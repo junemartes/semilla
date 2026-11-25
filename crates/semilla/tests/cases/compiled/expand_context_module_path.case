@@ -1,0 +1,48 @@
+note: batch 10n, part A: a macro whose code has `module_path!()`; the step renames the module of the call; the expansion changes only by the module path, a token of the context of the call
+rule+: R65.1-1 R65.1-2 R65.1-4
+must_match: only the context of the call changes: the module path of the call \(`module_path!\(\)`\)
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! tag {
+    ($v:expr) => { ($v, module_path!()) };
+}
+
+pub mod north {
+    pub fn label() -> (u32, &'static str) {
+        tag!(1)
+    }
+}
+=== new src/lib.rs
+macro_rules! tag {
+    ($v:expr) => { ($v, module_path!()) };
+}
+
+pub mod south {
+    pub fn label() -> (u32, &'static str) {
+        tag!(1)
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: renamed `shop::north` → `shop::south` [rename · code different]
+      ! the compiled code changes: shop::south::label
+  ◆ f2 derived: public API: `shop::north` is now `shop::south` (a different crate can no longer use the old path) [rename · no code]
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: 1 changed
+    `tag!(1)` at `shop::south::label/tail` (src/lib.rs:7): expansion changed: `macro_rules! tag` (src/lib.rs:1): only the context of the call changes: the module path of the call (`module_path!()`); changed code `north` → `south`; the context of the call changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: renamed `shop::north` → `shop::south` [rename · code different]
+    lines: src/lib.rs:5, src/lib.rs:-5
+◆ f2 derived: public API: `shop::north` is now `shop::south` (a different crate can no longer use the old path) [rename · no code]
+    no position

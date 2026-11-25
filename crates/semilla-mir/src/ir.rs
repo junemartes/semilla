@@ -88,6 +88,27 @@ pub enum IrTy {
         n: Option<u64>,
         k: String,
     },
+    /// A closure (design 66, part A): the name of its body, the type of each capture (a capture
+    /// by reference is a reference), and the key of the form of the body in the forms of the
+    /// instances (`qx`) for a closure of a generic item with concrete arguments or of the
+    /// standard library. The check also gives a closure value the identity of its body.
+    Clo {
+        n: String,
+        v: Vec<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        g: Option<String>,
+        /// True if a value needs a drop (a capture with a destructor).
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        d: bool,
+        /// True for a closure of the standard library: the same body in each version of the
+        /// workspace (one tool chain).
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        s: bool,
+        /// The key and the body name of each closure type in the generic arguments of the parent
+        /// item.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        q: Vec<(String, String)>,
+    },
 }
 
 #[derive(Serialize, Clone)]
@@ -146,6 +167,12 @@ pub enum IrConst {
     /// A reference to an array of scalars (design 64, part C): the type of an element and the
     /// bits of each element.
     S(u32, Vec<String>),
+    /// A constant that the compiler does not evaluate here (design 66, part B): a generic or an
+    /// associated constant, a promoted constant of a generic body, or a const parameter. The
+    /// path with the generic arguments, the type, and the digest of each item that its value
+    /// depends on (`consts::definition_digest`). The check gives it an uninterpreted value of
+    /// the path and the digest: one value in the two versions only if each item is equal.
+    G(String, u32, Vec<(String, String)>),
     /// A constant that the check does not model.
     U(String),
 }
@@ -172,6 +199,8 @@ pub enum IrAgg {
     A(u32, usize),
     /// An array of scalars: the type of an element (design 64, part C).
     S(u32),
+    /// A closure: its type (an `IrTy::Clo`), with the captures as operands (design 66, part A).
+    C(u32),
 }
 
 /// A place in the source: the tokens and the outermost macro call (as in the graph).
@@ -236,6 +265,23 @@ pub struct IrCallee {
     /// part C): `vec_push`, `slice_get`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub s: Option<String>,
+    /// A call of a closure whose body the check knows (design 66, part A): 1 if the first
+    /// argument goes to the body as it is, 2 if the call gives the closure by value to a body
+    /// that takes a reference (`FnOnce::call_once` of an `Fn` or `FnMut` closure); 10 more for
+    /// a closure of the standard library. The last argument is the tuple of the arguments of
+    /// the body. `w` is the name of the body, `g` is true if the form is the form of an
+    /// instance (by the key `p`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c: Option<u8>,
+    /// The key of each closure type in the generic arguments of the callee, with the name of
+    /// its body (design 66, part A): the check gives the identity of each closure to a call
+    /// that it does not inline.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub q: Vec<(String, String)>,
+    /// The function pointer of a call through a pointer (design 66, part A): an input of the
+    /// call, and the closure that the check inlines if the value is a closure of the body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub f: Option<IrOp>,
 }
 
 #[derive(Serialize, Clone)]
@@ -350,6 +396,18 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 let item = crate::effects::scalar_vec(def, &args).unwrap();
                 IrTy::Seq { e: self.ty(item, depth + 1), n: None, k: "v".into() }
             }
+            // A closure (design 66, part A): the captures, and the name and the key of its body.
+            TyKind::RigidTy(RigidTy::Closure(..)) => match closure_info(ty) {
+                Some(info) if info.known => {
+                    let v = info.captures.iter().map(|capture| self.ty(*capture, depth + 1)).collect();
+                    let internal = rustc_public::rustc_internal::internal(self.tcx, ty);
+                    let d = crate::safe::needs_drop(self.tcx, self.typing, internal);
+                    let s = info.std;
+                    let q = info.inner.clone();
+                    IrTy::Clo { n: info.name, v, g: info.instance.then_some(info.key), d, s, q }
+                }
+                _ => self.opaque(ty),
+            },
             TyKind::RigidTy(RigidTy::Adt(def, args)) if self.modeled(def) => {
                 let enum_like = def.kind() == AdtKind::Enum;
                 let mut variants = Vec::new();
@@ -390,7 +448,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             return true;
         }
         let krate = def.krate().name;
-        !matches!(krate.as_str(), "core" | "std" | "alloc")
+        !crate::stdlib::is_std_name(krate.as_str())
     }
 
     fn place_of(&mut self, span: rustc_public::ty::Span) -> (Option<[i64; 3]>, Option<[i64; 3]>) {
@@ -447,6 +505,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             let id = self.ty(ty, 0);
             return IrConst::I(v.to_string(), id);
         }
+        if let Some(found) = self.generic_constant(constant) {
+            return found;
+        }
         if crate::consts::int_of(ty).is_some() {
             return IrConst::U("a constant that the compiler does not evaluate here".into());
         }
@@ -477,6 +538,52 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 }
             }
             _ => IrConst::U("a constant that the compiler does not evaluate here".into()),
+        }
+    }
+
+    /// A constant that the compiler does not evaluate here (design 66, part B): an unevaluated
+    /// constant (with a parameter in its arguments, or a promoted constant of a generic body),
+    /// or a const parameter. No result for a constant that the compiler evaluates.
+    fn generic_constant(&mut self, constant: &rustc_public::ty::MirConst) -> Option<IrConst> {
+        let ty = constant.ty();
+        match constant.kind() {
+            ConstantKind::Unevaluated(unevaluated) => {
+                let evaluated = rustc_middle::ty::tls::with(|tcx| {
+                    let internal = rustc_public::rustc_internal::internal(tcx, constant);
+                    if rustc_middle::ty::TypeVisitableExt::has_param(&internal) || rustc_middle::ty::TypeVisitableExt::has_aliases(&internal) {
+                        return false;
+                    }
+                    let typing = match self.item.map(|item| rustc_public::rustc_internal::internal(tcx, item)) {
+                        Some(def) => rustc_middle::ty::TypingEnv::post_analysis(tcx, def),
+                        None => rustc_middle::ty::TypingEnv::fully_monomorphized(),
+                    };
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| internal.eval(tcx, typing, rustc_span::DUMMY_SP).is_ok())).unwrap_or(false)
+                });
+                if evaluated {
+                    return None;
+                }
+                let def = rustc_public::CrateDef::def_id(&unevaluated.def);
+                let digest = crate::guarded(|| crate::consts::definition_digest(def, unevaluated.promoted.map(|index| index as u32)))?;
+                let args = crate::print::Printer::for_body(self.body).generic_args(&unevaluated.args);
+                let path = match unevaluated.promoted {
+                    Some(index) => format!("{}::promoted[{index}]{args}", unevaluated.def.name()),
+                    None => format!("{}{args}", unevaluated.def.name()),
+                };
+                let id = self.ty(ty, 0);
+                Some(IrConst::G(path, id, digest))
+            }
+            ConstantKind::Param(param) => {
+                let id = self.ty(ty, 0);
+                Some(IrConst::G(format!("const parameter {}#{}", param.name, param.index), id, Vec::new()))
+            }
+            ConstantKind::Ty(ty_const) => match ty_const.kind() {
+                rustc_public::ty::TyConstKind::Param(param) => {
+                    let id = self.ty(ty, 0);
+                    Some(IrConst::G(format!("const parameter {}#{}", param.name, param.index), id, Vec::new()))
+                }
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -566,6 +673,10 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             }
             // An array as a slice (design 64, part C): the same sequence.
             Rvalue::Cast(CastKind::PointerCoercion(rustc_public::mir::PointerCoercion::Unsize), value, to) if crate::effects::scalar_slice_ref(*to) => IrRvalue::Use(self.operand(value)),
+            // A function pointer of a closure with no capture or of a function item (design 66,
+            // part A): the value of the closure or of the item. The check does not compare two
+            // function pointers exactly (one address can have two functions).
+            Rvalue::Cast(CastKind::PointerCoercion(rustc_public::mir::PointerCoercion::ClosureFnPointer(_) | rustc_public::mir::PointerCoercion::ReifyFnPointer(_)), value, _) => IrRvalue::Un("fnptr".into(), self.operand(value)),
             Rvalue::Cast(kind, _, _) => IrRvalue::U(format!("a cast ({})", crate::print::cast_kind_text(kind))),
             Rvalue::Aggregate(kind, operands) => match kind {
                 AggregateKind::Tuple => IrRvalue::Agg(IrAgg::T, operands.iter().map(|operand| self.operand(operand)).collect()),
@@ -577,7 +688,18 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     IrRvalue::Agg(IrAgg::A(ty, variant.to_index()), operands.iter().map(|operand| self.operand(operand)).collect())
                 }
                 AggregateKind::Adt(..) => IrRvalue::U("a value of a type that the check does not model".into()),
-                AggregateKind::Closure(..) | AggregateKind::CoroutineClosure(..) => IrRvalue::U("a closure value".into()),
+                // A closure is its captures and the identity of its body (design 66, part A).
+                AggregateKind::Closure(..) => match rvalue.ty(self.body.locals()) {
+                    Ok(ty) => {
+                        let id = self.ty(ty, 0);
+                        match self.types.get(id as usize) {
+                            Some(IrTy::Clo { .. }) => IrRvalue::Agg(IrAgg::C(id), operands.iter().map(|operand| self.operand(operand)).collect()),
+                            _ => IrRvalue::U("a closure value (a closure of a generic item that the check does not know here)".into()),
+                        }
+                    }
+                    Err(_) => IrRvalue::U("a closure value".into()),
+                },
+                AggregateKind::CoroutineClosure(..) => IrRvalue::U("a closure value (an async closure)".into()),
                 AggregateKind::Coroutine(..) => IrRvalue::U("a coroutine value".into()),
                 AggregateKind::Array(item) if crate::effects::is_scalar(*item) => {
                     let item = self.ty(*item, 0);
@@ -669,13 +791,17 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     // The opaque wrap of the driver (`black_box`) is the identity.
                     let value = args.first().map(|arg| self.operand(arg));
                     return match (value, target) {
-                        (Some(value), Some(target)) => IrTermKind::Call(IrCallee { p: "black_box".into(), w: None, k: Some("black_box".into()), m: None, g: false, e: Some(crate::effects::IrEff::default()), s: None }, vec![value], self.place(destination), Some(*target), IrUnwind::Drops(Vec::new())),
+                        (Some(value), Some(target)) => IrTermKind::Call(IrCallee { p: "black_box".into(), w: None, k: Some("black_box".into()), m: None, g: false, e: Some(crate::effects::IrEff::default()), s: None, c: None, q: Vec::new(), f: None }, vec![value], self.place(destination), Some(*target), IrUnwind::Drops(Vec::new())),
                         _ => IrTermKind::U("an opaque wrap".into()),
                     };
                 }
                 let mut callee = self.callee(func, self.span_of(kind));
                 callee.e = crate::guarded(|| crate::effects::of_call(self.body, func, args));
                 callee.s = crate::guarded(|| crate::effects::seq_model(func, self.body)).flatten();
+                callee.q = crate::guarded(|| closure_keys(func, self.body)).unwrap_or_default();
+                if callee.m.as_deref() == Some("pointer") {
+                    callee.f = Some(self.operand(func));
+                }
                 let uw = self.unwind(Some(unwind));
                 let args = args.iter().map(|arg| self.operand(arg)).collect();
                 IrTermKind::Call(callee, args, self.place(destination), *target, uw)
@@ -693,9 +819,21 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
     fn callee(&mut self, func: &Operand, span: rustc_span::Span) -> IrCallee {
         let typing = self.item.and_then(|item| rustc_public::rustc_internal::internal(self.tcx, item).as_local()).map(|local| rustc_middle::ty::TypingEnv::post_analysis(self.tcx, local.to_def_id()));
         let (text, mark) = crate::graph::callee_text(self.tcx, typing.or(Some(self.typing)), self.body, func, span);
-        let mut callee = IrCallee { p: text, w: None, k: None, m: mark.map(str::to_string), g: false, e: None, s: None };
+        let mut callee = IrCallee { p: text, w: None, k: None, m: mark.map(str::to_string), g: false, e: None, s: None, c: None, q: Vec::new(), f: None };
         let Ok(ty) = func.ty(self.body.locals()) else { return callee };
         let TyKind::RigidTy(RigidTy::FnDef(def, args)) = ty.kind() else { return callee };
+        // A call of a closure whose body the check knows (design 66, part A).
+        if mark == Some("closure")
+            && let Some((info, mode)) = crate::guarded(|| closure_call(self.body, func)).flatten()
+            && info.known
+        {
+            callee.p = info.key.clone();
+            callee.w = Some(info.name);
+            callee.g = info.instance;
+            let in_std = info.std;
+            callee.c = Some(if in_std { mode + 10 } else { mode });
+            return callee;
+        }
         if mark.is_some() {
             return callee;
         }
@@ -712,7 +850,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 if callee.k.is_none() {
                     let name = instance.def.name();
                     let krate = instance.def.krate().name;
-                    if !matches!(krate.as_str(), "core" | "std" | "alloc") {
+                    if !crate::stdlib::is_std_name(krate.as_str()) {
                         callee.w = Some(name);
                         callee.g = !instance.args().0.is_empty();
                     }
@@ -791,13 +929,30 @@ pub fn std_callees(ir: &Ir, body: &Body) -> BTreeMap<String, Ir> {
     while let Some((current, depth)) = todo.pop() {
         for block in &current.blocks {
             let TerminatorKind::Call { func, .. } = &block.terminator.kind else { continue };
+            // A call of a closure of an instance: the form of the closure body with the
+            // arguments of the instance, by the key of the closure (design 66, part A).
+            if let Some((info, _)) = crate::guarded(|| closure_call(&current, func)).flatten() {
+                if info.instance
+                    && !found.contains_key(&info.key)
+                    && let Some(callee) = crate::guarded(|| closure_body(&info)).flatten()
+                {
+                    let in_std = info.std;
+                    if callee.blocks.len() <= if in_std { MAX_STD_BLOCKS } else { MAX_BLOCKS } {
+                        found.insert(info.key.clone(), build(&callee, None));
+                        if depth < 1 {
+                            todo.push((callee, depth + 1));
+                        }
+                    }
+                }
+                continue;
+            }
             let Ok(ty) = func.ty(current.locals()) else { continue };
             let TyKind::RigidTy(RigidTy::FnDef(def, args)) = ty.kind() else { continue };
             if !concrete(&args) {
                 continue;
             }
             let Ok(instance) = rustc_public::mir::mono::Instance::resolve(def, &args) else { continue };
-            let in_std = matches!(instance.def.krate().name.as_str(), "core" | "std" | "alloc");
+            let in_std = crate::stdlib::is_std_name(instance.def.krate().name.as_str());
             if instance.intrinsic_name().is_some() || (!in_std && instance.args().0.is_empty()) {
                 continue;
             }
@@ -833,7 +988,23 @@ pub fn const_values(item: rustc_public::CrateItem) -> Vec<(String, String)> {
         if unevaluated.promoted.is_some() {
             return;
         }
-        let Some(crate::consts::Val::Bits { v, w, s }) = crate::consts::const_bits(constant, Some(item.def_id())) else { return };
+        let Some(crate::consts::Val::Bits { v, w, s }) = crate::consts::const_bits(constant, Some(item.def_id())) else {
+            // A constant that the compiler does not evaluate here (design 66, part B): the digest
+            // of its definition is its value for the compare of the two records, so an equal
+            // text with a changed definition is no proof (R64.5-2).
+            let generic = rustc_middle::ty::tls::with(|tcx| {
+                let internal = rustc_public::rustc_internal::internal(tcx, constant);
+                rustc_middle::ty::TypeVisitableExt::has_param(&internal) || rustc_middle::ty::TypeVisitableExt::has_aliases(&internal)
+            });
+            if generic && let Some(digest) = crate::guarded(|| crate::consts::definition_digest(rustc_public::CrateDef::def_id(&unevaluated.def), None)) {
+                for entry in crate::consts::digest_values(&unevaluated.def.name(), &digest) {
+                    if !found.contains(&entry) {
+                        found.push(entry);
+                    }
+                }
+            }
+            return;
+        };
         let value = if s && w < 128 { (((v << (128 - w)) as i128) >> (128 - w)).to_string() } else if w == 1 { (v == 1).to_string() } else { v.to_string() };
         let entry = (unevaluated.def.name(), value);
         if !found.contains(&entry) {
@@ -869,5 +1040,127 @@ pub fn const_values(item: rustc_public::CrateItem) -> Vec<(String, String)> {
         }
     }
     found.sort();
+    found
+}
+
+// ---------------------------------------------------------------------------------------------
+// Closures (design 66, part A).
+
+/// The facts of a closure type that the check needs.
+pub struct CloInfo {
+    /// The name of the body: its def path, as the name of its record (`shop::f::{closure#0}`).
+    pub name: String,
+    /// The key of the closure: the name, with the generic arguments of its parent item if it has
+    /// some. Two closure types with one key have one body and one type of each capture.
+    pub key: String,
+    /// True if the form of the body is the form of an instance (in the forms `qx`, by the key):
+    /// a closure of a generic item with concrete arguments, or a closure of the standard library.
+    pub instance: bool,
+    /// False if the check cannot know the form of the body: a closure of a generic item whose
+    /// arguments are not concrete and are not the parameters of the item.
+    pub known: bool,
+    /// The type of each capture (a capture by reference is a reference).
+    pub captures: Vec<Ty>,
+    /// The kind of the closure (`Fn`, `FnMut`, `FnOnce`), as the compiler gives it.
+    pub kind: rustc_middle::ty::ClosureKind,
+    pub def: rustc_public::ty::ClosureDef,
+    pub args: rustc_public::ty::GenericArgs,
+    /// The key and the body name of each closure type in the generic arguments of the parent
+    /// item (a closure of the standard library that takes a closure of the workspace).
+    pub inner: Vec<(String, String)>,
+    /// True for a closure of a crate of the standard library: the compiler loaded its crate from
+    /// the sysroot (R65.3-1, R66.10-2). A closure of the local crate is never one.
+    pub std: bool,
+}
+
+/// The facts of a closure type (design 66, part A). No facts for a type that is not a closure.
+pub fn closure_info(ty: Ty) -> Option<CloInfo> {
+    let TyKind::RigidTy(RigidTy::Closure(def, args)) = ty.kind() else { return None };
+    rustc_middle::ty::tls::with(|tcx| {
+        use rustc_middle::ty::TypeVisitableExt;
+        let internal = rustc_public::rustc_internal::internal(tcx, ty);
+        let rustc_middle::ty::Closure(def_id, closure_args) = internal.kind() else { return None };
+        let closure = closure_args.as_closure();
+        let name = def.name();
+        let in_std = crate::stdlib::is_sysroot_crate(tcx, def_id.krate);
+        // The generic arguments of the parent item, with no lifetime (MIR erases them).
+        let parent: Vec<rustc_middle::ty::GenericArg<'_>> = closure.parent_args().iter().copied().filter(|arg| arg.as_region().is_none()).collect();
+        let concrete = !internal.has_param() && !internal.has_aliases() && !internal.has_escaping_bound_vars();
+        let identity: Vec<rustc_middle::ty::GenericArg<'_>> = rustc_middle::ty::GenericArgs::identity_for_item(tcx, tcx.typeck_root_def_id(*def_id)).iter().filter(|arg| arg.as_region().is_none()).collect();
+        let key = if parent.is_empty() { name.clone() } else { format!("{name}::<{}>", parent.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().join(", ")) };
+        let instance = concrete && (!parent.is_empty() || in_std);
+        let known = instance || (!in_std && (parent.is_empty() || parent == identity));
+        let kind = closure.kind();
+        let captures = closure.upvar_tys().iter().map(rustc_public::rustc_internal::stable).collect();
+        let mut inner: Vec<(String, String)> = Vec::new();
+        for arg in &parent {
+            for part in arg.walk() {
+                if let Some(part) = part.as_type()
+                    && let rustc_middle::ty::Closure(..) = part.kind()
+                    && let Some(found) = closure_info(rustc_public::rustc_internal::stable(part))
+                    && !found.std
+                    && !inner.iter().any(|(key, _)| *key == found.key)
+                {
+                    inner.push((found.key, found.name));
+                }
+            }
+        }
+        Some(CloInfo { name, key, instance, known, captures, kind, def, args, inner, std: in_std })
+    })
+}
+
+/// A call of a closure through `Fn::call`, `FnMut::call_mut`, or `FnOnce::call_once` whose self
+/// type is the closure type: the facts of the closure and the mode of the call (see
+/// `IrCallee::c`). No result for a call through a reference to a closure (`<&F as Fn>::call`:
+/// an impl of the standard library) and for each other call.
+pub fn closure_call(body: &Body, func: &Operand) -> Option<(CloInfo, u8)> {
+    let ty = func.ty(body.locals()).ok()?;
+    let TyKind::RigidTy(RigidTy::FnDef(def, args)) = ty.kind() else { return None };
+    let GenericArgKind::Type(self_ty) = args.0.first()? else { return None };
+    let info = closure_info(*self_ty)?;
+    let requested = rustc_middle::ty::tls::with(|tcx| {
+        let def_id = rustc_public::rustc_internal::internal(tcx, def.def_id());
+        let trait_id = tcx.trait_of_assoc(def_id)?;
+        tcx.fn_trait_kind_from_def_id(trait_id)
+    })?;
+    let by_value = requested == rustc_middle::ty::ClosureKind::FnOnce && info.kind != rustc_middle::ty::ClosureKind::FnOnce;
+    Some((info, if by_value { 2 } else { 1 }))
+}
+
+/// The body of a closure of an instance (design 66, part A): the body of the closure item with
+/// the concrete arguments of the closure type.
+pub fn closure_body(info: &CloInfo) -> Option<Body> {
+    let kind = match info.kind {
+        rustc_middle::ty::ClosureKind::Fn => rustc_public::ty::ClosureKind::Fn,
+        rustc_middle::ty::ClosureKind::FnMut => rustc_public::ty::ClosureKind::FnMut,
+        rustc_middle::ty::ClosureKind::FnOnce => rustc_public::ty::ClosureKind::FnOnce,
+    };
+    let instance = rustc_public::mir::mono::Instance::resolve_closure(info.def, &info.args, kind).ok()?;
+    crate::safe::instance_body(&instance)
+}
+
+/// The keys of the closure types of the workspace in the generic arguments of a callee (also in
+/// the arguments of a closure type of the standard library), with the names of their bodies
+/// (design 66, part A). The text of a callee names a closure of the standard library by its def
+/// path, the same in the two versions; its value has its own identity.
+fn closure_keys(func: &Operand, body: &Body) -> Vec<(String, String)> {
+    let Ok(ty) = func.ty(body.locals()) else { return Vec::new() };
+    let TyKind::RigidTy(RigidTy::FnDef(_, args)) = ty.kind() else { return Vec::new() };
+    let mut found: Vec<(String, String)> = Vec::new();
+    rustc_middle::ty::tls::with(|tcx| {
+        let internal = rustc_public::rustc_internal::internal(tcx, &args);
+        for arg in internal.iter() {
+            for part in arg.walk() {
+                let Some(part) = part.as_type() else { continue };
+                if let rustc_middle::ty::Closure(..) = part.kind()
+                    && let Some(info) = closure_info(rustc_public::rustc_internal::stable(part))
+                    && !info.std
+                    && !found.iter().any(|(key, _)| *key == info.key)
+                {
+                    found.push((info.key, info.name));
+                }
+            }
+        }
+    });
     found
 }

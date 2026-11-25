@@ -232,6 +232,10 @@ impl GraphDiff {
 /// The most cells of one longest common subsequence. A larger list pairs equal texts in order.
 const LCS_CELLS: usize = 4_000_000;
 
+/// The words of a constant whose value has a part that the driver cannot compute (R66.11-4): the
+/// check does not know if it changes.
+pub const CANNOT_COMPARE: &str = "reads a constant that the check cannot compare";
+
 /// The pairs of a longest common subsequence of two lists, by `equal`.
 fn lcs(a: &[usize], b: &[usize], equal: &dyn Fn(usize, usize) -> bool) -> Vec<(usize, usize)> {
     if a.is_empty() || b.is_empty() {
@@ -1247,8 +1251,31 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
             line.push_str("; no edit in the body");
         }
         if !result.edit && !result.consts.is_empty() {
-            let list: Vec<String> = result.consts.iter().map(|(path, old, new)| format!("`{path}` ({old} → {new})")).collect();
-            line.push_str(&format!("; reads a changed constant: {}", list.join(", ")));
+            // [R66.11-4] Only two known values that differ are a changed constant. A value with a
+            // part that the driver cannot compute (R66.10-1) is not known to change: the line
+            // names the constant and the cause, with no unique word.
+            let shown = semilla_core::text::without_unique;
+            let (mut changed, mut unknown) = (Vec::new(), Vec::new());
+            for (path, old, new) in &result.consts {
+                let mut causes = semilla_core::text::unknown_causes(old);
+                for cause in semilla_core::text::unknown_causes(new) {
+                    if !causes.contains(&cause) {
+                        causes.push(cause);
+                    }
+                }
+                // One text for each constant: the values of each configuration have their own
+                // unique words, and one cause.
+                let (list, text) = if causes.is_empty() { (&mut changed, format!("`{path}` ({} → {})", shown(old), shown(new))) } else { (&mut unknown, format!("`{path}` ({})", causes.join(", "))) };
+                if !list.contains(&text) {
+                    list.push(text);
+                }
+            }
+            if !changed.is_empty() {
+                line.push_str(&format!("; reads a changed constant: {}", changed.join(", ")));
+            }
+            if !unknown.is_empty() {
+                line.push_str(&format!("; {CANNOT_COMPARE}: {}", unknown.join(", ")));
+            }
         }
         let mut details = Vec::new();
         for known in &result.outcomes {

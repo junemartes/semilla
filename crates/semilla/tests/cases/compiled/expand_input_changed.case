@@ -49,7 +49,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: − panic `overflow` (src/lib.rs:-5)
       control flow: − arrow entry (src/lib.rs:-5) → check `overflow: v + 1` (src/lib.rs:-5)
       equivalence: different: for v = 0: before returns 1, after returns 0
-      expansion: `other!(v)` at `shop::g/tail` (src/lib.rs:-5): expansion removed: 1 line(s) of code
   ◆ f3 derived: added statement `v` at `shop::g/tail` [semantics · code different]
       affected bodies: shop::g (with 1 other edit of this body)
       control flow: + arrow entry (src/lib.rs:5) → return (src/lib.rs:5)

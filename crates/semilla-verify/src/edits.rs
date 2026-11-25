@@ -811,8 +811,8 @@ fn local_member_order(edit: &Edit, function: &str) -> Option<(String, Option<Str
         let (before, after) = full_pair(edit);
         text.push_str(&format!("; the item has a second change: {}", sides_text(&before, &after)));
     }
-    let order = |attrs: &str| attrs.contains("repr") || attrs.split(|c: char| !c.is_alphanumeric()).any(|word| matches!(word, "PartialOrd" | "Ord" | "Hash"));
-    let why = (order(&old.3) || order(&new.3)).then(|| "an order change in a type with `#[repr]` or an order derive (`PartialOrd`, `Ord`, `Hash`)".to_string());
+    // R65.3-3: a derive, an attribute macro, or `#[repr]` reads the order.
+    let why = crate::facts::order_reader(&old.3).or_else(|| crate::facts::order_reader(&new.3));
     Some((text, why))
 }
 

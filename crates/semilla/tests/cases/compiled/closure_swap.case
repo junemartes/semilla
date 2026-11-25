@@ -33,14 +33,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: moved statement `let a: u32 = v.iter().map(|x| x.wrapping_add(1)).sum();` from `shop::both/S0` to `shop::both/S1` [semantics · code different]
       affected bodies: shop::both
       control flow: − arrow entry (src/lib.rs:-1) → call `slice::<impl [u32]>::iter` (src/lib.rs:-2)
-      equivalence: `shop::both`: not decided: a closure value: |x| x.wrapping_add(1) (src/lib.rs:-2)
-      equivalence: `shop::both::{closure#0} |x| x.wrapping_mul(2)`: equivalent (proved by SMT)
-      equivalence: `shop::both::{closure#1} |x| x.wrapping_add(1)`: equivalent (proved by SMT)
+      equivalence: `shop::both`: not decided: the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined)
+      equivalence: `shop::both::{closure#0} |x| x.wrapping_mul(2)`: equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_mul`)
+      equivalence: `shop::both::{closure#1} |x| x.wrapping_add(1)`: equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::both (src/lib.rs:1): graph changes: +3 arrows, −3 arrows; not decided (a closure value: |x| x.wrapping_add(1) (src/lib.rs:-2))
-    shop::both::{closure#0} |x| x.wrapping_mul(2) (src/lib.rs:2): same graph (the edit keeps the control flow); equivalent (proved by SMT)
-    shop::both::{closure#1} |x| x.wrapping_add(1) (src/lib.rs:3): same graph (the edit keeps the control flow); equivalent (proved by SMT)
+    shop::both (src/lib.rs:1): graph changes: +3 arrows, −3 arrows; not decided (the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined))
+    shop::both::{closure#0} |x| x.wrapping_mul(2) (src/lib.rs:2): same graph (the edit keeps the control flow); equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_mul`)
+    shop::both::{closure#1} |x| x.wrapping_add(1) (src/lib.rs:3): same graph (the edit keeps the control flow); equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -98,9 +98,6 @@ fn middle(n: usize, m: usize, eq: &dyn Fn(usize, usize) -> bool) -> Vec<(usize, 
     Vec::new()
 }
 
-/// The macros whose result depends on the path of the file of the call (design 56.3).
-const PATH_MACROS: &[&str] = &["include", "include_str", "include_bytes", "file"];
-
 /// The source place of a module on one side (design 56.3).
 struct ModulePlace {
     /// The file of the module, or the file of its block.
@@ -1096,7 +1093,7 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
             for (at, here) in tokens.iter().enumerate() {
                 let text = |offset: usize| tokens.get(at + offset).map_or("", |token| token.text.as_str());
                 let before = if at > 0 { tokens[at - 1].text.as_str() } else { "" };
-                let end = if PATH_MACROS.contains(&here.text.as_str()) && text(1) == "!" {
+                let end = if semilla_core::names::depends_on_file_path(&here.text) && text(1) == "!" {
                     // The macro call, to the end of its input.
                     let mut depth = 0usize;
                     let mut end = at + 1;

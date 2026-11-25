@@ -172,26 +172,25 @@ fn callee(body: &Body, func: &Operand, depth: usize, stack: &mut Vec<Instance>) 
     }
 }
 
-/// True for a function of the standard library with no MIR that never returns and has the place
-/// of its caller (`#[track_caller]`): a panic helper (`core::option::unwrap_failed`). An exit or
-/// an abort of the standard library has no such place.
-fn std_panic_helper(instance: Instance) -> bool {
-    if !matches!(instance.def.krate().name.as_str(), "core" | "alloc" | "std") {
+/// True for a function that never returns (the return type `!`) and has the place of its caller
+/// (`#[track_caller]`): a panic function (`core::panicking::panic_fmt`, `std::rt::begin_panic`,
+/// `core::option::unwrap_failed`). This is the structural rule of R65.4-1: the compiler gives the
+/// two marks, and no name decides it. An exit or an abort has no `#[track_caller]`, and
+/// `std::panicking::catch_unwind`, `set_hook`, and `take_hook` return: their MIR decides.
+fn stops_with_panic(instance: Instance) -> bool {
+    if !matches!(instance.kind, InstanceKind::Item) {
         return false;
     }
     rustc_middle::ty::tls::with(|tcx| {
         let internal = rustc_public::rustc_internal::internal(tcx, instance);
         let def = internal.def_id();
+        if !matches!(tcx.def_kind(def), rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn) {
+            return false;
+        }
         let never = tcx.fn_sig(def).skip_binder().output().skip_binder().is_never();
         let caller = tcx.codegen_fn_attrs(def).flags.contains(rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::TRACK_CALLER);
         never && caller
     })
-}
-
-/// True for a panic function of the standard library (`core::panicking::panic_fmt`, `begin_panic`).
-fn is_panic(name: &str) -> bool {
-    let name = name.split('<').next().unwrap_or(name);
-    name.starts_with("core::panicking::") || name.starts_with("std::panicking::") || name.starts_with("std::rt::begin_panic") || name == "std::rt::panic_fmt"
 }
 
 fn instance_summary(instance: Instance, depth: usize, stack: &mut Vec<Instance>) -> (IrEff, usize) {
@@ -202,7 +201,7 @@ fn instance_summary(instance: Instance, depth: usize, stack: &mut Vec<Instance>)
         return (IrEff::world(format!("the intrinsic `{name}`")), usize::MAX);
     }
     let name = instance.def.name();
-    if is_panic(&name) {
+    if stops_with_panic(instance) {
         return (IrEff { w: None, p: true }, usize::MAX);
     }
     match instance.kind {
@@ -222,9 +221,6 @@ fn instance_summary(instance: Instance, depth: usize, stack: &mut Vec<Instance>)
         return (IrEff::world(format!("the depth limit of the effect summary ({DEPTH})")), usize::MAX);
     }
     let Some(body) = crate::guarded(|| crate::safe::instance_body(&instance)).flatten() else {
-        if std_panic_helper(instance) {
-            return (IrEff { w: None, p: true }, usize::MAX);
-        }
         return (IrEff::world(format!("a callee with no MIR: `{name}`")), usize::MAX);
     };
     stack.push(instance);

@@ -68,10 +68,19 @@ pub struct Expansion {
     /// The files that the code reads with `include_str!` or `include_bytes!` (R63.9-6).
     #[serde(default)]
     pub reads: Vec<String>,
-    /// The text with a mark for each literal from `line!()`, `column!()`, or `file!()`
-    /// (R63.9-8). Empty if the code has no such literal.
+    /// The text with a mark for each token of the context of the call (R65.1-1): a value that
+    /// the compiler or a proc macro makes at the call. Empty if the code has no such token.
     #[serde(default)]
     pub placeless: String,
+    /// The source and the value of each token of the context, in the order of the text
+    /// (R65.1-2).
+    #[serde(default)]
+    pub context: Vec<[String; 2]>,
+    /// The identity of each definition of the chain that no fact of the step can show: a
+    /// macro of a crate outside the workspace and a proc macro, with the hash of its crate
+    /// (R65.1-3).
+    #[serde(default)]
+    pub ids: Vec<String>,
 }
 
 /// The expansions of one compiled target in one checked configuration.
@@ -269,9 +278,12 @@ fn one_line(text: &str) -> String {
 /// The text of a definition for a line: `macro_rules! base` (src/lib.rs:1), `derive
 /// PartialEq` (crate core).
 fn definition_text(expansion: &Expansion) -> String {
+    // A proc macro has an identity with the word (R65.1-3).
+    let proc = expansion.ids.iter().any(|id| id.starts_with(&format!("{}: proc macro ", expansion.name)));
     let word = match expansion.kind.as_str() {
         "derive" => "derive",
         "attr" => "attribute macro",
+        _ if proc => "proc macro",
         _ if expansion.def.starts_with("crate ") => "macro",
         _ => "macro_rules!",
     };
@@ -288,11 +300,31 @@ fn chain_owners(outcome: &StepOutcome, sides: [Option<&Expansion>; 2]) -> (Vec<u
             names.insert((name.clone(), def.clone()));
         }
     }
+    // R65.1-3: a proc macro of the workspace (an identity with the word `proc macro`) is a
+    // function of its crate: the fact of that function in the file of the definition owns the
+    // call.
+    let procs: BTreeSet<(String, String)> = sides
+        .into_iter()
+        .flatten()
+        .flat_map(|expansion| {
+            let mut all = vec![[expansion.name.clone(), expansion.def.clone()]];
+            all.extend(expansion.uses.iter().cloned());
+            all.into_iter().filter(|[name, def]| !def.starts_with("crate ") && expansion.ids.iter().any(|id| id.starts_with(&format!("{name}: proc macro ")))).map(|[name, def]| (name, def)).collect::<Vec<_>>()
+        })
+        .collect();
     let mut facts = Vec::new();
     let mut causes = Vec::new();
     for (index, fact) in outcome.report.facts.iter().enumerate() {
         let Some(item) = fact.at.as_ref().map(|at| at.item.as_str()) else { continue };
         let short = item.rsplit("::").next().unwrap_or(item);
+        if let Some((name, def)) = procs.iter().find(|(name, def)| name.rsplit("::").next() == Some(short) && fact.file.as_deref().is_some_and(|file| def.starts_with(&format!("{file}:")))) {
+            facts.push(index);
+            let cause = (name.clone(), format!("`proc macro {name}` ({def})"));
+            if !causes.contains(&cause) {
+                causes.push(cause);
+            }
+            continue;
+        }
         let Some(name) = short.strip_suffix('!') else { continue };
         let Some((_, def)) = names.iter().find(|(known, def)| known == name && !def.starts_with("crate ")) else { continue };
         // The fact must be the fact of a definition (a call has `!#N`), in the file of the
@@ -528,14 +560,26 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
     let mut by_fact: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
     for site in &sites {
         let any = site.new.or(site.old).expect("a site has a side");
-        // R63.9-8: a call that only moves, on the evidence of the compiler: the texts with no
-        // place literal are equal, the call text is equal, no definition of the chain changes,
-        // and no fact has an edit in the input of the call.
+        // R65.1-4: a call whose expansion changes only by its context, on the evidence of the
+        // compiler: the texts with the marks of the context are equal, the call text is equal,
+        // the identities of the definitions are equal, no definition of the workspace in the
+        // chain changes, and no fact has an edit in the input of the call.
         let moved = match (site.old, site.new) {
-            (Some(old), Some(new)) if chain_owners(outcome, [site.old, site.new]).0.is_empty() && input_facts(input, outcome, site).is_empty() => moved_place(old, new),
+            (Some(old), Some(new)) if chain_owners(outcome, [site.old, site.new]).0.is_empty() && input_facts(input, outcome, site).is_empty() => context_only(old, new),
             _ => None,
         };
         let (result, facts) = match (site.old, site.new) {
+            // R66.11-1: a text with a part that the driver cannot print is never equal to another
+            // text. The line names the cause, with no compare and no proof.
+            (Some(old), Some(new)) if !not_known(old).is_empty() || !not_known(new).is_empty() => {
+                let mut causes = not_known(old);
+                for cause in not_known(new) {
+                    if !causes.contains(&cause) {
+                        causes.push(cause);
+                    }
+                }
+                (NOT_KNOWN_RESULT, causes.iter().map(|cause| format!("not known: {cause}")).collect())
+            }
             (Some(old), Some(new)) => {
                 if let Some(moved) = moved.clone() {
                     ("expansion changed", vec![moved])
@@ -601,7 +645,7 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
             let holder = site.at[1].as_ref().or(site.at[0].as_ref()).map(|at| at.item.clone()).unwrap_or_default();
             owners.extend(outcome.report.facts.iter().enumerate().filter(|(_, fact)| !holder.is_empty() && fact.part == "indirect change" && fact.affected.contains(&holder)).map(|(index, _)| index));
             cause = if moved.is_some() {
-                "the call moves".to_string()
+                "the context of the call changes".to_string()
             } else {
                 "no changed definition, no changed input of the call, and no changed file that its code reads".to_string()
             };
@@ -610,12 +654,18 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         let shown_call = shown(any);
         let summary = facts.join("; ");
         let key = format!("{result}: {}: {summary}{}", definition_text(any), if cause.is_empty() { String::new() } else { format!("; {cause}") });
-        let diff = cut_diff(&line_diff(site.old.map(|e| e.text.as_str()).unwrap_or(""), site.new.map(|e| e.text.as_str()).unwrap_or("")), DIFF_LIMIT, &format!("semilla expand {place}"));
+        let shown_text = |e: Option<&Expansion>| e.map(|e| semilla_core::text::without_unique(&e.text)).unwrap_or_default();
+        let diff = cut_diff(&line_diff(&shown_text(site.old), &shown_text(site.new)), DIFF_LIMIT, &format!("semilla expand {place}"));
         let owner_ids: Vec<String> = owners.iter().map(|index| outcome.report.facts[*index].id.clone()).collect();
         // R63.9-7: the line goes under one fact, the first owner (a changed definition of the
         // chain, else an edit of the input, else a changed file that the code reads). The line
         // names the other owners; their own lines do not repeat it.
-        if let Some((first, others)) = owner_ids.split_first() {
+        // R65.2-2: an added or a removed expansion that makes no item is code of the edit of
+        // the call, which the fact of the call shows: the line is only in the step section. An
+        // added or a removed expansion that makes items, and each changed expansion, go under
+        // the fact.
+        let under_fact = result == "expansion changed" || result == NOT_KNOWN_RESULT || !any.items.is_empty();
+        if let Some((first, others)) = owner_ids.split_first().filter(|_| under_fact) {
             let prefix = if any.kind == "derive" { format!("derived `{}` of `{at}`", any.name) } else if any.file.is_empty() { format!("{shown_call} ({place})") } else { format!("{shown_call} at `{at}` ({place})") };
             let also = if others.is_empty() {
                 String::new()
@@ -636,7 +686,7 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         let at_call = |body: &semilla_core::report::FlowBody| if any.kind == "derive" { body.place == place && body.name.contains(&format!("::{}>", any.name)) } else { body.name == holder || body.place == place };
         let bodies: Vec<String> = flow.bodies.iter().filter(|body| at_call(body)).map(|body| format!("{} ({}): {}", body.name, body.place, body.line)).collect();
         // A body line with no edit names the changed expansion at its place (R63.3-9).
-        if result == "expansion changed" {
+        if result == "expansion changed" || result == NOT_KNOWN_RESULT {
             let mark = format!("; the expansion of {shown_call} changes (semilla expand {place})");
             for body in flow.bodies.iter_mut().filter(|body| at_call(body) && body.line.contains("no edit in the body") && !body.line.contains("; the expansion of ")) {
                 body.line.push_str(&mark);
@@ -752,6 +802,7 @@ pub fn view(place: &str, units: [&[ExpansionUnit]; 2], trees: [&Workspace; 2], f
         let side = if site.new.is_some() { 1 } else { 0 };
         let at = site.at[side].as_ref().map(|at| at.to_string()).unwrap_or_else(|| "no item".to_string());
         let result = match (site.old, site.new) {
+            (Some(old), Some(new)) if !not_known(old).is_empty() || !not_known(new).is_empty() => NOT_KNOWN_RESULT,
             (Some(old), Some(new)) if old.text == new.text => "expansion equal",
             (Some(_), Some(_)) => "expansion changed",
             (None, _) => "expansion added",
@@ -762,7 +813,8 @@ pub fn view(place: &str, units: [&[ExpansionUnit]; 2], trees: [&Workspace; 2], f
         out.push_str(&format!("{call} at `{at}` ({}:{}{}): {result}{configs}\n", any.file, if side == 0 { "-" } else { "" }, any.line));
         let uses: Vec<String> = any.uses.iter().map(|[name, def]| format!("`{name}!` ({def})")).collect();
         out.push_str(&format!("  definition: {}{}\n", definition_text(any), if uses.is_empty() { String::new() } else { format!("; uses: {}", uses.join(", ")) }));
-        let text_of = |expansion: Option<&Expansion>| expansion.map(|e| e.text.clone()).unwrap_or_default();
+        // R66.11-1: a part that the driver cannot print shows its cause, with no unique word.
+        let text_of = |expansion: Option<&Expansion>| expansion.map(|e| semilla_core::text::without_unique(&e.text)).unwrap_or_default();
         let lines: Vec<String> = match sides {
             Sides::Before => text_of(site.old).lines().map(|line| format!("  {line}")).collect(),
             Sides::After => text_of(site.new).lines().map(|line| format!("  {line}")).collect(),
@@ -784,6 +836,16 @@ pub fn view(place: &str, units: [&[ExpansionUnit]; 2], trees: [&Workspace; 2], f
     Ok(out)
 }
 
+/// The result of a call whose expansion has a part that the driver cannot print (R66.11-1).
+pub const NOT_KNOWN_RESULT: &str = "expansion not known";
+
+/// The causes of the parts of the text of an expansion that the driver cannot print (R66.11-1).
+/// A part of the text with the marks of the context (`placeless`) only stops R65.1-4: the text
+/// itself is known, so its compare stays.
+fn not_known(expansion: &Expansion) -> Vec<String> {
+    semilla_core::text::unknown_causes(&expansion.text)
+}
+
 /// The place text of a call with no place in a file of the workspace (R63.9-3).
 pub const NO_PLACE: &str = "no place: the tokens of the call are not in a file of the workspace";
 
@@ -794,24 +856,51 @@ fn inner_call(sites: &[Site], site: &Site, name: &str) -> Option<String> {
     sites.iter().filter(|other| !std::ptr::eq(*other, site) && other.old.is_some() && other.new.is_some()).filter_map(|other| other.new).find(|inner| inner.name == name && !outer.file.is_empty() && inner.file == outer.file && outer.r[0] <= inner.r[0] && inner.r[1] <= outer.r[1] && inner.r != outer.r).map(|inner| inner.call.clone())
 }
 
-/// The text of a call that only moves (R63.9-8).
-pub const MOVED: &str = "only the place of the call changes: its code has the line, the column, or the file of the call (`line!()`, `column!()`, `file!()`)";
+/// The start of the text of a call whose expansion changes only by its context (R65.1-4).
+pub const CONTEXT: &str = "only the context of the call changes";
 
-/// R63.9-8: the text of a call that only moves, on the evidence of the compiler. The driver
-/// gives each expansion a second text (`placeless`) in which each literal from an expansion of
-/// `line!()`, `column!()`, or `file!()` (also through `concat!`) is a mark. Two different texts
-/// with equal placeless texts differ only in such literals: the place of the call. The call
-/// text must be equal too. A number or a text that only looks like a line is not evidence: a
-/// record with no such literal has no placeless text, so it never gives this text. `None`
-/// for each other pair. The caller checks the definitions of the chain and the input.
-pub fn moved_place(old: &Expansion, new: &Expansion) -> Option<String> {
-    if old.text == new.text || old.call != new.call || (old.placeless.is_empty() && new.placeless.is_empty()) {
+/// R65.1-4 (R63.9-8 is one case of it): the text of a changed call whose definitions and input
+/// are equal. Each token of an expansion comes from a definition of the chain, from the input
+/// of the call, or from the context of the call (R65.1-1). The driver gives each expansion a
+/// second text (`placeless`) with a mark for each token of the context, and the source and the
+/// value of each mark (`context`). With equal identities of the definitions that no fact can
+/// show (`ids`: a macro of another crate, a proc macro), an equal call text, and equal texts
+/// with the marks, each difference is in a token of the context: the text names the source of
+/// each mark whose value changes ("the line of the call", "the environment variable `X`",
+/// "the file `data.txt`", "the output of the proc macro `Rows`"). The caller checks the
+/// definitions of the workspace (no changed `macro_rules!` of the chain) and the input (no
+/// fact with an edit in it). A number or a text that only looks like the line is not
+/// evidence: a record with no mark never gives this text. `None` for each other pair.
+pub fn context_only(old: &Expansion, new: &Expansion) -> Option<String> {
+    if old.text == new.text || old.call != new.call || old.ids != new.ids {
         return None;
     }
-    let placeless = |e: &Expansion| if e.placeless.is_empty() { e.text.clone() } else { e.placeless.clone() };
-    // The numbers are in the diff of the call: the text is the same for each moved call, so
-    // the moved calls of one macro fold into one line.
-    (placeless(old) == placeless(new)).then(|| MOVED.to_string())
+    if old.placeless.is_empty() || old.placeless != new.placeless || old.context.len() != new.context.len() {
+        return None;
+    }
+    // R66.11-1: a part that the driver cannot print is never evidence.
+    if [old, new].iter().any(|e| !not_known(e).is_empty() || !semilla_core::text::unknown_causes(&e.placeless).is_empty()) {
+        return None;
+    }
+    // The marks of the text are stable (the maker and the text of its call); the source of a
+    // mark comes from a compare of its value with the place, so it is the source of the new side.
+    let mut sources: Vec<&str> = Vec::new();
+    for ([_, before], [source, after]) in old.context.iter().zip(&new.context) {
+        if before != after && !sources.contains(&source.as_str()) {
+            sources.push(source);
+        }
+    }
+    // The numbers are in the diff of the call: the text is the same for each such call, so the
+    // calls of one macro fold into one line.
+    if sources.is_empty() {
+        return None;
+    }
+    // A source of data (a read file, an environment variable, the module path, the output of a
+    // proc macro) gives a new value to the code: the text shows it. A source of the place (the
+    // line, the column) only moves the call, and its value is in the diff.
+    let data = sources.iter().any(|source| ["the file `", "the environment variable `", "the module path", "the output of the proc macro"].iter().any(|kind| source.starts_with(kind)));
+    let values = if data { format!("; {}", changed_text(&old.text, &new.text)) } else { String::new() };
+    Some(format!("{CONTEXT}: {}{values}", sources.join(", ")))
 }
 
 /// R63.9-8: the changed part of two texts on one line: the text between the equal start and
@@ -951,27 +1040,75 @@ mod tests {
 
     // rule+ R63.9-8
     // rule- R63.9-8
+    // rule+ R65.1-4
+    // rule- R65.1-4
     #[test]
-    fn a_call_that_only_moves_has_one_text_and_a_file_fact_gives_the_changed_text() {
-        let at = |line: usize, text: &str, placeless: &str| Expansion { file: "src/lib.rs".into(), line, col: 4, call: "m!()".into(), placeless: placeless.into(), ..expansion("stmts", text) };
-        // The driver marks the literals of `line!()` and of `concat!(file!(), ":", line!())`.
-        let mark = "(1, \"\u{0}line\u{0}\")";
-        assert_eq!(moved_place(&at(16, "(1, 16u32)", mark), &at(18, "(1, 18u32)", mark)).as_deref(), Some(MOVED));
-        let concat = "panic!(\"\u{0}concat!(\"at \", file!(), \":\", line!())\u{0}\")";
-        assert_eq!(moved_place(&at(16, "panic!(\"at src/lib.rs:16\")", concat), &at(18, "panic!(\"at src/lib.rs:18\")", concat)).as_deref(), Some(MOVED));
+    fn a_call_that_only_changes_by_its_context_has_one_text_and_a_file_fact_gives_the_changed_text() {
+        let at = |line: usize, text: &str, placeless: &str, value: &str| Expansion {
+            file: "src/lib.rs".into(),
+            line,
+            col: 4,
+            call: "m!()".into(),
+            placeless: placeless.into(),
+            context: if placeless.is_empty() { Vec::new() } else { vec![["the line of the call".into(), value.into()]] },
+            ..expansion("stmts", text)
+        };
+        // The driver marks the literal of `line!()` with its source and its value.
+        let mark = "(1, \"\u{0}the line of the call\u{0}\")";
+        assert_eq!(context_only(&at(16, "(1, 16u32)", mark, "16u32"), &at(18, "(1, 18u32)", mark, "18u32")).as_deref(), Some("only the context of the call changes: the line of the call"));
+        // A value of `env!` and of `module_path!()`: the source names the variable.
+        let env = |value: &str| Expansion {
+            call: "m!()".into(),
+            placeless: "\"\u{0}the environment variable `CARGO_PKG_DESCRIPTION` (`env!(\"CARGO_PKG_DESCRIPTION\")`)\u{0}\"".into(),
+            context: vec![["the environment variable `CARGO_PKG_DESCRIPTION` (`env!(\"CARGO_PKG_DESCRIPTION\")`)".into(), value.into()]],
+            ..expansion("expr", value)
+        };
+        assert_eq!(context_only(&env("\"a\""), &env("\"b\"")).as_deref(), Some("only the context of the call changes: the environment variable `CARGO_PKG_DESCRIPTION` (`env!(\"CARGO_PKG_DESCRIPTION\")`); changed code `a` → `b`"));
         // The negative cases: a different change with the move, a changed literal that only
         // looks like the line (`5u32` → `6u32`, `"src/lib.rs:5"` → `"src/lib.rs:6"`, no mark of
-        // the driver), a different call text, and a call that does not move.
-        assert_eq!(moved_place(&at(16, "(1, 16u32)", mark), &at(18, "(2, 18u32)", "(2, \"\u{0}line\u{0}\")")), None);
-        assert_eq!(moved_place(&at(5, "5u32", ""), &at(6, "6u32", "")), None);
-        assert_eq!(moved_place(&at(5, "\"src/lib.rs:5\"", ""), &at(6, "\"src/lib.rs:6\"", "")), None);
-        let mut other = at(18, "(1, 18u32)", mark);
+        // the driver), a different call text, a call that does not move, a changed identity of
+        // a definition of another crate, and a mark with a different source.
+        assert_eq!(context_only(&at(16, "(1, 16u32)", mark, "16u32"), &at(18, "(2, 18u32)", "(2, \"\u{0}the line of the call\u{0}\")", "18u32")), None);
+        assert_eq!(context_only(&at(5, "5u32", "", ""), &at(6, "6u32", "", "")), None);
+        assert_eq!(context_only(&at(5, "\"src/lib.rs:5\"", "", ""), &at(6, "\"src/lib.rs:6\"", "", "")), None);
+        let mut other = at(18, "(1, 18u32)", mark, "18u32");
         other.call = "m!(x)".into();
-        assert_eq!(moved_place(&at(16, "(1, 16u32)", mark), &other), None);
-        assert_eq!(moved_place(&at(16, "(1, 16u32)", mark), &at(16, "(1, 16u32)", mark)), None);
+        assert_eq!(context_only(&at(16, "(1, 16u32)", mark, "16u32"), &other), None);
+        assert_eq!(context_only(&at(16, "(1, 16u32)", mark, "16u32"), &at(16, "(1, 16u32)", mark, "16u32")), None);
+        let (mut a, mut b) = (at(16, "(1, 16u32)", mark, "16u32"), at(18, "(1, 18u32)", mark, "18u32"));
+        a.ids = vec!["here: macro of crate depot 1".into()];
+        b.ids = vec!["here: macro of crate depot 2".into()];
+        assert_eq!(context_only(&a, &b), None);
+        // A mark of another maker (the text of a changed call) is a different text with marks.
+        let c = at(18, "(1, 18u32)", "(1, \"\u{0}made by `other!()`\u{0}\")", "18u32");
+        assert_eq!(context_only(&at(16, "(1, 16u32)", mark, "16u32"), &c), None);
         // The changed text of two texts, at word bounds.
         assert_eq!(changed_text("let a = f(39u32, x);", "let a = f(41u32, x);"), "changed code `39u32` → `41u32`");
         assert_eq!(changed_text("value_one + 1", "value_two + 1"), "changed code `value_one` → `value_two`");
+    }
+
+    // R66.11-1: a text with a part that the driver cannot print gives its cause, and it is never
+    // evidence of a change of the context only (R65.1-4). The negative case: a known text with
+    // known marks gives the text of R65.1-4 as before.
+    // rule+ R66.11-1
+    // rule- R66.11-1
+    #[test]
+    fn a_text_that_the_driver_cannot_print_is_never_evidence() {
+        let at = |line: usize, text: &str, placeless: &str| Expansion {
+            file: "src/lib.rs".into(),
+            line,
+            call: "m!()".into(),
+            placeless: placeless.into(),
+            context: vec![["the line of the call".into(), format!("{line}u32")]],
+            ..expansion("stmts", text)
+        };
+        let mark = "(1, \"\u{0}the line of the call\u{0}\")";
+        let unknown = |n: u32| format!("not known: the printer of the compiler cannot print an `else` that is not a block (unknown_print#9.{n}.1)");
+        assert_eq!(context_only(&at(16, "(1, 16u32)", mark), &at(18, "(1, 18u32)", mark)).as_deref(), Some("only the context of the call changes: the line of the call"));
+        assert_eq!(context_only(&at(16, "(1, 16u32)", &unknown(1)), &at(18, "(1, 18u32)", &unknown(2))), None);
+        assert_eq!(context_only(&at(16, &unknown(3), mark), &at(18, &unknown(4), mark)), None);
+        assert_eq!(not_known(&at(16, &format!("impl A {{ {} }}", unknown(5)), mark)), vec!["the printer of the compiler cannot print an `else` that is not a block".to_string()]);
+        assert!(not_known(&at(16, "(1, 16u32)", &unknown(6))).is_empty());
     }
 
     #[test]

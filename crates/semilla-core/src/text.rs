@@ -240,9 +240,68 @@ pub fn ascii_form(name: &str) -> Option<String> {
     Some(name.chars().map(|c| if c.is_ascii() { c.to_string() } else { format!("\\u{{{:x}}}", c as u32) }).collect())
 }
 
+/// The text of a value for a line, with no unique word of the driver (R66.10-1). The driver gives
+/// a value that it cannot compute a unique word (`unknown_WHAT#…`), so that the value is never
+/// equal to another value; the line shows only the cause: `not known: the limit of the digest
+/// (unknown_digest#4.2.17)` gives `not known: the limit of the digest`.
+pub fn without_unique(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(" (unknown_") {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at + 2..];
+        match tail.find(')') {
+            Some(end) => rest = &tail[end + 1..],
+            None => {
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The causes of the parts of a text that the driver cannot compute or print (R66.10-1,
+/// R66.11-1): each part `not known: CAUSE (unknown_WHAT#…)` gives `CAUSE`, in the order of the
+/// text, each cause one time. A text with no such part gives an empty list.
+pub fn unknown_causes(text: &str) -> Vec<String> {
+    let mut causes: Vec<String> = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(" (unknown_") {
+        let before = &rest[..at];
+        if let Some(start) = before.rfind("not known: ") {
+            let cause = before[start + "not known: ".len()..].to_string();
+            if !causes.contains(&cause) {
+                causes.push(cause);
+            }
+        }
+        rest = &rest[at + 2..];
+    }
+    causes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // R66.11-1 and R66.11-4: the cause of each part that the driver cannot compute or print. A
+    // text with no such part has no cause; a word "not known" with no unique word is no part.
+    // rule+ R66.11-4
+    // rule- R66.11-4
+    #[test]
+    fn each_part_that_the_driver_cannot_compute_gives_its_cause() {
+        assert_eq!(unknown_causes("definition not known: the limit of the depth (unknown_digest#4.2.17)"), vec!["the limit of the depth"]);
+        assert_eq!(unknown_causes("impl A {\n not known: the printer of the compiler cannot print an `else` that is not a block (unknown_print#1.0.5) }\nnot known: x (unknown_print#1.1.6) not known: x (unknown_print#1.2.7)"), vec!["the printer of the compiler cannot print an `else` that is not a block", "x"]);
+        assert!(unknown_causes("definition #7bc0ee4d6f74515f").is_empty());
+        assert!(unknown_causes("the value is not known: a text (b)").is_empty());
+    }
+
+    #[test]
+    fn a_value_line_has_no_unique_word_of_the_driver() {
+        assert_eq!(without_unique("definition not known: the limit of the digest (unknown_digest#4.2.17)"), "definition not known: the limit of the digest");
+        assert_eq!(without_unique("definition #7bc0ee4d6f74515f"), "definition #7bc0ee4d6f74515f");
+        assert_eq!(without_unique("a (b) c"), "a (b) c");
+    }
 
     /// Design 54.15: an old block text and a new block text make one block, a line diff. Each
     /// line of the two texts is in the block. The negative tests: one side with one line and

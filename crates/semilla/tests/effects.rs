@@ -113,6 +113,9 @@ pub fn say(x: u32) { println!("{x}"); }
 pub unsafe fn put(p: *mut u32, v: u32) { unsafe { *p = v; } }
 /// A process exit.
 pub fn leave(code: i32) -> ! { std::process::exit(code) }
+#[track_caller]
+pub fn give_up() -> ! { panic!("give up") }
+pub fn quiet(_: &std::panic::PanicHookInfo<'_>) {}
 /// A `&mut` reference inside a value of an argument: the capture of a closure.
 pub fn call_twice<F: FnMut()>(f: &mut F) { f(); f(); }
 pub fn bump_with(a: u32) -> u32 { let mut x = a; let mut inc = || x = x.wrapping_add(1); call_twice(&mut inc); x }
@@ -181,6 +184,12 @@ pub fn cells(c: &std::cell::Cell<u32>) -> u32 { let a = mark(c); touch(c, 5); a 
 pub fn pairs(v: &mut Vec<(u32, u32)>) { v.push((1, 2)); v.push((3, 4)); }
 pub fn total(v: &Vec<u32>) -> u32 { v.iter().sum() }
 pub fn extend_slice(v: &mut Vec<u32>, s: &[u32]) { v.extend_from_slice(s); v.push(0); }
+pub fn caught_order() -> u32 { let a = std::panic::catch_unwind(hit).unwrap_or(0); let b = hit(); a.wrapping_sub(b) }
+pub fn caught_twice() -> u32 { let a = std::panic::catch_unwind(hit).unwrap_or(0); let b = std::panic::catch_unwind(hit).unwrap_or(0); a.wrapping_sub(b) }
+pub fn hook_order(x: u32) -> u32 { let _ = std::panic::take_hook(); say(x); x }
+pub fn set_order(x: u32) -> u32 { std::panic::set_hook(Box::new(quiet)); say(x); x }
+pub fn hook_pure(x: u32) -> u32 { let _ = std::panic::take_hook(); mix(x) }
+pub fn fail_order(x: u32, y: u32) -> u32 { if x > 9 { give_up() } mix(y) }
 "##;
 
 const NEW: &str = r##"
@@ -243,6 +252,12 @@ pub fn cells(c: &std::cell::Cell<u32>) -> u32 { touch(c, 5); mark(c) }
 pub fn pairs(v: &mut Vec<(u32, u32)>) { v.push((3, 4)); v.push((1, 2)); }
 pub fn total(v: &Vec<u32>) -> u32 { let mut s = 0; for x in v { s += x; } s }
 pub fn extend_slice(v: &mut Vec<u32>, s: &[u32]) { v.push(0); v.extend_from_slice(s); }
+pub fn caught_order() -> u32 { let b = hit(); let a = std::panic::catch_unwind(hit).unwrap_or(0); a.wrapping_sub(b) }
+pub fn caught_twice() -> u32 { let a = std::panic::catch_unwind(hit).unwrap_or(0); let _ = std::panic::catch_unwind(hit).unwrap_or(0); a.wrapping_sub(a) }
+pub fn hook_order(x: u32) -> u32 { say(x); let _ = std::panic::take_hook(); x }
+pub fn set_order(x: u32) -> u32 { say(x); std::panic::set_hook(Box::new(quiet)); x }
+pub fn hook_pure(x: u32) -> u32 { let m = mix(x); let _ = std::panic::take_hook(); m }
+pub fn fail_order(x: u32, y: u32) -> u32 { let m = mix(y); if x > 9 { give_up() } m }
 "##;
 
 fn kind(verdict: &Verdict) -> &'static str {
@@ -271,6 +286,8 @@ fn kind(verdict: &Verdict) -> &'static str {
 // rule+ R64.4-2
 // rule+ R64.4-3
 // rule- R64.4-3
+// rule+ R65.3-8
+// rule- R65.3-8
 #[test]
 fn each_effect_keeps_the_order_of_a_call_and_a_call_with_no_effect_is_a_value() {
     if !semilla_smt::Solver::available() {
@@ -343,6 +360,20 @@ fn each_effect_keeps_the_order_of_a_call_and_a_call_with_no_effect_is_a_value() 
         ("shop::cells", "not decided", "the order of the calls changes: shop::mark, shop::touch"),
         ("shop::pairs", "not decided", "the order of the calls changes: std::vec::Vec::<(u32, u32)>::push"),
         ("shop::total", "not decided", ""),
+        // R65.3-8: a panic is a callee that never returns and has `#[track_caller]`, not a name
+        // prefix. `catch_unwind` runs its closure (`hit()` writes a static), so the order of the
+        // two calls stays; the old prefix `std::panicking::` made it a stop with no effect, and
+        // the check gave "equivalent" (a false proof). `set_hook` and `take_hook` write the
+        // global hook: a world effect.
+        ("shop::caught_order", "not decided", "the order of the calls changes"),
+        // Two calls of `catch_unwind(hit)` give two values (the counter changes): the old prefix
+        // rule made each one a value of its arguments, so `a - b` was `a - a` ("equivalent").
+        ("shop::caught_twice", "not decided", ""),
+        ("shop::hook_order", "not decided", "the order of the calls changes"),
+        ("shop::set_order", "not decided", ""),
+        ("shop::hook_pure", "equivalent", ""),
+        // A function of the workspace that never returns and has `#[track_caller]` is a stop.
+        ("shop::fail_order", "equivalent", ""),
     ];
     let mut problems = Vec::new();
     for (name, want, part) in expected {
@@ -358,6 +389,12 @@ fn each_effect_keeps_the_order_of_a_call_and_a_call_with_no_effect_is_a_value() 
     let form_text = |name: &str| old.iter().find(|record| record.name == name).and_then(|record| record.q.clone()).unwrap_or_default();
     assert!(form_text("shop::bump_with").contains("an argument with a `&mut` reference inside a value"), "{}", form_text("shop::bump_with"));
     assert!(!form_text("shop::two_muts").contains("an argument with a `&mut` reference inside a value"));
+    // R65.3-8: `catch_unwind` runs its closure, and `take_hook` writes the global hook: each one
+    // is a world effect, not a stop with no effect (the old prefix `std::panicking::`).
+    assert!(form_text("shop::caught_twice").contains("\"p\":\"std::panic::catch_unwind::<fn() -> u32 {shop::hit}, u32>\",\"e\":{\"w\":"), "{}", form_text("shop::caught_twice"));
+    assert!(form_text("shop::hook_pure").contains("\"p\":\"std::panic::take_hook\",\"e\":{\"w\":"), "{}", form_text("shop::hook_pure"));
+    // A function that never returns and has `#[track_caller]` is a stop with no world effect.
+    assert!(form_text("shop::fail_order").contains("\"p\":\"shop::give_up\",\"w\":\"shop::give_up\",\"e\":{\"p\":true}"), "{}", form_text("shop::fail_order"));
     let _ = std::fs::remove_dir_all(&scratch);
 }
 

@@ -100,14 +100,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + panic `overflow` (src/lib.rs:4)
       control flow: + arrow entry (src/lib.rs:4) → check `overflow: v + 2` (src/lib.rs:4)
       equivalence: different: for v = 0: before returns 0, after returns 2
-      expansion: `bump!(v)` at `shop::keep/tail` (src/lib.rs:4): expansion added: 1 line(s) of code
   ◆ f4 derived: deleted statement `bump!(v)` at `shop::pick/tail` [semantics · code different]
       affected bodies: shop::pick (with 1 other edit of this body)
       control flow: − check `overflow: v + 1` (src/lib.rs:-3): ok → return, fail → panic `overflow`
       control flow: − panic `overflow` (src/lib.rs:-3)
       control flow: − arrow entry (src/lib.rs:-3) → check `overflow: v + 1` (src/lib.rs:-3)
       equivalence: different: for v = 0: before returns 1, after returns 0
-      expansion: `bump!(v)` at `shop::pick/tail` (src/lib.rs:-3): expansion removed: 1 line(s) of code
   ◆ f5 derived: added statement `v` at `shop::pick/tail` [semantics · code different]
       affected bodies: shop::pick (with 1 other edit of this body)
       control flow: + arrow entry (src/lib.rs:3) → return (src/lib.rs:3)
@@ -117,7 +115,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     shop::base (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); no edit in the body; different (for v = 0: before returns 1, after returns 2); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:5)
     shop::keep (src/lib.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for v = 0: before returns 0, after returns 2)
     shop::pick (src/lib.rs:3): graph changes: −1 check, −1 panic, +1 arrow, −3 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for v = 0: before returns 1, after returns 0)
-  expansions: 1 changed, 1 added, 1 removed, 6 equal
+  expansions: 1 changed, 1 added, 1 removed, 25 equal
     `bump!(v)` at `shop::keep/tail` (src/lib.rs:4): expansion added: `macro_rules! bump` (src/lib.rs:1): 1 line(s) of code; the step adds the call or its input
     `bump!(v)` at `shop::base/tail` (src/lib.rs:5): expansion changed: `macro_rules! bump` (src/lib.rs:1): changed literal `1` → `2` at `expansion/rhs` [semantics]; from `macro_rules! bump` (src/lib.rs:1)
     `bump!(v)` at `shop::pick/tail` (src/lib.rs:-3): expansion removed: `macro_rules! bump` (src/lib.rs:1): 1 line(s) of code; the step removes the call or its input

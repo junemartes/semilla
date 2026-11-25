@@ -1,0 +1,64 @@
+note: batch 10n, part B: each macro call has a record, also a macro of the standard library; the step changes the input of `assert_eq!`; its changed expansion shows; the equal expansion of `println!` is only a count in the section
+rule+: R65.2-1 R65.2-2
+rule-: R65.2-2
+must_match: `assert_eq!\(total\(3\), 6\)` at `shop::check/S0` \(src/lib\.rs:6\): expansion changed: `macro assert_eq` \(crate core\)
+must_not_match: `println!
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(x: u32) -> u32 {
+    x * 2
+}
+
+pub fn check() {
+    assert_eq!(total(2), 4);
+    println!("checked");
+}
+=== new src/lib.rs
+pub fn total(x: u32) -> u32 {
+    x * 2
+}
+
+pub fn check() {
+    assert_eq!(total(3), 6);
+    println!("checked");
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f1, f2)
+      in: shop::check
+      lines: src/lib.rs:6, src/lib.rs:-6
+      to state it: --change 'shop::check=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::check=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `2` → `3` at `shop::check/S0/args[0]/args[0]` [semantics · code different]
+      affected bodies: shop::check (with 1 other edit of this body)
+      control flow: ~ branch `assert_eq!(total(2), 4)` → `assert_eq!(total(3), 6)` (src/lib.rs:-6, src/lib.rs:6)
+      control flow: ~ panic `assert_eq!(total(2), 4)` → `assert_eq!(total(3), 6)` (src/lib.rs:-6, src/lib.rs:6)
+      equivalence: not decided alone: a deref of a value that is not a reference (a `Box`, a raw pointer); the body: not decided: a deref of a value that is not a reference (a `Box`, a raw pointer)
+      expansion: `assert_eq!(total(3), 6)` at `shop::check/S0` (src/lib.rs:6): expansion changed: changed literal `2` → `3` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/args[0]` [semantics]; changed literal `4` → `6` at `expansion/S0/body/S0/scrutinee/elems[1]/operand` [semantics] (also the change of f2)
+  ◆ f2 derived: changed literal `4` → `6` at `shop::check/S0/args[1]` [semantics · code different]
+      affected bodies: shop::check (with 1 other edit of this body)
+      control flow: ~ branch `assert_eq!(total(2), 4)` → `assert_eq!(total(3), 6)` (src/lib.rs:-6, src/lib.rs:6)
+      control flow: ~ panic `assert_eq!(total(2), 4)` → `assert_eq!(total(3), 6)` (src/lib.rs:-6, src/lib.rs:6)
+      equivalence: not decided alone: a deref of a value that is not a reference (a `Box`, a raw pointer); the body: not decided: a deref of a value that is not a reference (a `Box`, a raw pointer)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::check (src/lib.rs:5): same structure: 1 changed condition, 1 changed panic call; not decided (a deref of a value that is not a reference (a `Box`, a raw pointer))
+  expansions: 1 changed, 1 equal
+    `assert_eq!(total(3), 6)` at `shop::check/S0` (src/lib.rs:6): expansion changed: `macro assert_eq` (crate core): changed literal `2` → `3` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/args[0]` [semantics]; changed literal `4` → `6` at `expansion/S0/body/S0/scrutinee/elems[1]/operand` [semantics]; the input of the call changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `2` → `3` at `shop::check/S0/args[0]/args[0]` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6
+◆ f2 derived: changed literal `4` → `6` at `shop::check/S0/args[1]` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6

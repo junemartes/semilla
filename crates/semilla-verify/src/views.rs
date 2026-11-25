@@ -984,6 +984,15 @@ pub const LINE_MAX: usize = 500;
 /// (items with ", " between them) shows its first items and its last items, with the count of
 /// the items that it does not show. Each other long line shows its start and its end. The cut
 /// says that `semilla status --verbose` shows the full line.
+///
+/// [R66.10-6] The cut keeps each result of a check: a result word ("equivalent", "different",
+/// "not decided", "not checked", also with "alone") and the list of its configurations ("in dev,
+/// release, dev, no default features (libraries and binaries only)"). If the cut above hides a
+/// part of a result, the cut hides other text in its place, in this order: items in the middle
+/// of the longest list of code names (items in backquotes, such as the inlined callees of a
+/// proof); items in the middle of the longest list with no result; characters in the middle of
+/// the longest text with no result. A cut that hides no part of a result stays as it was, so the
+/// lines with no result (the lines of the default mode) keep their text.
 pub fn fit_line(line: &str) -> String {
     const HEAD: usize = 300;
     const TAIL: usize = 100;
@@ -993,6 +1002,17 @@ pub fn fit_line(line: &str) -> String {
     }
     const FULL: &str = "`semilla status --verbose` shows the full line";
     let parts: Vec<&str> = line.split(", ").collect();
+    // The byte range of each item in the line.
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut at = 0;
+    for part in &parts {
+        ranges.push((at, at + part.len()));
+        at += part.len() + 2;
+    }
+    let results = result_ranges(line);
+    let touches = |from: usize, to: usize| results.iter().any(|(a, b)| from < *b && *a < to);
+    // The cut of a list: its first items and its last items.
+    let mut old: Option<(String, (usize, usize))> = None;
     if parts.len() >= 6 {
         let mut head = 0;
         let mut size = 0;
@@ -1008,13 +1028,139 @@ pub fn fit_line(line: &str) -> String {
         }
         if head >= 1 && tail >= 1 && head + tail < parts.len() {
             let hidden = parts.len() - head - tail;
-            return format!("{}, … ({hidden} items more; {FULL}) …, {}", parts[..head].join(", "), parts[parts.len() - tail..].join(", "));
+            let text = format!("{}, … ({hidden} items more; {FULL}) …, {}", parts[..head].join(", "), parts[parts.len() - tail..].join(", "));
+            old = Some((text, (ranges[head].0, ranges[parts.len() - tail - 1].1)));
         }
     }
-    let chars: Vec<char> = line.chars().collect();
-    let start: String = chars[..HEAD].iter().collect();
-    let end: String = chars[chars.len() - TAIL..].iter().collect();
-    format!("{start}… ({} characters more; {FULL}) …{end}", chars.len() - HEAD - TAIL)
+    let old = old.unwrap_or_else(|| {
+        let chars: Vec<char> = line.chars().collect();
+        let start: String = chars[..HEAD].iter().collect();
+        let end: String = chars[chars.len() - TAIL..].iter().collect();
+        (format!("{start}… ({} characters more; {FULL}) …{end}", chars.len() - HEAD - TAIL), (start.len(), line.len() - end.len()))
+    });
+    if !touches(old.1.0, old.1.1) {
+        return old.0;
+    }
+    // The longest run of items with a test: the cut hides items in its middle.
+    let list_cut = |keep: &dyn Fn(usize) -> bool| -> Option<String> {
+        let mut best: Option<(usize, usize)> = None;
+        let mut index = 0;
+        while index < parts.len() {
+            if !keep(index) {
+                index += 1;
+                continue;
+            }
+            let mut end = index;
+            while end < parts.len() && keep(end) {
+                end += 1;
+            }
+            if best.is_none_or(|(a, b)| end - index > b - a) {
+                best = Some((index, end));
+            }
+            index = end;
+        }
+        let (start, end) = best.filter(|(start, end)| end - start >= 3)?;
+        // Keep the first items of the run and its last item; hide the fewest items.
+        (1..end - start - 1).rev().map(|kept| (kept, end - start - 1 - kept)).map(|(kept, hidden)| format!("{}, … ({hidden} items more; {FULL}) …, {}", parts[..start + kept].join(", "), parts[end - 1..].join(", "))).find(|text| count(text) <= LINE_MAX)
+    };
+    let code = |index: usize| {
+        let part = parts[index].trim_end_matches([')', ';', '.']);
+        part.len() >= 2 && part.starts_with('`') && part.ends_with('`')
+    };
+    let free = |index: usize| !touches(ranges[index].0, ranges[index].1);
+    if let Some(text) = list_cut(&|index| code(index) && free(index)) {
+        return text;
+    }
+    if let Some(text) = list_cut(&free) {
+        return text;
+    }
+    // The longest text with no result and no cut mark: the cut hides characters in its middle,
+    // one text after another.
+    let marker = |hidden: usize| format!("… ({hidden} characters more; {FULL}) …");
+    let mut text = line.to_string();
+    for _ in 0..4 {
+        if count(&text) <= LINE_MAX {
+            return text;
+        }
+        let mut kept = result_ranges(&text);
+        let mut search = 0;
+        while let Some(offset) = text[search..].find(FULL) {
+            let at = search + offset;
+            let from = text[..at].rfind("… (").unwrap_or(at);
+            let to = text[at..].find(") …").map_or(at + FULL.len(), |end| at + end + ") …".len());
+            kept.push((from, to));
+            search = to;
+        }
+        kept.sort();
+        let mut gaps: Vec<(usize, usize)> = Vec::new();
+        let mut from = 0;
+        for (a, b) in kept {
+            if a > from {
+                gaps.push((from, a));
+            }
+            from = from.max(b);
+        }
+        if from < text.len() {
+            gaps.push((from, text.len()));
+        }
+        let Some((a, b)) = gaps.into_iter().max_by_key(|(a, b)| count(&text[*a..*b])) else { break };
+        let gap: Vec<usize> = text[a..b].char_indices().map(|(offset, _)| a + offset).collect();
+        let need = count(&text) - LINE_MAX + count(&marker(count(&text)));
+        // Keep 10 characters at each end of the text.
+        let Some(room) = gap.len().checked_sub(20).filter(|room| *room > count(&marker(gap.len()))) else { break };
+        let hidden = need.min(room);
+        let first = (gap.len() - hidden) / 2;
+        let (cut_from, cut_to) = (gap[first], gap.get(first + hidden).copied().unwrap_or(b));
+        text = format!("{}{}{}", &text[..cut_from], marker(count(&text[cut_from..cut_to])), &text[cut_to..]);
+    }
+    if count(&text) <= LINE_MAX {
+        return text;
+    }
+    old.0
+}
+
+/// The byte ranges of the results of a check in a line (R66.10-6): a result word, "alone", and
+/// the list of its configurations after " in " (to the start of the cause: ": ", "; ", or " (",
+/// but not " (libraries and binaries only)").
+fn result_ranges(line: &str) -> Vec<(usize, usize)> {
+    // The mark of a configuration that builds only the libraries and the binaries.
+    let only = semilla_core::report::ConfigNote::NARROW;
+    let bytes = line.as_bytes();
+    let mut found = Vec::new();
+    for word in crate::equiv::result_words() {
+        let mut search = 0;
+        while let Some(offset) = line[search..].find(word) {
+            let start = search + offset;
+            search = start + word.len();
+            if start > 0 && bytes[start - 1].is_ascii_alphanumeric() {
+                continue;
+            }
+            let mut end = start + word.len();
+            if line[end..].starts_with(" alone") {
+                end += " alone".len();
+            }
+            let rest = &line[end..];
+            let ends = rest.is_empty() || [" in ", ": ", "; ", " (", ")", ",", ";"].iter().any(|next| rest.starts_with(next));
+            if !ends {
+                continue;
+            }
+            if rest.starts_with(" in ") {
+                end += " in ".len();
+                while end < line.len() {
+                    let rest = &line[end..];
+                    if rest.starts_with(only) {
+                        end += only.len();
+                    } else if rest.starts_with(": ") || rest.starts_with("; ") || rest.starts_with(" (") || rest.starts_with(" …") {
+                        break;
+                    } else {
+                        end += rest.chars().next().map_or(1, char::len_utf8);
+                    }
+                }
+            }
+            found.push((start, end));
+        }
+    }
+    found
 }
 
 /// The facts of one step of the text report (design 37.13 to 37.18).

@@ -1,0 +1,195 @@
+note: batch 10nq-fix2, E3: a body with no edit reads a generic constant whose digest passes the limit of the digest (R66.10-1): the line says that the check cannot compare the constant, with the cause, and the check stays not decided with a cause that does not say "changes"; a body that reads a constant with two known values that differ keeps "reads a changed constant"
+rule+: R66.11-4
+rule-: R66.11-4
+must_match: shop::far \(src/lib\.rs:\d+\): same graph; reads a constant that the check cannot compare: `shop::Big::<T>::FAR` \(the limit of the digest\); not decided \(a constant that the check cannot compare: `shop::Big::<T>::FAR::<T>` \(the limit of the digest\)\)
+must_match: shop::price \(src/lib\.rs:\d+\): same graph; reads a changed constant: `shop::RATE` \(7 → 6\)
+must_not_match: changed constant: `shop::Big
+must_not_match: definition not known
+must_not_match: unknown_digest
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub const fn k0() -> usize { k1() + 1 }
+pub const fn k1() -> usize { k2() + 1 }
+pub const fn k2() -> usize { k3() + 1 }
+pub const fn k3() -> usize { k4() + 1 }
+pub const fn k4() -> usize { k5() + 1 }
+pub const fn k5() -> usize { k6() + 1 }
+pub const fn k6() -> usize { k7() + 1 }
+pub const fn k7() -> usize { k8() + 1 }
+pub const fn k8() -> usize { k9() + 1 }
+pub const fn k9() -> usize { k10() + 1 }
+pub const fn k10() -> usize { k11() + 1 }
+pub const fn k11() -> usize { k12() + 1 }
+pub const fn k12() -> usize { k13() + 1 }
+pub const fn k13() -> usize { k14() + 1 }
+pub const fn k14() -> usize { k15() + 1 }
+pub const fn k15() -> usize { k16() + 1 }
+pub const fn k16() -> usize { k17() + 1 }
+pub const fn k17() -> usize { k18() + 1 }
+pub const fn k18() -> usize { k19() + 1 }
+pub const fn k19() -> usize { k20() + 1 }
+pub const fn k20() -> usize { k21() + 1 }
+pub const fn k21() -> usize { k22() + 1 }
+pub const fn k22() -> usize { k23() + 1 }
+pub const fn k23() -> usize { k24() + 1 }
+pub const fn k24() -> usize { k25() + 1 }
+pub const fn k25() -> usize { k26() + 1 }
+pub const fn k26() -> usize { k27() + 1 }
+pub const fn k27() -> usize { k28() + 1 }
+pub const fn k28() -> usize { k29() + 1 }
+pub const fn k29() -> usize { k30() + 1 }
+pub const fn k30() -> usize { k31() + 1 }
+pub const fn k31() -> usize { k32() + 1 }
+pub const fn k32() -> usize { k33() + 1 }
+pub const fn k33() -> usize { k34() + 1 }
+pub const fn k34() -> usize { k35() + 1 }
+pub const fn k35() -> usize { k36() + 1 }
+pub const fn k36() -> usize { k37() + 1 }
+pub const fn k37() -> usize { k38() + 1 }
+pub const fn k38() -> usize { k39() + 1 }
+pub const fn k39() -> usize { k40() + 1 }
+pub const fn k40() -> usize { k41() + 1 }
+pub const fn k41() -> usize { k42() + 1 }
+pub const fn k42() -> usize { k43() + 1 }
+pub const fn k43() -> usize { k44() + 1 }
+pub const fn k44() -> usize { k45() + 1 }
+pub const fn k45() -> usize { k46() + 1 }
+pub const fn k46() -> usize { k47() + 1 }
+pub const fn k47() -> usize { k48() + 1 }
+pub const fn k48() -> usize { k49() + 1 }
+pub const fn k49() -> usize { k50() + 1 }
+pub const fn k50() -> usize { k51() + 1 }
+pub const fn k51() -> usize { k52() + 1 }
+pub const fn k52() -> usize { k53() + 1 }
+pub const fn k53() -> usize { k54() + 1 }
+pub const fn k54() -> usize { k55() + 1 }
+pub const fn k55() -> usize { k56() + 1 }
+pub const fn k56() -> usize { k57() + 1 }
+pub const fn k57() -> usize { k58() + 1 }
+pub const fn k58() -> usize { k59() + 1 }
+pub const fn k59() -> usize { k60() + 1 }
+pub const fn k60() -> usize { 1 }
+
+pub struct Big<T>(pub T);
+
+impl<T> Big<T> {
+    pub const FAR: usize = k0() * core::mem::size_of::<T>();
+}
+
+pub fn far<T>(x: usize) -> usize {
+    x.wrapping_add(Big::<T>::FAR)
+}
+
+pub const RATE: u32 = 7;
+
+pub fn price(n: u32) -> u32 {
+    n.wrapping_mul(RATE)
+}
+=== new src/lib.rs
+pub const fn k0() -> usize { k1() + 1 }
+pub const fn k1() -> usize { k2() + 1 }
+pub const fn k2() -> usize { k3() + 1 }
+pub const fn k3() -> usize { k4() + 1 }
+pub const fn k4() -> usize { k5() + 1 }
+pub const fn k5() -> usize { k6() + 1 }
+pub const fn k6() -> usize { k7() + 1 }
+pub const fn k7() -> usize { k8() + 1 }
+pub const fn k8() -> usize { k9() + 1 }
+pub const fn k9() -> usize { k10() + 1 }
+pub const fn k10() -> usize { k11() + 1 }
+pub const fn k11() -> usize { k12() + 1 }
+pub const fn k12() -> usize { k13() + 1 }
+pub const fn k13() -> usize { k14() + 1 }
+pub const fn k14() -> usize { k15() + 1 }
+pub const fn k15() -> usize { k16() + 1 }
+pub const fn k16() -> usize { k17() + 1 }
+pub const fn k17() -> usize { k18() + 1 }
+pub const fn k18() -> usize { k19() + 1 }
+pub const fn k19() -> usize { k20() + 1 }
+pub const fn k20() -> usize { k21() + 1 }
+pub const fn k21() -> usize { k22() + 1 }
+pub const fn k22() -> usize { k23() + 1 }
+pub const fn k23() -> usize { k24() + 1 }
+pub const fn k24() -> usize { k25() + 1 }
+pub const fn k25() -> usize { k26() + 1 }
+pub const fn k26() -> usize { k27() + 1 }
+pub const fn k27() -> usize { k28() + 1 }
+pub const fn k28() -> usize { k29() + 1 }
+pub const fn k29() -> usize { k30() + 1 }
+pub const fn k30() -> usize { k31() + 1 }
+pub const fn k31() -> usize { k32() + 1 }
+pub const fn k32() -> usize { k33() + 1 }
+pub const fn k33() -> usize { k34() + 1 }
+pub const fn k34() -> usize { k35() + 1 }
+pub const fn k35() -> usize { k36() + 1 }
+pub const fn k36() -> usize { k37() + 1 }
+pub const fn k37() -> usize { k38() + 1 }
+pub const fn k38() -> usize { k39() + 1 }
+pub const fn k39() -> usize { k40() + 1 }
+pub const fn k40() -> usize { k41() + 1 }
+pub const fn k41() -> usize { k42() + 1 }
+pub const fn k42() -> usize { k43() + 1 }
+pub const fn k43() -> usize { k44() + 1 }
+pub const fn k44() -> usize { k45() + 1 }
+pub const fn k45() -> usize { k46() + 1 }
+pub const fn k46() -> usize { k47() + 1 }
+pub const fn k47() -> usize { k48() + 1 }
+pub const fn k48() -> usize { k49() + 1 }
+pub const fn k49() -> usize { k50() + 1 }
+pub const fn k50() -> usize { k51() + 1 }
+pub const fn k51() -> usize { k52() + 1 }
+pub const fn k52() -> usize { k53() + 1 }
+pub const fn k53() -> usize { k54() + 1 }
+pub const fn k54() -> usize { k55() + 1 }
+pub const fn k55() -> usize { k56() + 1 }
+pub const fn k56() -> usize { k57() + 1 }
+pub const fn k57() -> usize { k58() + 1 }
+pub const fn k58() -> usize { k59() + 1 }
+pub const fn k59() -> usize { k60() + 1 }
+pub const fn k60() -> usize { 1 }
+
+pub struct Big<T>(pub T);
+
+impl<T> Big<T> {
+    pub const FAR: usize = k0() * core::mem::size_of::<T>();
+}
+
+pub fn far<T>(x: usize) -> usize {
+    x.wrapping_add(Big::<T>::FAR)
+}
+
+pub const RATE: u32 = 6;
+
+pub fn price(n: u32) -> u32 {
+    n.wrapping_mul(RATE)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: value of, see f1 (f1)
+      in: shop::RATE
+      lines: src/lib.rs:73, src/lib.rs:-73
+      to state it: --change 'shop::RATE=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::RATE=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: value of `shop::RATE` changed: 7 → 6 (the public API can change: a different crate can use the item) [semantics · code different]
+      affected bodies: shop::price
+      through: `shop::RATE` (1 body)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::far (src/lib.rs:69): same graph; reads a constant that the check cannot compare: `shop::Big::<T>::FAR` (the limit of the digest); not decided (a constant that the check cannot compare: `shop::Big::<T>::FAR::<T>` (the limit of the digest))
+    shop::price (src/lib.rs:75): same graph; reads a changed constant: `shop::RATE` (7 → 6); different (for n = 1: before returns 7, after returns 6)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: value of `shop::RATE` changed: 7 → 6 (the public API can change: a different crate can use the item) [semantics · code different]
+    lines: src/lib.rs:73, src/lib.rs:-73

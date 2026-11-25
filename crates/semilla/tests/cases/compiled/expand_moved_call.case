@@ -2,7 +2,7 @@ note: batch 10c2: a new comment line moves the calls of a macro whose code has t
 rule+: R63.9-7 R63.9-8
 rule-: R63.9-5 R63.9-8
 must_match: the compiled code of `shop::one` changes with no edit at its place
-must_match: `here!\(1\)` at `shop::one/tail` \(src/lib\.rs:8\): expansion changed: only the place of the call changes
+must_match: `here!\(1\)` at `shop::one/tail` \(src/lib\.rs:8\): expansion changed: only the context of the call changes: the line of the call
 must_match: `here!\(3\)` at `shop::two/tail` \(src/lib\.rs:12\): expansion changed: changed literal
 option: --compiled
 === both Cargo.toml
@@ -54,7 +54,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: `here!(3)` at `shop::two/tail` (src/lib.rs:12): expansion changed: changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `10u32` → `12u32` at `expansion/elems[1]` [semantics]
   ◆ f2 derived: the compiled code of `shop::one` changes with no edit at its place: `here!(1)` [indirect · code different]
       affected bodies: shop::one
-      expansion: `here!(1)` at `shop::one/tail` (src/lib.rs:8): expansion changed: only the place of the call changes: its code has the line, the column, or the file of the call (`line!()`, `column!()`, `file!()`)
+      expansion: `here!(1)` at `shop::one/tail` (src/lib.rs:8): expansion changed: only the context of the call changes: the line of the call
       note: lines 8
       ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'shop::one=…'
   ◆ f3 derived: layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
@@ -63,7 +63,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   control flow: 1 body
     shop::two (src/lib.rs:11): same graph (the edit keeps the control flow); different (for each input: before returns (2, 10), after returns (3, 12))
   expansions: 2 changed
-    `here!(1)` at `shop::one/tail` (src/lib.rs:8): expansion changed: `macro_rules! here` (src/lib.rs:1): only the place of the call changes: its code has the line, the column, or the file of the call (`line!()`, `column!()`, `file!()`); the call moves
+    `here!(1)` at `shop::one/tail` (src/lib.rs:8): expansion changed: `macro_rules! here` (src/lib.rs:1): only the context of the call changes: the line of the call; the context of the call changes
     `here!(3)` at `shop::two/tail` (src/lib.rs:12): expansion changed: `macro_rules! here` (src/lib.rs:1): changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `10u32` → `12u32` at `expansion/elems[1]` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'shop::one=<why>' --compiled

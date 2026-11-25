@@ -85,23 +85,26 @@ fn walk(tcx: TyCtxt<'_>, def_id: &dyn Fn(rustc_ast::NodeId) -> Option<LocalDefId
                 if let ItemKind::Mod(_, _, ModKind::Loaded(inner, ..)) = &mut copy.kind {
                     inner.clear();
                 }
-                rustc_ast_pretty::pprust::item_to_string(&copy)
+                crate::pretty::item(&copy)
             }
-            None => rustc_ast_pretty::pprust::item_to_string(item),
+            None => crate::pretty::item(item),
         };
+        // R66.11-1: an item that the driver cannot print has a text that is never equal to
+        // another text, with the cause.
+        let text = text.unwrap_or_else(|cause| crate::pretty::not_known(&cause));
         let test = matches!(item.kind, ItemKind::Fn(_)) && item.kind.ident().is_some_and(|ident| tests.contains(&ident.name));
         out.push((def_id(item.id), MadeItem { file, line, col, expanded: item.span.from_expansion(), module: module.to_string(), text, test, public: false, owner: String::new() }));
         // An associated item that a macro call in the block makes (batch 10c, R63.4-2): the
         // item of the block has no place in the call, so the made item has its own record.
         let assoc = match &item.kind {
-            ItemKind::Impl(value) if !item.span.from_expansion() => Some((rustc_ast_pretty::pprust::ty_to_string(&value.self_ty), &value.items)),
+            ItemKind::Impl(value) if !item.span.from_expansion() => Some((crate::pretty::ty(&value.self_ty).unwrap_or_else(|cause| crate::pretty::not_known(&cause)), &value.items)),
             ItemKind::Trait(value) if !item.span.from_expansion() => Some((value.ident.to_string(), &value.items)),
             _ => None,
         };
         for (owner, list) in assoc.into_iter() {
             for inner in list.iter().filter(|inner| inner.span.from_expansion()) {
                 let Some((file, line, col)) = place(tcx, inner.span) else { continue };
-                let text = rustc_ast_pretty::pprust::assoc_item_to_string(inner);
+                let text = crate::pretty::assoc_item(inner).unwrap_or_else(|cause| crate::pretty::not_known(&cause));
                 out.push((def_id(inner.id), MadeItem { file, line, col, expanded: true, module: module.to_string(), text, test: false, public: false, owner: owner.clone() }));
             }
         }

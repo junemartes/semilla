@@ -49,6 +49,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   control flow: 2 bodies
     shop::first (src/lib.rs:1): same structure: 1 changed call target; not decided (a deref of a value that is not a reference (a `Box`, a raw pointer): "none" (src/lib.rs:1))
     shop::show (src/lib.rs:2): graph changes: +1 call, +1 construct, 1 changed call target, +4 arrows, −2 arrows; not decided (an array)
+  expansions: 1 added
+    `format!("{x}")` at `shop::show/tail` (src/lib.rs:2): expansion added: `macro format` (crate alloc): 1 line(s) of code; the step adds the call or its input
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -429,8 +429,7 @@ struct ExpansionLine {
 pub fn read_expansions(dir: &Path) -> Option<Vec<UnitExpansions>> {
     use std::io::BufRead as _;
     let entries = std::fs::read_dir(dir).ok()?;
-    let mut files: Vec<_> = entries.filter_map(|entry| entry.ok().map(|entry| entry.path())).filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")).collect();
-    files.sort();
+    let files = unit_order(entries.filter_map(|entry| entry.ok().map(|entry| entry.path())).filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")).collect());
     let mut out = Vec::new();
     for file in files {
         let reader = std::io::BufReader::new(std::fs::File::open(&file).ok()?);
@@ -447,6 +446,42 @@ pub fn read_expansions(dir: &Path) -> Option<Vec<UnitExpansions>> {
 /// The start of the line of a unit record.
 const UNIT_LINE: &str = "{\"unit\":";
 
+/// The order of the record files of a folder (R66.10-3): by the data of the unit record of each
+/// file (the package, the target name with no metadata hash, the configuration, the root file),
+/// not by the file name. The file name `<crate>.<kind>.<metadata>.jsonl` has the metadata hash
+/// of cargo, which changes with the driver, so two targets with one crate name and one kind (two
+/// packages with a test target `integration`) had an order that changed with the driver. The
+/// file name only breaks a tie.
+pub fn unit_order(files: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    use std::io::BufRead as _;
+    #[derive(Deserialize)]
+    struct KeyUnit {
+        #[serde(default)]
+        target: String,
+        #[serde(default)]
+        package: String,
+        #[serde(default)]
+        root: String,
+        #[serde(default)]
+        cfg: Vec<String>,
+    }
+    #[derive(Deserialize)]
+    struct KeyLine {
+        unit: KeyUnit,
+    }
+    let key = |file: &std::path::PathBuf| -> (String, String, Vec<String>, String) {
+        let line = std::fs::File::open(file).ok().and_then(|handle| std::io::BufReader::new(handle).lines().next()).and_then(Result::ok).unwrap_or_default();
+        let unit = line.starts_with(UNIT_LINE).then(|| serde_json::from_str::<KeyLine>(&line).ok()).flatten().map(|line| line.unit);
+        let Some(unit) = unit else { return Default::default() };
+        // The target is the stem of the file: `<crate>.<kind>.<metadata>`.
+        let name = unit.target.rsplit_once('.').map_or(unit.target.as_str(), |(name, _)| name).to_string();
+        (unit.package, name, unit.cfg, unit.root)
+    };
+    let mut keyed: Vec<((String, String, Vec<String>, String), std::path::PathBuf)> = files.into_iter().map(|file| (key(&file), file)).collect();
+    keyed.sort();
+    keyed.into_iter().map(|(_, file)| file).collect()
+}
+
 /// Parses the JSON lines of the driver. The line of the unit record is not a body record.
 pub fn parse_records(text: &str) -> Result<Vec<BodyRecord>> {
     text.lines()
@@ -459,14 +494,15 @@ pub fn parse_records(text: &str) -> Result<Vec<BodyRecord>> {
         .collect()
 }
 
-/// Reads all `*.jsonl` files in a folder (in name order).
+/// Reads all `*.jsonl` files in a folder (in the order of their units, `unit_order`).
 pub fn read_records(dir: &Path) -> Result<Vec<BodyRecord>> {
-    let mut files: Vec<_> = std::fs::read_dir(dir)
-        .with_context(|| format!("cannot read {}", dir.display()))?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().is_some_and(|extension| extension == "jsonl"))
-        .collect();
-    files.sort();
+    let files = unit_order(
+        std::fs::read_dir(dir)
+            .with_context(|| format!("cannot read {}", dir.display()))?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.extension().is_some_and(|extension| extension == "jsonl"))
+            .collect(),
+    );
     let mut records = Vec::new();
     for file in files {
         let text = std::fs::read_to_string(&file)

@@ -42,14 +42,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: ~ call `<Iter<'_, Item> as Iterator>::map::<u32, {closure#1}> (trait default)` → `<Filter<Iter<'_, Item>, {closure#0}> as Iterator>::map::<u32, {closure#1}> (trait default)` (src/lib.rs:-7, src/lib.rs:7)
       control flow: ~ call `<Map<Iter<'_, Item>, {closure#1}> as Iterator>::sum::<u32> (trait default)` → `<Map<Filter<Iter<'_, Item>, {closure#0}>, {closure#1}> as Iterator>::sum::<u32> (trait default)` (src/lib.rs:-7, src/lib.rs:7)
       control flow: … 3 more (semilla status --verbose)
-      equivalence: `shop::total`: not decided: a closure value: |x| x.cost() (src/lib.rs:-7)
+      equivalence: `shop::total`: not decided: the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined)
       equivalence: `shop::total::{closure#1} |x| x.cost()`: equivalent (proved by SMT)
   ◆ f2 derived: the compiled code of `shop::total` changes with no edit at its place: `x` (before the step) [indirect · code different]
       affected bodies: shop::total
       note: lines before the step 7
   cover: each of the 2 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::total (src/lib.rs:6): graph changes: +1 call, 2 changed call targets, +2 arrows, −1 arrow; not decided (a closure value: |x| x.cost() (src/lib.rs:-7))
+    shop::total (src/lib.rs:6): graph changes: +1 call, 2 changed call targets, +2 arrows, −1 arrow; not decided (the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined))
     shop::total::{closure#0} |x| x.cost() > 0 (src/lib.rs:7): graph added: 3 points, 2 arrows
     shop::total::{closure#1} |x| x.cost() (src/lib.rs:7): same graph (the edit keeps the control flow); equivalent (proved by SMT)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

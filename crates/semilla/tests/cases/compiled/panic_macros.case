@@ -74,6 +74,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     shop::b (src/lib.rs:2): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow; not decided (a value of a type that the check does not model)
     shop::c (src/lib.rs:3): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow; different (for x = 10: before returns 9, after panics (`core::panicking::unreachable_default_msg`))
     shop::d (src/lib.rs:4): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow; different (for x = 10: before returns 14, after panics (`core::panicking::todo_default_msg`))
+  expansions: 4 added
+    `panic!("too big")` at `shop::a/S0/then/S0` (src/lib.rs:1): expansion added: `macro panic` (crate std): 1 line(s) of code; the step adds the call or its input
+    `assert_eq!(x, y)` at `shop::b/S0` (src/lib.rs:2): expansion added: `macro assert_eq` (crate core): 11 line(s) of code; the step adds the call or its input
+    `unreachable!()` from `unreachable!()` at `shop::c/S0/then/tail` (src/lib.rs:3): expansion added: `macro $crate::panic::unreachable_2021` (crate core): 1 line(s) of code; the step adds the call or its input
+    `todo!()` at `shop::d/S0/then/tail` (src/lib.rs:4): expansion added: `macro todo` (crate core): 1 line(s) of code; the step adds the call or its input
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

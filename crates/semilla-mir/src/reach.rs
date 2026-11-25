@@ -80,7 +80,7 @@ pub fn crate_name(tcx: TyCtxt<'_>, def_id: DefId) -> String {
 
 /// True for a crate of the standard library.
 pub fn is_std(name: &str) -> bool {
-    matches!(name, "core" | "alloc" | "std" | "proc_macro" | "test")
+    crate::stdlib::is_std_name(name)
 }
 
 /// Where a type comes from.
@@ -319,21 +319,17 @@ fn note_layout<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, field: bool, out: &mut BTr
     }
 }
 
-/// The callees that keep a value of a generic argument whole (batch 5o): the methods of
-/// `Option` and `Result`, and the functions of the `?` operator. Such a call stays a call
-/// node in each normal form (the inliner of rustc is off). The code of the callee can move
-/// and drop a value of the type. It cannot read a part of it, and it cannot ask for its
-/// layout. So the generic arguments of such a call are not a `touch` use.
-const WHOLE_VALUE: [&str; 8] = [
-    "core::result::Result::<T, E>::",
-    "core::option::Option::<T>::",
-    "core::ops::Try::branch",
-    "core::ops::FromResidual::from_residual",
-    "core::ops::try_trait::Try::branch",
-    "core::ops::try_trait::FromResidual::from_residual",
-    "core::convert::From::from",
-    "core::convert::Into::into",
-];
+/// The callees that keep a value of a generic argument whole (batch 5o): the inherent methods
+/// of `Option` and `Result`. Such a call stays a call node in each normal form (the inliner of
+/// rustc is off). The code of the callee can move and drop a value of the type. It cannot read
+/// a part of it, and it cannot ask for its layout. So the generic arguments of such a call are
+/// not a `touch` use. A call of a trait method (`From::from`, `Into::into`, the functions of the
+/// `?` operator) is whole by the rule `trait_of_assoc` below, so batch 10n removed these four
+/// entries from the list (design 65.3, R65.3-9). The old comment said that such a callee cannot
+/// read a part of the value; an `impl From` of the workspace can, but its code is a body of the
+/// workspace with its own record, and the rule here is only about the layout of the generic
+/// arguments of the call.
+const WHOLE_VALUE: [&str; 2] = ["core::result::Result::<T, E>::", "core::option::Option::<T>::"];
 
 /// The types with a definition outside the standard library that the body uses (batch 5l): in
 /// the type of a local, of a constant, and in the generic arguments of a callee. The walk

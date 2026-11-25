@@ -1,0 +1,68 @@
+note: a generic body whose text does not change and that reads an associated constant of a generic impl with a changed definition (`rows`) gets a line in the step section, and its result is not a proof by an equal MIR text; a body that reads a generic constant with no change (`cells`) gets no line
+rule+: R66.3-2
+rule-: R66.3-2
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Grid<T>(pub T);
+
+impl<T> Grid<T> {
+    pub const ROWS: usize = 2 * core::mem::size_of::<T>();
+    pub const CELLS: usize = 4 * core::mem::size_of::<T>();
+}
+
+pub fn rows<T>(x: usize) -> usize {
+    x.wrapping_add(Grid::<T>::ROWS)
+}
+
+pub fn cells<T>(x: usize) -> usize {
+    x.wrapping_add(Grid::<T>::CELLS)
+}
+=== new src/lib.rs
+pub struct Grid<T>(pub T);
+
+impl<T> Grid<T> {
+    pub const ROWS: usize = 3 * core::mem::size_of::<T>();
+    pub const CELLS: usize = 4 * core::mem::size_of::<T>();
+}
+
+pub fn rows<T>(x: usize) -> usize {
+    x.wrapping_add(Grid::<T>::ROWS)
+}
+
+pub fn cells<T>(x: usize) -> usize {
+    x.wrapping_add(Grid::<T>::CELLS)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: value of, see f1 (f1)
+      in: shop::Grid::ROWS
+      lines: src/lib.rs:4, src/lib.rs:-4
+      to state it: --change 'shop::Grid::ROWS=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::Grid::ROWS=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: value of `shop::Grid::ROWS` changed: 2 * core::mem::size_of::<T>() → 3 * core::mem::size_of::<T>() (the public API can change: a different crate can use the item) [semantics · code different]
+      affected bodies: shop::Grid::ROWS
+      control flow: + check `overflow: 3 * core::mem::size_of::<T>()` (src/lib.rs:4): ok → return, fail → panic `overflow`
+      control flow: − check `overflow: 2 * core::mem::size_of::<T>()` (src/lib.rs:-4): ok → return, fail → panic `overflow`
+      control flow: + arrow call `size_of::<T>` (src/lib.rs:4) → check `overflow: 3 * core::mem::size_of::<T>()` (src/lib.rs:4) (return)
+      control flow: … 1 more (semilla status --verbose)
+      equivalence: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::Grid::<T>::ROWS (src/lib.rs:4): graph changes: +1 check, −1 check, +3 arrows, −3 arrows; not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))
+    shop::rows (src/lib.rs:8): same graph; reads a changed constant: `shop::Grid::<T>::ROWS` (definition #7bc0ee4d6f74515f → definition #38eb96e1afda756d); not decided (a constant that the compiler does not evaluate here changes: `shop::Grid::<T>::ROWS::<T>` (changed: `shop::Grid::<T>::ROWS`))
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: value of `shop::Grid::ROWS` changed: 2 * core::mem::size_of::<T>() → 3 * core::mem::size_of::<T>() (the public API can change: a different crate can use the item) [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:-4

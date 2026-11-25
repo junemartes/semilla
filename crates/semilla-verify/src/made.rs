@@ -98,13 +98,10 @@ pub(crate) fn call_text(item: &Item) -> String {
 }
 
 /// The name of a macro definition: `same` for `m::same!` and for `m::same!#1`.
-/// The macros of the standard prelude (design 38.7). A local `macro_rules!` with one of these
-/// names replaces the standard macro for each call in its scope.
-const STD_MACROS: &[&str] = &[
-    "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne", "matches", "vec", "format", "format_args", "write", "writeln", "print", "println", "eprint",
-    "eprintln", "panic", "unreachable", "unimplemented", "todo", "concat", "stringify", "line", "column", "file", "module_path", "cfg", "env", "option_env", "include", "include_str",
-    "include_bytes", "compile_error", "dbg",
-];
+
+/// The rule of the compiled mode for a call of a macro with the name of a standard macro
+/// (R65.4-2): the expansion record names the definition of each call.
+const STD_MACRO_RULE: &str = " (the macros of the standard prelude); the compiled mode reads the definition of each call from its expansion record (R65.2-1)";
 
 /// The most call sites that the text of a standard macro name names one by one.
 const STD_CALL_NAMES: usize = 6;
@@ -114,7 +111,8 @@ const STD_CALL_NAMES: usize = 6;
 /// the module of the definition and its inner modules, after the definition in its own file.
 /// A call with a path (`std::matches!`) is not in the list. An empty text for each other name.
 fn std_macro_text(name: &str, definition: &Item, ws: &Workspace, added: bool) -> String {
-    if !STD_MACROS.contains(&name) {
+    // R65.4-2: the shared list of the macros of the standard prelude decides it.
+    if !semilla_core::names::is_std_macro(name) {
         return String::new();
     }
     let module = definition.path.rsplit_once("::").map(|(module, _)| module).unwrap_or("");
@@ -141,9 +139,9 @@ fn std_macro_text(name: &str, definition: &Item, ws: &Workspace, added: bool) ->
     }
     let list = if count == 0 { "no call in its scope".to_string() } else { format!("each call in its scope: {}", names.join(", ")) };
     if added {
-        format!(" (it replaces the standard macro `{name}!`; {list})")
+        format!(" (it replaces the standard macro `{name}!`; {list}; {}{STD_MACRO_RULE})", semilla_core::names::NAME_LIST)
     } else {
-        format!(" (the standard macro `{name}!` is used again; {list})")
+        format!(" (the standard macro `{name}!` is used again; {list}; {}{STD_MACRO_RULE})", semilla_core::names::NAME_LIST)
     }
 }
 
@@ -199,7 +197,7 @@ fn shown(item: &MadeItem) -> Option<Shown> {
         ast::Item::Impl(value) => {
             if let Some(path) = value.trait_() {
                 let last = path.syntax().descendants().filter_map(ast::NameRef::cast).filter(|name| name.syntax().ancestors().all(|ancestor| ancestor.kind() != semilla_syntax::rs::SyntaxKind::GENERIC_ARG_LIST)).last();
-                implicit = last.map(|name| name.text().to_string()).filter(|name| matches!(name.as_str(), "Drop" | "Deref" | "DerefMut"));
+                implicit = last.map(|name| name.text().to_string()).filter(|name| semilla_core::names::is_implicit_trait(name));
             }
             inner_attrs.extend(value.assoc_item_list().into_iter().flat_map(|list| list.assoc_items()).flat_map(|inner| match inner {
                 ast::AssocItem::Fn(inner) => attrs_of(inner.syntax()),

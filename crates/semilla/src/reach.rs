@@ -399,7 +399,7 @@ impl NormalOracle {
                 checked += 1;
                 jobs.push((name.clone(), through));
             }
-            let results = self.reach_checks(solver, old, new, renames, &snapshot, &jobs, &sources);
+            let results = self.reach_checks(solver, old, new, renames, &snapshot, &jobs, &sources, started + limit, crate::oracle::check_share(limit));
             for ((name, through), verdict) in jobs.into_iter().zip(results) {
                 if matches!(verdict, Verdict::Equivalent(_)) {
                     proved.insert(name.clone());
@@ -453,7 +453,7 @@ impl NormalOracle {
     /// The checks of one round of the walk, in up to 8 threads: each caller with each body of
     /// `must` inlined, and no proof by an equal MIR text.
     #[allow(clippy::too_many_arguments)]
-    fn reach_checks(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], must: &Arc<BTreeSet<String>>, jobs: &[(String, Vec<String>)], sources: &Sources) -> Vec<Verdict> {
+    fn reach_checks(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], must: &Arc<BTreeSet<String>>, jobs: &[(String, Vec<String>)], sources: &Sources, end: std::time::Instant, share: std::time::Duration) -> Vec<Verdict> {
         let next = std::sync::atomic::AtomicUsize::new(0);
         let results: std::sync::Mutex<Vec<(usize, Verdict)>> = std::sync::Mutex::new(Vec::new());
         let threads = std::thread::available_parallelism().map(|count| count.get()).unwrap_or(4).clamp(1, 8).min(jobs.len().max(1));
@@ -462,7 +462,8 @@ impl NormalOracle {
                 scope.spawn(|| loop {
                     let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let Some((name, _)) = jobs.get(at) else { break };
-                    let verdict = self.reach_one(solver, old, new, renames, must, name, sources);
+                    let deadline = (std::time::Instant::now() + share).min(end);
+                    let verdict = self.reach_one(solver, old, new, renames, must, name, sources, deadline);
                     results.lock().unwrap_or_else(|error| error.into_inner()).push((at, verdict));
                 });
             }
@@ -476,7 +477,7 @@ impl NormalOracle {
     /// with a target of one kind and one name, R61.14-1) has a check for each: the name is
     /// equivalent only if each one is, and a difference of one is the result.
     #[allow(clippy::too_many_arguments)]
-    fn reach_one(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], must: &Arc<BTreeSet<String>>, node: &str, sources: &Sources) -> Verdict {
+    fn reach_one(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], must: &Arc<BTreeSet<String>>, node: &str, sources: &Sources, deadline: std::time::Instant) -> Verdict {
         // A node of a source body (R61.16-1): only the records of its file.
         let name = name_of(node);
         let bodies: Vec<&semilla_normal::BodyRecord> = new.bodies(name).into_iter().filter(|record| node_file(node).is_none_or(|file| sources.file(record) == file)).collect();
@@ -487,7 +488,7 @@ impl NormalOracle {
         for b in bodies {
             let verdict = match old.find(&rename_back(name, renames), &b.target, &b.unit) {
                 None => Verdict::NotDecided("the old tree has no record of the body".into()),
-                Some(a) => match self.check_pair(solver, a, b, old, new, renames, true, must, false) {
+                Some(a) => match self.check_pair(solver, a, b, old, new, renames, true, must, false, Some(deadline)) {
                     Some(answer) => answer.verdict,
                     None => Verdict::NotDecided("no check".into()),
                 },

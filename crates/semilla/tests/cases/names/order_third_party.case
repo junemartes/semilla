@@ -1,0 +1,62 @@
+note: batch 10n, part C (order derives): a field order change under a derive of a proc macro crate (`depot::Rows`, it writes the field names in order); the old name list missed each derive of a third crate
+rule+: R65.3-3
+must_match: spotlight: an order change in a type with `#\[repr\]`, a derive, or an attribute macro
+=== both Cargo.toml
+[workspace]
+members = ["shop", "depot"]
+resolver = "2"
+=== both depot/Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+=== both depot/src/lib.rs
+use proc_macro::TokenStream;
+
+#[proc_macro_derive(Rows)]
+pub fn rows(input: TokenStream) -> TokenStream {
+    // The names of the fields in their order.
+    let text = input.to_string();
+    let name = text.split_whitespace().skip_while(|word| *word != "struct").nth(1).unwrap_or("X").to_string();
+    let fields: Vec<String> = text.split(['{', ',']).skip(1).filter_map(|part| part.split(':').next()).map(|part| part.trim().trim_start_matches("pub ").to_string()).filter(|part| !part.is_empty() && !part.contains('}')).collect();
+    format!("impl {name} {{ pub fn rows() -> &'static str {{ {:?} }} }}", fields.join(",")).parse().unwrap()
+}
+=== both shop/Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+depot = { path = "../depot" }
+=== old shop/src/lib.rs
+#[derive(depot::Rows)]
+pub struct Item {
+    pub a: u8,
+    pub b: u32,
+}
+=== new shop/src/lib.rs
+#[derive(depot::Rows)]
+pub struct Item {
+    pub b: u32,
+    pub a: u8,
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  declarations, filled in by Semilla:
+  ◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
+      ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Rows`): the code that it makes reads the members in order; it needs a reason: --reason 'shop::Item=…'
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'shop::Item=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::Item=the reason of the test'
+◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
+    lines: shop/src/lib.rs:4, shop/src/lib.rs:-3

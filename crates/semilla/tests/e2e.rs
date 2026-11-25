@@ -1955,7 +1955,10 @@ fn a_field_reorder_owns_the_derived_bodies_and_keeps_the_readers_neutral() {
     write(repo, "crates/shop-core/src/lib.rs", &format!("pub mod cart;\n{}", account("    pub id: u32,\n    pub owner: String,\n    pub cents: u64,\n")));
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "account"]);
     write(repo, "crates/shop-core/src/lib.rs", &format!("pub mod cart;\n{}", account("    pub id: u32,\n    pub cents: u64,\n    pub owner: String,\n")));
-    let out = run(repo, &["step", "reorder the fields of Account"], 0);
+    // R65.3-3: `Debug` prints the fields in order, so the order change needs a reason.
+    let out = run(repo, &["step", "reorder the fields of Account"], 1);
+    assert!(out.contains("an order change in a type with `#[repr]`, a derive, or an attribute macro (`Debug`, `Clone`)"), "{out}");
+    let out = run(repo, &["step", "reorder the fields of Account", "--reason", "shop_core::Account=the debug text has the new order"], 0);
     assert!(out.contains("member order of `shop_core::Account`") && out.contains("<shop_core::Account as std::fmt::Debug>::fmt"), "{out}");
     assert!(!out.contains("indirect change") && !out.contains("shop_core::total") && !out.contains("shop_core::open"), "{out}");
 }
@@ -2096,7 +2099,8 @@ fn a_member_edit_that_changes_the_indexes_is_not_a_neutral_rewrite() {
     // and gives 9.
     let code = code.replace("pub enum Kind { Small, Large }", "pub enum Kind { Large, Small }").replace("match k { Kind::Small => 1, Kind::Large => 9 }", "match k { Kind::Large => 1, Kind::Small => 9 }");
     write(repo, "crates/shop-core/src/members.rs", &code);
-    let out = run(repo, &["step", "reorder Kind and swap the patterns"], 0);
+    // R65.3-3: `Kind` has derives, so the order change needs a reason.
+    let out = run(repo, &["step", "reorder Kind and swap the patterns", "--reason", "shop_core::members::Kind=the patterns swap with the order"], 0);
     let order = fact_line(&out, "member order of `shop_core::members::Kind`");
     // Design 44 (fix round 1): the pattern edits own the elements of `weight` by their place,
     // and a link adds the order as a second cause (the signature of `weight` names `Kind`).
@@ -2118,7 +2122,8 @@ fn a_member_order_change_alone_makes_no_noise() {
 
     let code = base.replace("pub struct Pair { pub a: u64, pub b: u64 }", "pub struct Pair { pub b: u64, pub a: u64 }");
     write(repo, "crates/shop-core/src/members.rs", &code);
-    let out = run(repo, &["step", "reorder Pair"], 0);
+    // R65.3-3: the derives read the fields in order, so the order change needs a reason.
+    let out = run(repo, &["step", "reorder Pair", "--reason", "shop_core::members::Pair=the debug text has the new order"], 0);
     let order = fact_line(&out, "member order of `shop_core::members::Pair`");
     assert!(order.ends_with("code different]"), "{out}");
     assert!(out.contains("<shop_core::members::Pair as std::fmt::Debug>::fmt"), "{out}");
@@ -3897,6 +3902,8 @@ fn no_proof_uses_the_value_of_a_macro_that_the_tree_does_not_decide() {
 /// reason.
 const CONFIG_NOTE: &str = "which Semilla did not check";
 
+// rule+ R65.3-2
+// rule- R65.3-2
 #[test]
 fn a_proof_holds_for_each_build_configuration() {
     // Batch 5k, A1 (trial 6, D1): a condition whose value is a constant of the check build is
@@ -6573,6 +6580,118 @@ fn the_budget_of_the_equivalence_check_stops_each_check_with_one_line_for_the_st
     assert!(!out.contains("not checked") && !out.contains("the equivalence check stopped"), "{out}");
 }
 
+// R66.10-5: each part of the budget stops only the work that it counts. Past the time budget
+// (here 0 s), a body whose two MIR texts are equal still gets the proof "equal MIR" (it needs no
+// solver); a body with another result is "not checked (the budget of the step)" (the negative
+// case). Past the query budget (here 0 queries), the variants of the single edits still build in
+// the time budget: the rename alone is "equivalent alone (proved by equal MIR)", and the other
+// edit alone, which needs the solver, is "not checked alone".
+// rule+ R66.10-5
+// rule- R66.10-5
+#[test]
+fn a_check_by_equal_mir_keeps_its_proof_past_the_budget() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = "pub mod cart;\n\npub fn tier(k: u8) -> u32 {\n    match k {\n        0 => 2,\n        1 => 4,\n        _ => 8,\n    }\n}\n\npub fn total(n: u32) -> u32 {\n    let sum = n.wrapping_mul(3);\n    sum.wrapping_add(1)\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", base);
+    commit_all(repo, "tier");
+    write(repo, "crates/shop-core/src/lib.rs", &base.replace("1 => 4", "1 => 5").replace("let sum", "let all").replace("sum.wrapping", "all.wrapping"));
+    let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_BUDGET", "0")]);
+    assert_eq!(code, 0, "{out}");
+    let line = |out: &str, name: &str| out.lines().find(|line| line.trim_start().starts_with(name) && line.contains("(crates/shop-core/src/lib.rs:")).unwrap_or_default().to_string();
+    assert!(line(&out, "shop_core::total ").ends_with("equivalent (proved by equal MIR)"), "{out}");
+    assert!(line(&out, "shop_core::tier ").ends_with("not checked (the budget of the step)"), "{out}");
+    assert!(out.contains("  the equivalence check stopped after 0 s: 1 body not checked; semilla status --verbose\n"), "{out}");
+    run(repo, &["undo"], 0);
+    // One body with two edits: a rename of a local and a changed literal.
+    write(repo, "crates/shop-core/src/lib.rs", &base.replace("let sum", "let all").replace("sum.wrapping", "all.wrapping").replace("wrapping_add(1)", "wrapping_add(2)"));
+    let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_QUERIES", "0")]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("      equivalence: equivalent alone (proved by equal MIR); the body: different: for n = "), "{out}");
+    assert!(out.contains("      equivalence: not checked alone (the budget of the step); the body: different: for n = "), "{out}");
+}
+
+/// E2 of batch 10nq-fix2: a body check that the solver cannot finish (the identity of a
+/// division and its rest: the query reaches the timeout of the solver) uses its share of the
+/// budget (R66.9-2). Before, the builds of the variants waited for the body checks, so that
+/// check took the time of each build: a single edit lost its proof by equal MIR, also in a step
+/// that used less time than 10o.
+// rule+ R66.11-3
+// rule- R66.11-3
+#[test]
+fn a_slow_body_check_does_not_take_the_time_of_the_variant_builds() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    // `split` has one edit (no variant); `total` has two (a rename and a changed literal).
+    let base = "pub mod cart;\n\npub fn split(a: u64, b: u64) -> u64 {\n    let d = b | 1;\n    (a / d).wrapping_mul(d).wrapping_add(a % d)\n}\n\npub fn total(n: u32) -> u32 {\n    let sum = n.wrapping_mul(3);\n    sum.wrapping_add(1)\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", base);
+    commit_all(repo, "split");
+    let edited = base.replace("(a / d).wrapping_mul(d).wrapping_add(a % d)", "a").replace("let sum", "let all").replace("sum.wrapping", "all.wrapping").replace("wrapping_add(1)", "wrapping_add(2)");
+    write(repo, "crates/shop-core/src/lib.rs", &edited);
+    // A budget of 4 s: the check of `split` runs to its end (a query of 5 s), past the budget.
+    let started = std::time::Instant::now();
+    let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_BUDGET", "4")]);
+    assert_eq!(code, 0, "{out}");
+    let split = out.lines().find(|line| line.trim_start().starts_with("shop_core::split (")).unwrap_or_default();
+    assert!(split.contains("not decided") || split.contains("not checked"), "{out}");
+    // The build of the variant of the rename ran next to that check: its proof by equal MIR
+    // stays. Before: "not checked alone (the budget of the step)".
+    assert!(out.contains("      equivalence: equivalent alone (proved by equal MIR); the body: different: for n = "), "{out}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(120), "{:?}", started.elapsed());
+    run(repo, &["undo"], 0);
+    // The negative case: a budget of 0 s starts no build (R61.14-5): each single edit that needs
+    // a build is not checked.
+    let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_BUDGET", "0")]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("equivalent alone (proved by equal MIR)") && out.contains("not checked alone (the budget of the step)"), "{out}");
+}
+
+/// A proc macro of the crate `depot` (E1 of batch 10nq-fix2) whose output has an `if` with an
+/// `else` block of made tokens: a mark of the context (R65.1-1) in place of that block made the
+/// printer of the compiler panic, and the drop of its boxes aborted the driver. The build check
+/// failed for code that compiles, or the compiled mode lost the test and example targets.
+const LEVEL_DEPOT: &str = "use proc_macro::{Delimiter, Group, TokenStream, TokenTree};\n\n#[proc_macro_derive(Level, attributes(level))]\npub fn level(input: TokenStream) -> TokenStream {\n    let mut name = String::new();\n    let mut limit = None;\n    let mut next = false;\n    for token in input {\n        match token {\n            TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => {\n                for inner in group.stream() {\n                    if let TokenTree::Group(args) = inner {\n                        limit = args.stream().into_iter().next();\n                    }\n                }\n            }\n            TokenTree::Ident(ident) if next => {\n                name = ident.to_string();\n                break;\n            }\n            TokenTree::Ident(ident) => next = ident.to_string() == \"struct\",\n            _ => {}\n        }\n    }\n    let mut body: TokenStream = \"if x >\".parse().unwrap();\n    body.extend(limit);\n    body.extend(\"{ x } else { 0 }\".parse::<TokenStream>().unwrap());\n    let mut inner: TokenStream = \"pub fn level(&self, x: u32) -> u32\".parse().unwrap();\n    inner.extend([TokenTree::Group(Group::new(Delimiter::Brace, body))]);\n    let mut out: TokenStream = format!(\"impl {name}\").parse().unwrap();\n    out.extend([TokenTree::Group(Group::new(Delimiter::Brace, inner))]);\n    out\n}\n";
+
+// rule+ R66.11-1 R66.11-2
+// rule- R66.11-2
+#[test]
+fn a_derive_whose_else_block_has_only_made_tokens_passes_the_build_check_in_each_target() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/depot/Cargo.toml", "[package]\nname = \"depot\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\nproc-macro = true\n");
+    write(repo, "crates/depot/src/lib.rs", LEVEL_DEPOT);
+    write(repo, "crates/shop-core/Cargo.toml", "[package]\nname = \"shop-core\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\ndepot = { path = \"../depot\" }\n");
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\n\n#[derive(depot::Level)]\n#[level(3)]\npub struct Shelf;\n\n#[derive(Debug, PartialEq)]\npub struct Plain(pub u32);\n");
+    write(repo, "crates/shop-core/examples/demo.rs", "#[derive(depot::Level)]\n#[level(5)]\nstruct Bin;\n\nfn main() {\n    println!(\"{}\", Bin.level(6) + shop_core::Shelf.level(2));\n}\n");
+    write(repo, "crates/shop-core/tests/levels.rs", "#[derive(depot::Level)]\n#[level(7)]\nstruct Crate;\n\n#[test]\nfn level() {\n    assert_eq!(Crate.level(8), 8);\n}\n");
+    commit_all(repo, "levels");
+    write(repo, "crates/shop-core/src/cart.rs", &CART_V0.replace("*x < max", "*x <= max"));
+    let (code, out) = run_env(repo, &["step", "include the limit", "--compiled"], &[("SEMILLA_NO_CHECK", "0")]);
+    assert!(out.contains("\nbuild check: passes (the build of the compiled check)\n"), "{code}: {out}");
+    assert!(!out.contains("libraries and binaries only") && !out.contains("does not compile") && !out.contains("the body check failed"), "{out}");
+    // Each target has its records: the library, the test target, and the example.
+    fn files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() { files(&path, out) } else { out.push(path) }
+        }
+    }
+    let mut found = Vec::new();
+    files(&repo_cache(repo), &mut found);
+    let records: Vec<&PathBuf> = found.iter().filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")).collect();
+    for target in ["shop_core.lib.", "levels.test.", "demo.bin."] {
+        let record = records.iter().find(|path| path.file_name().unwrap().to_string_lossy().starts_with(target)).unwrap_or_else(|| panic!("{target}: {records:?}"));
+        // R66.11-2: the mark of the made `else` block keeps a block. The negative case: the
+        // derives of the standard library keep their text.
+        let text = std::fs::read_to_string(record).unwrap();
+        assert!(text.contains("} else { \\\"\\u0000made by the proc macro `depot::Level`\\u0000\\\" }"), "{target}: {text}");
+        assert!(!text.contains("unknown_print"), "{target}: {text}");
+        if target.starts_with("shop_core.lib") {
+            assert!(text.contains("impl ::core::fmt::Debug for Plain {"), "{text}");
+        }
+    }
+}
+
 /// Design 60: the control flow graph of each body with `--compiled`. One step has a body of
 /// each result: `graph changes` (an early exit), `same structure` (a changed condition), `same
 /// graph` (a changed literal with no check), and a body with no edit whose graph changes (a
@@ -8635,7 +8754,8 @@ fn a_changed_expansion_has_its_facts_a_command_to_expand_it_and_a_section_of_the
     assert!(out.contains("expansion: `fee!(v)` at `shop_core::price/tail` (crates/shop-core/src/lib.rs:6): expansion changed: changed literal `10` → `12` at `expansion/lhs/rhs` [semantics]"), "{out}");
     assert!(out.contains("expansion: derived `PartialEq` of `shop_core::Point`: expansion changed: changed expression `self.x == other.x` → `self.x == other.x && self.y == other.y`"), "{out}");
     // R63.3-7: `status --verbose` lists each call with its result, its facts, and its cause.
-    assert!(out.contains("  expansions: 2 changed\n"), "{out}");
+    // R65.2-2: the equal expansions of the crate (also of the standard library) are a count.
+    assert!(out.contains("  expansions: 2 changed, 2 equal\n"), "{out}");
     assert!(out.contains("      cause: from `macro_rules! base` (crates/shop-core/src/lib.rs:3)\n"), "{out}");
     // R63.3-9: the line of the body that holds the call, with its graph and its equivalence.
     assert!(out.contains("      body: shop_core::price (crates/shop-core/src/lib.rs:6): same structure: 2 changed checks"), "{out}");

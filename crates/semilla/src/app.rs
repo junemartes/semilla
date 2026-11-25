@@ -1890,6 +1890,9 @@ impl App {
         crate::oracle::READ_TIME.print("read the records of a cache folder");
         crate::oracle::MARK_TIME.print("give the records to the build configuration rules");
         crate::oracle::N0_TIME.print("compare the bodies at N0");
+        crate::oracle::FORM_TIME.print("read the forms of the body checks");
+        crate::oracle::STD_FORM_TIME.print("read the forms of the callees of the body checks");
+        crate::oracle::SOLVE_TIME.print("run the body checks");
         // The test rule of `tests` groups needs the test items of all trees.
         let test_items: BTreeSet<String> = cache.values().flat_map(|ws| ws.items.values().filter(|i| i.test).map(|i| i.path.clone())).collect();
         semilla_verify::organize::check_test_groups(set, &test_items, &mut report);

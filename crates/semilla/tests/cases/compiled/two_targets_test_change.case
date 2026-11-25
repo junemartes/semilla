@@ -1,5 +1,6 @@
 note: the same two targets; the step changes only the `hash` of the test: in each configuration (also in those with no bench), the records of the test go to the body of the test, with no point of `benches/probe.rs` (design 61.16)
-rule+: R61.16-1
+rule+: R61.16-1 R65.3-1
+must_match: not decided \(a value of a type that the check does not model
 option: --compiled
 must_match: probe::hash \(tests/probe\.rs:1\): same structure: 1 changed condition; different
 must_not_match: benches/probe\.rs
@@ -85,8 +86,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   control flow: 1 body
     probe::hash (tests/probe.rs:1): same structure: 1 changed condition; different (for x = 11: before returns 12, after returns 33)
     reached bodies: 2
-      probe::test_hash (tests/probe.rs:9): reached through probe::hash, probe::test_hash::{closure#0}, not decided (a closure value: fn test_hash() { assert!(hash(2) > 0); } (tests/probe.rs:-10))
-      probe::test_hash::{closure#0} (tests/probe.rs:9): reached through probe::test_hash, not decided (a closure value: fn test_hash() { assert!(hash(2) > 0); } (tests/probe.rs:-10))
+      probe::test_hash (tests/probe.rs:9): reached through probe::hash, probe::test_hash::{closure#0}, not decided (a value of a type that the check does not model: fn test_hash() { assert!(hash(2) > 0); } (tests/probe.rs:-10))
+      probe::test_hash::{closure#0} (tests/probe.rs:9): reached through probe::test_hash, not decided (a value of a type that the check does not model: fn test_hash() { assert!(hash(2) > 0); } (tests/probe.rs:-10))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -1,7 +1,7 @@
 note: batch 10c2, R63.9-8 (a defect of the first fix): the definition changes `5u32` → `6u32`, and a doc line moves the call from line 5 to line 6; the code has no `line!()`, so the line is the normal compare, not "only the place of the call changes"
-rule-: R63.9-8
+rule-: R63.9-8 R65.1-4
 must_match: `m!\(\)` at `depot::f/tail` \(src/lib\.rs:6\): expansion changed: changed literal `5u32` → `6u32`
-must_not_match: only the place of the call changes
+must_not_match: only the context of the call changes
 option: --compiled
 === both Cargo.toml
 [package]

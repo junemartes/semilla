@@ -190,7 +190,8 @@ fn each_supported_part_keeps_or_changes_the_outcome_and_each_other_part_gives_no
         // An index of a slice: the sequence model (design 64, part C).
         ("probe::first", "equivalent"),
         ("probe::scale", "not decided"),
-        ("probe::apply", "not decided"),
+        // A closure is a value, and a call of it runs its body (design 66, part A).
+        ("probe::apply", "equivalent"),
     ];
     let mut problems = Vec::new();
     for (name, want) in expected {
@@ -217,7 +218,7 @@ fn each_supported_part_keeps_or_changes_the_outcome_and_each_other_part_gives_no
         other => panic!("{other:?}"),
     }
     // The cause of each unsupported part.
-    for (name, cause) in [("probe::scale", "float"), ("probe::apply", "closure")] {
+    for (name, cause) in [("probe::scale", "float")] {
         match verdict(&old, &new, name) {
             Verdict::NotDecided { cause: found } => assert!(found.contains(cause), "{name}: {found}"),
             other => panic!("{name}: {other:?}"),

@@ -1,0 +1,130 @@
+note: batch 10nq-fix2, E1: a proc macro of the crate `depot` makes an `if` whose `else` block has only made tokens (the form that made the printer of the compiler abort the driver), in the library, an example, and a test target of `shop`; a mark of the context keeps the `else` a block, so the expansions are known; a call of `depot::deep!` (the same in the two versions) makes a tree deeper than the limit of the printer of the driver: its expansion is not known, with the cause, and never equal
+rule+: R66.11-1 R66.11-2
+rule-: R66.11-1 R66.11-2
+must_match: derived `depot::Level` of `shop::Cart`: expansion changed: change condition `3` → `4`
+must_match: calls: expansion not known: `proc macro depot::deep` \(depot/src/lib\.rs:40\): not known: the printer of the compiler cannot print a tree deeper than the limit of the driver
+must_match: expansions: 1 changed, 6 equal
+must_not_match: the body check failed
+must_not_match: libraries and binaries only
+must_not_match: unknown_print
+option: --compiled
+=== both Cargo.toml
+[workspace]
+members = ["shop", "depot"]
+resolver = "2"
+=== both depot/Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+=== both depot/src/lib.rs
+use proc_macro::{Delimiter, Group, TokenStream, TokenTree};
+
+/// Makes a method `level`: an `if` whose condition has the literal of the attribute
+/// `#[level(N)]` (a token of the input) and whose `else` block has only made tokens.
+#[proc_macro_derive(Level, attributes(level))]
+pub fn level(input: TokenStream) -> TokenStream {
+    let mut name = String::new();
+    let mut limit = None;
+    let mut next = false;
+    for token in input {
+        match token {
+            TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => {
+                for inner in group.stream() {
+                    if let TokenTree::Group(args) = inner {
+                        limit = args.stream().into_iter().next();
+                    }
+                }
+            }
+            TokenTree::Ident(ident) if next => {
+                name = ident.to_string();
+                break;
+            }
+            TokenTree::Ident(ident) => next = ident.to_string() == "struct",
+            _ => {}
+        }
+    }
+    let mut body: TokenStream = "if x >".parse().unwrap();
+    body.extend(limit);
+    body.extend("{ x } else { 0 }".parse::<TokenStream>().unwrap());
+    let mut inner: TokenStream = "pub fn level(&self, x: u32) -> u32".parse().unwrap();
+    inner.extend([TokenTree::Group(Group::new(Delimiter::Brace, body))]);
+    let mut out: TokenStream = format!("impl {name}").parse().unwrap();
+    out.extend([TokenTree::Group(Group::new(Delimiter::Brace, inner))]);
+    out
+}
+
+/// Makes the literal `1` in 1001 pairs of parentheses: a tree deeper than the limit of the
+/// printer of the driver.
+#[proc_macro]
+pub fn deep(_input: TokenStream) -> TokenStream {
+    let mut out: TokenStream = "1".parse().unwrap();
+    for _ in 0..1001 {
+        out = TokenStream::from(TokenTree::Group(Group::new(Delimiter::Parenthesis, out)));
+    }
+    out
+}
+=== both shop/Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+depot = { path = "../depot" }
+=== both shop/examples/demo.rs
+#[derive(depot::Level)]
+#[level(3)]
+struct Crate;
+
+fn main() {
+    println!("{}", Crate.level(4) + shop::total(1));
+}
+=== both shop/tests/levels.rs
+#[derive(depot::Level)]
+#[level(5)]
+struct Bin;
+
+#[test]
+fn level() {
+    assert_eq!(Bin.level(6), 6);
+}
+=== old shop/src/lib.rs
+#[derive(depot::Level)]
+#[level(3)]
+pub struct Cart;
+
+pub fn total(x: u32) -> u32 {
+    depot::deep!() + x
+}
+=== new shop/src/lib.rs
+#[derive(depot::Level)]
+#[level(4)]
+pub struct Cart;
+
+pub fn total(x: u32) -> u32 {
+    depot::deep!() + x
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: attributes of `shop::Cart`: changed `#[level(3)]` → `#[level(4)]` [attribute · code different]
+      ! the compiled code changes: shop::Cart::level
+      expansion: derived `depot::Level` of `shop::Cart`: expansion changed: change condition `3` → `4` (effect hint: narrow, example: x = 4) at `shop::Cart::level/S0/cond/rhs` [semantics]
+      ✗ spotlight: a changed attribute that can change the behavior: `level`; it needs a reason: --reason 'shop::Cart=…'
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: 1 changed, 6 equal
+    derive `depot::Level` at `shop::Cart` (shop/src/lib.rs:1): expansion changed: `derive depot::Level` (depot/src/lib.rs:6): change condition `3` → `4` (effect hint: narrow, example: x = 4) at `shop::Cart::level/S0/cond/rhs` [semantics]; the input of the call changes
+    4 calls: expansion not known: `proc macro depot::deep` (depot/src/lib.rs:40): not known: the printer of the compiler cannot print a tree deeper than the limit of the driver; no changed definition, no changed input of the call, and no changed file that its code reads: `shop::total/tail/lhs`, `shop::total/tail/lhs`, `shop::total/tail/lhs`, and 1 more (semilla status --verbose)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'shop::Cart=<why>' --compiled
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::Cart=the reason of the test' --compiled
+◆ f1 derived: attributes of `shop::Cart`: changed `#[level(3)]` → `#[level(4)]` [attribute · code different]
+    lines: shop/src/lib.rs:2, shop/src/lib.rs:-2

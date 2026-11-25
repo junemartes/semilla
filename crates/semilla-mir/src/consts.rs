@@ -279,4 +279,268 @@ mod tests {
         assert_eq!(binary(BinOp::Div, 1, 0, 8, 8, false), None);
         assert_eq!(binary(BinOp::Gt, 0xff, 1, 8, 8, true), Some((0, 1, false, false)));
     }
+
+    /// R66.10-1: a part of a digest that the driver cannot compute (the limit of the digest, the
+    /// limit of the depth, a local item with no MIR) is never equal to another value, also with
+    /// the same cause, and each digest that contains it says so. The negative case: a digest
+    /// with only known parts keeps one text for one list. The driver never asks the compiler
+    /// for the hash of its own crate: the compiler has no such hash before it writes the
+    /// metadata, and the query stops the build.
+    // rule+ R66.10-1
+    // rule- R66.10-1
+    #[test]
+    fn a_part_that_the_driver_cannot_compute_is_never_equal_to_another_value() {
+        let (a, b) = (not_known("an item of the crate with no MIR"), not_known("an item of the crate with no MIR"));
+        assert_ne!(a, b);
+        assert!(a.starts_with(NOT_KNOWN));
+        let list = |value: &str| vec![("shop::unit".to_string(), "4f1c".to_string()), ("shop::Grid::ROWS".to_string(), value.to_string())];
+        let (first, second) = (digest_text(&list(&a)), digest_text(&list(&b)));
+        assert_ne!(first, second);
+        assert!(first.starts_with("definition not known: an item of the crate with no MIR"), "{first}");
+        // A nested digest keeps the part.
+        let outer = digest_text(&[("impl: shop::L0::X for u8".to_string(), first.clone())]);
+        assert!(outer.starts_with("definition not known: "), "{outer}");
+        assert_eq!(digest_text(&list("9a2b")), digest_text(&list("9a2b")));
+        assert!(digest_text(&list("9a2b")).starts_with("definition #"));
+        // No source file of the driver asks for the hash of the local crate.
+        let query = format!("{}({}", "crate_hash", "rustc_hir::def_id::LOCAL");
+        let short = format!("{}({}", "crate_hash", "LOCAL");
+        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for entry in std::fs::read_dir(&folder).unwrap().flatten() {
+            let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
+            let code: String = text.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+            assert!(!code.contains(&query) && !code.contains(&short), "{} asks for the hash of the local crate", entry.path().display());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The definition of a constant that the compiler does not evaluate here (design 66, part B).
+
+/// The most items in the digest of one constant (design 66, part B, Decided by Claude). Past it,
+/// the digest gets a part that the driver cannot compute (R66.10-1).
+const MAX_DIGEST_ITEMS: usize = 48;
+
+/// The start of the value of a digest part that the driver cannot compute (R66.10-1).
+pub const NOT_KNOWN: &str = "not known: ";
+
+/// The value of a digest part that the driver cannot compute (R66.10-1): the cause and a word
+/// that no other call returns (`print::unique`), so the value is never equal to another value,
+/// also in the other version. A body that reads the constant gets "not decided", never a proof.
+/// Before, the value was the hash of the local crate (`tcx.crate_hash(LOCAL_CRATE)`), but the
+/// compiler has no such hash before it writes the metadata of the crate: the query stops the
+/// compiler, and the build fails.
+fn not_known(cause: &str) -> String {
+    format!("{NOT_KNOWN}{cause} ({})", crate::print::unique("digest"))
+}
+
+/// The deepest nesting of the digests of the impls of trait constants.
+const MAX_DIGEST_DEPTH: usize = 4;
+
+thread_local! {
+    /// The nesting of the digests of the impls of trait constants.
+    static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The digest of each constant (the def and the promoted index), for the run of the driver.
+    static DIGESTS: std::cell::RefCell<std::collections::HashMap<(rustc_hir::def_id::DefId, Option<u32>), Vec<(String, String)>>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// A short hash of a text.
+fn short_hash(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes()).iter().take(8).map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The text of a digest list for the constant values of a record (design 66, part B): one short
+/// hash of each item and its digest. A list with a part that the driver cannot compute gives a
+/// text with that part (R66.10-1): it is never equal to another text.
+pub fn digest_text(list: &[(String, String)]) -> String {
+    // A nested digest (the impl of a trait constant) keeps the part, so it reaches each digest
+    // that contains it.
+    if let Some(at) = list.iter().find_map(|(_, value)| value.find(NOT_KNOWN).map(|at| &value[at..])) {
+        return format!("definition {at}");
+    }
+    let all: Vec<String> = list.iter().map(|(item, hash)| format!("{item}={hash}")).collect();
+    format!("definition #{}", short_hash(&all.join(";")))
+}
+
+/// The constant values of a record for a constant with a digest (R66.3-2): the path with one
+/// digest of the entries that are not impls, and one value for each impl (`PATH for TYPE`). The
+/// compare of two records only compares the paths of the two versions, so an impl of one
+/// version only gives no changed value.
+pub fn digest_values(path: &str, list: &[(String, String)]) -> Vec<(String, String)> {
+    let own: Vec<(String, String)> = list.iter().filter(|(item, _)| !item.starts_with("impl: ")).cloned().collect();
+    let mut found = vec![(path.to_string(), digest_text(&own))];
+    for (item, value) in list {
+        if let Some(rest) = item.strip_prefix("impl: ")
+            && let Some((_, ty)) = rest.split_once(" for ")
+        {
+            found.push((format!("{path} for {ty}"), value.clone()));
+        }
+    }
+    found
+}
+
+/// The items that the value of a constant depends on, with a digest of each one (design 66,
+/// part B):
+///
+/// - the definition of the constant: the text of its MIR (or its value for a trivial constant),
+///   or of the promoted body;
+/// - each function and each constant that this MIR uses, to the end of the chain;
+/// - each impl of a trait constant (a type parameter selects the impl);
+/// - the declaration of each ADT of the crate in a type of the MIR (its layout can be a value).
+///
+/// An item of another crate has the hash of its crate (one tool chain gives one standard library;
+/// a dependency with another version gives another hash). A part that the driver cannot compute
+/// (the limit of the digest, the limit of the depth, a local item with no MIR) has a value that
+/// is never equal to another value (R66.10-1). Two equal lists give one value for the same
+/// generic arguments.
+pub fn definition_digest(def: rustc_public::DefId, promoted: Option<u32>) -> Vec<(String, String)> {
+    rustc_middle::ty::tls::with(|tcx| {
+        let def = rustc_public::rustc_internal::internal(tcx, def);
+        if let Some(found) = DIGESTS.with(|memo| memo.borrow().get(&(def, promoted)).cloned()) {
+            return found;
+        }
+        let found = digest_of(tcx, def, promoted);
+        DIGESTS.with(|memo| memo.borrow_mut().insert((def, promoted), found.clone()));
+        found
+    })
+}
+
+fn digest_of(tcx: rustc_middle::ty::TyCtxt<'_>, def: rustc_hir::def_id::DefId, promoted: Option<u32>) -> Vec<(String, String)> {
+    use rustc_hir::def::DefKind;
+    let mut found: Vec<(String, String)> = Vec::new();
+    let mut seen: std::collections::HashSet<(rustc_hir::def_id::DefId, Option<u32>)> = std::collections::HashSet::new();
+    let mut adts: std::collections::HashSet<rustc_hir::def_id::DefId> = std::collections::HashSet::new();
+    let mut work: Vec<(rustc_hir::def_id::DefId, Option<u32>)> = vec![(def, promoted)];
+    while let Some((item, index)) = work.pop() {
+        if !seen.insert((item, index)) {
+            continue;
+        }
+        if found.len() >= MAX_DIGEST_ITEMS {
+            found.push(("the limit of the digest".into(), not_known("the limit of the digest")));
+            break;
+        }
+        let name = match index {
+            Some(index) => format!("{}::promoted[{index}]", tcx.def_path_str(item)),
+            None => tcx.def_path_str(item),
+        };
+        // A trait constant: the impl that a type parameter selects gives the value. Each impl
+        // has an entry of its own (`impl: …`): the digest of its item, or "the default". An impl
+        // of one version only is a new type for the generic body, not a change of an old one.
+        if index.is_none()
+            && matches!(tcx.def_kind(item), DefKind::AssocConst)
+            && let Some(trait_id) = tcx.trait_of_assoc(item)
+        {
+            for implementation in tcx.all_impls(trait_id) {
+                let self_ty = tcx.type_of(implementation).instantiate_identity().skip_norm_wip();
+                let key = format!("impl: {name} for {self_ty}");
+                let value = match tcx.impl_item_implementor_ids(implementation).get(&item) {
+                    Some(target) => {
+                        let nested = DEPTH.with(|depth| depth.get());
+                        if nested >= MAX_DIGEST_DEPTH {
+                            not_known("the limit of the depth of the digest")
+                        } else {
+                            DEPTH.with(|depth| depth.set(nested + 1));
+                            let found = definition_digest(rustc_public::rustc_internal::stable(*target), None);
+                            DEPTH.with(|depth| depth.set(nested));
+                            digest_text(&found)
+                        }
+                    }
+                    None => "the default".into(),
+                };
+                found.push((key, value));
+            }
+        }
+        if !item.is_local() {
+            // The hash of another crate comes from its metadata, so the compiler has it.
+            found.push((name, format!("crate {}", tcx.crate_hash(item.krate))));
+            continue;
+        }
+        // An item with no body (a trait constant with no default value): its impls give the
+        // value.
+        if tcx.hir_maybe_body_owned_by(item.expect_local()).is_none() {
+            found.push((name, "no body".into()));
+            continue;
+        }
+        let body: Option<rustc_public::mir::Body> = match index {
+            Some(index) => {
+                if !tcx.is_mir_available(item) && !matches!(tcx.def_kind(item), DefKind::Const | DefKind::AssocConst | DefKind::AnonConst | DefKind::Static { .. }) {
+                    None
+                } else {
+                    let all = tcx.promoted_mir(item);
+                    all.get(rustc_middle::mir::Promoted::from_u32(index)).map(rustc_public::rustc_internal::stable)
+                }
+            }
+            None => {
+                if matches!(tcx.def_kind(item), DefKind::Const | DefKind::AssocConst) && tcx.is_trivial_const(item) {
+                    found.push((name, short_hash(&format!("{:?}", tcx.trivial_const(item)))));
+                    continue;
+                }
+                let crate_item = rustc_public::CrateItem(rustc_public::rustc_internal::stable(item));
+                if crate_item.has_body() { crate_item.body() } else { None }
+            }
+        };
+        let Some(body) = body else {
+            found.push((name, not_known("an item of the crate with no MIR")));
+            continue;
+        };
+        let text = crate::print::Printer::default().body(&crate::normalize::canonical_body(&body));
+        found.push((name, short_hash(&text)));
+        // The functions, the constants, and the types of the body.
+        let internal_body = |b: &rustc_public::mir::Body| b.locals().iter().map(|decl| rustc_public::rustc_internal::internal(tcx, decl.ty)).collect::<Vec<_>>();
+        let mut types = internal_body(&body);
+        for block in &body.blocks {
+            let mut operands: Vec<&Operand> = Vec::new();
+            for statement in &block.statements {
+                if let StatementKind::Assign(_, value) = &statement.kind {
+                    match value {
+                        Rvalue::Use(operand, _) | Rvalue::UnaryOp(_, operand) | Rvalue::Cast(_, operand, _) | Rvalue::Repeat(operand, _) => operands.push(operand),
+                        Rvalue::BinaryOp(_, a, b) | Rvalue::CheckedBinaryOp(_, a, b) => {
+                            operands.push(a);
+                            operands.push(b);
+                        }
+                        Rvalue::Aggregate(_, list) => operands.extend(list.iter()),
+                        _ => {}
+                    }
+                }
+            }
+            match &block.terminator.kind {
+                rustc_public::mir::TerminatorKind::Call { func, args, .. } => {
+                    operands.push(func);
+                    operands.extend(args.iter());
+                }
+                rustc_public::mir::TerminatorKind::SwitchInt { discr, .. } => operands.push(discr),
+                rustc_public::mir::TerminatorKind::Assert { cond, .. } => operands.push(cond),
+                _ => {}
+            }
+            for operand in operands {
+                let Operand::Constant(constant) = operand else { continue };
+                let ty = rustc_public::rustc_internal::internal(tcx, constant.const_.ty());
+                types.push(ty);
+                if let rustc_middle::ty::FnDef(callee, _) = ty.kind() {
+                    work.push((*callee, None));
+                }
+                if let rustc_public::ty::ConstantKind::Unevaluated(unevaluated) = constant.const_.kind() {
+                    let target = rustc_public::rustc_internal::internal(tcx, rustc_public::CrateDef::def_id(&unevaluated.def));
+                    work.push((target, unevaluated.promoted.map(|promoted| promoted as u32)));
+                }
+            }
+        }
+        // The declaration of each ADT of the crate in a type of the body.
+        for ty in types {
+            for part in ty.walk() {
+                let Some(part) = part.as_type() else { continue };
+                if let rustc_middle::ty::Adt(adt, _) = part.kind()
+                    && adt.did().is_local()
+                    && adts.insert(adt.did())
+                {
+                    let fields: Vec<String> = adt.all_fields().map(|field| format!("{}: {}", field.name, tcx.type_of(field.did).instantiate_identity().skip_norm_wip())).collect();
+                    let text = format!("{:?} {:?} {}", adt.repr(), adt.variants().iter().map(|variant| format!("{:?}", variant.discr)).collect::<Vec<_>>(), fields.join(", "));
+                    found.push((format!("the declaration of {}", tcx.def_path_str(adt.did())), short_hash(&text)));
+                }
+            }
+        }
+    }
+    found.sort();
+    found
 }

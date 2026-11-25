@@ -2444,7 +2444,8 @@ pub fn is_test_harness_main(name: &str) -> bool {
 }
 
 /// Counts the explicit panic sites in the non-test functions of a workspace (design 5.5):
-/// `unwrap` and `expect` calls, `panic!`, `unreachable!`, `todo!`, `unimplemented!`, and
+/// `unwrap` and `expect` calls, each panic macro of the standard prelude (the shared list,
+/// R65.4-1: `panic!`, `unreachable!`, `todo!`, `unimplemented!`, the `assert!` macros), and
 /// indexing. The implicit checks (arithmetic overflow) do not count.
 pub fn panic_sites(workspace: &Workspace) -> i64 {
     let mut count = 0;
@@ -2455,7 +2456,7 @@ pub fn panic_sites(workspace: &Workspace) -> i64 {
             let attr = node.attr.as_deref().unwrap_or("");
             let site = match node.kind {
                 "method_call" => matches!(attr, "unwrap" | "expect"),
-                "macro" => matches!(attr, "panic" | "unreachable" | "todo" | "unimplemented"),
+                "macro" => semilla_core::names::panics(attr),
                 "index" => true,
                 _ => false,
             };

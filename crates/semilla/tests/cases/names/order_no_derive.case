@@ -1,0 +1,31 @@
+note: batch 10n, part C (order derives): the negative case: a field order change in a type with no derive and no `#[repr]`; no code reads the order, so no spotlight
+rule-: R65.3-3
+must_not_match: spotlight: an order change
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct P {
+    pub a: u8,
+    pub b: u32,
+}
+=== new src/lib.rs
+pub struct P {
+    pub b: u32,
+    pub a: u8,
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: member order of `depot::P`: `a, b` → `b, a` [declaration]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: member order of `depot::P`: `a, b` → `b, a` [declaration]
+    lines: src/lib.rs:3, src/lib.rs:-2

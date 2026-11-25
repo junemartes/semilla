@@ -1403,18 +1403,18 @@ fn replaced_derive(impl_path: &str, before: &Workspace, after: &Workspace) -> Op
     (derives(before) && !derives(after)).then(|| (path.clone(), trait_name.to_string()))
 }
 
-/// The attributes that cannot change a MIR body or the behavior: docs, lint levels, and hints for
-/// the compiler.
-const NO_MIR: &[&str] = &["doc", "allow", "warn", "deny", "forbid", "expect", "must_use", "inline", "cold", "rustfmt::skip", "deprecated"];
-
-/// The attributes whose change needs no reason. A derive can change bodies, but the MIR compare
-/// shows these bodies, and the fact owns them (it is not neutral then).
-const NO_SPOTLIGHT: &[&str] = &["doc", "allow", "warn", "deny", "forbid", "expect", "must_use", "inline", "cold", "rustfmt::skip", "deprecated", "derive"];
+/// True for an attribute whose change needs no reason (the shared list of the built-in
+/// attributes, R65.4-1): an attribute that cannot change a MIR body or the behavior, and
+/// `derive`. A derive can change bodies, but the MIR compare shows these bodies, and the fact
+/// owns them (it is not neutral then).
+fn no_spotlight_attribute(name: &str) -> bool {
+    semilla_core::names::attribute_no_mir(name) || name == "derive"
+}
 
 /// True for an attribute of a lint tool (`clippy::…`, `diagnostic::…`, `rustfmt::…`).
 /// True for an attribute that changes no MIR (design 44): the allow list of [`harmless_attribute_edit`].
 pub(crate) fn harmless_attribute_name(name: &str) -> bool {
-    NO_MIR.contains(&name) || is_lint_tool(name)
+    semilla_core::names::attribute_no_mir(name) || is_lint_tool(name)
 }
 
 pub(crate) fn is_lint_tool(name: &str) -> bool {
@@ -1644,7 +1644,7 @@ pub fn positional_sites(entity: &str, after: &Workspace, callees: Option<&BTreeM
 
 /// The attributes of a new item that need a reason (brief 5h, B2): the names, in source order.
 ///
-/// A new item follows the allow list of a changed item (`NO_SPOTLIGHT` and the lint tools). Two
+/// A new item follows the allow list of a changed item (`no_spotlight_attribute` and the lint tools). Two
 /// more attributes are allowed on a new item: `#[test]` and exactly `#[cfg(test)]`. They only
 /// add test code. Each other attribute needs a reason, also an attribute that Semilla does not
 /// know (invariant I3).
@@ -1661,7 +1661,7 @@ pub(crate) fn new_attributes(attrs: &[String]) -> Vec<String> {
         }
         // An attribute that does not parse is unknown, so it is not harmless.
         let name = attribute_name(&attribute).unwrap_or_else(|| "unknown".into());
-        if !NO_SPOTLIGHT.contains(&name.as_str()) && !is_lint_tool(&name) && !names.contains(&name) {
+        if !no_spotlight_attribute(&name) && !is_lint_tool(&name) && !names.contains(&name) {
             names.push(name);
         }
     }
@@ -1690,7 +1690,7 @@ pub fn changed_attributes(edit: &Edit) -> Vec<String> {
 /// True if an attribute edit cannot change a MIR body: each changed attribute is a doc, a lint
 /// level, or a compiler hint.
 pub fn harmless_attribute_edit(edit: &Edit) -> bool {
-    edit.kind == EditKind::Attrs && changed_attributes(edit).iter().all(|name| NO_MIR.contains(&name.as_str()) || is_lint_tool(name))
+    edit.kind == EditKind::Attrs && changed_attributes(edit).iter().all(|name| semilla_core::names::attribute_no_mir(name) || is_lint_tool(name))
 }
 
 /// The category of a type-level fact from its part (design 35, "Decided by Claude").
@@ -2057,6 +2057,35 @@ pub(crate) fn reads_files(body_index: &BodyIndex, item: &str) -> bool {
     body_index.config(item).iter().any(|call| include_text(call, item).is_some())
 }
 
+/// R65.3-3: why a member order change of a type needs a reason, or `None`. The code that a
+/// derive or an attribute macro makes from the type reads its members in the order of the text
+/// (`Debug` prints them so, `PartialOrd` compares them so, a derive of a third crate can write
+/// them so), and `#[repr]` gives the layout the order. A built-in attribute that is not a
+/// derive and not `#[repr]` does not read the members. No name of a derive decides it: the
+/// default mode does not see the code of a derive. The compiled mode compares the expansion of
+/// each derive (R63.3-8, R65.2-1).
+pub(crate) fn order_reader(attrs: &str) -> Option<String> {
+    let mut found: Vec<String> = Vec::new();
+    for attribute in split_attributes(attrs) {
+        let Some(name) = attribute_name(&attribute) else { continue };
+        let reader = match name.as_str() {
+            "repr" | "derive" => true,
+            // A `cfg_attr` with a derive or a `repr` in its content.
+            "cfg_attr" => attribute.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == "derive" || word == "repr"),
+            other => !semilla_core::names::attribute_no_mir(other) && !semilla_core::names::attribute_no_cfg(other) && !is_lint_tool(other) && other != "cfg",
+        };
+        if reader && !found.contains(&name) {
+            found.push(name);
+        }
+    }
+    if found.is_empty() {
+        return None;
+    }
+    let names = derive_list(&[attrs.to_string()]).into_iter().map(|(_, path)| format!("`{path}`")).collect::<Vec<_>>();
+    let list = if names.is_empty() { found.iter().map(|name| format!("`#[{name}]`")).collect::<Vec<_>>().join(", ") } else { names.join(", ") };
+    Some(format!("an order change in a type with `#[repr]`, a derive, or an attribute macro ({list}): the code that it makes reads the members in order"))
+}
+
 /// The text of a use of `include_str!`, `include_bytes!`, or `include!` for the spotlight:
 /// "`PATH` (`include_str!` in `ITEM`)". `None` for each other use. A path that is not one
 /// literal shows as its source text.
@@ -2078,10 +2107,6 @@ fn spotlight(part: &str, anchor: &Anchor, edits: Vec<&Edit>, before: &Workspace,
         }
     }
     if part == "member order" {
-        let item = after.items.get(&anchor.item).or_else(|| before.items.get(&anchor.item));
-        if item.is_some_and(|item| item.attrs.iter().any(|attr| attr.contains("repr") || attr.contains("PartialOrd") || attr.split(|c: char| !c.is_alphanumeric()).any(|w| w == "Ord" || w == "Hash"))) {
-            return Some("an order change in a type with `#[repr]` or an order derive (`PartialOrd`, `Ord`, `Hash`)".into());
-        }
         // A cast (`as`) reads the discriminant value of the enum (batch 5e). The MIR facts of the
         // "after" bodies give the casts.
         let mut readers: Vec<&String> = callees.into_iter().flatten().filter(|(_, facts)| facts.casts.contains(&anchor.item)).map(|(item, _)| item).collect();
@@ -2089,6 +2114,12 @@ fn spotlight(part: &str, anchor: &Anchor, edits: Vec<&Edit>, before: &Workspace,
         if let Some(first) = readers.first() {
             let more = if readers.len() > 1 { format!(" and {} more", readers.len() - 1) } else { String::new() };
             return Some(format!("an order change in an enum whose discriminant value a cast (`as`) reads (in `{first}`{more})"));
+        }
+        // R65.3-3: a derive, an attribute macro, or `#[repr]` reads the order. The cast text
+        // above is more exact, so it comes first.
+        let item = after.items.get(&anchor.item).or_else(|| before.items.get(&anchor.item));
+        if let Some(why) = item.and_then(|item| order_reader(&item.attrs.join(" "))) {
+            return Some(why);
         }
     }
     if part == "trait impl added" {
@@ -2101,14 +2132,17 @@ fn spotlight(part: &str, anchor: &Anchor, edits: Vec<&Edit>, before: &Workspace,
     if part.starts_with("trait impl") {
         let inner = anchor.item.split_once("::impl ").map(|(_, inner)| inner).unwrap_or("");
         let trait_name = inner.split_once(" as ").map(|(_, t)| t.trim_end_matches('>').rsplit("::").next().unwrap_or("").split('<').next().unwrap_or("")).unwrap_or("");
-        if matches!(trait_name, "Drop" | "Deref" | "DerefMut") {
-            return Some(format!("an implicit call: the compiler calls `{trait_name}` with no call in the text, so the MIR of the callers does not show the change"));
+        if semilla_core::names::is_implicit_trait(trait_name) {
+            return Some(format!(
+                "an implicit call: the compiler calls `{trait_name}` with no call in the text, so the MIR of the callers does not show the change ({} (the traits that the compiler calls with no call); the compiled mode: the MIR of the drop glue and of each method call)",
+                semilla_core::names::NAME_LIST
+            ));
         }
     }
     if part == "attribute" {
         // An allow list (invariant I3): each attribute that is not known as harmless needs a
         // reason. A deny list misses the next attribute.
-        let changed: Vec<String> = edits.iter().flat_map(|edit| changed_attributes(edit)).filter(|name| !NO_SPOTLIGHT.contains(&name.as_str()) && !is_lint_tool(name)).collect();
+        let changed: Vec<String> = edits.iter().flat_map(|edit| changed_attributes(edit)).filter(|name| !no_spotlight_attribute(name) && !is_lint_tool(name)).collect();
         if !changed.is_empty() {
             let mut names = changed.clone();
             names.sort();

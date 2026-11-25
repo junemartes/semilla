@@ -490,7 +490,7 @@ impl<'a> Scope<'a> {
             name => match self.in_module(module, name, depth) {
                 Lookup::Item(path) => (path, rest),
                 _ if is_crate(name) => (name.to_string(), rest),
-                _ if matches!(name, "std" | "core" | "alloc") => return Lookup::External,
+                _ if semilla_core::names::is_std_crate(name) => return Lookup::External,
                 _ => return Lookup::Unknown,
             },
         };

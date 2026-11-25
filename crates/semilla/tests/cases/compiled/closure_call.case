@@ -29,19 +29,19 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: deleted statement `v ^ 1` at `depot::apply/tail` [semantics · code different]
       affected bodies: depot::apply (with 2 other edits of this body)
-      equivalence: not decided: a closure value: |x: u32| x ^ 1 (src/lib.rs:2)
+      equivalence: equivalent (proved by SMT after inlining `depot::apply::{closure#0}`)
   ◆ f2 derived: added `let` `let f = |x: u32| x ^ 1;` at `depot::apply/S0` [semantics · code different]
       affected bodies: depot::apply (with 2 other edits of this body)
       control flow: + graph of `depot::apply::{closure#0} |x: u32| x ^ 1`: 2 points, 1 arrow (semilla status --verbose)
-      equivalence: not decided: a closure value: |x: u32| x ^ 1 (src/lib.rs:2)
+      equivalence: equivalent (proved by SMT after inlining `depot::apply::{closure#0}`)
   ◆ f3 derived: added statement `f(v)` at `depot::apply/tail` [semantics · code different]
       affected bodies: depot::apply (with 2 other edits of this body)
       control flow: + call `f` [closure] (src/lib.rs:3): return → return
       control flow: + arrow entry (src/lib.rs:1) → call `f` [closure] (src/lib.rs:3)
-      equivalence: not decided: a closure value: |x: u32| x ^ 1 (src/lib.rs:2)
+      equivalence: equivalent (proved by SMT after inlining `depot::apply::{closure#0}`)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::apply (src/lib.rs:1): graph changes: +1 call, +2 arrows, −1 arrow; not decided (a closure value: |x: u32| x ^ 1 (src/lib.rs:2))
+    depot::apply (src/lib.rs:1): graph changes: +1 call, +2 arrows, −1 arrow; equivalent (proved by SMT after inlining `depot::apply::{closure#0}`)
     depot::apply::{closure#0} |x: u32| x ^ 1 (src/lib.rs:2): graph added: 2 points, 1 arrow
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

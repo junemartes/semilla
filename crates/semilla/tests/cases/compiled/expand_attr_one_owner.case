@@ -113,7 +113,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     shop::Cart::double (shop/src/lib.rs:5): same graph (the edit keeps the control flow); different (for self = &Cart { 1 }: before returns 2, after returns 4)
     shop::Cart::half (shop/src/lib.rs:5): same graph (the edit keeps the control flow); different (for self = &Cart { 9 }: before returns 4, after returns 3)
     shop::Cart::total (shop/src/lib.rs:5): same graph (the edit keeps the control flow); different (for self = &Cart { 0 }: before returns 1, after returns 2)
-  expansions: 1 changed
+  expansions: 1 changed, 1 equal
     `#[depot_macros::helper]` at `shop::impl Cart` (shop/src/lib.rs:5): expansion changed: `attribute macro depot_macros::helper` (depot_macros/src/lib.rs:4): changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics]; changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics]; changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

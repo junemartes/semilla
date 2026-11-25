@@ -1,0 +1,39 @@
+note: batch 10n, part A: a macro reads a `.txt` file with `include_str!`; the step changes only that file; the expansion changes only by the read file, a token of the context of the call, and the line shows the new value
+rule+: R65.1-2
+must_match: only the context of the call changes: the file `notes\.txt` \(`include_str!\("\.\./notes\.txt"\)`\); changed code
+must_match: the code of the call reads `notes\.txt`, which the step changes
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+macro_rules! notes {
+    () => { include_str!("../notes.txt") };
+}
+
+pub fn notes() -> &'static str {
+    notes!()
+}
+=== old notes.txt
+open at nine
+=== new notes.txt
+open at ten
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: notes.txt: changed [file · code different]
+      affected bodies: shop::notes
+      expansion: `include_str!("../notes.txt")` from `notes!()` at `shop::notes/tail` (src/lib.rs:6): expansion changed: only the context of the call changes: the file `notes.txt` (`include_str!("../notes.txt")`); changed code `nine` → `ten`
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: 1 changed
+    `include_str!("../notes.txt")` from `notes!()` at `shop::notes/tail` (src/lib.rs:6): expansion changed: `macro include_str` (crate core): only the context of the call changes: the file `notes.txt` (`include_str!("../notes.txt")`); changed code `nine` → `ten`; the code of the call reads `notes.txt`, which the step changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: notes.txt: changed [file · code different]
+    lines: notes.txt:1, notes.txt:-1

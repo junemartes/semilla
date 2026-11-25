@@ -9,6 +9,7 @@
 
 pub mod anchor;
 pub mod claim;
+pub mod names;
 pub mod ops;
 pub mod report;
 pub mod text;

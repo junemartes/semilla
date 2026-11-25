@@ -104,6 +104,25 @@ pub enum IrTy {
         n: Option<u64>,
         k: String,
     },
+    /// A closure (design 66, part A): the name of its body, the type of each capture, and the
+    /// key of the form of an instance (`std`). A value is the captures and the identity of the
+    /// body (the last field: an opaque term).
+    Clo {
+        n: String,
+        v: Vec<u32>,
+        #[serde(default)]
+        g: Option<String>,
+        /// True if a value needs a drop (a capture with a destructor).
+        #[serde(default)]
+        d: bool,
+        /// True for a closure of the standard library (one body in each version).
+        #[serde(default)]
+        s: bool,
+        /// The key and the body name of each closure type in the generic arguments of the parent
+        /// item.
+        #[serde(default)]
+        q: Vec<(String, String)>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -153,6 +172,9 @@ pub enum IrConst {
     /// A reference to an array of scalars (design 64, part C): the type of an element and the
     /// bits of each element.
     S(u32, Vec<String>),
+    /// A constant that the compiler does not evaluate here (design 66, part B): the path with
+    /// the generic arguments, the type, and the digest of each item that its value depends on.
+    G(String, u32, Vec<(String, String)>),
     U(String),
 }
 
@@ -175,6 +197,8 @@ pub enum IrAgg {
     A(u32, usize),
     /// An array of scalars: the type of an element (design 64, part C).
     S(u32),
+    /// A closure: its type (an `IrTy::Clo`) and the captures (design 66, part A).
+    C(u32),
 }
 
 /// A place in the source: `[file, start, end]` (an index into `f`).
@@ -232,6 +256,19 @@ pub struct IrCallee {
     /// The operation of the sequence model (design 64, part C): `vec_push`, `slice_get`.
     #[serde(default)]
     pub s: Option<String>,
+    /// A call of a closure whose body the check knows (design 66, part A): 1 if the first
+    /// argument goes to the body as it is, 2 if the body takes a reference to the closure that
+    /// the call gives by value; 10 more for a closure of the standard library. `w` is the name
+    /// of the body; `g` with the key `p`: the form of an instance.
+    #[serde(default)]
+    pub c: Option<u8>,
+    /// The key and the body name of each closure type in the generic arguments of the callee
+    /// (design 66, part A).
+    #[serde(default)]
+    pub q: Vec<(String, String)>,
+    /// The function pointer of a call through a pointer (design 66, part A).
+    #[serde(default)]
+    pub f: Option<IrOp>,
 }
 
 /// The effect summary of a call from the driver (design 64, part B).
@@ -300,6 +337,9 @@ pub struct Checked {
     pub queries: usize,
     pub millis: u128,
 }
+
+/// The longest term that a value keeps in place; a longer term gets a name (design 66.9).
+const SHARED_TERM: usize = 160;
 
 /// The most paths of one side.
 pub const MAX_PATHS: usize = 256;
@@ -620,6 +660,27 @@ struct Decls {
     /// The symbol of each sequence input (design 64, part C): a small model has short
     /// sequences.
     seqs: Vec<(String, SeqE)>,
+    /// The closure bodies that the runs met (design 66, part A), for the links of their
+    /// identities.
+    clos: Vec<CloSeen>,
+    /// The pairs of closure bodies that the check proved equivalent (`old` ≡ `new`).
+    links: Vec<String>,
+    /// The name of each long term (design 66.9): the text and the name.
+    terms: std::collections::HashMap<String, String>,
+    /// The constants that the compiler does not evaluate here (design 66, part B): the side,
+    /// the path, and the digest.
+    gconsts: Vec<(bool, String, Vec<(String, String)>, V)>,
+}
+
+/// A closure body that a run met (design 66, part A): the side, the key, the name of the body,
+/// true for the form of an instance (by the key), and the symbol of its identity.
+#[derive(Clone, Debug)]
+struct CloSeen {
+    old: bool,
+    key: String,
+    name: String,
+    inst: bool,
+    sym: String,
 }
 
 impl Decls {
@@ -704,6 +765,9 @@ struct Frame {
     name: String,
     /// A number of the frame, unique in the run.
     id: usize,
+    /// True for a small helper of the standard library that the first try inlines (design 66,
+    /// part C). A stop in it gives the helper back to the call rule (R66.10-4).
+    helper: bool,
 }
 
 #[derive(Clone)]
@@ -789,7 +853,8 @@ impl<'a, 'b> Run<'a, 'b> {
         Ok(value)
     }
 
-    fn write(&self, state: &mut State, loc: &Loc, new: V) -> Result<(), Stop> {
+    fn write(&mut self, state: &mut State, loc: &Loc, new: V) -> Result<(), Stop> {
+        let new = self.share(new);
         let ty = state.types.get(loc.slot).cloned().flatten();
         let slot = state.slots.get_mut(loc.slot).ok_or_else(|| Stop("a place with no slot".into()))?;
         write_path(slot, &loc.path, new, ty.as_ref())
@@ -849,6 +914,7 @@ impl<'a, 'b> Run<'a, 'b> {
                     let next = match ty.get()? {
                         IrTy::Tuple(items) => *items.get(*i)?,
                         IrTy::Adt { v, .. } => *v.get(variant.unwrap_or(0))?.get(*i)?,
+                        IrTy::Clo { v, .. } => *v.get(*i)?,
                         _ => return None,
                     };
                     ty = ty.at(next);
@@ -880,6 +946,16 @@ impl<'a, 'b> Run<'a, 'b> {
                     && let Some(IrTy::Ref(false, inner)) = ir.t.get(*ty as usize)
                     && let Some(value) = zero_sized(&ir, *inner)
                 {
+                    state.slots.push(value);
+                    state.types.push(Some(Ty { ir: ir.clone(), id: *inner }));
+                    return Ok(V::Ptr(Loc { slot: state.slots.len() - 1, path: Vec::new() }));
+                }
+                // A constant that the compiler does not evaluate here, of a reference type: a new
+                // place with the value (design 66, part B).
+                if let IrConst::G(path, ty, digest) = constant
+                    && let Some(IrTy::Ref(false, inner)) = ir.t.get(*ty as usize)
+                {
+                    let value = self.generic_value(&Ty { ir: ir.clone(), id: *inner }, path, digest)?;
                     state.slots.push(value);
                     state.types.push(Some(Ty { ir: ir.clone(), id: *inner }));
                     return Ok(V::Ptr(Loc { slot: state.slots.len() - 1, path: Vec::new() }));
@@ -920,6 +996,11 @@ impl<'a, 'b> Run<'a, 'b> {
             }
             IrConst::Z(ty) => Ok(match ir.t.get(*ty as usize) {
                 Some(IrTy::Adt { e: false, v, .. }) if v.first().is_none_or(Vec::is_empty) => V::Tup(Vec::new()),
+                // A closure with no captures as a constant: the identity of its body (design 66).
+                Some(closure @ IrTy::Clo { v, .. }) if v.is_empty() => V::Tup(vec![V::Opq(self.clo_identity(closure))]),
+                // A closure type that the check does not know: two such values are not a sure
+                // difference.
+                Some(IrTy::Opaque { n, .. }) if n.contains("{closure") => V::Opq(tx(self.opaque_const(&format!("zst {n}")), false)),
                 Some(IrTy::Opaque { n, .. }) => V::Opq(tx(self.opaque_const(&format!("zst {n}")), true)),
                 _ => V::Unit,
             }),
@@ -945,8 +1026,106 @@ impl<'a, 'b> Run<'a, 'b> {
                 }
             }
             IrConst::S(..) => Err(Stop("an array".into())),
+            IrConst::G(path, ty, digest) => self.generic_value(&Ty { ir: ir.clone(), id: *ty }, path, digest),
             IrConst::U(cause) => Err(Stop(cause.clone())),
         }
+    }
+
+    /// A value with each long term replaced by a name (design 66.9, part D follow-up). A term
+    /// that a body reads many times grows with each use (`b = a * k ^ (a >> 3)` has `a` two
+    /// times), and a chain of such statements gives terms of many megabytes: each copy of a
+    /// state and each step then costs much time before any query. A term longer than
+    /// `SHARED_TERM` characters gets a name, `(define-fun |t4| () SORT TERM)`; one text gets one
+    /// name, so two equal texts stay equal (each fold on equal texts stays). A literal is short,
+    /// so a fold on a literal stays too. The solver sees the same formula.
+    fn share(&mut self, value: V) -> V {
+        match value {
+            V::Bv(term, w) => V::Bv(self.share_term(term, &sort_of_bv(w)), w),
+            V::Bool(term) => V::Bool(self.share_term(term, "Bool")),
+            V::Tup(items) => V::Tup(items.into_iter().map(|item| self.share(item)).collect()),
+            V::Enum { d, w, ds, f } => {
+                let d = self.share_term(d, &sort_of_bv(w));
+                V::Enum { d, w, ds, f: f.into_iter().map(|fields| fields.into_iter().map(|item| self.share(item)).collect()).collect() }
+            }
+            V::Seq(Sq { s, e, n }) => {
+                let s = self.share_term(s, &e.sort());
+                let n = self.share_term(n, &sort_of_bv(64));
+                V::Seq(Sq { s, e, n })
+            }
+            other => other,
+        }
+    }
+
+    fn share_term(&mut self, term: T, sort: &str) -> T {
+        if term.s.len() <= SHARED_TERM {
+            return term;
+        }
+        let name = match self.decls.terms.get(&term.s) {
+            Some(name) => name.clone(),
+            None => {
+                let name = format!("|t{}|", self.decls.terms.len());
+                self.decls.lines.push(format!("(define-fun {name} () {sort} {})", term.s));
+                self.decls.names.insert(name.clone());
+                self.decls.terms.insert(term.s.clone(), name.clone());
+                name
+            }
+        };
+        tx(name, term.x)
+    }
+
+    /// The identity of a closure body (design 66, part A): a symbol of this side and the key.
+    /// The symbols of the two sides are equal only if the check proves the two bodies
+    /// equivalent (`closure_links`); a pair by name never makes them equal.
+    fn closure_identity(&mut self, key: &str, name: &str, inst: bool) -> T {
+        let sym = format!("|clo {} {}|", if self.old { "o" } else { "n" }, sym_name(key));
+        self.decls.declare("Opq", "(declare-sort Opq 0)".into());
+        self.decls.declare(&sym, format!("(declare-const {sym} Opq)"));
+        if !self.decls.clos.iter().any(|seen| seen.sym == sym) {
+            self.decls.clos.push(CloSeen { old: self.old, key: key.to_string(), name: name.to_string(), inst, sym: sym.clone() });
+        }
+        tx(sym, false)
+    }
+
+    /// The value of a constant that the compiler does not evaluate here (design 66, part B): an
+    /// uninterpreted value of the path (renamed for the old side) and of the digest of each item
+    /// that the value depends on. The two versions have one value only if the path and each
+    /// digest are equal; else two values, and a difference that depends on them is not exact.
+    fn generic_value(&mut self, ty: &Ty, path: &str, digest: &[(String, String)]) -> Result<V, Stop> {
+        let path = (self.side.rename)(path);
+        let digest: Vec<(String, String)> = digest.iter().map(|(item, hash)| ((self.side.rename)(item), hash.clone())).collect();
+        let all: Vec<String> = digest.iter().map(|(item, hash)| format!("{item}={hash}")).collect();
+        let name = format!("g_{}_{}", if self.old { "o" } else { "n" }, sym_name(&format!("{path}|{}", all.join(";"))));
+        let value = self.result_value(ty, &name, &[], &[], 0).map_err(|Stop(cause)| Stop(format!("a constant that the compiler does not evaluate here: {path} ({cause})")))?;
+        if !self.decls.gconsts.iter().any(|(side, known, list, _)| *side == self.old && *known == path && *list == digest) {
+            self.decls.gconsts.push((self.old, path, digest, value.clone()));
+        }
+        Ok(value)
+    }
+
+    /// The identity of the body of a closure type (design 66, part A). A closure of the standard
+    /// library has one body in the two versions (one tool chain): its identity is a function of
+    /// its key with no closure place and of the identity of each closure type in its generic
+    /// arguments (two closures of the workspace with other bodies give other identities). A
+    /// closure of the workspace has the identity of its side (`closure_identity`).
+    fn clo_identity(&mut self, ty: &IrTy) -> T {
+        let IrTy::Clo { n, g, s, q, .. } = ty else { return tx("@no-closure", false) };
+        let key = g.as_deref().unwrap_or(n);
+        if !*s {
+            return self.closure_identity(key, n, g.is_some());
+        }
+        let mut inner = Vec::new();
+        for (key, name) in q {
+            inner.push(self.closure_identity(key, name, key != name));
+        }
+        let symbol = format!("|clos {}|", sym_name(&without_closure_places(key)));
+        self.decls.declare("Opq", "(declare-sort Opq 0)".into());
+        if inner.is_empty() {
+            self.decls.declare(&symbol, format!("(declare-const {symbol} Opq)"));
+            return tx(symbol, false);
+        }
+        let signature = vec!["Opq"; inner.len()].join(" ");
+        self.decls.declare(&format!("{symbol}/{}", inner.len()), format!("(declare-fun {symbol} ({signature}) Opq)"));
+        tx(format!("({symbol} {})", inner.iter().map(|term| term.s.as_str()).collect::<Vec<_>>().join(" ")), false)
     }
 
     /// The symbol of an opaque constant: the same text gives the same symbol on the two sides,
@@ -965,6 +1144,10 @@ impl<'a, 'b> Run<'a, 'b> {
         // A depth-first walk; each switch gives a copy of the state for each arm.
         let mut work: Vec<State> = vec![state];
         while let Some(mut state) = work.pop() {
+            if past_deadline() {
+                self.stops.insert(0, (t("true"), DEADLINE_CAUSE.into()));
+                return;
+            }
             if self.outs.len() + self.stops.len() > MAX_PATHS {
                 self.stops.push((and(&state.pc), format!("more than {MAX_PATHS} paths")));
                 return;
@@ -974,6 +1157,10 @@ impl<'a, 'b> Run<'a, 'b> {
                 Ok(Next::Done) => {}
                 Ok(Next::Continue) => work.push(state),
                 Err(Stop(cause)) => {
+                    if cause == DEADLINE_CAUSE {
+                        self.stops.insert(0, (t("true"), cause));
+                        return;
+                    }
                     let pc = and(&state.pc);
                     if lit_bool(&pc) == Some(false) {
                         continue;
@@ -984,6 +1171,7 @@ impl<'a, 'b> Run<'a, 'b> {
                     } else if cause.starts_with(BOUND) {
                         self.dropped += 1;
                     } else {
+                        note_helper_stop(&state);
                         self.stops.push((pc, cause));
                     }
                 }
@@ -997,6 +1185,9 @@ impl<'a, 'b> Run<'a, 'b> {
             self.steps += 1;
             if self.steps > MAX_STEPS {
                 return Err(Stop(format!("more than {MAX_STEPS} steps")));
+            }
+            if self.steps % 256 == 0 && past_deadline() {
+                return Err(Stop(DEADLINE_CAUSE.into()));
             }
             let frame = state.frames.last().cloned().ok_or_else(|| Stop("no frame".into()))?;
             let block = frame.ir.b.get(frame.block).ok_or_else(|| Stop("a jump to a block that does not exist".into()))?;
@@ -1107,6 +1298,12 @@ impl<'a, 'b> Run<'a, 'b> {
                     _ => Err(Stop("the length of a slice".into())),
                 }
             }
+            // A function pointer (design 66, part A): the value of the closure or of the function
+            // item, not exact (one address can have two functions).
+            IrRvalue::Un(op, a) if op == "fnptr" => Ok(match self.operand(state, a)? {
+                V::Opq(term) => V::Opq(tx(term.s, false)),
+                other => other,
+            }),
             IrRvalue::Un(op, a) => {
                 let a = self.operand(state, a)?;
                 match (op.as_str(), a) {
@@ -1147,6 +1344,14 @@ impl<'a, 'b> Run<'a, 'b> {
                             e,
                             n,
                         }))
+                    }
+                    // A closure: the captures and the identity of its body (design 66, part A).
+                    IrAgg::C(ty_id) => {
+                        let ir = state.frames.last().unwrap().ir.clone();
+                        let Some(closure) = ir.t.get(*ty_id as usize).filter(|ty| matches!(ty, IrTy::Clo { .. })) else { return Err(Stop("a closure value of a type that the check does not model".into())) };
+                        let identity = self.clo_identity(closure);
+                        values.push(V::Opq(identity));
+                        Ok(V::Tup(values))
                     }
                     IrAgg::A(ty_id, variant) => {
                         let ir = state.frames.last().unwrap().ir.clone();
@@ -1232,6 +1437,7 @@ impl<'a, 'b> Run<'a, 'b> {
                         Err(Stop(cause)) => {
                             let pc = and(&next.pc);
                             if lit_bool(&pc) != Some(false) {
+                                note_helper_stop(&next);
                                 self.stops.push((pc, cause));
                             }
                         }
@@ -1353,6 +1559,7 @@ impl<'a, 'b> Run<'a, 'b> {
         let drops = match self.unwind_values(state, unwind) {
             Ok(drops) => drops,
             Err(Stop(cause)) => {
+                note_helper_stop(state);
                 self.stops.push((pc, cause));
                 return Ok(());
             }
@@ -1387,6 +1594,25 @@ impl<'a, 'b> Run<'a, 'b> {
         if let Some(model) = &callee.s {
             return self.seq_call(state, model, &values, &dest_loc, dest_ty.as_ref(), target, unwind);
         }
+        // A call of a closure whose body the check knows: the check inlines the body with the
+        // captured values (design 66, part A).
+        if let Some(mode) = callee.c
+            && self.inline_closure(callee, mode)
+        {
+            let first_ty = match args.first() {
+                Some(IrOp::C(place) | IrOp::M(place)) => self.place_ty(state, place),
+                _ => None,
+            };
+            let helper = mode >= 10 && !self.inline_all;
+            let next = self.closure_call(state, callee, mode % 10, values, first_ty, dest_loc, target, unwind);
+            if helper
+                && next.is_ok()
+                && let Some(frame) = state.frames.last_mut()
+            {
+                frame.helper = true;
+            }
+            return next;
+        }
         // The inline step.
         let depth = state.frames.len();
         // A generic callee has the form of its instance (in `std`, by the callee text): the
@@ -1400,7 +1626,10 @@ impl<'a, 'b> Run<'a, 'b> {
         } else if self.inline_all {
             workspace_form.clone().or(std_form)
         } else {
-            None
+            // The first try inlines a small helper of the standard library that the check
+            // models fully (design 66, part C), unless its inlined body stopped an earlier run
+            // of this check (R66.10-4).
+            std_form.filter(|form| small_std(form) && !skipped_helper(&callee.p))
         };
         if let Some(form) = form {
             let name = callee.w.clone().unwrap_or_else(|| callee.p.clone());
@@ -1428,7 +1657,8 @@ impl<'a, 'b> Run<'a, 'b> {
                 }
                 state.serial += 1;
                 state.visits.push((state.serial, 0));
-                state.frames.push(Frame { ir: form, base, block: 0, stmt: 0, ret: Some((dest_loc, target, unwind.clone())), name, id: state.serial });
+                let helper = !changed && !self.inline_all;
+                state.frames.push(Frame { ir: form, base, block: 0, stmt: 0, ret: Some((dest_loc, target, unwind.clone())), name, id: state.serial, helper });
                 return Ok(Next::Continue);
             }
         }
@@ -1448,15 +1678,40 @@ impl<'a, 'b> Run<'a, 'b> {
             return Err(Stop(format!("the impl `{name}` of the trait method changes in the step")));
         }
         // A call that the check does not inline: an effect, or a value (design 64, parts A and B).
-        if values.iter().any(contains_mut_ref_inside) {
+        // A reference inside an argument value: the callee can write through it, unless the
+        // summary has no effect on the world. The driver gives the world to each argument with
+        // a `&mut` reference inside its value and to each argument with interior mutability,
+        // so a call with no such effect only reads through these references (design 66, part
+        // A: a closure that captures by shared reference).
+        if values.iter().any(contains_mut_ref_inside) && callee.e.as_ref().is_none_or(|summary| summary.w.is_some()) {
             return Err(Stop("a reference inside an argument of a call".into()));
         }
-        let renamed = (self.side.rename)(&callee.p);
+        let mut renamed = (self.side.rename)(&callee.p);
         // The inputs of the call: each argument, and the value behind each reference in it
         // (the read set of the call).
         let mut deep: Vec<V> = values.clone();
+        // A call through a function pointer (design 66, part A): the pointer is an input. A
+        // pointer to a closure of the body: the check inlines the closure.
+        if let Some(pointer) = &callee.f {
+            let pointer = self.operand(state, pointer)?;
+            if let Some(found) = self.pointer_closure(state, &pointer, &values, &dest_loc, target, unwind)? {
+                return Ok(found);
+            }
+            deep.insert(0, pointer);
+        }
         for value in &values {
             self.behind(state, value, &mut deep, 0)?;
+        }
+        // The closure types in the generic arguments of the callee (design 66, part A): the
+        // identity of each body is an input of the call, so the name of the callee does not
+        // need to name them. Two closures with other bodies give other inputs.
+        renamed = without_closure_places(&renamed);
+        let mut keys = callee.q.clone();
+        keys.sort_by_key(|(_, name)| std::cmp::Reverse(name.len()));
+        for (key, name) in &keys {
+            let identity = self.closure_identity(key, name, key != name);
+            deep.push(V::Opq(identity));
+            renamed = renamed.replace(&(self.side.rename)(name), "{closure}");
         }
         let world = match &callee.e {
             Some(summary) => summary.w.clone(),
@@ -1535,6 +1790,96 @@ impl<'a, 'b> Run<'a, 'b> {
                 Ok(Next::Continue)
             }
         }
+    }
+
+    /// A call through a function pointer whose value is a closure of the workspace that the run
+    /// made (design 66, part A): the check inlines the closure body with a reference to the
+    /// closure (it has no captures). No result for another pointer.
+    #[allow(clippy::too_many_arguments)]
+    fn pointer_closure(&mut self, state: &mut State, pointer: &V, values: &[V], dest_loc: &Loc, target: Option<usize>, unwind: &IrUnwind) -> Result<Option<Next>, Stop> {
+        let V::Tup(items) = pointer else { return Ok(None) };
+        let [V::Opq(identity)] = items.as_slice() else { return Ok(None) };
+        let Some(seen) = self.decls.clos.iter().find(|seen| seen.sym == identity.s).cloned() else { return Ok(None) };
+        let form = if seen.inst { self.side.std.get(&seen.key).cloned() } else { (self.side.workspace)(&seen.name) };
+        let Some(form) = form else { return Ok(None) };
+        let ty = form.l.get(1).and_then(|id| form.t.get(*id as usize)).cloned();
+        let Some(IrTy::Ref(false, inner)) = ty else { return Ok(None) };
+        let callee = IrCallee { p: seen.key.clone(), w: Some(seen.name.clone()), k: None, m: Some("closure".into()), g: seen.inst, e: None, s: None, c: Some(2), q: Vec::new(), f: None };
+        let tuple = if values.is_empty() { V::Unit } else { V::Tup(values.to_vec()) };
+        let first_ty = Some(Ty { ir: form.clone(), id: inner });
+        self.closure_call(state, &callee, 2, vec![pointer.clone(), tuple], first_ty, dest_loc.clone(), target, unwind).map(Some)
+    }
+
+    /// True if the check inlines a call of a closure (design 66, part A): a closure of the
+    /// workspace always; a closure of the standard library in the second try, and in the first
+    /// try only with the rule of the small helpers (part C). Else the call is a call that the
+    /// check does not inline (a value or an effect), with the closure as an input.
+    fn inline_closure(&self, callee: &IrCallee, mode: u8) -> bool {
+        if mode < 10 || self.inline_all {
+            return true;
+        }
+        let form = if callee.g { self.side.std.get(&callee.p).cloned() } else { callee.w.as_ref().and_then(|name| (self.side.workspace)(name)) };
+        let name = callee.w.clone().unwrap_or_else(|| callee.p.clone());
+        form.is_some_and(|form| small_std(&form)) && !skipped_helper(&name)
+    }
+
+    /// A call of a closure whose body the check knows (design 66, part A): the check inlines the
+    /// body. The first argument is the closure (or a reference to it), the second one the tuple
+    /// of the arguments of the body. A call that gives the closure by value to a body that takes
+    /// a reference (`FnOnce::call_once` of an `Fn` closure) gives the body a reference to a new
+    /// place with the closure; the call drops the closure after the body.
+    #[allow(clippy::too_many_arguments)]
+    fn closure_call(&mut self, state: &mut State, callee: &IrCallee, mode: u8, values: Vec<V>, first_ty: Option<Ty>, dest_loc: Loc, target: Option<usize>, unwind: &IrUnwind) -> Result<Next, Stop> {
+        let name = callee.w.clone().unwrap_or_else(|| callee.p.clone());
+        let form = if callee.g { self.side.std.get(&callee.p).cloned() } else { callee.w.as_ref().and_then(|name| (self.side.workspace)(name)) };
+        let Some(form) = form else { return Err(Stop(format!("a call of a closure with no form: `{name}`"))) };
+        if let Some(cause) = &form.u {
+            return Err(Stop(format!("the closure `{name}` has no form ({cause})")));
+        }
+        let Some(target) = target else { return Err(Stop(format!("a call of the closure `{name}` that never returns"))) };
+        // A closure is a part of the body that makes it: one more level than a callee.
+        if state.frames.len() >= MAX_DEPTH + 2 {
+            return Err(Stop(format!("the inline step is too deep for the closure `{name}`")));
+        }
+        if state.frames.iter().any(|frame| frame.name == name) {
+            return Err(Stop(format!("a recursive callee `{name}`")));
+        }
+        let mut items = values.into_iter();
+        let (Some(first), Some(tuple)) = (items.next(), items.next()) else { return Err(Stop(format!("a call of the closure `{name}` with no arguments"))) };
+        let first = if mode == 2 {
+            if !matches!(first_ty.as_ref().and_then(|ty| ty.get()), Some(IrTy::Clo { d: false, .. })) {
+                return Err(Stop(format!("a call of the closure `{name}` by value that drops its captures")));
+            }
+            state.slots.push(first);
+            state.types.push(first_ty);
+            V::Ptr(Loc { slot: state.slots.len() - 1, path: Vec::new() })
+        } else {
+            first
+        };
+        let mut params = vec![first];
+        match tuple {
+            V::Tup(list) => params.extend(list),
+            V::Unit => {}
+            _ => return Err(Stop(format!("a call of the closure `{name}` whose arguments are not a tuple"))),
+        }
+        if params.len() != form.a {
+            return Err(Stop(format!("a call of the closure `{name}` with other parameters")));
+        }
+        self.inlined.insert(name.clone());
+        let base = state.slots.len();
+        for ty in &form.l {
+            state.slots.push(V::Undef);
+            state.types.push(Some(Ty { ir: form.clone(), id: *ty }));
+        }
+        for (index, value) in params.into_iter().enumerate() {
+            if let Some(slot) = state.slots.get_mut(base + 1 + index) {
+                *slot = value;
+            }
+        }
+        state.serial += 1;
+        state.visits.push((state.serial, 0));
+        state.frames.push(Frame { ir: form, base, block: 0, stmt: 0, ret: Some((dest_loc, target, unwind.clone())), name, id: state.serial, helper: false });
+        Ok(Next::Continue)
     }
 
     /// An operation of the sequence model of `Vec` and slices (design 64, part C), with its
@@ -1774,6 +2119,21 @@ impl<'a, 'b> Run<'a, 'b> {
                 self.decls.declare("Opq", "(declare-sort Opq 0)".into());
                 V::Opq(apply(self.decls, "Opq".into()))
             }
+            // A closure that a call gives (design 66, part A): each capture and the identity of
+            // the body are functions of the call.
+            Some(IrTy::Clo { v, .. }) => {
+                let mut values = Vec::new();
+                for (index, item) in v.iter().enumerate() {
+                    values.push(self.result_value(&ty.at(*item), &format!("{name}f{index}"), args, sorts, depth + 1)?);
+                }
+                self.decls.declare("Opq", "(declare-sort Opq 0)".into());
+                let name = format!("{name}b");
+                let symbol = format!("{name}_Opq");
+                let signature = sorts.join(" ");
+                self.decls.declare(&format!("{symbol}|{signature}"), format!("(declare-fun |{symbol}| ({signature}) Opq)"));
+                values.push(V::Opq(if args.is_empty() { tx(format!("|{symbol}|"), false) } else { tx(format!("(|{symbol}| {})", args.iter().map(|arg| arg.s.as_str()).collect::<Vec<_>>().join(" ")), false) }));
+                V::Tup(values)
+            }
             Some(IrTy::Seq { e, n: fixed, .. }) => {
                 let e = SeqE::of(&ty.at(e)).ok_or_else(|| Stop("a call result of a sequence that the check does not model".into()))?;
                 let seq = apply(self.decls, e.sort());
@@ -1799,6 +2159,99 @@ enum Next {
     Continue,
     Fork(Vec<State>),
     Done,
+}
+
+/// The most blocks of a callee of the standard library that the first try inlines (design 66,
+/// part C, Decided by Claude: see the counts of the training set in design 66).
+pub const FIRST_TRY_STD_BLOCKS: usize = 8;
+
+/// True for a small helper of the standard library that the first try inlines (design 66, part
+/// C): at most `FIRST_TRY_STD_BLOCKS` blocks, no loop, and no part that the check does not model
+/// (no mark `U` in the form, no place in a value of an opaque type, no call that the MIR does
+/// not resolve, no call that returns a reference). So the first try gets the
+/// exact value of the helper, and it never stops at a part of the helper that the value of the
+/// call (R64.2-1) does not need.
+fn small_std(form: &Ir) -> bool {
+    if form.u.is_some() || form.b.len() > FIRST_TRY_STD_BLOCKS || !loop_heads(form).is_empty() {
+        return false;
+    }
+    // Each projection of a place has a type that the check models (a field of a value of an
+    // opaque type stops a run).
+    let place_ok = |place: &IrPlace| -> bool {
+        let Some(mut ty) = form.l.get(place.l).and_then(|id| form.t.get(*id as usize)) else { return false };
+        let mut variant: Option<usize> = None;
+        for projection in &place.p {
+            let next = match (projection, ty) {
+                (IrProj::D, IrTy::Ref(_, inner)) => *inner,
+                (IrProj::V(v), IrTy::Adt { .. }) => {
+                    variant = Some(*v);
+                    continue;
+                }
+                (IrProj::F(i), IrTy::Tuple(items)) => match items.get(*i) {
+                    Some(id) => *id,
+                    None => return false,
+                },
+                (IrProj::F(i), IrTy::Adt { v, .. }) => match v.get(variant.unwrap_or(0)).and_then(|fields| fields.get(*i)) {
+                    Some(id) => *id,
+                    None => return false,
+                },
+                (IrProj::F(i), IrTy::Clo { v, .. }) => match v.get(*i) {
+                    Some(id) => *id,
+                    None => return false,
+                },
+                (IrProj::I(_) | IrProj::K(..), IrTy::Seq { e, .. }) => *e,
+                _ => return false,
+            };
+            variant = None;
+            let Some(found) = form.t.get(next as usize) else { return false };
+            ty = found;
+        }
+        true
+    };
+    let op_ok = |op: &IrOp| match op {
+        IrOp::C(place) | IrOp::M(place) => place_ok(place),
+        IrOp::K(constant) => !matches!(constant, IrConst::U(_)),
+        IrOp::R(_) => true,
+    };
+    let unwind_ok = |unwind: &IrUnwind| !matches!(unwind, IrUnwind::U(_));
+    for block in &form.b {
+        for statement in &block.s {
+            let ok = match &statement.k {
+                IrStmtKind::Set(place, value) => {
+                    place_ok(place)
+                        && match value {
+                            IrRvalue::Use(a) | IrRvalue::Un(_, a) | IrRvalue::Cast(a, _) => op_ok(a),
+                            IrRvalue::Bin(_, a, b) | IrRvalue::Chk(_, a, b) => op_ok(a) && op_ok(b),
+                            IrRvalue::Agg(_, list) => list.iter().all(op_ok),
+                            IrRvalue::Ref(_, place) | IrRvalue::Disc(place) => place_ok(place),
+                            IrRvalue::U(_) => false,
+                        }
+                }
+                IrStmtKind::SetDisc(place, _) => place_ok(place),
+                IrStmtKind::U(_) => false,
+            };
+            if !ok {
+                return false;
+            }
+        }
+        let ok = match &block.t.k {
+            IrTermKind::Goto(_) | IrTermKind::Ret | IrTermKind::Unreach => true,
+            IrTermKind::Sw(op, _, _) => op_ok(op),
+            IrTermKind::Assert(op, _, _, _, unwind) => op_ok(op) && unwind_ok(unwind),
+            // A call that returns a reference stops a run (the check does not know the place),
+            // unless it is an operation of the sequence model.
+            IrTermKind::Call(callee, args, dest, _, unwind) => {
+                let reference = form.l.get(dest.l).and_then(|id| form.t.get(*id as usize)).is_some_and(|ty| matches!(ty, IrTy::Ref(..))) && dest.p.is_empty();
+                callee.m.as_deref().is_none_or(|mark| mark == "closure" && callee.c.is_some()) && (!reference || callee.s.is_some()) && args.iter().all(op_ok) && place_ok(dest) && unwind_ok(unwind)
+            }
+            IrTermKind::Drop(place, _, _, unwind) => place_ok(place) && unwind_ok(unwind),
+            IrTermKind::U(_) => false,
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
 }
 
 /// The trait and the method of a callee text `<X as Trait>::method`: ` as Trait>::method`.
@@ -1874,6 +2327,7 @@ fn field_ty(ty: Option<&Ty>, variant: Option<usize>, index: usize) -> Option<Ty>
     let id = match ty.get()? {
         IrTy::Tuple(items) => *items.get(index)?,
         IrTy::Adt { v, .. } => *v.get(variant.unwrap_or(0))?.get(index)?,
+        IrTy::Clo { v, .. } => *v.get(index)?,
         _ => return None,
     };
     Some(ty.at(id))
@@ -1885,6 +2339,7 @@ fn shape(ty: Option<&Ty>) -> Option<V> {
     match ty.get()? {
         IrTy::Tuple(items) => Some(V::Tup(vec![V::Undef; items.len()])),
         IrTy::Adt { e: false, v, .. } => Some(V::Tup(vec![V::Undef; v.first().map_or(0, Vec::len)])),
+        IrTy::Clo { v, .. } => Some(V::Tup(vec![V::Undef; v.len() + 1])),
         IrTy::Adt { e: true, v, d, dt, .. } => {
             let (w, ds) = discriminants(&ty.ir, d, *dt);
             Some(V::Enum { d: bv_lit(ds.first().copied().unwrap_or(0), w), w, ds, f: v.iter().map(|fields| vec![V::Undef; fields.len()]).collect() })
@@ -2282,6 +2737,19 @@ fn input(decls: &mut Decls, ty: &Ty, name: &str, slots: &mut Vec<V>, types: &mut
             decls.declare(&symbol, format!("(declare-const {symbol} Opq)"));
             V::Opq(tx(symbol, false))
         }
+        // A closure (design 66, part A): each capture is an input, and the identity of the body
+        // is one input of the two sides.
+        Some(IrTy::Clo { v, .. }) => {
+            let mut values = Vec::new();
+            for (index, item) in v.iter().enumerate() {
+                values.push(input(decls, &ty.at(*item), &format!("{name}.{index}"), slots, types, muts, depth + 1)?);
+            }
+            let body = format!("|in {name}.body|");
+            decls.declare("Opq", "(declare-sort Opq 0)".into());
+            decls.declare(&body, format!("(declare-const {body} Opq)"));
+            values.push(V::Opq(tx(body, false)));
+            V::Tup(values)
+        }
         // A sequence (design 64, part C): a `Vec` or a slice has at most `isize::MAX` elements;
         // an array has its length.
         Some(IrTy::Seq { e, n, .. }) => {
@@ -2316,6 +2784,9 @@ fn same_type(a: &Ty, b: &Ty, depth: usize, rename: &dyn Fn(&str) -> String) -> b
             rename(nx) == *ny && ex == ey && dx == dy && x.len() == y.len() && x.iter().zip(y).all(|(p, q)| p.len() == q.len() && p.iter().zip(q).all(|(r, s)| same_type(&a.at(*r), &b.at(*s), depth + 1, rename)))
         }
         (Some(IrTy::Ref(m, x)), Some(IrTy::Ref(n, y))) => m == n && same_type(&a.at(*x), &b.at(*y), depth + 1, rename),
+        // Two closure types with the same captures: the inputs of the two bodies are equal
+        // (design 66, part A). The bodies are not a part of the type here.
+        (Some(IrTy::Clo { v: x, .. }), Some(IrTy::Clo { v: y, .. })) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same_type(&a.at(*p), &b.at(*q), depth + 1, rename)),
         (Some(IrTy::Seq { e: x, n: m, k: p }), Some(IrTy::Seq { e: y, n, k: q })) => m == n && p == q && same_type(&a.at(*x), &b.at(*y), depth + 1, rename),
         (Some(IrTy::Opaque { n: x, .. }), Some(IrTy::Opaque { n: y, .. })) => without_place(&rename(x)) == without_place(y),
         (Some(x), Some(y)) => x == y,
@@ -2342,6 +2813,23 @@ fn without_place(text: &str) -> String {
         } else {
             out.push_str(&rest[..=at]);
             rest = &rest[at + 1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A text with each closure place removed (`{closure@src/lib.rs:2:18: 2:21}` gives `{closure}`,
+/// design 66, part A). The identity of each such closure is an input where the text names it.
+fn without_closure_places(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("{closure@") {
+        out.push_str(&rest[..at]);
+        out.push_str("{closure}");
+        match rest[at..].find('}') {
+            Some(end) => rest = &rest[at + end + 1..],
+            None => rest = "",
         }
     }
     out.push_str(rest);
@@ -2574,7 +3062,7 @@ fn fresh_state(side: &Side, cut: &CutState, head: usize, base: usize, map: &[(us
     types.truncate(slots.len());
     // The locals of the top frame follow the input slots (`base`).
     let mut state = State { slots, types, frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), calls: Vec::new(), visits: vec![(0, head)], serial: 1_000_000 };
-    state.frames.push(Frame { ir: side.ir.clone(), base, block: head, stmt: 0, ret: None, name: String::new(), id: 0 });
+    state.frames.push(Frame { ir: side.ir.clone(), base, block: head, stmt: 0, ret: None, name: String::new(), id: 0, helper: false });
     Ok(state)
 }
 
@@ -2604,13 +3092,18 @@ fn check_loop(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all: 
     let maps = local_maps(&first_a, &first_b, base, old.rename);
     let mut unproved = "the states at the loop entry differ".to_string();
     for map in &maps {
+        if past_deadline() {
+            return not_decided(DEADLINE_CAUSE.into(), inlined);
+        }
         // (1) The states at the loop entry are equal.
         if pairs_differ(solver, &decls, &with_map(&a.outs, map, true), &with_map(&b.outs, map, false), queries) != Some(false) {
             continue;
         }
         // (2) One iteration from equal states gives equal states, equal effects, and the same
         // exit decision.
-        let mut step_decls = start.clone();
+        // The state at the loop head can have names of long terms of the first segment
+        // (design 66.9): their definitions come with it.
+        let mut step_decls = if decls.terms.is_empty() { start.clone() } else { decls.clone() };
         let mut shared = BTreeMap::new();
         let (Ok(sa), Ok(sb)) = (fresh_state(old, &first_a, ha, base, map, true, &mut step_decls, &mut shared), fresh_state(new, &first_b, hb, base, map, false, &mut step_decls, &mut shared)) else {
             unproved = "the state of the loop has a reference".into();
@@ -2641,6 +3134,9 @@ fn check_loop(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all: 
         if let Verdict::Different { input, before, after } = verdict {
             return Some((Verdict::Different { input: format!("{input} (a bounded run of at most {UNROLL} loop iterations)"), before, after }, inlined));
         }
+    }
+    if past_deadline() {
+        return not_decided(DEADLINE_CAUSE.into(), inlined);
     }
     not_decided(format!("{unproved}; a bounded run of at most {UNROLL} loop iterations finds no input"), inlined)
 }
@@ -2750,7 +3246,7 @@ fn start_state(side: &Side, inputs: &[V], slots: &[V], types: &[Option<Ty>]) -> 
     for (index, value) in inputs.iter().enumerate() {
         state.slots[base + 1 + index] = value.clone();
     }
-    state.frames.push(Frame { ir: ir.clone(), base, block: 0, stmt: 0, ret: None, name: String::new(), id: 0 });
+    state.frames.push(Frame { ir: ir.clone(), base, block: 0, stmt: 0, ret: None, name: String::new(), id: 0, helper: false });
     state.visits.push((0, 0));
     state
 }
@@ -2788,8 +3284,14 @@ fn value_text(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> S
             let types: Vec<Option<Ty>> = match ty.and_then(|ty| ty.get()) {
                 Some(IrTy::Tuple(list)) => list.iter().map(|id| ty.map(|ty| ty.at(*id))).collect(),
                 Some(IrTy::Adt { v, .. }) => v.first().map(|list| list.iter().map(|id| ty.map(|ty| ty.at(*id))).collect()).unwrap_or_default(),
+                Some(IrTy::Clo { v, .. }) => v.iter().map(|id| ty.map(|ty| ty.at(*id))).collect(),
                 _ => Vec::new(),
             };
+            // A closure: its captures; the last part is the identity of its body.
+            if let Some(IrTy::Clo { .. }) = ty.and_then(|ty| ty.get()) {
+                let parts: Vec<String> = items.iter().take(items.len().saturating_sub(1)).enumerate().map(|(index, item)| value_text(item, types.get(index).and_then(|ty| ty.as_ref()), model)).collect();
+                return if parts.is_empty() { "a closure".into() } else { format!("a closure with ({})", parts.join(", ")) };
+            }
             let parts: Vec<String> = items.iter().enumerate().map(|(index, item)| value_text(item, types.get(index).and_then(|ty| ty.as_ref()), model)).collect();
             match ty.and_then(|ty| ty.get()) {
                 Some(IrTy::Adt { n, .. }) if parts.is_empty() => short_type(n),
@@ -2913,12 +3415,103 @@ fn terms_of(value: &V, out: &mut Vec<String>) {
     }
 }
 
+/// The cause of a check that its deadline stops (design 66.9): the text of the budget of the
+/// step (`semilla_verify::equiv::BUDGET_CAUSE`). The oracle gives such a check the result "not
+/// checked (the budget of the step)".
+pub const DEADLINE_CAUSE: &str = "the budget of the step";
+
+thread_local! {
+    /// The deadline of the body check that runs in this thread (also for its nested checks).
+    static DEADLINE: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// True if the deadline of the body check of this thread is past.
+fn past_deadline() -> bool {
+    DEADLINE.with(|deadline| deadline.get()).is_some_and(|deadline| Instant::now() >= deadline)
+}
+
 /// Checks two versions of a body. The first try inlines only the callees that the step changes;
 /// a second try inlines each callee with a form, when the first try proves nothing.
 pub fn check_bodies(solver: &Solver, old: &Side, new: &Side, step: &Step) -> Checked {
+    check_bodies_until(solver, old, new, step, None)
+}
+
+/// `check_bodies` with a deadline (design 66.9): the runs of the two sides and each solver query
+/// start only before it. A check that the deadline stops gives "not decided" with the cause
+/// `DEADLINE_CAUSE`, and no part of it is a result. No deadline: the same check as
+/// `check_bodies`.
+pub fn check_bodies_until(solver: &Solver, old: &Side, new: &Side, step: &Step, deadline: Option<Instant>) -> Checked {
+    let outer = DEADLINE.with(|cell| cell.get());
+    // A nested check keeps the deadline of its outer check.
+    let own = match (outer, deadline) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    DEADLINE.with(|cell| cell.set(own));
+    let checked = check_bodies_in(solver, old, new, step);
+    DEADLINE.with(|cell| cell.set(outer));
+    checked
+}
+
+fn check_bodies_in(solver: &Solver, old: &Side, new: &Side, step: &Step) -> Checked {
+    // A nested check (a closure link) has its own sets of the helpers (R66.10-4).
+    let outer = (SKIPPED_HELPERS.with(|cell| cell.take()), HELPER_STOPS.with(|cell| cell.take()));
+    let checked = check_bodies_helpers(solver, old, new, step);
+    SKIPPED_HELPERS.with(|cell| cell.replace(outer.0));
+    HELPER_STOPS.with(|cell| cell.replace(outer.1));
+    checked
+}
+
+thread_local! {
+    /// The small helpers of the standard library that the first try of this check does not
+    /// inline, because their inlined body stopped an earlier run (R66.10-4).
+    static SKIPPED_HELPERS: std::cell::RefCell<BTreeSet<String>> = const { std::cell::RefCell::new(BTreeSet::new()) };
+    /// The small helpers of the standard library whose inlined body was on the stack of a stop
+    /// of the run (R66.10-4).
+    static HELPER_STOPS: std::cell::RefCell<BTreeSet<String>> = const { std::cell::RefCell::new(BTreeSet::new()) };
+}
+
+/// The most runs of the first try that give back the helpers that stop it (R66.10-4).
+const HELPER_ROUNDS: usize = 4;
+
+fn skipped_helper(name: &str) -> bool {
+    SKIPPED_HELPERS.with(|cell| cell.borrow().contains(name))
+}
+
+/// Notes each small helper of the standard library on the stack of a stop (R66.10-4).
+fn note_helper_stop(state: &State) {
+    for frame in state.frames.iter().filter(|frame| frame.helper) {
+        HELPER_STOPS.with(|cell| cell.borrow_mut().insert(frame.name.clone()));
+    }
+}
+
+fn check_bodies_helpers(solver: &Solver, old: &Side, new: &Side, step: &Step) -> Checked {
     let started = Instant::now();
     let mut queries = 0;
+    let stopped = |verdict: &Verdict| matches!(verdict, Verdict::NotDecided { cause } if cause == DEADLINE_CAUSE);
+    // [R66.10-4] The first try inlines the small helpers of the standard library (design 66,
+    // part C). If the inlined body of a helper stops the run (an operation that the check does
+    // not model, such as the `offset` of `<*mut T>::add`), the call of that helper is a value
+    // of its inputs again (R64.2-1, the result of 10o), and the first try runs again: a stop in
+    // a helper never replaces a result that the call rule gives.
     let mut result = check_once(solver, old, new, step, false, &mut queries);
+    for _ in 0..HELPER_ROUNDS {
+        if stopped(&result.0) || !matches!(result.0, Verdict::NotDecided { .. }) {
+            break;
+        }
+        let found = HELPER_STOPS.with(|cell| cell.take());
+        let skipped = SKIPPED_HELPERS.with(|cell| cell.borrow().clone());
+        if found.is_subset(&skipped) {
+            break;
+        }
+        SKIPPED_HELPERS.with(|cell| cell.borrow_mut().extend(found));
+        result = check_once(solver, old, new, step, false, &mut queries);
+    }
+    SKIPPED_HELPERS.with(|cell| cell.borrow_mut().clear());
+    HELPER_STOPS.with(|cell| cell.borrow_mut().clear());
+    if stopped(&result.0) {
+        return Checked { verdict: result.0, inlined: Vec::new(), queries, millis: started.elapsed().as_millis() };
+    }
     let first_inlined = result.1.clone();
     let retry = match &result.0 {
         Verdict::Equivalent { .. } | Verdict::Different { .. } => false,
@@ -2926,9 +3519,14 @@ pub fn check_bodies(solver: &Solver, old: &Side, new: &Side, step: &Step) -> Che
     };
     if retry {
         let second = check_once(solver, old, new, step, true, &mut queries);
+        if stopped(&second.0) {
+            return Checked { verdict: second.0, inlined: Vec::new(), queries, millis: started.elapsed().as_millis() };
+        }
         // The second try gives the result if it decides, or if it inlines more.
         let decides = !matches!(second.0, Verdict::NotDecided { .. });
-        if decides || second.1.len() > first_inlined.len() {
+        // The first try can inline small helpers of the standard library (design 66, part C);
+        // the second try inlines each of them too.
+        if decides || second.1.len() >= first_inlined.len().max(1) {
             if decides || matches!(&result.0, Verdict::NotDecided { cause } if cause.contains("depends on")) {
                 result = second;
             }
@@ -2982,7 +3580,13 @@ fn check_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all: 
     }
     let start = decls.clone();
     let a = run_side(old, step, inline_all, &mut decls, &inputs, &slots, &types, &muts, true);
+    if a.stops.first().is_some_and(|(_, cause)| cause == DEADLINE_CAUSE) {
+        return not_decided(DEADLINE_CAUSE.into());
+    }
     let b = run_side(new, step, inline_all, &mut decls, &inputs, &slots, &types, &muts, false);
+    if b.stops.first().is_some_and(|(_, cause)| cause == DEADLINE_CAUSE) || past_deadline() {
+        return not_decided(DEADLINE_CAUSE.into());
+    }
     if let Some((_, cause)) = a.stops.first().or(b.stops.first()) {
         // A loop: the inductive check of the two loops (design 61.11, part B).
         if cause.starts_with("a loop")
@@ -2994,7 +3598,196 @@ fn check_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all: 
         inlined.extend(b.inlined.iter().cloned());
         return (Verdict::NotDecided { cause: cause.clone() }, inlined);
     }
-    decide(solver, old, new, inline_all, queries, decls, a, b, &slots, &types, &muts)
+    let mut decls = decls;
+    closure_links(solver, old, new, step, &mut decls, &[&a.outs, &b.outs], queries);
+    constant_links(&mut decls);
+    let (changed, unknown) = changed_constants(&decls);
+    if past_deadline() {
+        return not_decided(DEADLINE_CAUSE.into());
+    }
+    let (verdict, inlined) = decide(solver, old, new, inline_all, queries, decls, a, b, &slots, &types, &muts);
+    // A difference that depends on a constant whose definition changes: the cause names the
+    // constant and the changed items (design 66, part B). [R66.11-4] A constant whose definition
+    // has a part that the driver cannot compute is not known to change: the cause says that the
+    // check cannot compare it, with the cause of the part.
+    match verdict {
+        Verdict::NotDecided { cause } if cause.starts_with("the difference depends on") && !(changed.is_empty() && unknown.is_empty()) => {
+            let mut parts = Vec::new();
+            if !changed.is_empty() {
+                parts.push(format!("a constant that the compiler does not evaluate here changes: {}", changed.join("; ")));
+            }
+            if !unknown.is_empty() {
+                parts.push(format!("{CANNOT_COMPARE}: {}", unknown.join("; ")));
+            }
+            (Verdict::NotDecided { cause: parts.join("; ") }, inlined)
+        }
+        other => (other, inlined),
+    }
+}
+
+/// True if two digests of a constant give one value (design 66, part B): each item of the two
+/// versions has the same digest, and each item of one version only is an impl of a trait
+/// constant (a new type for the generic body, not a change of an old type).
+fn same_definition(before: &[(String, String)], after: &[(String, String)]) -> bool {
+    let common = |list: &[(String, String)], other: &[(String, String)]| {
+        list.iter().all(|(item, hash)| match other.iter().find(|(name, _)| name == item) {
+            Some((_, found)) => found == hash,
+            None => item.starts_with("impl: "),
+        })
+    };
+    common(before, after) && common(after, before)
+}
+
+/// The links of the constants that the compiler does not evaluate here (design 66, part B): the
+/// old value and the new value of one path are one value if the two digests give one definition.
+fn constant_links(decls: &mut Decls) {
+    let mut found = Vec::new();
+    for (side, path, before, old_value) in &decls.gconsts {
+        if !*side {
+            continue;
+        }
+        for (other, path_b, after, new_value) in &decls.gconsts {
+            if !*other && path_b == path && same_definition(before, after) {
+                let differs = differ(old_value, new_value);
+                if lit_bool(&differs) != Some(false) {
+                    found.push(not(&differs).s);
+                }
+            }
+        }
+    }
+    decls.assume.extend(found);
+}
+
+/// The words of a constant whose definition has a part that the driver cannot compute
+/// (R66.11-4): the check does not know if it changes.
+pub const CANNOT_COMPARE: &str = "a constant that the check cannot compare";
+
+/// The constants that the compiler does not evaluate here, with one path on the two sides and
+/// another definition (design 66, part B): the path and the changed items. [R66.11-4] An item
+/// with a part that the driver cannot compute (R66.10-1, on either side) is not a changed item:
+/// a constant with only such items goes to the second list, with the causes (`` `X` (the limit
+/// of the depth) ``). A constant with a known changed item stays in the first list.
+fn changed_constants(decls: &Decls) -> (Vec<String>, Vec<String>) {
+    let (mut found, mut unknown) = (Vec::new(), Vec::new());
+    for (side, path, before, _) in &decls.gconsts {
+        if !*side {
+            continue;
+        }
+        for (other, path_b, after, _) in &decls.gconsts {
+            if *other || path_b != path || same_definition(before, after) {
+                continue;
+            }
+            let mut items: Vec<String> = Vec::new();
+            let mut causes: Vec<String> = Vec::new();
+            for (item, hash) in after {
+                let known = before.iter().find(|(name, _)| name == item);
+                let parts: Vec<String> = known.map(|(_, value)| semilla_core::text::unknown_causes(value)).unwrap_or_default().into_iter().chain(semilla_core::text::unknown_causes(hash)).collect();
+                if !parts.is_empty() && (known.is_some() || !item.starts_with("impl: ")) {
+                    for cause in parts {
+                        if !causes.contains(&cause) {
+                            causes.push(cause);
+                        }
+                    }
+                    continue;
+                }
+                if known.is_some_and(|(_, value)| value != hash) || (known.is_none() && !item.starts_with("impl: ")) {
+                    items.push(format!("`{}`", item.strip_prefix("impl: ").unwrap_or(item)));
+                }
+            }
+            for (item, _) in before {
+                if !after.iter().any(|(name, _)| name == item) && !item.starts_with("impl: ") {
+                    items.push(format!("`{item}` (removed)"));
+                }
+            }
+            let text = if causes.is_empty() {
+                format!("`{path}` (changed: {})", items.join(", "))
+            } else if items.is_empty() {
+                format!("`{path}` ({})", causes.join(", "))
+            } else {
+                format!("`{path}` (changed: {}; the check cannot compare: {})", items.join(", "), causes.join(", "))
+            };
+            let list = if items.is_empty() && !causes.is_empty() { &mut unknown } else { &mut found };
+            if !list.contains(&text) {
+                list.push(text);
+            }
+        }
+    }
+    (found, unknown)
+}
+
+/// The most pairs of closure bodies that the links of one check compare.
+const MAX_LINKS: usize = 16;
+/// The deepest nested check of the closure links (a closure in a closure).
+const MAX_LINK_DEPTH: usize = 2;
+
+thread_local! {
+    /// The depth of the nested checks of the closure links.
+    static LINK_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The links of the closure identities (design 66, part A). The identity of an old closure body
+/// and the identity of a new closure body are one value only if the check proves the two
+/// bodies equivalent, with the captures and the parameters as inputs (the normal check, with
+/// its limits). A pair by name or by place never makes a proof: it only gives the order of the
+/// pairs. Only the identities that an outcome uses count.
+fn closure_links(solver: &Solver, old: &Side, new: &Side, step: &Step, decls: &mut Decls, outs: &[&[PathOut]], queries: &mut usize) {
+    if decls.clos.is_empty() || LINK_DEPTH.with(|depth| depth.get()) >= MAX_LINK_DEPTH || past_deadline() {
+        return;
+    }
+    let mut used = String::new();
+    for out in outs.iter().flat_map(|list| list.iter()) {
+        used.push_str(&out.pc.s);
+        let mut values: Vec<&V> = out.after.iter().collect();
+        values.extend(out.effects.iter().flat_map(|effect| effect.args.iter()));
+        match &out.exit {
+            Exit::Return(value) => values.push(value),
+            Exit::Panic { args, .. } => values.extend(args.iter()),
+            Exit::Abort | Exit::Cut => {}
+        }
+        for value in values {
+            for (_, term) in flatten(value) {
+                used.push_str(&term.s);
+            }
+        }
+    }
+    let seen = |is_old: bool| decls.clos.iter().filter(|seen| seen.old == is_old && used.contains(&seen.sym)).cloned().collect::<Vec<_>>();
+    let (olds, news) = (seen(true), seen(false));
+    let form = |side: &Side, seen: &CloSeen| -> Option<Arc<Ir>> {
+        if seen.inst { side.std.get(&seen.key).cloned() } else { (side.workspace)(&seen.name).or_else(|| side.std.get(&seen.key).cloned()) }
+    };
+    // The pairs with one name first (only an order: each pair needs its proof).
+    let mut pairs: Vec<(&CloSeen, &CloSeen)> = olds.iter().flat_map(|a| news.iter().map(move |b| (a, b))).collect();
+    pairs.sort_by_key(|(a, b)| (old.rename)(&a.name) != b.name);
+    let mut linked: BTreeSet<String> = BTreeSet::new();
+    for (a, b) in pairs.into_iter().take(MAX_LINKS) {
+        // One link for each body is enough: two links of one body give one value to the three
+        // bodies, and each link is a proof.
+        if linked.contains(&a.sym) || linked.contains(&b.sym) {
+            continue;
+        }
+        let (Some(fa), Some(fb)) = (form(old, a), form(new, b)) else { continue };
+        if fa.a != fb.a {
+            continue;
+        }
+        LINK_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        let side_a = Side { ir: fa, workspace: old.workspace, std: old.std, rename: old.rename };
+        let side_b = Side { ir: fb, workspace: new.workspace, std: new.std, rename: new.rename };
+        let checked = check_bodies(solver, &side_a, &side_b, step);
+        LINK_DEPTH.with(|depth| depth.set(depth.get() - 1));
+        // The queries of a link do not count in the query budget of the step (Decided by
+        // Claude, design 66.6): the links have their own limits, and the time budget of the
+        // step still holds.
+        let _ = &queries;
+        if let Verdict::Equivalent { .. } = checked.verdict {
+            decls.assume.push(format!("(= {} {})", a.sym, b.sym));
+            linked.insert(a.sym.clone());
+            linked.insert(b.sym.clone());
+            let text = if (old.rename)(&a.name) == b.name { format!("`{}`", b.name) } else { format!("`{}` ≡ `{}`", a.name, b.name) };
+            if !decls.links.contains(&text) {
+                decls.links.push(text);
+            }
+        }
+    }
 }
 
 /// The query of a check after the runs of the two sides: an input and a pair of paths with
@@ -3058,7 +3851,11 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
         Err(error) => return (Verdict::NotDecided { cause: format!("the solver failed: {error}") }, inlined),
     };
     match answer {
-        Answer::Unsat => (Verdict::Equivalent { method: method(&inlined) }, inlined),
+        Answer::Unsat => {
+            // The closure bodies that the check proved equivalent (design 66, part A).
+            let method = if decls.links.is_empty() { method(&inlined) } else { format!("{} and equivalent closure bodies {}", method(&inlined), decls.links.join(", ")) };
+            (Verdict::Equivalent { method }, inlined)
+        }
         Answer::Unknown(reason) => (Verdict::NotDecided { cause: format!("the solver gave no answer ({reason})") }, inlined),
         Answer::Sat(model) => {
             let mut model: BTreeMap<String, String> = model.into_iter().collect();
@@ -3111,6 +3908,9 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
                 // small numbers of each sign (Decided by Claude, 61.10: a small input is easier
                 // to read).
                 for list in &tries {
+                    if past_deadline() {
+                        return (Verdict::NotDecided { cause: DEADLINE_CAUSE.into() }, inlined);
+                    }
                     let narrow = format!("{body}(assert (and {}))\n", list.join(" "));
                     *queries += 1;
                     if let Ok((_, Answer::Sat(found))) = solver.check(&narrow, &symbols) {
@@ -3140,8 +3940,15 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
                 if let Some(moved) = by_name.or_else(|| pairs.iter().find_map(|(p, q)| call_order(p, q))) {
                     return (Verdict::NotDecided { cause: format!("the order of the calls changes: {}", moved.join(", ")) }, inlined);
                 }
-                let cause = if inline_all { "the difference depends on the result of a call or on a value that the check does not model" } else { "the difference depends on the result of a call or on a value that the check does not model (no callee inlined)" };
-                return (Verdict::NotDecided { cause: cause.into() }, inlined);
+                let base = "the difference depends on the result of a call or on a value that the check does not model";
+                let cause = if inline_all {
+                    base.to_string()
+                } else if inlined.is_empty() {
+                    format!("{base} (no callee inlined)")
+                } else {
+                    format!("{base} (only the changed callees and the small helpers of the standard library inlined)")
+                };
+                return (Verdict::NotDecided { cause }, inlined);
             }
             // The values of the two outcomes: a second query with the inputs of the model.
             let mut wanted = Vec::new();
@@ -3173,6 +3980,9 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
                 }
             }
             let mut values = model.clone();
+            if past_deadline() {
+                return (Verdict::NotDecided { cause: DEADLINE_CAUSE.into() }, inlined);
+            }
             if !wanted.is_empty() {
                 // A name for each term: the solver gives the value of a name.
                 let mut names = Vec::new();

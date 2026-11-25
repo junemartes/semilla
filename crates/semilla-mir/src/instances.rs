@@ -33,7 +33,7 @@ pub struct InstanceRecord {
 }
 
 fn std_crate(name: &str) -> bool {
-    matches!(name, "core" | "std" | "alloc")
+    crate::stdlib::is_std_name(name)
 }
 
 /// The instances that a root body makes.

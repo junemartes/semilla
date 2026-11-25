@@ -1,0 +1,33 @@
+note: batch 10n, part C (manifest keys): the negative case: the step changes `package.description`, and no code names `CARGO_PKG_DESCRIPTION`; the key stays a descriptive key with no code
+rule-: R65.3-5
+must_match: package\.description "a shop" → "a small shop" \[manifest\]
+must_not_match: spotlight
+=== old Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+description = "a shop"
+=== new Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+description = "a small shop"
+=== both src/lib.rs
+pub fn about() -> &'static str {
+    "a shop"
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: Cargo.toml: package.description "a shop" → "a small shop" [manifest]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: Cargo.toml: package.description "a shop" → "a small shop" [manifest]
+    lines: Cargo.toml:5, Cargo.toml:-5

@@ -15,20 +15,6 @@ use crate::{BodyComparison, BodyStatus};
 /// The mark of a use that Semilla cannot see into (a macro or an attribute of another crate).
 pub(crate) const UNSEEN: &str = " (not known)";
 
-/// The attributes that do not select code by the build configuration.
-const ATTR_FREE: [&str; 21] = [
-    "allow", "expect", "warn", "deny", "forbid", "doc", "inline", "cold", "must_use", "test", "should_panic", "ignore", "derive", "repr", "non_exhaustive", "track_caller", "rustfmt::skip",
-    "deprecated", "automatically_derived", "default", "macro_export",
-];
-
-/// The macros of the standard library with an expansion that has no `cfg` attribute. The MIR
-/// driver makes the values of `cfg!`, `env!`, and `option_env!` opaque.
-pub(crate) const MACRO_FREE: [&str; 33] = [
-    "println", "print", "eprintln", "eprint", "format", "format_args", "write", "writeln", "vec", "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne",
-    "matches", "panic", "unreachable", "unimplemented", "todo", "concat", "stringify", "line", "column", "file", "module_path", "include_str", "include_bytes", "cfg", "env", "option_env",
-    "compile_error", "dbg",
-];
-
 /// The keywords of each edition of Rust (the strict keywords and the reserved keywords of the
 /// 2015 edition). A keyword is never the name of a macro: `if !(a)` is the operator `!` after
 /// `if`. A keyword of a later edition only (`async`, `await`, `dyn`, `try`, `gen`) is not in the
@@ -39,7 +25,6 @@ pub(crate) const KEYWORDS: [&str; 47] = [
     "unsized", "virtual", "yield",
 ];
 
-const STD: [&str; 3] = ["std", "core", "alloc"];
 const LOCAL: [&str; 3] = ["crate", "self", "super"];
 
 /// The uses of the build configuration in one token text.
@@ -166,7 +151,7 @@ impl<'a> Scan<'a> {
                             Some(roots) if item.vis != "pub" => roots.clone(),
                             _ => vec![EACH.to_string()],
                         };
-                        let foreign = |first: &str| !(LOCAL.contains(&first) || STD.contains(&first) || scan.crates.contains(first));
+                        let foreign = |first: &str| !(LOCAL.contains(&first) || semilla_core::names::is_std_crate(first) || scan.crates.contains(first));
                         match crate::opaque::use_imports(&item.text) {
                             // A name that the line can bring: the last segment, the name after
                             // `as`, each name of a group. A segment in the middle of a path
@@ -178,7 +163,7 @@ impl<'a> Scan<'a> {
                                         None => {
                                             scan.foreign.insert(item.file.clone());
                                         }
-                                        Some(name) if MACRO_FREE.contains(&name.as_str()) => scan.shadowed.extend(scopes.iter().map(|scope| (scope.clone(), name.clone()))),
+                                        Some(name) if semilla_core::names::cfg_free_macro(name) => scan.shadowed.extend(scopes.iter().map(|scope| (scope.clone(), name.clone()))),
                                         Some(_) => {}
                                     }
                                 }
@@ -187,7 +172,7 @@ impl<'a> Scan<'a> {
                             // crate.
                             None => {
                                 let idents = item.text.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|t| !t.is_empty());
-                                scan.shadowed.extend(idents.filter(|t| MACRO_FREE.contains(t)).map(|t| (EACH.to_string(), t.to_string())));
+                                scan.shadowed.extend(idents.filter(|t| semilla_core::names::cfg_free_macro(t)).map(|t| (EACH.to_string(), t.to_string())));
                                 scan.foreign.insert(item.file.clone());
                             }
                         }
@@ -269,7 +254,7 @@ impl<'a> Scan<'a> {
                     // attribute with a condition that the checked configurations cover (batch 5s).
                     let free_attr = (name == "cfg_attr" && matches!(crate::opaque::attr_kind(group.stream()), Some(crate::opaque::Attr::Free)))
                         || matches!(crate::opaque::attr_kind(group.stream()), Some(crate::opaque::Attr::Covered));
-                    if ATTR_FREE.contains(&name.as_str()) || crate::facts::is_lint_tool(&name) || (leading && name == "cfg") || free_attr {
+                    if semilla_core::names::attribute_no_cfg(&name) || crate::facts::is_lint_tool(&name) || (leading && name == "cfg") || free_attr {
                         // A free attribute. Its arguments are not code. A `cfg_attr` is free
                         // if its content is in the allow list (batch 5o, A5).
                     } else if name == "cfg" || name == "cfg_attr" {
@@ -316,11 +301,11 @@ impl<'a> Scan<'a> {
         let first = trees[start].to_string();
         let qualified = start != index;
         let shown = format!("{name}!");
-        let std_free = MACRO_FREE.contains(&name);
+        let std_free = semilla_core::names::cfg_free_macro(name);
         let free = if dollar && !qualified {
             // `$name!(…)`: the caller of the macro gives the name.
             false
-        } else if qualified && !global && STD.contains(&first.as_str()) && !self.crates.contains(&first) {
+        } else if qualified && !global && semilla_core::names::is_std_crate(&first) && !self.crates.contains(&first) {
             std_free
         } else if !qualified || (!global && (LOCAL.contains(&first.as_str()) || self.crates.contains(&first))) {
             match self.workspace_macro(name) {
@@ -515,7 +500,7 @@ fn has_token_reader(stream: TokenStream) -> bool {
         let known = match name.as_str() {
             "cfg" => true,
             "cfg_attr" => matches!(crate::opaque::attr_kind(group.stream()), Some(crate::opaque::Attr::Free | crate::opaque::Attr::Covered | crate::opaque::Attr::Derive(_))),
-            name => ATTR_FREE.contains(&name) || crate::facts::is_lint_tool(name),
+            name => semilla_core::names::attribute_no_cfg(name) || crate::facts::is_lint_tool(name),
         };
         if !known {
             return true;

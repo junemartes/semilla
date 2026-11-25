@@ -81,11 +81,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: testdata/regression.txt: changed [file · code different]
       affected bodies: lexer (test "integration")::suite, lexer_core (test "integration")::suite
-      expansion: 2 calls of `load`: expansion changed: value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]: `lexer_core (test "integration")::suite/S3`, `lexer (test "integration")::suite/S3` (semilla status --verbose)
+      expansion: `load!("regression")` at `lexer (test "integration")::suite/S3` (tests/lib.rs:10): expansion changed: only the context of the call changes: the file `testdata/regression.txt` (`include_bytes!(concat!("../testdata/", $name, ".txt"))`); changed code `n` → `ntwo\n`
+      expansion: `load!("regression")` at `lexer_core (test "integration")::suite/S3` (lexer-core/tests/lib.rs:10): expansion changed: only the context of the call changes: the file `testdata/regression.txt` (`include_bytes!(concat!("../../testdata/", $name, ".txt"))`); changed code `n` → `ntwo\n`
   cover: each of the 1 changed line(s) is in a fact
-  expansions: 2 changed, 2 equal
-    `load!("regression")` at `lexer_core (test "integration")::suite/S3` (lexer-core/tests/lib.rs:10): expansion changed: `macro_rules! load` (lexer-core/tests/lib.rs:3): value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]; the code of the call reads `testdata/regression.txt`, which the step changes
-    `load!("regression")` at `lexer (test "integration")::suite/S3` (tests/lib.rs:10): expansion changed: `macro_rules! load` (tests/lib.rs:3): value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]; the code of the call reads `testdata/regression.txt`, which the step changes
+  expansions: 2 changed, 6 equal
+    `load!("regression")` at `lexer (test "integration")::suite/S3` (tests/lib.rs:10): expansion changed: `macro_rules! load` (tests/lib.rs:3): only the context of the call changes: the file `testdata/regression.txt` (`include_bytes!(concat!("../testdata/", $name, ".txt"))`); changed code `n` → `ntwo\n`; the code of the call reads `testdata/regression.txt`, which the step changes
+    `load!("regression")` at `lexer_core (test "integration")::suite/S3` (lexer-core/tests/lib.rs:10): expansion changed: `macro_rules! load` (lexer-core/tests/lib.rs:3): only the context of the call changes: the file `testdata/regression.txt` (`include_bytes!(concat!("../../testdata/", $name, ".txt"))`); changed code `n` → `ntwo\n`; the code of the call reads `testdata/regression.txt`, which the step changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

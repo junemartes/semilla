@@ -701,12 +701,14 @@ fn the_claim_list_of_a_rejected_step_has_a_short_cause() {
     assert!(full.contains("  ✗ c7 empty: the claim explains no change"), "{full}");
 }
 
+// rule+ R65.3-4
+// rule- R65.3-4
 #[test]
 fn each_file_spotlight_text_fits_its_fact() {
     // Brief 5g, item 4: a mode change of a parsed `.rs` file had the text for Rust code that
     // Semilla does not parse.
     use crate::files::file_spotlight;
-    let why = |file: &str, note: &str, content_changed: bool, parsed: bool| file_spotlight(file, note, content_changed, parsed, file.ends_with(".rs"), None, || false).unwrap_or_default();
+    let why = |file: &str, note: &str, content_changed: bool, parsed: bool| file_spotlight(file, note, content_changed, parsed, file.ends_with(".rs"), None, || false, || None).unwrap_or_default();
     let (mode, link, submodule) = ("a file mode", "a symbolic link", "a submodule");
     let (unparsed, manifest, list) = ("Rust code that Semilla does not parse", "a manifest whose keys Semilla cannot compare", "not on the allow list of files");
     let texts = [mode, link, submodule, unparsed, manifest, list];
@@ -734,10 +736,16 @@ fn each_file_spotlight_text_fits_its_fact() {
         }
     }
     // A file on the allow list with no special note: no spotlight, but for a doc include.
-    assert_eq!(file_spotlight("README.md", "", true, false, false, None, || false), None);
-    assert!(file_spotlight("README.md", "", true, false, false, None, || true).is_some_and(|text| text.starts_with("a doc attribute includes this file")));
+    assert_eq!(file_spotlight("README.md", "", true, false, false, None, || false, || None), None);
+    assert!(file_spotlight("README.md", "", true, false, false, None, || true, || None).is_some_and(|text| text.starts_with("a doc attribute includes this file")));
     // A Rust file never goes without a text.
-    assert!(file_spotlight("src/lib.rs", "", true, true, true, None, || false).is_some());
+    assert!(file_spotlight("src/lib.rs", "", true, true, true, None, || false, || None).is_some());
+    // R65.3-4: a file of an inert kind that the code reads at build time is not inert; the same
+    // file with no reader stays inert.
+    for file in ["notes.txt", "README.md", "logo.png"] {
+        assert!(file_spotlight(file, "", true, false, false, None, || false, || Some("src/lib.rs".into())).is_some_and(|text| text.starts_with("a file that the code reads at build time")), "{file}");
+        assert_eq!(file_spotlight(file, "", true, false, false, None, || false, || None), None, "{file}");
+    }
 }
 
 #[test]
@@ -2764,7 +2772,7 @@ fn a_member_order_of_a_local_type_follows_the_rule_of_a_module_type() {
     let derive = before.replace("    enum Side", "    #[derive(PartialEq, PartialOrd)]\n    enum Side");
     let report = run_derived(&derive, &derive.replace("Low, High", "High, Low"), &[("demo::rank", equal("n0"))]);
     let fact = &report.facts[0];
-    assert!(fact.spotlight && fact.spotlight_why.as_deref().is_some_and(|why| why.contains("an order derive")) && !report.accepted(), "{fact:#?}");
+    assert!(fact.spotlight && fact.spotlight_why.as_deref().is_some_and(|why| why.contains("a derive")) && !report.accepted(), "{fact:#?}");
     // A second change in the same item shows in the text. A new member only is not an order change.
     let report = check(&before.replace("Low, High", "High, Low = 4"), equal("n0"));
     assert!(report.facts[0].description.contains("; the item has a second change: `enum Side { Low, High }` → `enum Side { High, Low = 4 }`"), "{:#?}", report.facts);
@@ -3331,6 +3339,25 @@ mod tests {
 }
 ";
 
+// rule+ R65.3-6
+// rule- R65.3-6
+#[test]
+fn an_impl_under_cfg_of_a_trait_of_another_crate_makes_its_type_opaque() {
+    // `==` calls `PartialEq::eq` with no name in the text. Before batch 10n, a name list of
+    // silent traits decided the rule, and it had no `PartialEq`: the body kept its proof.
+    let src = "pub struct P(pub u32);\n\n#[cfg(feature = \"loose\")]\nimpl PartialEq for P {\n    fn eq(&self, other: &P) -> bool { self.0 <= other.0 }\n}\n\n#[cfg(not(feature = \"loose\"))]\nimpl PartialEq for P {\n    fn eq(&self, other: &P) -> bool { self.0 == other.0 }\n}\n\npub trait Near { fn near(&self, other: &P) -> bool; }\n\n#[cfg(feature = \"loose\")]\nimpl Near for u32 {\n    fn near(&self, other: &P) -> bool { *self <= other.0 }\n}\n\npub fn same(a: &P, b: &P) -> bool { a == b }\n\npub fn other(a: u32) -> u32 { a + 1 }\n";
+    let (_d0, before) = load(src);
+    let (_d1, after) = load(&src.replace("{ a == b }", "{ b == a }").replace("{ a + 1 }", "{ 1 + a }"));
+    let opaque = crate::opaque::Opaque::new(&before, &after);
+    let body = |name: &str, status: BodyStatus| BodyComparison { graphs: Vec::new(), name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None };
+    let mut bodies = vec![body("demo::same", equal("n2")), body("demo::other", equal("n2"))];
+    opaque.apply(&mut bodies, &BTreeMap::new());
+    assert_eq!(bodies[0].status, different(true), "{:?}", bodies[0].config);
+    // The negative case: an `impl` under `cfg` of a trait of the workspace (`Near`) has each use
+    // of its methods in the text; a body that does not name `near` keeps its proof.
+    assert_eq!(bodies[1].status, equal("n2"), "{:?}", bodies[1].config);
+}
+
 #[test]
 fn the_items_of_the_build_configuration_are_opaque_inputs() {
     let (_d0, before) = load(OPAQUE_SRC);
@@ -3437,10 +3464,10 @@ pub fn limited() -> bool { lim() == 1 }
 pub fn quick() -> bool { true }
 #[cfg_attr(unix, repr(C))]
 pub struct Raw { pub a: u8 }
-#[cfg_attr(feature = \"serde\", derive(Serialize))]
+#[cfg_attr(feature = \"hash\", derive(Hash))]
 pub struct Heap(pub Vec<u8>);
 pub fn heap_len(h: &Heap) -> usize { h.0.len() }
-pub fn heap_text(h: &Heap) -> usize { h.serialize(); 0 }
+pub fn heap_text(h: &Heap) -> usize { h.hash(&mut Fresh); 0 }
 pub fn no_heap() -> usize { serialize() }
 pub fn serialize() -> usize { 0 }
 pub struct Builder<'a> { pub alpha: &'a u8, #[cfg(unix)] pub extra: u64 }
@@ -3492,7 +3519,7 @@ fn the_exact_rule_uses_the_kind_and_the_scope_of_a_name() {
     assert!(!callee("demo::quick", &[]));
     assert!(layout("demo::Raw") && !layout("demo::Heap"));
     assert!(!callee("demo::heap_len", &[]) && !callee("demo::no_heap", &[]));
-    assert!(callee("demo::heap_text", &[]), "`serialize` on a `Heap`");
+    assert!(callee("demo::heap_text", &[]), "`hash` on a `Heap`");
     // The hold set: a struct with a field of plain data under `cfg` and an anchor field. A
     // body that moves the value is free. A body that reads the layout is not.
     assert!(!layout("demo::Builder") && layout("touch demo::Builder") && layout("demo::Bare"));
@@ -3848,13 +3875,18 @@ fn the_spotlight_rule_uses_the_token_diff() {
 
 /// Batch 5p, C2: a `derive` in a `cfg_attr` is free only for a `derive` that the test
 /// `trait_table` compiles. A derive macro of the workspace with such a name is not known.
+// rule+ R65.3-7
 #[test]
 fn a_derive_that_semilla_does_not_know_makes_the_type_opaque() {
-    let src = "#[cfg_attr(feature = \"x\", derive(Clone, Serialize))]\npub struct Known(u8);\n#[cfg_attr(feature = \"x\", derive(Display))]\npub struct Shown(u8);\n#[cfg_attr(feature = \"x\", derive(Error))]\npub struct Failed(u8);\n";
+    let src = "#[cfg_attr(feature = \"x\", derive(Clone, Debug))]\npub struct Known(u8);\n#[cfg_attr(feature = \"x\", derive(Display))]\npub struct Shown(u8);\n#[cfg_attr(feature = \"x\", derive(Error))]\npub struct Failed(u8);\n#[cfg_attr(feature = \"serde\", derive(Serialize))]\npub struct Sent(u8);\n";
     let (_dir, ws) = load(src);
     let opaque = crate::opaque::Opaque::new(&ws, &ws);
     let layout = |opaque: &crate::opaque::Opaque, name: &str| opaque.layout(&[name.to_string()]);
     assert!(!layout(&opaque, "demo::Known"));
+    // R65.3-7: a derive of a crate outside the standard library is not known by its name (a
+    // manifest can give the name `serde` to a different package): `Serialize` makes its type
+    // opaque. The compiled mode reads the definition of each derive from its record.
+    assert!(layout(&opaque, "demo::Sent"));
     assert!(layout(&opaque, "demo::Shown") && layout(&opaque, "demo::Failed"), "no built-in `derive` has the name");
     let pm = "use proc_macro::TokenStream;\n#[proc_macro_derive(Clone, attributes(skip))]\npub fn clone(input: TokenStream) -> TokenStream { input }\n";
     let manifest = format!("{MANIFEST}\n[workspace]\nmembers = [\"pm\"]\n");
@@ -3919,9 +3951,10 @@ fn a_call_with_a_rival_is_an_input_only_with_a_fact_of_its_kind() {
 
 /// Batch 5q, C2: the name of a derive macro is a short name. A `use`, a glob `use`, or a
 /// `macro_use` can give the name `Clone` to a macro of a different crate.
+// rule- R65.3-7
 #[test]
 fn a_derive_name_that_an_import_can_hide_makes_the_type_opaque() {
-    let base = "#[cfg_attr(feature = \"x\", derive(Clone, Serialize))]\npub struct Known(u8);\n";
+    let base = "#[cfg_attr(feature = \"x\", derive(Clone, Debug))]\npub struct Known(u8);\n";
     let known = |head: &str| {
         let (_dir, ws) = load(&format!("{head}\n{base}"));
         !crate::opaque::Opaque::new(&ws, &ws).layout(&["demo::Known".to_string()])
@@ -3930,7 +3963,6 @@ fn a_derive_name_that_an_import_can_hide_makes_the_type_opaque() {
         "",
         "use std::fmt::Debug;\nuse serde::{Deserialize, Serialize};\nuse std::collections::*;",
         "pub mod m { pub struct Thing; }\nuse crate::m::Thing;\nuse m::*;",
-        "#[macro_use]\nextern crate serde;",
         "extern crate fake;\nuse fake::Other;",
         "pub mod m { pub enum Kind { A } }\nuse m::Kind;\nuse Kind::*;",
         "use serde::{self, Deserialize, Serialize};",
@@ -3945,7 +3977,10 @@ fn a_derive_name_that_an_import_can_hide_makes_the_type_opaque() {
     for hidden in [
         "use fake::Clone;",
         "use fake::Other as Clone;",
-        "use fake::{inner::{Serialize}, Other};",
+        "use fake::{inner::{Debug}, Other};",
+        // R65.3-7: `serde` is a crate of a registry, not a trusted crate: its `macro_use` can
+        // give each derive name.
+        "#[macro_use]\nextern crate serde;",
         "use fake::*;",
         "use fake::prelude::*;",
         "pub mod m { pub use fake::Clone; }",
@@ -3962,7 +3997,7 @@ fn a_derive_name_that_an_import_can_hide_makes_the_type_opaque() {
         "pub mod fake { pub fn f() {} }\nuse ::fake::Clone;",
         "#[macro_use]\nextern crate fake;",
         "#[macro_use(Clone)] extern crate fake;",
-        "extern crate fake as serde;",
+        "extern crate fake as core;",
         // The module `inner` has no item `m`. Thus `m` can be a crate.
         "pub mod m { pub struct Clone; }\npub mod inner { use m::Clone; }",
         "use fake::derives;\nuse derives::Clone;",
@@ -6853,14 +6888,17 @@ fn a_dependency_version_has_no_compare() {
 }
 
 // Batch 7d, part 4.4 (design 38.7): a local macro with the name of a standard macro.
+// rule+ R65.4-2
+// rule- R65.4-2
 #[test]
 fn a_local_macro_with_a_standard_name_says_what_it_replaces() {
     let before = "pub fn f(x: u32) -> bool {\n    matches!(x, 1)\n}\npub fn g(x: u32) -> bool {\n    std::matches!(x, 2)\n}\n";
     let after = format!("macro_rules! matches {{\n    ($e:expr, $p:pat) => {{ true }};\n}}\n{before}");
     let texts = descriptions(&run_derived(before, &after, &[]));
-    assert!(texts.contains(&"added macro `matches` (it replaces the standard macro `matches!`; each call in its scope: `demo::f`)".to_string()), "{texts:?}");
+    let list = "a name list of the language decided it (the macros of the standard prelude); the compiled mode reads the definition of each call from its expansion record (R65.2-1)";
+    assert!(texts.contains(&format!("added macro `matches` (it replaces the standard macro `matches!`; each call in its scope: `demo::f`; {list})")), "{texts:?}");
     let texts = descriptions(&run_derived(&after, before, &[]));
-    assert!(texts.contains(&"removed macro `matches` (the standard macro `matches!` is used again; each call in its scope: `demo::f`)".to_string()), "{texts:?}");
+    assert!(texts.contains(&format!("removed macro `matches` (the standard macro `matches!` is used again; each call in its scope: `demo::f`; {list})")), "{texts:?}");
     // A different name: the old text.
     let other = after.replace("macro_rules! matches", "macro_rules! same");
     assert!(descriptions(&run_derived(before, &other, &[])).contains(&"added macro `same`".to_string()));
@@ -6880,6 +6918,41 @@ fn a_long_line_is_cut_and_says_so() {
     let cut = views::fit_line(&text);
     assert!(cut.chars().count() <= views::LINE_MAX && cut.contains("(500 characters more; `semilla status --verbose` shows the full line)"), "{cut}");
     assert_eq!(views::fit_line("short"), "short");
+}
+
+// R66.10-6: a cut keeps each result word and its configurations; it cuts the list of the
+// inlined callees (code names in backquotes) first. The negative case: a list with no code names
+// keeps the old cut (its start and its end).
+// rule+ R66.10-6
+// rule- R66.10-6
+#[test]
+fn a_cut_keeps_each_result_word_and_cuts_the_list_of_code_names_first() {
+    let callees: Vec<String> = (0..30).map(|n| format!("`shop::h{n}`")).collect();
+    let start = format!("    shop::scan (src/lib.rs:12): graph changes: +2 branches, +6 arrows, −3 arrows; {}", "no edit in the body; ".repeat(10));
+    let line = format!("{start}equivalent in dev, no default features, all features, test (proved by SMT after inlining {})", callees.join(", "));
+    assert!(line.chars().count() > views::LINE_MAX);
+    let cut = views::fit_line(&line);
+    assert!(cut.chars().count() <= views::LINE_MAX, "{cut}");
+    assert!(cut.contains("equivalent in dev, no default features, all features, test (proved by SMT after inlining `shop::h0`"), "{cut}");
+    assert!(cut.contains("items more; `semilla status --verbose` shows the full line) …, `shop::h29`)"), "{cut}");
+    assert!(cut.starts_with(&start), "{cut}");
+    // The same line with no backquotes: the cut hides items of the list with no result.
+    let plain = line.replace('`', "");
+    let cut = views::fit_line(&plain);
+    assert!(cut.chars().count() <= views::LINE_MAX && cut.contains("equivalent in dev, no default features, all features, test (proved by SMT after inlining shop::h0"), "{cut}");
+    // A result with a long list of configurations and a long cause: the cut hides characters of
+    // the text with no result, and each configuration stays.
+    let configs = "dev, dev, no default features (libraries and binaries only), dev, all features, release, release, no default features (libraries and binaries only), release, all features";
+    let line = format!("      shop::table::Table::<T, A>::into_iter_from (src/table.rs:1435): reached through {}, not decided in {configs} (a cleanup path with a call: {} (src/table.rs:-1455))", "shop::table::Table::<T, A>::into_allocation".repeat(4), "self.into_allocation_of_the_table()".repeat(6));
+    let cut = views::fit_line(&line);
+    assert!(cut.chars().count() <= views::LINE_MAX && cut.contains(&format!("not decided in {configs} (a clean")) && cut.contains("characters more;"), "{cut}");
+    // A list of code names only: the cut of its first and its last items, as before.
+    let names: Vec<String> = (0..80).map(|n| format!("`demo::item_{n}`")).collect();
+    let line = format!("      through: {}", names.join(", "));
+    let cut = views::fit_line(&line);
+    assert!(cut.starts_with("      through: `demo::item_0`, `demo::item_1`,") && cut.ends_with("`demo::item_78`, `demo::item_79`"), "{cut}");
+    let shown = cut.matches("`demo::item_").count();
+    assert!(shown > 10 && cut.contains(&format!("({} items more;", 80 - shown)), "{cut}");
 }
 
 // Batch 7d, part 4.2 (design 38.4): a spotlight line that is equal for a run of facts shows one

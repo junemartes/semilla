@@ -41,6 +41,13 @@ pub enum Verdict {
     NotChecked(String),
 }
 
+/// The result words of a check, one for each kind of verdict (R66.10-6: a cut of a line keeps
+/// them).
+pub(crate) fn result_words() -> Vec<&'static str> {
+    let empty = String::new;
+    [Verdict::Equivalent(empty()), Verdict::Different { input: empty(), before: empty(), after: empty() }, Verdict::NotDecided(empty()), Verdict::NotChecked(empty())].iter().map(Verdict::word).collect()
+}
+
 /// The cause of a check that the budget of the step stopped (R61.14-6).
 pub const BUDGET_CAUSE: &str = "the budget of the step";
 

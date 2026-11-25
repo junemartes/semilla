@@ -27,7 +27,7 @@ use semilla_syntax::tt::{Delimiter, Spacing, TokenStream, TokenTree};
 use ast::{HasGenericArgs, HasGenericParams, HasName, HasTypeBounds};
 use semilla_syntax::{Item, ItemKind, Workspace};
 
-use crate::srcconfig::{compact, Scan, KEYWORDS, MACRO_FREE};
+use crate::srcconfig::{compact, Scan, KEYWORDS};
 use crate::{BodyComparison, BodyStatus};
 
 /// Where a hard name can mean the item of the build configuration.
@@ -109,8 +109,11 @@ const NUMERIC: [&str; 14] = ["u8", "u16", "u32", "u64", "u128", "usize", "i8", "
 /// The types with no drop code and with a value in each configuration.
 const PLAIN: [&str; 16] = ["u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32", "f64", "bool", "char"];
 
-/// The content of a `cfg_attr` that cannot change the behavior (batch 5o, A5).
-const CFG_ATTR_FREE: [&str; 10] = ["allow", "warn", "deny", "expect", "forbid", "doc", "inline", "cold", "must_use", "deprecated"];
+/// The content of a `cfg_attr` that cannot change the behavior (batch 5o, A5): a built-in
+/// attribute that cannot change a MIR body (the shared list, R65.4-1).
+fn cfg_attr_free(name: &str) -> bool {
+    semilla_core::names::attribute_no_mir(name)
+}
 
 /// The features of the compiler that change only the documentation. Decided by Claude.
 const DOC_FEATURES: [&str; 4] = ["doc_cfg", "doc_auto_cfg", "doc_cfg_hide", "doc_notable_trait"];
@@ -130,16 +133,16 @@ pub struct KnownTrait {
     /// The names that the trait gives to a type: its methods, and the items of each trait
     /// that a blanket impl gives to a type with the trait (`to_string` from `Display`).
     pub names: &'static [&'static str],
-    /// True if a `derive` with this name is in the allow list: a built-in `derive`, or a
-    /// `derive` of `serde`. The test `trait_table` compiles each one.
+    /// True if a `derive` with this name is in the allow list: a built-in `derive`. The test
+    /// `trait_table` compiles each one.
     pub derive: bool,
 }
 
-/// The table of known traits: the traits of the standard library and of `serde` that give
+/// The table of known traits: the traits of the standard library that give
 /// only methods to a type. A trait with an operator, an associated type, or a `Drop` meaning
 /// is not in the table. The test `trait_table` of the crate `semilla` reads each row from
 /// the compiler (batch 5p, C2). Decided by Claude.
-pub const KNOWN_TRAITS: [KnownTrait; 16] = [
+pub const KNOWN_TRAITS: [KnownTrait; 14] = [
     KnownTrait { name: "Display", path: "std::fmt::Display", names: &["fmt", "to_string"], derive: false },
     KnownTrait { name: "Debug", path: "std::fmt::Debug", names: &["fmt"], derive: true },
     KnownTrait { name: "Clone", path: "std::clone::Clone", names: &["clone", "clone_from", "to_owned", "clone_into", "Owned", "clone_to_uninit"], derive: true },
@@ -154,8 +157,6 @@ pub const KNOWN_TRAITS: [KnownTrait; 16] = [
     KnownTrait { name: "Default", path: "std::default::Default", names: &["default"], derive: true },
     KnownTrait { name: "From", path: "std::convert::From", names: &["from", "into", "try_from", "try_into", "Error"], derive: false },
     KnownTrait { name: "Error", path: "std::error::Error", names: &["source", "description", "cause", "provide", "type_id"], derive: false },
-    KnownTrait { name: "Serialize", path: "serde::Serialize", names: &["serialize"], derive: true },
-    KnownTrait { name: "Deserialize", path: "serde::Deserialize", names: &["deserialize", "deserialize_in_place"], derive: true },
 ];
 
 /// The names that a known trait gives to a type. `None`: the trait is not known.
@@ -235,7 +236,7 @@ pub(crate) fn attr_kind(content: TokenStream) -> Option<Attr> {
                     return Some(Attr::Select);
                 }
                 let list = list.unwrap_or_default();
-                if CFG_ATTR_FREE.contains(&first.as_str()) {
+                if cfg_attr_free(&first) {
                     continue;
                 }
                 let words = || list.iter().filter_map(|tree| if let TokenTree::Ident(ident) = tree { Some(ident.to_string()) } else { None });
@@ -295,7 +296,7 @@ fn plain_attrs(item: &Item) -> bool {
             Some(Attr::Free) => true,
             Some(Attr::Select) | Some(Attr::Covered) => first == "cfg",
             Some(Attr::Derive(_)) => false,
-            None => first == "doc" || CFG_ATTR_FREE.contains(&first.as_str()),
+            None => first == "doc" || cfg_attr_free(&first),
         }
     })
 }
@@ -386,7 +387,7 @@ fn tokens(text: &str, macros: &BTreeSet<String>) -> Vec<Tok> {
                     if is_punct(trees.get(index + 1), '!') && !is_punct(trees.get(index + 2), '=') && !KEYWORDS.contains(&word.as_str()) {
                         let group = |at: usize| matches!(trees.get(at), Some(TokenTree::Group(_)));
                         if group(index + 2) || (matches!(trees.get(index + 2), Some(TokenTree::Ident(_))) && group(index + 3)) {
-                            next_free = Some(!MACRO_FREE.contains(&word.as_str()) || macros.contains(&word));
+                            next_free = Some(!semilla_core::names::cfg_free_macro(&word) || macros.contains(&word));
                         }
                     }
                     let def = !free && index.checked_sub(1).and_then(|at| trees.get(at)).is_some_and(|tree| matches!(tree, TokenTree::Ident(ident) if ident == "fn"));
@@ -830,8 +831,12 @@ fn own_cfg(item: &Item, shadow: &Shadow) -> bool {
     selects_any(item.attrs.iter().filter(|attr| !(item.kind == ItemKind::Mod && inner_keeps_items(attr))), matches!(item.kind, ItemKind::Struct | ItemKind::Enum), &|name| shadow.hides(item, name))
 }
 
-/// The crates whose `derive` names have the meaning of their name.
-const TRUSTED_CRATES: [&str; 5] = ["std", "core", "alloc", "serde", "serde_derive"];
+/// The crates whose `derive` names have the meaning of their name: the crates of the standard
+/// library (R65.3-7). A crate of a registry is not on the list: a manifest can give its name to
+/// a different package (`serde = { package = "x" }`), and its derives are proc macros whose code
+/// the default mode does not see. The compiled mode reads the definition of each derive from its
+/// expansion record (R65.2-1).
+const TRUSTED_CRATES: &[&str] = semilla_core::names::STD_CRATES;
 
 /// The `derive` names of the allow list that can have a different meaning (batch 5q, part
 /// C2). The name of a derive macro is a short name. The compiler looks for it in this order:
@@ -917,9 +922,9 @@ impl Shadow {
         fn gives(import: &Import, name: &str) -> bool {
             import.leaf.as_deref() == Some(name) && import.first != name
         }
-        let masked: BTreeSet<&str> = TRUSTED_CRATES.into_iter().filter(|name| paths.iter().any(|path| last_name(path) == *name) || imports.values().flatten().any(|import| gives(import, name))).collect();
+        let masked: BTreeSet<&str> = TRUSTED_CRATES.iter().copied().filter(|name| paths.iter().any(|path| last_name(path) == *name) || imports.values().flatten().any(|import| gives(import, name))).collect();
         let crates: BTreeSet<String> = crates.into_iter().collect();
-        let trusted: BTreeSet<String> = TRUSTED_CRATES.into_iter().filter(|name| !masked.contains(name)).map(str::to_string).chain(crates.iter().cloned()).collect();
+        let trusted: BTreeSet<String> = TRUSTED_CRATES.iter().copied().filter(|name| !masked.contains(name)).map(str::to_string).chain(crates.iter().cloned()).collect();
         fn foreign(module: &str, first: &str, depth: usize, paths: &BTreeSet<String>, trusted: &BTreeSet<String>, imports: &BTreeMap<String, Vec<Import>>) -> bool {
             if ["crate", "self", "super"].contains(&first) || paths.contains(&format!("{module}::{first}")) {
                 return false;
@@ -1356,15 +1361,6 @@ fn module_of(item: &Item) -> String {
     parts[..parts.len().saturating_sub(1)].join("::")
 }
 
-/// The traits of the standard library that the code uses with no name (an operator, a drop,
-/// a loop, a call), or that have an associated type. An `impl` of one of them gets the
-/// coarse rule.
-const SILENT_TRAITS: [&str; 44] = [
-    "Drop", "Deref", "DerefMut", "Index", "IndexMut", "Iterator", "IntoIterator", "DoubleEndedIterator", "ExactSizeIterator", "Future", "IntoFuture", "Fn", "FnMut", "FnOnce", "Add", "Sub", "Mul",
-    "Div", "Rem", "Neg", "Not", "BitAnd", "BitOr", "BitXor", "Shl", "Shr", "AddAssign", "SubAssign", "MulAssign", "DivAssign", "RemAssign", "BitAndAssign", "BitOrAssign", "BitXorAssign",
-    "ShlAssign", "ShrAssign", "FromStr", "TryFrom", "TryInto", "Borrow", "AsRef", "ToOwned", "FromIterator", "Extend",
-];
-
 /// The functions of the prelude. A call of a function with one of these names can mean the
 /// prelude item in a different configuration.
 const PRELUDE_FNS: [&str; 5] = ["drop", "Some", "None", "Ok", "Err"];
@@ -1596,7 +1592,7 @@ impl<'a> Opaque<'a> {
             for name in calls {
                 if self.macro_words.contains_key(name) {
                     queue.push(name.clone());
-                } else if !MACRO_FREE.contains(&name.as_str()) && name != "macro_rules" {
+                } else if !semilla_core::names::cfg_free_macro(&name) && name != "macro_rules" {
                     wild.insert(name.clone());
                 }
             }
@@ -2104,7 +2100,7 @@ impl<'a> Opaque<'a> {
         // (batch 5q, part C3). The macro can give a different type in a different
         // configuration: the `impl` has the rule of an `impl` under `cfg`.
         let own_macros = opaque.macros.clone();
-        let by_macro = |item: &Item| item.kind == ItemKind::Impl && macro_calls(&item.signature).iter().any(|name| !MACRO_FREE.contains(&name.as_str()) && !own_macros.contains(name));
+        let by_macro = |item: &Item| item.kind == ItemKind::Impl && macro_calls(&item.signature).iter().any(|name| !semilla_core::names::cfg_free_macro(name) && !own_macros.contains(name));
         let rooted = |item: &Item| own_cfg(item, &masks) || by_macro(item);
         for (side, ws) in [before, after].into_iter().enumerate() {
             // The roots: each item with its own attribute, and each module file with an inner
@@ -2208,8 +2204,15 @@ impl<'a> Opaque<'a> {
                     opaque.facts.any |= !parts.parsed || of_trait == "?" || opaque.renames.contains(of_trait);
                     let mut names: BTreeSet<String> = own.iter().map(|(_, member)| member.clone()).collect();
                     let sibling = shapes.get(&shape(item)).is_some_and(|headers| headers.len() > 1);
-                    let mut coarse = !parts.parsed || sibling || SILENT_TRAITS.contains(&of_trait.as_str()) || own.iter().any(|(kind, _)| kind != "fn");
                     let local: Vec<&Item> = all().filter(|other| other.kind == ItemKind::Trait && short(other) == *of_trait).collect();
+                    // R65.3-6: a trait of another crate (the standard library, a registry crate)
+                    // gets the coarse rule. The code of that crate can call it with no name in
+                    // the text of the workspace: an operator (`==` calls `PartialEq::eq`), a
+                    // format (`{}` calls `Display::fmt`), a drop, a loop, a generic function
+                    // (`sort` calls `Ord::cmp`). Only a trait of the workspace has each of its
+                    // uses in the text. Before, a name list of silent traits decided it, and it
+                    // had no `PartialEq`, `PartialOrd`, `Display`, `Ord`, or `Hash`.
+                    let mut coarse = !parts.parsed || sibling || local.is_empty() || own.iter().any(|(kind, _)| kind != "fn");
                     for (kind, member) in local.iter().flat_map(|other| members(other)) {
                         coarse |= kind != "fn";
                         names.insert(member);
@@ -2259,7 +2262,7 @@ impl<'a> Opaque<'a> {
                 // bounds that Semilla does not read.
                 if item.kind == ItemKind::Trait && (root.is_some() || !scan.uses(item).config.is_empty()) {
                     opaque.facts.some = true;
-                    opaque.facts.any |= macro_calls(&item.text).iter().any(|name| !MACRO_FREE.contains(&name.as_str()));
+                    opaque.facts.any |= macro_calls(&item.text).iter().any(|name| !semilla_core::names::cfg_free_macro(name));
                     let mut todo = vec![item];
                     let mut seen: BTreeSet<String> = BTreeSet::new();
                     while let Some(next) = todo.pop() {

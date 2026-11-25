@@ -211,6 +211,20 @@ pub fn is_dependency_version(place: &str) -> bool {
 /// The descriptive package keys: they do not change the build.
 const DESCRIPTIVE: &[&str] = &["description", "authors", "license", "license-file", "repository", "readme", "keywords", "categories", "homepage", "documentation"];
 
+/// R65.3-5: the environment variable that cargo gives to the build for a package key
+/// (`package.description` gives `CARGO_PKG_DESCRIPTION`), if a Rust file of the two trees names
+/// it. Cargo gives the keys `name`, `version`, `authors`, `description`, `homepage`,
+/// `repository`, `license`, `license-file`, `readme`, and `rust-version` so (a fact of the
+/// tool); the rule makes the name of each key and needs no list: a key with no variable has no
+/// text that names it. A proc macro can read a variable with no text in the workspace; the
+/// compiled mode shows such a change as a changed expansion (R65.1-2).
+pub fn package_key_reader(before: &Workspace, after: &Workspace, key: &str) -> Option<String> {
+    let name = ["workspace.package.", "package."].iter().find_map(|table| key.strip_prefix(table))?;
+    let name = name.split([':', '.']).next().unwrap_or(name);
+    let variable = format!("CARGO_PKG_{}", name.to_ascii_uppercase().replace('-', "_"));
+    [after, before].iter().flat_map(|ws| ws.rust_files.values()).any(|text| text.contains(&format!("\"{variable}\""))).then_some(variable)
+}
+
 /// True if the manifest fact with this place (`FILE:key`) is a build input (brief 5f, B2): each
 /// key change except a descriptive package key. `package.version` is a build input: it is a part
 /// of the crate hash, so it can change the MIR of bodies with no edit.
@@ -351,7 +365,7 @@ pub(crate) const PARSE_ERROR: &str = "Semilla cannot parse this file: ";
 /// - `rust`: the file is Rust code on one side: a `.rs` file, or a file that a target, a module,
 ///   or an `include!` of a target names. The file name does not decide (brief 5h, A4).
 /// - `code`: the target that has the file, if the loader does not parse the target.
-pub(crate) fn file_spotlight(file: &str, note: &str, content_changed: bool, parsed: bool, rust: bool, code: Option<&semilla_syntax::CodeFile>, doc_include: impl Fn() -> bool) -> Option<String> {
+pub(crate) fn file_spotlight(file: &str, note: &str, content_changed: bool, parsed: bool, rust: bool, code: Option<&semilla_syntax::CodeFile>, doc_include: impl Fn() -> bool, reader: impl Fn() -> Option<String>) -> Option<String> {
     let mut causes: Vec<String> = Vec::new();
     if note.contains("mode ") {
         causes.push(MODE_WHY.to_string());
@@ -380,6 +394,11 @@ pub(crate) fn file_spotlight(file: &str, note: &str, content_changed: bool, pars
         Some("a file that is not on the allow list of files that no tool reads to build or to test (docs, license texts, images)".to_string())
     } else if doc_include() {
         Some("a doc attribute includes this file (`#[doc = include_str!(…)]`): its doc tests run in `cargo test`".to_string())
+    } else if let Some(reader) = reader() {
+        // R65.3-4: a file that the code reads at build time is not inert, whatever its kind is.
+        // The default mode finds the read in the text (`include_str!`, `include_bytes!`); the
+        // compiled mode has the files that the compiler reads (R63.9-6, R65.1-2).
+        Some(format!("a file that the code reads at build time (in `{reader}`): the build reads it, so its kind does not make it inert"))
     } else {
         None
     };
@@ -455,7 +474,15 @@ pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], bef
             Some(changes) => {
                 let manifest = new.as_deref().or(old.as_deref()).and_then(|text| parse_table(&file, text));
                 for change in &changes {
-                    let why = spotlight(&file, change, &changes, manifest.as_ref()).map(str::to_string);
+                    // R65.3-5: a descriptive key that the code reads (`env!("CARGO_PKG_…")`) is a
+                    // build input.
+                    // The compiled mode has the MIR: the evidence rule of the owners decides it
+                    // (brief 5h, B3), so this text scan is a rule of the default mode only.
+                    let read = if step.compiled { None } else { package_key_reader(before, after, &change.key) };
+                    let why = match &read {
+                        Some(variable) => Some(format!("a package key that the code reads at build time (`{variable}`): cargo gives each package key to the build as an environment variable")),
+                        None => spotlight(&file, change, &changes, manifest.as_ref()).map(str::to_string),
+                    };
                     fact(format!("{file}:{}", change.key), describe(&file, change), why);
                 }
                 if mode_only {
@@ -474,7 +501,7 @@ pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], bef
                 let parsed = |ws: &Workspace| !exists(ws) || ws.parsed_files.contains(&file);
                 // A file that `include!` reads is Rust code, whatever its name is (batch 5w, D3).
                 let rust = before.is_rust_file(&file) || after.is_rust_file(&file) || crate::owners::code_readers(before, after, &file).is_some();
-                let why = file_spotlight(&file, note, content_changed, parsed(before) && parsed(after), rust, code_file(before, after, &file), || doc_include(before, after, &file));
+                let why = file_spotlight(&file, note, content_changed, parsed(before) && parsed(after), rust, code_file(before, after, &file), || doc_include(before, after, &file), || if step.compiled { None } else { crate::owners::build_reader(before, after, &file).map(|(reader, _)| reader) });
                 // A file that the loader cannot parse (design 37.5): the spotlight has the reason.
                 let error = |ws: &Workspace, side: &str| ws.parse_errors.get(&file).map(|reason| format!("{reason}, in the tree {side} the step"));
                 let why = match error(after, "after").or_else(|| error(before, "before")) {

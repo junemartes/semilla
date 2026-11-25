@@ -669,7 +669,7 @@ impl<'a> Builder<'a> {
         let name = compare_opt(mac.path().as_ref()).replace(' ', "");
         let short_name = name.rsplit("::").next().unwrap_or(&name);
         let mut children = Vec::new();
-        if EXPRESSION_MACROS.contains(&short_name)
+        if semilla_core::names::has_expressions(short_name)
             && let Some(tree) = mac.token_tree()
         {
             children = self.macro_arguments(&tree).unwrap_or_default();
@@ -754,12 +754,6 @@ pub fn expr_text_node(role: &str, text: &str) -> Option<Node> {
     let builder = Builder { lines: &lines, shift: -(start as isize), edition: Edition::Edition2021, tokens: &[] };
     Some(builder.expr_node(role, &expr))
 }
-
-/// The `std` macros whose input is a list of expressions (design 4.1).
-pub(crate) const EXPRESSION_MACROS: &[&str] = &[
-    "println", "print", "eprintln", "eprint", "format", "format_args", "write", "writeln", "panic", "assert", "assert_eq",
-    "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne", "vec", "dbg", "todo", "unimplemented", "unreachable",
-];
 
 #[cfg(test)]
 mod tests {

@@ -6,7 +6,6 @@
 //! word in a literal, in a comment, or in a lifetime has no place. The site table of
 //! [`crate::Renames`] has the key of each place that is a site of a rename.
 
-use crate::tree::EXPRESSION_MACROS;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -280,7 +279,7 @@ pub fn places(text: &str, wanted: &dyn Fn(&str) -> bool) -> Vec<Place> {
                     // `name ! (…)`: the input of a macro call. `macro_rules ! name { … }`: rules.
                     let call = punct(before, "!").then(|| word(index.checked_sub(2))).flatten();
                     let rules = punct(index.checked_sub(2), "!") && word(index.checked_sub(3)) == Some("macro_rules");
-                    let opaque = inherited || rules || call.is_some_and(|name| !EXPRESSION_MACROS.contains(&name));
+                    let opaque = inherited || rules || call.is_some_and(|name| !semilla_core::names::has_expressions(name));
                     if token.text == "{" && !opaque && call.is_none() {
                         if let Some((_, prefixes)) = use_line.as_mut() {
                             // A group of a `use` line: the names of the group follow its prefix.
@@ -418,7 +417,7 @@ pub fn block_uses(text: &str) -> Vec<BlockUse> {
                 let inherited = stack.last().is_some_and(|frame| frame.1);
                 let call = punct(index.checked_sub(1), "!").then(|| word(index.checked_sub(2))).flatten();
                 let rules = punct(index.checked_sub(2), "!") && word(index.checked_sub(3)) == Some("macro_rules");
-                let opaque = inherited || rules || call.is_some_and(|name| !EXPRESSION_MACROS.contains(&name));
+                let opaque = inherited || rules || call.is_some_and(|name| !semilla_core::names::has_expressions(name));
                 stack.push(((token.text == "{" && line.is_none()).then_some(token.start), opaque));
             }
             (Kind::Punct, "}" | ")" | "]") => {

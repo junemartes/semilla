@@ -47,9 +47,9 @@ pub struct Scope {
     pub from: BTreeMap<String, (String, String)>,
 }
 
-/// The crates of the standard library.
+/// The crates of the standard library (the shared list, R65.4-1).
 fn is_std(krate: &str) -> bool {
-    matches!(krate, "core" | "alloc" | "std" | "proc_macro" | "test")
+    semilla_core::names::is_std_crate(krate)
 }
 
 /// The modules of the library types that are plain data: a value holds no code that the type

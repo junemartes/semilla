@@ -1183,7 +1183,9 @@ fn build_inputs(input: &Input, report: &StepReport) -> Vec<(usize, Option<BTreeS
         }
         let name = file.rsplit('/').next().unwrap_or(file);
         if crate::files::is_manifest(file) {
-            if fact.description.ends_with(": format only") || !crate::files::is_build_key(&fact.part) {
+            let key = fact.part.split_once(':').map(|(_, key)| key).unwrap_or("");
+            let read = crate::files::package_key_reader(input.before, input.after, key).is_some();
+            if fact.description.ends_with(": format only") || !(crate::files::is_build_key(&fact.part) || read) {
                 continue;
             }
             match package(file).filter(|_| name == "Cargo.toml") {
@@ -1278,7 +1280,7 @@ fn reads_file(text: &str, path: &str, file: &str) -> bool {
     text.match_indices("include").any(|(start, _)| {
         let rest = &text[start..];
         // The item text has a space between the tokens: `include_str ! (…)`.
-        let Some(open) = rest.find('!').filter(|bang| matches!(rest[..*bang].trim_end(), "include" | "include_str" | "include_bytes")) else { return false };
+        let Some(open) = rest.find('!').filter(|bang| semilla_core::names::reads_file(rest[..*bang].trim_end())) else { return false };
         let call: String = rest[open..].chars().take(400).collect();
         let call = call.split(';').next().unwrap_or("");
         call.contains(&format!("/{name}\"")) || call.contains(&format!("\"{name}\""))

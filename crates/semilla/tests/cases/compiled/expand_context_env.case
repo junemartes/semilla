@@ -1,0 +1,60 @@
+note: batch 10n, part A: a macro whose code has `env!("CARGO_PKG_DESCRIPTION")` and `option_env!("CARGO_PKG_HOMEPAGE")`; the step changes only the description and adds a homepage in the manifest; each expansion changes only by an environment variable, a token of the context of the call
+rule+: R65.1-2
+must_match: only the context of the call changes: the environment variable `CARGO_PKG_DESCRIPTION` \(`env!\("CARGO_PKG_DESCRIPTION"\)`\)
+must_match: only the context of the call changes: the environment variable `CARGO_PKG_HOMEPAGE` \(`option_env!\("CARGO_PKG_HOMEPAGE"\)`\)
+option: --compiled
+=== old Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+description = "a shop"
+=== new Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+description = "a small shop"
+homepage = "https://shop.example"
+=== both src/lib.rs
+macro_rules! about {
+    () => { env!("CARGO_PKG_DESCRIPTION") };
+}
+
+macro_rules! home {
+    () => { option_env!("CARGO_PKG_HOMEPAGE") };
+}
+
+pub fn about() -> &'static str {
+    about!()
+}
+
+pub fn home() -> Option<&'static str> {
+    home!()
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: Cargo.toml: package.description "a shop" → "a small shop" [manifest · code different]
+      affected bodies: shop::about, shop::home
+      note: this body uses `env!("CARGO_PKG_DESCRIPTION")`, which Semilla did not check (`shop::about`); this body uses `option_env!("CARGO_PKG_HOMEPAGE")`, which Semilla did not check (`shop::home`)
+      ✗ spotlight: a build input: the MIR of 2 bodies changed with no edit of their text, and this change can reach their crates. The bodies have one of these causes: `Cargo.toml: package.description "a shop" → "a small shop"`, `Cargo.toml: package.homepage added ("https://shop.example")` (the same text for f1, f2); it needs a reason: --reason 'Cargo.toml:package.description=…'
+  ◆ f2 derived: Cargo.toml: package.homepage added ("https://shop.example") [manifest · code different]
+      affected bodies: shop::about, shop::home
+      note: this body uses `env!("CARGO_PKG_DESCRIPTION")`, which Semilla did not check (`shop::about`); this body uses `option_env!("CARGO_PKG_HOMEPAGE")`, which Semilla did not check (`shop::home`)
+      ✗ spotlight: a build input: the same text as f1; it needs a reason: --reason 'Cargo.toml:package.homepage=…'
+  cover: each of the 3 changed line(s) is in a fact
+  expansions: 2 changed
+    `env!("CARGO_PKG_DESCRIPTION")` from `about!()` at `shop::about/tail` (src/lib.rs:10): expansion changed: `macro env` (crate core): only the context of the call changes: the environment variable `CARGO_PKG_DESCRIPTION` (`env!("CARGO_PKG_DESCRIPTION")`); changed code `shop` → `small shop`; the context of the call changes
+    `option_env!("CARGO_PKG_HOMEPAGE")` from `home!()` at `shop::home/tail` (src/lib.rs:14): expansion changed: `macro option_env` (crate core): only the context of the call changes: the environment variable `CARGO_PKG_HOMEPAGE` (`option_env!("CARGO_PKG_HOMEPAGE")`); changed code `` → `https://shop.example`; the context of the call changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'Cargo.toml:package.description=<why>' --reason 'Cargo.toml:package.homepage=<why>' --compiled
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'Cargo.toml:package.description=the reason of the test' --reason 'Cargo.toml:package.homepage=the reason of the test' --compiled
+◆ f1 derived: Cargo.toml: package.description "a shop" → "a small shop" [manifest · code different]
+    lines: Cargo.toml:5-6, Cargo.toml:-5
+◆ f2 derived: Cargo.toml: package.homepage added ("https://shop.example") [manifest · code different]
+    lines: Cargo.toml:5-6, Cargo.toml:-5

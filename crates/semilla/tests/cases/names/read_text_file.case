@@ -1,0 +1,32 @@
+note: batch 10n, part C (files): a `.txt` file that `include_str!` reads; the step changes only that file; the file is a build input, not an inert file (the old extension list `md`, `txt`, … called each `.txt` file inert)
+rule+: R65.3-4
+must_match: spotlight: a file that the code reads at build time \(in `src/lib\.rs`\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+pub fn notes() -> &'static str {
+    include_str!("../notes.txt")
+}
+=== old notes.txt
+open at nine
+=== new notes.txt
+open at ten
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: notes.txt: changed [file]
+      ✗ spotlight: a file that the code reads at build time (in `src/lib.rs`): the build reads it, so its kind does not make it inert; it needs a reason: --reason 'notes.txt:=…'
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'notes.txt:=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'notes.txt:=the reason of the test'
+◆ f1 derived: notes.txt: changed [file]
+    lines: notes.txt:1, notes.txt:-1

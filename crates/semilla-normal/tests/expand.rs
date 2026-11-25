@@ -143,8 +143,9 @@ fn each_macro_call_has_its_expansion_with_the_definition_the_items_and_the_chain
         // R63.2-4: the local `x` of the macro and the parameter `x` of the caller have two
         // texts. The negative case: a name with one context has no mark (`v` above).
         assert!(has("bang shadow [src/lib.rs:14] expr `{ let x = 1; x\u{b7}1 - x }`") || has("bang shadow [src/lib.rs:14] expr `{ let x\u{b7}1 = 1; x - x\u{b7}1 }`"), "{all}");
-        // R63.2-3, the negative case: `format!` has no record.
-        assert!(!has(" format "), "{all}");
+        // R65.2-1 (it replaces R63.2-3): `format!` of the standard library has a record too, and
+        // its inner `format_args!` is a record inside it.
+        assert!(has("src/lib.rs:38 bang format [crate alloc] expr") && has("bang $crate::__export::format_args [crate core]"), "{all}");
         // R63.2-5: the check of the expanded `$v + 10` has the expanded text. The negative
         // case: a check whose tokens are in the source keeps the source text.
         let records = read_records(&out).unwrap();
@@ -159,4 +160,47 @@ fn each_macro_call_has_its_expansion_with_the_definition_the_items_and_the_chain
     }
     // R63.2-2: two runs give equal records.
     assert_eq!(runs[0], runs[1]);
+}
+
+/// R66.10-3: the units of a record folder have the order of their data (the package, the target
+/// name with no metadata hash, the configuration, the root file), not the order of the file
+/// names. Two packages with a test target `integration` keep their order when the metadata hash
+/// of cargo changes. The negative case: two files with the same data keep the order of their
+/// names (the only tie break).
+// rule+ R66.10-3
+// rule- R66.10-3
+#[test]
+fn the_units_of_a_record_folder_have_the_order_of_their_data_not_of_the_file_names() {
+    let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("semilla-unit-order");
+    let unit = |package: &str, target: &str, cfg: &str| format!("{{\"unit\":{{\"target\":\"{target}\",\"package\":\"{package}\",\"root\":\"tests/lib.rs\",\"cfg\":[{cfg}],\"expansions\":[]}}}}\n");
+    let order = |files: &[(&str, &str, &str)]| -> Vec<String> {
+        let _ = std::fs::remove_dir_all(&scratch);
+        for (package, stem, cfg) in files {
+            write(&scratch.join(format!("{stem}.jsonl")), &unit(package, stem, cfg));
+        }
+        let units = read_expansions(&scratch).expect("the expansions of each unit");
+        units.iter().map(|unit| format!("{} {} {}", unit.package, unit.target, unit.cfg.join(","))).collect()
+    };
+    // The hash of `parser` is first in the order of the names, then the hash of `lexer`.
+    let first = order(&[("parser", "integration.test.0a1b", ""), ("lexer", "integration.test.f9e8", "")]);
+    let second = order(&[("parser", "integration.test.f9e8", ""), ("lexer", "integration.test.0a1b", "")]);
+    assert_eq!(first, vec!["lexer integration.test.f9e8 ", "parser integration.test.0a1b "]);
+    assert_eq!(second, vec!["lexer integration.test.0a1b ", "parser integration.test.f9e8 "]);
+    // One package and one target in two configurations: the configuration gives the order.
+    let configs = order(&[("lexer", "integration.test.0a1b", "\"feature=\\\"b\\\"\""), ("lexer", "integration.test.f9e8", "\"feature=\\\"a\\\"\"")]);
+    assert_eq!(configs, vec!["lexer integration.test.f9e8 feature=\"a\"", "lexer integration.test.0a1b feature=\"b\""]);
+    // The negative case: the same data gives the order of the file names.
+    let same = order(&[("lexer", "integration.test.f9e8", ""), ("lexer", "integration.test.0a1b", "")]);
+    assert_eq!(same, vec!["lexer integration.test.0a1b ", "lexer integration.test.f9e8 "]);
+    // The records of the bodies have the same order of the units.
+    let names: Vec<String> = {
+        let _ = std::fs::remove_dir_all(&scratch);
+        for (package, stem) in [("parser", "integration.test.0a1b"), ("lexer", "integration.test.f9e8")] {
+            let record = format!("{{\"name\":\"{package}::suite\",\"level\":\"n0\",\"text\":\"t\",\"shape\":\"s\"}}\n");
+            write(&scratch.join(format!("{stem}.jsonl")), &format!("{}{record}", unit(package, stem, "")));
+        }
+        read_records(&scratch).expect("the records").into_iter().map(|record| record.name).collect()
+    };
+    assert_eq!(names, vec!["lexer::suite", "parser::suite"]);
+    let _ = std::fs::remove_dir_all(&scratch);
 }

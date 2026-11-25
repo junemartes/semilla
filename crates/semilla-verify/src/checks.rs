@@ -2124,7 +2124,7 @@ pub fn item_panic_sites(item: &semilla_syntax::Item) -> Vec<String> {
         let attr = node.attr.as_deref().unwrap_or("");
         let site = match node.kind {
             "method_call" => matches!(attr, "unwrap" | "expect"),
-            "macro" => matches!(attr, "panic" | "unreachable" | "todo" | "unimplemented" | "assert" | "assert_eq" | "assert_ne"),
+            "macro" => semilla_core::names::panics(attr),
             "index" => true,
             _ => false,
         };

@@ -74,10 +74,6 @@ const PURE_BUILTIN: [&str; 12] = [
     "pattern_type",
 ];
 
-/// The macros of the standard library that use `cfg!(debug_assertions)` and say so in their
-/// name. A use of the build configuration through them gets no spotlight.
-const DEBUG_ASSERT: [&str; 3] = ["debug_assert", "debug_assert_eq", "debug_assert_ne"];
-
 /// The built-in macros whose value is not in the source text of the use, and that do not read
 /// the build configuration: the content of a file of the tree, and a source position. The
 /// value is opaque (a proof does not use it), and the use gets no spotlight.
@@ -189,7 +185,7 @@ fn black_box_def(tcx: TyCtxt<'_>) -> Option<DefId> {
 }
 
 /// The built-in name of a macro (`#[rustc_builtin_macro]`), if it is a built-in macro.
-fn builtin_name(tcx: TyCtxt<'_>, def_id: DefId, name: rustc_span::Symbol) -> Option<String> {
+pub(crate) fn builtin_name(tcx: TyCtxt<'_>, def_id: DefId, name: rustc_span::Symbol) -> Option<String> {
     #[allow(deprecated)]
     for attr in tcx.get_all_attrs(def_id) {
         if let Attribute::Parsed(AttributeKind::RustcBuiltinMacro { builtin_name, .. }) = attr {
@@ -237,10 +233,15 @@ fn macro_source(tcx: TyCtxt<'_>, span: Span) -> Option<Source> {
                     },
                     None => false,
                 };
-                if let Some(def_id) = data.macro_def_id {
-                    if found.is_some() && tcx.crate_name(def_id.krate).as_str() == "core" && DEBUG_ASSERT.contains(&tcx.item_name(def_id).as_str()) {
-                        quiet = true;
-                    }
+                // R65.3-2: a check of the profile (`cfg!(debug_assertions)`) that a macro of the
+                // standard library makes (`debug_assert!`) gets no spotlight: the reader sees the
+                // macro, and the dev and release configurations give the two values. The crate
+                // of the macro is a fact of the compiler (the sysroot), not a name list.
+                if let Some(def_id) = data.macro_def_id
+                    && found.as_deref() == Some("cfg!(debug_assertions)")
+                    && crate::stdlib::is_sysroot_crate(tcx, def_id.krate)
+                {
+                    quiet = true;
                 }
                 if !free && found.is_none() {
                     found = Some(call_text(tcx, data.call_site, name));
@@ -285,7 +286,7 @@ fn is_call_text(text: &str) -> bool {
     is_path && group
 }
 
-fn is_proc_macro(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+pub(crate) fn is_proc_macro(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     // A crate cannot use its own proc macros: a local macro is a `macro_rules!` macro.
     if def_id.is_local() {
         return false;

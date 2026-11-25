@@ -82,8 +82,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   control flow: 2 bodies
     <shop::Meters as std::convert::From<u32>>::from (src/lib.rs:4): graph removed: 2 points, 1 arrow; no edit in the body
     <shop::Meters as std::convert::From<u64>>::from (src/lib.rs:4): graph added: 2 points, 1 arrow; no edit in the body
-  expansions: 3 changed
-    3 calls: expansion changed: `macro_rules! check_here` (src/lib.rs:9): only the place of the call changes: its code has the line, the column, or the file of the call (`line!()`, `column!()`, `file!()`); the call moves: `shop::one/S1`, `shop::two/S1`, `shop::two/S2` (semilla status --verbose)
+  expansions: 5 changed
+    2 calls: expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes: `shop::one`, `shop::two` (semilla status --verbose)
+    3 calls: expansion changed: `macro_rules! check_here` (src/lib.rs:9): only the context of the call changes: a value that the macro makes at the call (`concat!("failed at ", file!(), ":", line!())`); the context of the call changes: `shop::one/S1`, `shop::two/S1`, `shop::two/S2` (semilla status --verbose)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'shop::Meters=<why>' --compiled
 === positions

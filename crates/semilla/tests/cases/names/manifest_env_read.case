@@ -1,0 +1,35 @@
+note: batch 10n, part C (manifest keys): the step changes `package.description`, and the code reads it with `env!("CARGO_PKG_DESCRIPTION")`; the key is a build input, not a descriptive key with no code (the old list of descriptive keys called it "no code")
+rule+: R65.3-5
+must_match: spotlight: a package key that the code reads at build time \(`CARGO_PKG_DESCRIPTION`\)
+=== old Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+description = "a shop"
+=== new Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+description = "a small shop"
+=== both src/lib.rs
+pub fn about() -> &'static str {
+    env!("CARGO_PKG_DESCRIPTION")
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: Cargo.toml: package.description "a shop" → "a small shop" [manifest]
+      ✗ spotlight: a package key that the code reads at build time (`CARGO_PKG_DESCRIPTION`): cargo gives each package key to the build as an environment variable; it needs a reason: --reason 'Cargo.toml:package.description=…'
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'Cargo.toml:package.description=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'Cargo.toml:package.description=the reason of the test'
+◆ f1 derived: Cargo.toml: package.description "a shop" → "a small shop" [manifest]
+    lines: Cargo.toml:5, Cargo.toml:-5
