@@ -1,0 +1,11 @@
+[package]
+name = "semilla-intent"
+description = "The intent language of semilla: the syntax tree of the claims, the parser from Rust syntax, and the prelude."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+ra_ap_syntax = "=0.0.360"
+serde = { version = "1", features = ["derive"] }

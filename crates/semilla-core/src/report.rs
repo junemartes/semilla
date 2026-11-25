@@ -189,6 +189,9 @@ pub struct StepReport {
     /// The facts of the agent with their check results (design 54).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_facts: Vec<AgentFact>,
+    /// The claims of the intent files of the step with their results (design 67, part D).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub intent_claims: Vec<IntentClaim>,
     /// The gap list (design 54.4): the edits of existing code that can change the behavior and
     /// that no agent fact states. The list is never a cause of a reject.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -658,6 +661,96 @@ pub fn parse_tag(text: &str) -> Result<(Vec<Place>, String), String> {
     }
     let places = parts.iter().map(|part| Place::parse(part)).collect::<Result<Vec<_>, _>>()?;
     Ok((places, name.to_string()))
+}
+
+/// The result of a claim of an intent file (design 67, part D).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntentResult {
+    /// Semilla checked the claim for each input in each checked configuration.
+    Proved,
+    /// Semilla found an input where the claim is false (an input that the check verified on
+    /// the two versions).
+    False,
+    /// Semilla cannot check the claim: the cause.
+    Claimed,
+    /// The text of `intent!("…")`: shown, not checked.
+    Shown,
+    /// A reference error or a type error of the claim.
+    Error,
+    /// The check runs in the background (phase 2).
+    Pending,
+}
+
+impl IntentResult {
+    pub fn word(self) -> &'static str {
+        match self {
+            IntentResult::Proved => "proved",
+            IntentResult::False => "false",
+            IntentResult::Claimed => "claimed",
+            IntentResult::Shown => "shown",
+            IntentResult::Error => "error",
+            IntentResult::Pending => "pending",
+        }
+    }
+
+    /// The mark of a result line.
+    pub fn mark(self) -> &'static str {
+        match self {
+            IntentResult::Proved => "✓",
+            IntentResult::False | IntentResult::Error => "✗",
+            IntentResult::Shown => "·",
+            IntentResult::Claimed | IntentResult::Pending => "?",
+        }
+    }
+}
+
+/// One claim of an intent file with its result (design 67, part D).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntentClaim {
+    /// The number in the step, for example `i1`.
+    pub id: String,
+    /// The kind: `intent`, `same`, `change`, `different`, `rename`, `moved`, `rewrite`, or the
+    /// attribute of a later batch.
+    pub kind: String,
+    /// The claim as written: `#[same(shop::parse)] fn parse(s: u32)`, or the intent text.
+    pub text: String,
+    /// The place in the intent file: `FILE:LINE`.
+    pub place: String,
+    pub result: IntentResult,
+    /// The cause of a claimed result, the input of a false claim, or the method of a proof.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+    /// The result of each checked configuration when they do not agree.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configs: Vec<String>,
+    /// The options of the claim that the result line shows: `cfg = "…"`, `reason = "…"`,
+    /// `except = […]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    /// The bodies that the claim reads, with the hash of each: `before::PATH HASH`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reads: Vec<String>,
+    /// The cause of a stale claim (design 67, part D): the bodies that changed after the last
+    /// check. The result is the result of the new check.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stale: String,
+}
+
+impl IntentClaim {
+    /// The line of the claim in an output, without the mark.
+    pub fn line(&self) -> String {
+        let options = if self.options.is_empty() { String::new() } else { format!(" ({})", self.options.join(", ")) };
+        let detail = if self.detail.is_empty() { String::new() } else { format!(": {}", self.detail) };
+        let stale = if self.stale.is_empty() { String::new() } else { format!(" (stale before this check: {})", self.stale) };
+        let text = if self.kind == "intent" { crate::text::quoted(&self.text) } else { format!("`{}`", self.text) };
+        format!("{} {text} ({}){options}: {}{stale}{detail}", self.id, self.place, self.result.word())
+    }
+
+    /// True if the claim stops a step: a false claim or an error.
+    pub fn blocks(&self) -> bool {
+        matches!(self.result, IntentResult::False | IntentResult::Error)
+    }
 }
 
 /// One fact of the agent with its check result (design 54).
@@ -1565,6 +1658,8 @@ impl StepReport {
             && self.claims.iter().all(|claim| claim.status.is_verified())
             && self.agent_facts.iter().all(|fact| fact.holds)
             && self.tags.iter().all(|tag| tag.error.is_none())
+            // Design 67: a false claim or an error of an intent file.
+            && self.intent_claims.iter().all(|claim| !claim.blocks())
     }
 
     /// The lines of the cover check (design 55.4), without the indent. A record of an earlier

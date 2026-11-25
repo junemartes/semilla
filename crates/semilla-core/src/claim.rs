@@ -82,17 +82,39 @@ pub struct AgentFacts {
     /// Each `--change` text: `ITEM[,ITEM]=TEXT`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub change: Vec<String>,
+    /// Each `--intent FILE` (design 67, part D): the path and the text of the file. The step
+    /// note keeps the text, so a later check reads the same claims.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub intent: Vec<IntentFile>,
+    /// The bodies that the claims of the intent files read at the last check, with the hash of
+    /// each body (design 67, part D): `CLAIM_ID before::PATH HASH`. A claim whose bodies
+    /// changed is stale.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub intent_reads: Vec<String>,
+}
+
+/// An intent file of a step (design 67): the path as the agent gave it, and the text.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntentFile {
+    pub path: String,
+    pub text: String,
 }
 
 impl AgentFacts {
     pub fn is_empty(&self) -> bool {
-        self.same.is_empty() && self.change.is_empty()
+        self.same.is_empty() && self.change.is_empty() && self.intent.is_empty()
     }
 
-    /// The options of a command that gives these facts: `--same 'TEXT'` and `--change 'TEXT'`.
+    /// The options of a command that gives these facts: `--same 'TEXT'`, `--change 'TEXT'`, and
+    /// `--intent 'FILE'`.
     pub fn options(&self) -> Vec<String> {
         let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
-        self.same.iter().map(|text| format!("--same {}", quote(text))).chain(self.change.iter().map(|text| format!("--change {}", quote(text)))).collect()
+        self.same
+            .iter()
+            .map(|text| format!("--same {}", quote(text)))
+            .chain(self.change.iter().map(|text| format!("--change {}", quote(text))))
+            .chain(self.intent.iter().map(|file| format!("--intent {}", quote(&file.path))))
+            .collect()
     }
 }
 

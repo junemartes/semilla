@@ -13,6 +13,9 @@ use crate::git::Repo;
 #[path = "reach.rs"]
 pub(crate) mod reach;
 
+#[path = "intent.rs"]
+mod intent;
+
 /// Runs the MIR driver on the snapshots, and compares the bodies with the normal forms.
 ///
 /// Each level has one fixed build folder. Semilla updates it to each tree by delta, so cargo
@@ -1564,6 +1567,10 @@ impl NormalOracle {
 }
 
 impl BodyOracle for NormalOracle {
+    fn intent(&self, step: &Step, renames: &BTreeMap<String, String>, queries: &[semilla_verify::intent::Query]) -> Option<Vec<semilla_verify::intent::Answer>> {
+        self.intent_claims(step, renames, queries)
+    }
+
     fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> Result<Vec<BodyComparison>> {
         self.compare_with(step, renames, added, &AllOpaque)
     }

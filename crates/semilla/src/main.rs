@@ -94,6 +94,14 @@ enum Command {
         /// the behavior. It does not check the sentence.
         #[arg(long = "change")]
         change: Vec<String>,
+        /// An intent file (design 67): a Rust file of claims outside the production code, for
+        /// example `.semilla/intent/step.rs`. Each claim is a function with an attribute
+        /// (`#[same(ITEM)]`, `#[change(ITEM)]`, `#[different(ITEM)]`, `#[rename(A, B)]`,
+        /// `#[moved(A, B)]`, `#[rewrite(A, B)]`). The step stores the text of the file.
+        /// `semilla intent check FILE` checks the references and the types first. A property
+        /// claim needs `--compiled`. A false claim rejects the step.
+        #[arg(long = "intent")]
+        intent_files: Vec<PathBuf>,
         /// A tag of the agent: a name for a part of the step. `PLACE[,PLACE]=NAME`. A place is
         /// `FILE:LINE` or `FILE:START-END` (lines of the new tree), `FILE:-START-END` (lines of
         /// the old tree, for a deleted text), or `FILE` (the full file). The two sides of a
@@ -164,6 +172,20 @@ enum Command {
         /// `PLACE[,PLACE]=NAME`: a tag, a name for a part of the step (see `semilla step --help`).
         #[arg(long = "tag")]
         tag: Vec<String>,
+        /// An intent file (see `semilla step --help`). A file with the path of a stored file
+        /// replaces it.
+        #[arg(long = "intent")]
+        intent_files: Vec<PathBuf>,
+        /// Check the stored claims of the intent files of the step again (design 67, part D).
+        #[arg(long)]
+        again: bool,
+    },
+    /// The intent files (design 67): `semilla intent check [FILE]` gives the parse errors, the
+    /// reference errors, and the type errors of the claims, with the candidates.
+    #[command(display_order = 7)]
+    Intent {
+        #[command(subcommand)]
+        action: IntentAction,
     },
     /// Remove the last stored step (the working tree keeps its changes).
     #[command(display_order = 2)]
@@ -397,6 +419,22 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum IntentAction {
+    /// Parse each intent file, then resolve each reference of each claim against the compiler
+    /// data of the two trees, and check the types. The default files: each `.rs` file of
+    /// `.semilla/intent/`. The default step: the working tree against `HEAD`. The command
+    /// builds the compiled records only if the cache has no record of the two trees. It runs
+    /// no claim check: `semilla step --intent FILE --compiled` gives the results.
+    Check {
+        /// The intent files.
+        files: Vec<PathBuf>,
+        /// A stored step of the session.
+        #[arg(long)]
+        step: Option<usize>,
+    },
+}
+
+#[derive(Subcommand)]
 enum PairAction {
     /// Say why the removed item and the added item are really two items.
     Refuse {
@@ -624,9 +662,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Replay { action: ReplayAction::End } => println!("{}", app.replay_end()?),
         Command::Replay { action: ReplayAction::Abort } => println!("{}", app.replay_abort()?),
-        Command::Step { intent, group, claims, same, change, tag, reasons, tree, compiled, no_check, fast } => {
+        Command::Step { intent, group, claims, same, change, intent_files, tag, reasons, tree, compiled, no_check, fast } => {
             let intent = intent.context("give the intent: `semilla step \"<intent>\"`")?;
-            let request = onestep::StepRequest { intent, group, claims, reasons, same, change, tags: tag, tree, fast, compiled, no_check };
+            let intent_files = app.read_intent_files(&intent_files)?;
+            let request = onestep::StepRequest { intent, group, claims, reasons, same, change, intent_files, tags: tag, tree, fast, compiled, no_check };
             let (text, stored) = app.step_once(&request)?;
             print!("{text}");
             // Design 37.22: the build code cache keeps the entries of the stored steps and the
@@ -643,10 +682,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 return Ok(ExitCode::from(1));
             }
         }
-        Command::Fact { step, commit, reasons, same, change, tag } => {
+        Command::Fact { step, commit, reasons, same, change, tag, intent_files, again } => {
+            let intent_files = app.read_intent_files(&intent_files)?;
             let (text, stored) = match commit {
+                Some(_) if !intent_files.is_empty() || again => anyhow::bail!("`--intent` and `--again` add to a step of the session; a tagged commit gets its intent files from the step of the session"),
                 Some(commit) => app.add_to_commit(&commit, step, &same, &change, &tag, &reasons)?,
-                None => app.add_facts(step, &same, &change, &tag, &reasons)?,
+                None => app.add_facts(step, &same, &change, &tag, &reasons, &intent_files, again)?,
             };
             print!("{text}");
             if !stored {
@@ -822,6 +863,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         },
         Command::Index => println!("{}", app.index()?),
+        Command::Intent { action: IntentAction::Check { files, step } } => {
+            let (text, clean) = app.intent_check(&files, step)?;
+            print!("{text}");
+            if !clean {
+                return Ok(ExitCode::from(1));
+            }
+        }
         Command::Expand { place, step, full, before, after } => {
             let sides = if before { semilla_verify::expand::Sides::Before } else if after { semilla_verify::expand::Sides::After } else { semilla_verify::expand::Sides::Both };
             print!("{}", app.expand(&place, step, full, sides)?);

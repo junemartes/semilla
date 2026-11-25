@@ -8880,7 +8880,7 @@ fn run_agent(before: &str, after: &str, same: &[&str], change: &[&str]) -> StepR
     let (_d2, new) = load(after);
     let mut step = step(Vec::new());
     step.compiled = false;
-    step.agent = semilla_core::AgentFacts { same: same.iter().map(|text| text.to_string()).collect(), change: change.iter().map(|text| text.to_string()).collect() };
+    step.agent = semilla_core::AgentFacts { same: same.iter().map(|text| text.to_string()).collect(), change: change.iter().map(|text| text.to_string()).collect(), ..Default::default() };
     verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report
 }
 
@@ -9214,7 +9214,7 @@ fn run_agent_files(before: &[(&str, &str)], after: &[(&str, &str)], same: &[&str
     let (_d2, new) = load_files(after);
     let mut step = step(Vec::new());
     step.compiled = false;
-    step.agent = semilla_core::AgentFacts { same: same.iter().map(|text| text.to_string()).collect(), change: change.iter().map(|text| text.to_string()).collect() };
+    step.agent = semilla_core::AgentFacts { same: same.iter().map(|text| text.to_string()).collect(), change: change.iter().map(|text| text.to_string()).collect(), ..Default::default() };
     verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report
 }
 
@@ -9422,7 +9422,7 @@ fn a_stated_move_keeps_each_edit_of_the_body() {
 // rule- R54.16-1 R54.16-2 R54.16-3 R54.16-5
 #[test]
 fn a_false_pattern_gets_the_near_pattern_that_holds() {
-    let facts = |same: &str| semilla_core::AgentFacts { same: vec![same.to_string()], change: Vec::new() };
+    let facts = |same: &str| semilla_core::AgentFacts { same: vec![same.to_string()], change: Vec::new(), ..Default::default() };
     let error = agent::check_form(&facts("rewrite .total => .sum()")).unwrap_err();
     assert!(error.ends_with("A side that starts with `.` has no receiver: write a variable (`$a`) for the receiver. The correct form: `--same 'rewrite $a.total => $a.sum()'`"), "{error}");
     let error = agent::check_form(&facts("rewrite $a.total; => $a.sum();")).unwrap_err();
@@ -9824,7 +9824,7 @@ fn run_tagged(before: &[(&str, &str)], after: &[(&str, &str)], same: &[&str], ch
     let (_d2, new) = load_files(after);
     let mut step = step(Vec::new());
     step.compiled = false;
-    step.agent = semilla_core::AgentFacts { same: same.iter().map(|text| text.to_string()).collect(), change: change.iter().map(|text| text.to_string()).collect() };
+    step.agent = semilla_core::AgentFacts { same: same.iter().map(|text| text.to_string()).collect(), change: change.iter().map(|text| text.to_string()).collect(), ..Default::default() };
     step.tags = tags.iter().map(|text| text.to_string()).collect();
     verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report
 }

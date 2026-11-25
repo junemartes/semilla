@@ -394,7 +394,7 @@ impl App {
         if index > last {
             bail!("no step {index} in the note of commit {short}; the last step is step {last}");
         }
-        let added = semilla_core::AgentFacts { same: same.to_vec(), change: change.to_vec() };
+        let added = semilla_core::AgentFacts { same: same.to_vec(), change: change.to_vec(), ..Default::default() };
         if added.is_empty() && tags.is_empty() && reasons.is_empty() {
             bail!("give a reason, a fact, or a tag: `semilla fact --commit {short} --reason 'KEY=TEXT'`, `--same '…'`, `--change 'ITEM=TEXT'`, or `--tag 'PLACE=NAME'`");
         }

@@ -211,6 +211,91 @@ If a step has a gap, `semilla status`, `semilla tag`, and the review show one li
 
 **A replay plan.** A plan step with a false fact or a refuted claim has the mark `✗` on its plan line, with the cause below it. `semilla replay apply` then has the exit code 1, with and without `--full`.
 
+## The intent file
+
+An intent file gives the intent of a step and the claims that Semilla can check. It is a Rust file outside the production code, for example `.semilla/intent/step.rs` (never in a `src` folder). You do not change the code, the `Cargo.toml`, or the `cfg` of the project. Your editor and `rustfmt` can read the file. Semilla never compiles or runs it.
+
+Each claim is a function with an attribute. A body is a `bool` expression that must be true for each value of the parameters. `before::PATH` names an item of the old version, and `after::PATH` names an item of the new version. The names of the language (`panics`, `returns`, …) are in `semilla_intent::prelude` (`crates/semilla-intent/src/prelude.rs`).
+
+```rust
+use semilla_intent::prelude::*;
+
+// Shown to the reviewer. Semilla does not check it.
+intent!("Add a strict mode to `parse`, and make `half` a shift");
+
+// An empty body: the equivalence check of the step for the item.
+#[same(shop::report)]
+fn report() {}
+
+// A changed signature: the relation of the two versions, for each `x`.
+#[same(shop::parse)]
+fn parse(x: u32) -> bool {
+    after::shop::parse(x, false) == before::shop::parse(x)
+}
+
+// An intended change with its condition. `if` splits the cases.
+#[change(shop::first, reason = "an empty list is not a panic now")]
+fn first(v: Vec<u32>) -> bool {
+    if v.is_empty() {
+        panics(|| before::shop::first(&v)) && after::shop::first(&v).is_none()
+    } else {
+        after::shop::first(&v) == Some(before::shop::first(&v))
+    }
+}
+
+// A sure difference: no parameter, so one input.
+#[different(shop::half)]
+fn half_rounds_down() -> bool {
+    before::shop::half(-1) != after::shop::half(-1)
+}
+
+// A private field is a valid reference.
+#[same(shop::cart_len)]
+fn cart_len(c: &after::shop::Cart) -> bool {
+    after::shop::cart_len(c) == c.len
+}
+
+// The forms of `--same`.
+#[rename(before::shop::sum, after::shop::total)]
+fn sum_to_total() {}
+
+// Options: `cfg` (only the matching configurations), `reason` (shown), and
+// `except = [panic_message]` (a panic with another message is the same panic).
+#[same(shop::mode, cfg = "debug_assertions")]
+fn mode_in_dev() -> bool {
+    after::shop::mode() == 1
+}
+
+// A function with no attribute is a relation that the claims can call.
+fn same_len(b: &before::shop::Cart, a: &after::shop::Cart) -> bool {
+    b.len == a.len
+}
+```
+
+**The results** (one line for each claim in the section "intent" of the step):
+
+- `proved`: Semilla checked the claim for each input in each checked configuration. This is a proof.
+- `false`: an input where the claim is false, with the value of each call. Semilla verified the input on the two versions. The step is rejected.
+- `claimed`: Semilla cannot check the claim; the line has the cause (a loop, a float, a part outside the model, a budget). The reviewer sees it as your claim, not as a proof.
+- `error`: a reference error or a type error, with the candidates. The step is rejected.
+- `shown`: the text of `intent!`.
+- `pending`: with `--fast`, the background check gives the result.
+
+A claim with a property body needs `--compiled`: the default mode shows "claimed (the check needs `--compiled`)". `#[rename]`, `#[moved]`, and `#[rewrite]` have the checks of `--same` in each mode. A `#[change(ITEM)]` claim also states its item for the gap list, as `--change` does.
+
+**The rules of a body.** A call of a version runs the body of that version. Each call starts with the same world: a call does not see the effects of another call. A panic of a call outside `panics(|| …)`, `panics_with(|| …, "…")`, `returns(|| …)`, and `same_outcome(|| …, || …)` makes the claim false. An operation of the claim has the checks of a debug build (an overflow panics). `==` compares the values of integers, `bool`, `char`, tuples, sequences, and `Option` and `Result` of these; on a type of the workspace it calls `PartialEq::eq` of that version. A path can be loose (`shop::Cart::len` for `shop::Cart::<T>::len`); a trait method has its record name as a text: `#[same("<shop::Cart as core::fmt::Debug>::fmt")]`.
+
+**The loop.**
+
+1. Write the file (one file for each step is easy to read).
+2. Run `semilla intent check FILE` (or with no file: each `.rs` file of `.semilla/intent/`). It builds the compiled records of `HEAD` and of the working tree, and gives each parse, reference, and type error with its place and the candidates. It does not check a claim.
+3. Run `semilla step "<intent>" --intent FILE --compiled`. Read the section "intent".
+4. Fix a false claim (or the code), an error, or a claim that the model cannot check (write it with fewer parts). For a stored step, `semilla fact --step N --intent FILE` replaces the file with the same path, and `semilla fact --again` checks the stored claims again.
+
+A later step that changes a body that a claim reads checks that claim again (`s0.i3 … stale before this check: this step changes …`). A false result rejects the later step.
+
+**The help.** In a step with an intent file, a body whose equivalence check cannot compare the two versions because the parameters or the return type change gets a note with the two signatures and a template of a `#[same]` claim. Fill in the arguments of the new version.
+
 ## The tags of a step
 
 A tag is a name for a part of a step. Use tags to put the facts of a large step in groups that a reviewer can read one at a time. You give the part by the hunks of the line diff of the step.

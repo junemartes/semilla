@@ -18,6 +18,8 @@ The decisions of batch 10n for each list of the audit are in design 65.3 and 65.
 | `crates/semilla-core/src/ops.rs` | `const RETIRED` | tool | the names of the claim operations that Semilla does not accept any more (its own options) |
 | `crates/semilla-core/src/report.rs` | `const CAUSES` | tool | the names of the evidence rules of Semilla (its own data) |
 | `crates/semilla-core/src/report.rs` | `const FILLED_GROUPS` | tool | the names of the groups of the report (its own data) |
+| `crates/semilla-intent/src/lib.rs` | `fn cfg_expr "all"` | language | the operators of a `cfg` predicate (`all`, `any`, `not`) of the Rust reference; the option `cfg = "…"` of a claim (design 67) |
+| `crates/semilla-intent/src/prelude.rs` | `const EXCEPT` | tool | the observations of `except = […]` that the check of the intent language knows (the own data of Semilla: its language, design 67); each other name gives "claimed" (the safe side) |
 | `crates/semilla-mir/src/config.rs` | `const FREE_ALIASES` | tool | type aliases of the standard library with one definition and no `cfg` in the source of the pinned tool chain; the driver cannot see the `cfg` of another crate; an alias outside the list is opaque (the safe side) |
 | `crates/semilla-mir/src/config.rs` | `const NOT_CONFIG` | tool | the built-in macros of the compiler (`#[rustc_builtin_macro]`) whose value is a file or a place, not the build configuration: no spotlight, the value stays opaque (never a proof); the names are the built-in names of the compiler |
 | `crates/semilla-mir/src/config.rs` | `const PURE_BUILTIN` | tool | the built-in macros of the compiler whose value comes only from their input; each other built-in macro is not configuration-free (an allow list: the safe side) |

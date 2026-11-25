@@ -182,6 +182,10 @@ pub fn check_form(facts: &semilla_core::AgentFacts) -> Result<(), String> {
     for text in &facts.change {
         parse_change(text)?;
     }
+    // Design 67: the parse errors of each intent file, each with its place.
+    if let Err(errors) = crate::intent::parse_files(&facts.intent) {
+        return Err(format!("the intent file has errors:\n{}", errors.iter().map(|error| format!("  {error}")).collect::<Vec<_>>().join("\n")));
+    }
     Ok(())
 }
 

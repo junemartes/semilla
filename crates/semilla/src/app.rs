@@ -233,6 +233,10 @@ impl semilla_verify::BodyOracle for Guard<'_> {
     fn reach(&self, step: &Step, renames: &BTreeMap<String, String>) -> Option<semilla_verify::equiv::ReachReport> {
         if self.off(step) { None } else { self.inner.reach(step, renames) }
     }
+
+    fn intent(&self, step: &Step, renames: &BTreeMap<String, String>, queries: &[semilla_verify::intent::Query]) -> Option<Vec<semilla_verify::intent::Answer>> {
+        if self.off(step) { None } else { self.inner.intent(step, renames, queries) }
+    }
 }
 
 /// Puts the mark on each node of the change tree with the result `code equal` whose step used
@@ -285,8 +289,78 @@ pub(crate) fn hard_problem(step: &semilla_core::report::StepReport) -> bool {
         || step.facts.iter().any(|fact| fact.spotlight && fact.reason.is_none())
         || step.claims.iter().any(|claim| !(claim.status.is_verified() || claim.status.is_pending() || matches!(claim.status, ClaimStatus::NotChecked { .. })))
         || step.agent_facts.iter().any(|fact| !fact.holds)
+        // Design 67: a false claim or an error of an intent file.
+        || step.intent_claims.iter().any(|claim| claim.blocks())
         // Design 55.3: a tag with a position with no edit.
         || step.tags.iter().any(|tag| tag.error.is_some())
+}
+
+/// [R67.5-3] The claims of an earlier step whose `after::` bodies a later step changes: the
+/// later step checks each such claim again, with the tree before the earlier step and the tree
+/// after the later step. The line of the later step has the mark "stale" with the changed
+/// bodies. Only the compiled check has the reads of a claim.
+fn later_claims(set: &ChangeSet, all: &[Step], bodies: &dyn semilla_verify::BodyOracle, steps: &mut [semilla_core::report::StepReport]) {
+    let mut added: Vec<(usize, semilla_core::IntentClaim)> = Vec::new();
+    for later in set.steps.iter().filter(|step| step.compiled) {
+        let Some(report) = steps.iter().find(|step| step.step == later.index) else { continue };
+        // The bodies that the later step changes: a fact of an item, and a body of the control
+        // flow section.
+        let mut changed: BTreeSet<String> = report.facts.iter().filter_map(|fact| fact.at.as_ref().map(|at| at.item.clone())).collect();
+        if let Some(flow) = &report.flow {
+            changed.extend(flow.bodies.iter().map(|body| body.name.clone()));
+        }
+        for earlier in all.iter().filter(|step| step.index < later.index && !step.agent.intent.is_empty()) {
+            // The stored reads of the earlier step: `ID after::PATH HASH`.
+            let mut stale: Vec<(String, Vec<String>)> = Vec::new();
+            for line in &earlier.agent.intent_reads {
+                let mut words = line.split(' ');
+                let (Some(id), Some(path)) = (words.next(), words.next()) else { continue };
+                let Some(path) = path.strip_prefix("after::").filter(|path| changed.contains(*path)) else { continue };
+                match stale.iter_mut().find(|(known, _)| known == id) {
+                    Some((_, hit)) if !hit.contains(&format!("`{path}`")) => hit.push(format!("`{path}`")),
+                    Some(_) => {}
+                    None => stale.push((id.to_string(), vec![format!("`{path}`")])),
+                }
+            }
+            if stale.is_empty() {
+                continue;
+            }
+            let Ok(parsed) = semilla_verify::intent::parse_files(&earlier.agent.intent) else { continue };
+            let queries: Vec<semilla_verify::intent::Query> = semilla_verify::intent::queries(&parsed, false).into_iter().filter(|query| stale.iter().any(|(id, _)| *id == query.id)).collect();
+            let pair = Step { index: later.index, intent: earlier.intent.clone(), claims: Vec::new(), tree_before: earlier.tree_before.clone(), tree_after: later.tree_after.clone(), reasons: Default::default(), compiled: true, build_check: None, agent: earlier.agent.clone(), tags: Vec::new() };
+            let Some(answers) = bodies.intent(&pair, &BTreeMap::new(), &queries) else { continue };
+            for (query, answer) in queries.iter().zip(answers) {
+                let hit = stale.iter().find(|(id, _)| *id == query.id).map(|(_, hit)| hit.join(", ")).unwrap_or_default();
+                let result = if answer.errors.is_empty() { answer.result.unwrap_or(semilla_core::IntentResult::Claimed) } else { semilla_core::IntentResult::Error };
+                let detail = if answer.errors.is_empty() { answer.detail } else { answer.errors.join("; ") };
+                added.push((
+                    later.index,
+                    semilla_core::IntentClaim {
+                        id: format!("s{}.{}", earlier.index, query.id),
+                        kind: query.claim.kind.name().into(),
+                        text: query.claim.text(),
+                        place: format!("{}:{}", query.claim.place.file, query.claim.place.line),
+                        result,
+                        detail: format!("checked again from the tree before step {} to the tree after step {}: {detail}", earlier.index, later.index),
+                        configs: answer.configs,
+                        options: Vec::new(),
+                        reads: answer.reads,
+                        stale: format!("this step changes {hit}"),
+                    },
+                ));
+            }
+        }
+    }
+    for (index, claim) in added {
+        if let Some(step) = steps.iter_mut().find(|step| step.step == index) {
+            step.intent_claims.push(claim);
+        }
+    }
+}
+
+/// The stored reads of the intent claims of a report (design 67, part D): `ID PATH HASH`.
+pub(crate) fn intent_reads(step: &semilla_core::report::StepReport) -> Vec<String> {
+    step.intent_claims.iter().flat_map(|claim| claim.reads.iter().map(move |read| format!("{} {read}", claim.id))).collect()
 }
 
 /// The problems of a rejected step, one text for each: a fact with no reason, a claim that is
@@ -301,6 +375,9 @@ pub(crate) fn step_problems(step: &semilla_core::report::StepReport) -> Vec<Stri
     }
     for fact in step.agent_facts.iter().filter(|fact| !fact.holds) {
         problems.push(format!("the fact {} of the agent is false: {}", fact.id, fact.line()));
+    }
+    for claim in step.intent_claims.iter().filter(|claim| claim.blocks()) {
+        problems.push(format!("the intent claim {}", claim.line()));
     }
     problems.extend(step.tags.iter().filter_map(|tag| tag.error.clone()));
     problems.extend(step.errors.iter().cloned());
@@ -1710,6 +1787,91 @@ impl App {
         semilla_verify::views::fact_full_text(&report, id).with_context(|| format!("step {} has no fact {id}; its facts: {}", report.step, ids.join(", ")))
     }
 
+    /// Reads the intent files of a command (design 67, part D): the path relative to the
+    /// repository folder when the file is in it, and the text.
+    pub fn read_intent_files(&self, paths: &[std::path::PathBuf]) -> Result<Vec<semilla_core::IntentFile>> {
+        let mut files = Vec::new();
+        for path in paths {
+            let text = std::fs::read_to_string(path).with_context(|| format!("cannot read the intent file `{}`", path.display()))?;
+            let full = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            let root = std::fs::canonicalize(&self.repo.root).unwrap_or_else(|_| self.repo.root.clone());
+            let shown = full.strip_prefix(&root).map(|inside| inside.display().to_string()).unwrap_or_else(|_| path.display().to_string());
+            if shown.starts_with("src/") || shown.contains("/src/") {
+                bail!("the intent file `{shown}` is in a `src` folder: an intent file lives outside the production code, for example in `.semilla/intent/` (design 67)");
+            }
+            files.push(semilla_core::IntentFile { path: shown, text });
+        }
+        Ok(files)
+    }
+
+    /// `semilla intent check [FILE]` (design 67, part B): the parse errors, then the reference
+    /// errors and the type errors of each claim against the compiler data of the two trees.
+    /// The result is true if no file has an error.
+    pub fn intent_check(&mut self, paths: &[std::path::PathBuf], step: Option<usize>) -> Result<(String, bool)> {
+        let mut paths = paths.to_vec();
+        if paths.is_empty() {
+            let folder = self.repo.root.join(".semilla/intent");
+            let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(&folder).map(|entries| entries.flatten().map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|ext| ext == "rs")).collect()).unwrap_or_default();
+            found.sort();
+            if found.is_empty() {
+                bail!("no intent file: give a file (`semilla intent check FILE`), or put the files in `.semilla/intent/`");
+            }
+            paths = found;
+        }
+        let files = self.read_intent_files(&paths)?;
+        let mut text = String::new();
+        let parsed = match semilla_verify::intent::parse_files(&files) {
+            Ok(parsed) => parsed,
+            Err(errors) => {
+                for error in &errors {
+                    put_line(&mut text, &format!("✗ {error}"));
+                }
+                put_line(&mut text, &format!("{} parse error(s); Semilla did not check the references", errors.len()));
+                return Ok((text, false));
+            }
+        };
+        let (before, after) = match step {
+            Some(index) => {
+                let set = self.current_changeset()?;
+                let step = set.steps.get(index).with_context(|| format!("the session has no step {index}"))?;
+                (step.tree_before.clone(), step.tree_after.clone())
+            }
+            None => (self.repo.commit_tree("HEAD")?, self.repo.write_tree()?),
+        };
+        let step = Step { index: 0, intent: "intent check".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons: Default::default(), compiled: true, build_check: None, agent: Default::default(), tags: Vec::new() };
+        let set = ChangeSet { base_tree: before.clone(), head_tree: after.clone(), steps: vec![step.clone()], ..Default::default() };
+        let code = self.build_code(&set)?;
+        self.set_compiled(true);
+        let oracle = NormalOracle { repo: self.repo.clone(), code, mode: self.mode, log: self.config_log.clone(), added: Default::default(), after_commit: false };
+        let queries = semilla_verify::intent::queries(&parsed, true);
+        let answers = semilla_verify::BodyOracle::intent(&oracle, &step, &BTreeMap::new(), &queries).context("the compiled build of the two trees gives no records")?;
+        let mut errors = 0;
+        for (query, answer) in queries.iter().zip(&answers) {
+            if answer.errors.is_empty() {
+                let mut paths: Vec<String> = answer.reads.iter().map(|read| format!("`{}`", read.rsplit_once(' ').map(|(path, _)| path).unwrap_or(read))).collect();
+                paths.dedup();
+                let reads = if paths.is_empty() { String::new() } else { format!(" (reads {})", paths.join(", ")) };
+                let outside = match (&answer.result, answer.detail.as_str()) {
+                    (Some(semilla_core::IntentResult::Claimed), detail) if detail != semilla_smt::mir::claim::DRY_CAUSE => format!("; outside the model: {detail}"),
+                    _ => String::new(),
+                };
+                put_line(&mut text, &format!("✓ {} `{}` ({}:{}): the references and the types are correct{reads}{outside}", query.id, query.claim.text(), query.claim.place.file, query.claim.place.line));
+            } else {
+                errors += answer.errors.len();
+                put_line(&mut text, &format!("✗ {} `{}` ({}:{}):", query.id, query.claim.text(), query.claim.place.file, query.claim.place.line));
+                for error in &answer.errors {
+                    put_line(&mut text, &format!("    {error}"));
+                }
+            }
+        }
+        let forms: usize = parsed.iter().map(|file| file.claims().filter(|claim| semilla_verify::intent::same_text(claim).is_some()).count()).sum();
+        if forms > 0 {
+            put_line(&mut text, &format!("{forms} claim(s) of the forms of `--same` (`rename`, `moved`, `rewrite`): `semilla step` checks them against the syntax tree"));
+        }
+        put_line(&mut text, &format!("{} claim(s) checked against the trees {} (before) and {} (after): {errors} error(s). The step gives the results: `semilla step \"<intent>\" --intent FILE --compiled`", queries.len(), &before[..before.len().min(12)], &after[..after.len().min(12)]));
+        Ok((text, errors == 0))
+    }
+
     pub fn index(&mut self) -> Result<String> {
         // The body hashes come from a build: cargo gives the targets.
         self.set_compiled(!self.no_bodies);
@@ -1961,6 +2123,16 @@ impl App {
         let mut memo = StepMemo { results: std::mem::take(&mut self.step_memo), inputs: format!("{:?} {} {skip:?} {code:?} {} {records_key:?}", self.mode, self.no_bodies, set.after_commit.is_some()) };
         let (mut report, mut outcomes) = semilla_verify::verify_changeset_cached(set, &mut load, &bodies, &exprs, Options { require_groups, derive_edits: true }, &mut memo);
         self.step_memo = memo.results;
+        // Design 67, part D: a later step that changes a body that a claim of an earlier step
+        // reads checks that claim again.
+        // The earlier steps come from the session when the set is one step of it.
+        let full = self.current_changeset().ok().filter(|full| set.steps.iter().all(|step| full.steps.get(step.index).is_some_and(|known| known.tree_after == step.tree_after)));
+        later_claims(set, full.as_ref().map(|full| full.steps.as_slice()).unwrap_or(&set.steps), &bodies, &mut report.steps);
+        for outcome in &mut outcomes {
+            if let Some(found) = report.steps.iter().find(|step| step.step == outcome.report.step) {
+                outcome.report.intent_claims = found.intent_claims.clone();
+            }
+        }
         for step in report.steps.iter_mut().chain(outcomes.iter_mut().map(|outcome| &mut outcome.report)).filter(|step| skip.contains(&step.step)) {
             let change = note.as_ref().and_then(|note| note.changes.iter().find(|change| change.steps.contains(&step.step))).map(|change| change.step).unwrap_or(step.step);
             mark_not_checked(step, &format!("build code changed in step {change}"));
