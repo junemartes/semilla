@@ -1,0 +1,50 @@
+note: G2: a call of one macro is replaced by a call of a different macro with a different text: no identity, no equal text, and a similarity under the threshold: an added and a removed expansion
+rule-: R72.1-1
+build_check: on
+must_match: expansion added
+must_match: expansion removed
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn make(n: u32) -> Vec<u32> {
+    let label = format!("n = {}", n);
+    let _ = label;
+    Vec::new()
+}
+=== new src/lib.rs
+pub fn make(n: u32) -> Vec<u32> {
+    let label = String::new();
+    let _ = label;
+    vec![n, n + 1, n + 2]
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 3 places: 3 different edits (f1, f2, f3)
+      in: shop::make
+      lines: src/lib.rs:2, src/lib.rs:4, src/lib.rs:-2, src/lib.rs:-4
+      to state it: --change 'shop::make=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::make=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `format!("n = {}", n)` → `String::new()` at `shop::make/S0/init` [semantics]
+  ◆ f2 derived: deleted statement `Vec::new()` at `shop::make/tail` [semantics]
+  ◆ f3 derived: added macro statement `vec![n, n + 1, n + 2]` at `shop::make/tail` [semantics]
+  cover: each of the 4 changed line(s) is in a fact
+  expansions: 1 added, 1 removed
+    `vec![n, n + 1, n + 2]` at `shop::make/tail` (src/lib.rs:4): expansion added: `macro vec` (crate alloc): 2 line(s) of code; the step adds the call or its input
+    `format!("n = {}", n)` at `shop::make/S0/init` (src/lib.rs:-2): expansion removed: `macro format` (crate alloc): 3 line(s) of code; the step removes the call or its input
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed expression `format!("n = {}", n)` → `String::new()` at `shop::make/S0/init` [semantics]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f2 derived: deleted statement `Vec::new()` at `shop::make/tail` [semantics]
+    lines: src/lib.rs:-4
+◆ f3 derived: added macro statement `vec![n, n + 1, n + 2]` at `shop::make/tail` [semantics]
+    lines: src/lib.rs:4

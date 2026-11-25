@@ -40,6 +40,9 @@ fn words(op: &str) -> String {
         "change-path" => "changed path".into(),
         "change-operator" => "changed operator".into(),
         "add-arm" => "added match arm".into(),
+        "remove-arm" => "removed match arm".into(),
+        "move-arm" => "moved match arm".into(),
+        "replace-arm" => "changed match arm".into(),
         "add-alternative" => "added pattern alternative".into(),
         "change-signature" => "changed macro or signature".into(),
         "replace-expression" => "changed expression".into(),
@@ -63,7 +66,7 @@ pub fn display_text(edit: &Edit) -> String {
         (Some(_), None) => format!("`{old}`"),
         _ => String::new(),
     };
-    let what = if !op.contains(' ') && semilla_core::ops::op(op).is_some() { words(op) } else { format!("changed {}:", edit.node_after.or(edit.node_before).map(|node| if node == "item_stmt" { "item" } else { node }).unwrap_or("code")) };
+    let what = if op == "replace-arm" || (!op.contains(' ') && semilla_core::ops::op(op).is_some()) { words(op) } else { format!("changed {}:", edit.node_after.or(edit.node_before).map(|node| if node == "item_stmt" { "item" } else { node }).unwrap_or("code")) };
     let location = edit.anchor().filter(|a| !a.path.is_empty()).map(|a| format!(" at `{a}`")).unwrap_or_default();
     if let Some(note) = operand_note(edit) {
         return format!("{note}{location}");
@@ -284,7 +287,10 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                     at: Some(after.clone()),
                     file: edit.file.clone(),
                     part: "edit".into(),
-                    description: format!("moved statement `{text}` from `{before}` to `{after}`"),
+                    // R72.1-3: the key of a pair by similarity.
+                    // R72.1-1 (part d): a moved match arm names the arm, with the place of its
+                    // pattern.
+                    description: format!("moved {} `{text}` from `{before}` to `{after}`{}", if edit.node_before == Some("arm") { "match arm" } else { "statement" }, edit.note.as_deref().map(|note| format!(" ({note})")).unwrap_or_default()),
                     // Fix round 2 of 8c (design 41.7, 42): a move changes the order of
                     // execution, so a moved statement is `semantics`, as an added statement.
                     // An extracted or inlined variable keeps `move`.
@@ -561,11 +567,18 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
         }
         let op = crate::hints::suggest(edit);
         let anchor = if edit.kind == EditKind::Inserted { edit.after.clone() } else { edit.before.clone().or(edit.after.clone()) };
+        // R72.1-1 (part d): the op of an arm edit is a claim on the `match`.
+        let claim_at = anchor.clone().map(|mut at| {
+            if edit.node_before == Some("arm") || edit.node_after == Some("arm") {
+                at.path.pop();
+            }
+            at
+        });
         let mut explained = vec![index];
         let mut description = None;
         let mut op_category = None;
         if !op.contains(' ') && semilla_core::ops::op(op).is_some() {
-            let mut claim = Claim { id: "derived".into(), op: op.to_string(), at: anchor.clone(), args: Default::default() };
+            let mut claim = Claim { id: "derived".into(), op: op.to_string(), at: claim_at, args: Default::default() };
             if matches!(op, "add-early-exit" | "add-if") {
                 if let Some(cond) = edit.text_after.as_deref().and_then(condition) {
                     claim.args.insert("cond".into(), serde_json::Value::String(cond));
@@ -666,6 +679,10 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 // is gone (batch 7b, part 5.7).
                 None if node == "item_stmt" && edit.text_before.as_deref().is_none_or(|text| text.trim().is_empty()) => format!("added item `{new}`"),
                 None if node == "item_stmt" && edit.text_after.as_deref().is_none_or(|text| text.trim().is_empty()) => format!("removed item `{old}`"),
+                // R72.1-1 (part d): an edit of a full match arm.
+                None if node == "arm" && edit.kind == EditKind::Inserted => format!("added match arm `{new}`"),
+                None if node == "arm" && edit.kind == EditKind::Deleted => format!("removed match arm `{old}`"),
+                None if node == "arm" => format!("changed match arm `{old}` → `{new}`"),
                 // Each other node with no text on one side: the text does not show an empty side.
                 None if old.is_empty() && !new.is_empty() => format!("added `{node}` `{new}`"),
                 None if new.is_empty() && !old.is_empty() => format!("removed `{node}` `{old}`"),

@@ -1,6 +1,6 @@
 note: batch 10c2, item 1: the step changes one source file; the item-level calls in `impl` blocks of a different, unchanged file are not added or removed; the test build of the library and the integration test `tests/shop.rs` have one crate name and one kind
-rule+: R63.9-1 R63.9-2
-rule-: R63.9-2
+rule+: R72.1-1
+rule-: R72.1-1
 must_not_match: \((src/store|tests/shop)\.rs:-?\d+\): expansion (added|removed)
 must_match: `fee!\(1\)` at `shop::price/tail` \(src/lib\.rs:6\): expansion changed
 must_match: `fee!\(5\)` at `shop::cost/tail` \(src/lib\.rs:-7\): expansion removed

@@ -21,6 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use semilla_core::matcher::{Key, Ladder, Thing};
 use semilla_core::{Anchor, Category, Claim, ClaimStatus, Compare, Fact};
 use semilla_syntax::rs::UseTree;
 use semilla_syntax::{EditKind, ItemKind, Workspace};
@@ -988,14 +989,15 @@ pub(crate) fn twin_base(path: &str) -> Option<&str> {
 }
 
 /// The new keys of the twins of a step (design 38.3). An item `P` of one tree that gets twins
-/// (`P#0`, `P#1`) in the other tree keeps its key for the twin with its text: the key `P#N` of
-/// that twin becomes `P`. The compare ignores the attributes, the docs, and the visibility. A
-/// key changes only for an item with no inner items, and only if exactly one twin has the
-/// text. `None` if no key changes: then the trees stay as they are.
-pub(crate) fn twin_keys(before: &Workspace, after: &Workspace) -> Option<(Workspace, Workspace)> {
+/// (`P#0`, `P#1`) in the other tree keeps its key for the twin that pairs with it: the key `P#N`
+/// of that twin becomes `P`. The one matcher chooses the twin (R72.1-1, part a): the `cfg`
+/// condition, then equal tokens (the attributes, the docs, and the visibility do not count), then
+/// the best similarity over the threshold. A key changes only for an item with no inner items.
+/// `None` if no key changes: then the trees stay as they are.
+pub(crate) fn twin_keys(before: &Workspace, after: &Workspace) -> Option<(Workspace, Workspace, Vec<TwinPair>)> {
     let text = |item: &semilla_syntax::Item| without_free_parts(&without_docs(&item.text));
     // The keys of `twins` that take the plain path: (plain path, twin key).
-    let keys = |single: &Workspace, twins: &Workspace| -> Vec<(String, String)> {
+    let keys = |single: &Workspace, twins: &Workspace| -> Vec<(String, String, Key)> {
         let mut out = Vec::new();
         let mut bases: BTreeMap<&str, Vec<&semilla_syntax::Item>> = BTreeMap::new();
         for item in twins.items.values() {
@@ -1003,7 +1005,7 @@ pub(crate) fn twin_keys(before: &Workspace, after: &Workspace) -> Option<(Worksp
                 bases.entry(base).or_default().push(item);
             }
         }
-        for (base, found) in bases {
+        for (base, mut found) in bases {
             let Some(old) = single.items.get(base) else { continue };
             if twins.items.contains_key(base) || found.len() < 2 || single.items.keys().any(|key| twin_base(key) == Some(base)) {
                 continue;
@@ -1012,9 +1014,16 @@ pub(crate) fn twin_keys(before: &Workspace, after: &Workspace) -> Option<(Worksp
             if inner(single, base) {
                 continue;
             }
-            let same: Vec<&&semilla_syntax::Item> = found.iter().filter(|item| item.kind == old.kind && text(item) == text(old) && !inner(twins, &item.path)).collect();
-            if let [twin] = same[..] {
-                out.push((base.to_string(), twin.path.clone()));
+            found.retain(|item| item.kind == old.kind && !inner(twins, &item.path));
+            found.sort_by_key(|item| twin_number(&item.path));
+            let one = [Thing { group: String::new(), identity: twin_identities(single, &[base.to_string()]).pop(), content: Some(text(old).join(" ")) }];
+            let paths: Vec<String> = found.iter().map(|item| item.path.clone()).collect();
+            let many: Vec<Thing> = found.iter().zip(twin_identities(twins, &paths)).map(|(item, identity)| Thing { group: String::new(), identity: Some(identity), content: Some(text(item).join(" ")) }).collect();
+            let old_tokens = text(old);
+            let similarity = |_: usize, b: usize| semilla_core::matcher::token_similarity(&old_tokens, &text(found[b]));
+            let ladder = Ladder { similarity: &similarity, threshold: TWIN_THRESHOLD, in_order: None };
+            if let [pair] = semilla_core::matcher::pair(&one, &many, &ladder)[..] {
+                out.push((base.to_string(), found[pair.new].path.clone(), pair.key));
             }
         }
         out
@@ -1023,9 +1032,9 @@ pub(crate) fn twin_keys(before: &Workspace, after: &Workspace) -> Option<(Worksp
     if from_before.is_empty() && from_after.is_empty() {
         return None;
     }
-    let apply = |ws: &Workspace, keys: &[(String, String)]| -> Workspace {
+    let apply = |ws: &Workspace, keys: &[(String, String, Key)]| -> Workspace {
         let mut ws = ws.clone();
-        for (base, key) in keys {
+        for (base, key, _) in keys {
             if let Some(mut item) = ws.items.remove(key) {
                 item.path = base.clone();
                 ws.items.insert(base.clone(), item);
@@ -1034,31 +1043,90 @@ pub(crate) fn twin_keys(before: &Workspace, after: &Workspace) -> Option<(Worksp
         ws.body_index = Default::default();
         ws
     };
-    Some((apply(before, &from_after), apply(after, &from_before)))
+    // R72.1-3: the note of each pair names the twin and the key of the ladder.
+    let mut listed: Vec<TwinPair> = from_before.iter().map(|(base, twin, key)| (base.clone(), twin.clone(), base.clone(), Some(*key))).collect();
+    listed.extend(from_after.iter().map(|(base, twin, key)| (twin.clone(), base.clone(), base.clone(), Some(*key))));
+    Some((apply(before, &from_after), apply(after, &from_before), listed))
 }
 
-/// The pairs of the twins of a step (design 59, part C). Twins are the items of one parent
-/// with one path and one kind (the suffix `#N` in source order). The twins of one path pair in
-/// two passes. Pass 1: a twin pairs with a twin of the other tree with equal tokens: first the
-/// longest list of such pairs in their order, then each other twin in source order. Pass 2: in
-/// each gap between two pairs of pass 1 in their order, the twins that remain pair in source
-/// order. A twin with no partner is an added or a removed item.
-///
-/// The compare pairs items by their keys. If a pair has two different numbers, one tree gets
-/// new keys: the tree with fewer twins of the path takes the numbers of the other tree for its
-/// paired twins. Thus each twin with no partner keeps the number of its own tree, and the keys
-/// of each tree stay different. The items in a twin (the items of a twin module) get the new
-/// key of the twin. `None` if no key changes. The list has each pair with two different
-/// numbers: (the old path, the new path, the key of the pair in the compare).
-/// R68.2-1: the `cfg` attributes of an item itself (not of the items in it), in their compare
-/// text, sorted. A `cfg_attr` does not decide if the item exists, so it is not in the key.
+/// The smallest similarity of a pair of twins by similarity (Decided by Claude, design 72.4).
+pub(crate) const TWIN_THRESHOLD: f64 = 0.5;
+
+/// The number of a twin key (`a::f#1` gives 1), or 0.
+fn twin_number(path: &str) -> usize {
+    twin_base(path).and_then(|base| path[base.len() + 1..].parse().ok()).unwrap_or(0)
+}
+
+/// The `cfg` attributes of an item itself (not of the items in it), in their compare text,
+/// sorted. A `cfg_attr` does not decide if the item exists, so it is not in the key. A part of
+/// the identity of a twin (R72.1-1, part a).
 fn cfg_key(ws: &Workspace, path: &str) -> Vec<String> {
     let mut key: Vec<String> = ws.items.get(path).map(|item| item.attrs.iter().filter(|text| crate::facts::attribute_name(text).as_deref() == Some("cfg")).map(|text| text.split_whitespace().collect::<String>()).collect()).unwrap_or_default();
     key.sort();
     key
 }
 
-pub(crate) fn twin_pairs(before: &Workspace, after: &Workspace) -> Option<(Workspace, Workspace, Vec<(String, String, String)>)> {
+/// The `impl` block of the syntax tree that holds a member: the smallest `impl` item of the file
+/// whose lines hold the lines of the member.
+fn impl_block_of<'a>(ws: &'a Workspace, item: &semilla_syntax::Item) -> Option<&'a semilla_syntax::Item> {
+    ws.items
+        .values()
+        .filter(|block| block.kind == ItemKind::Impl && block.file == item.file && block.path != item.path)
+        .filter(|block| (block.line_start, block.col_start) <= (item.line_start, item.col_start) && (item.line_end, item.col_end) <= (block.line_end, block.col_end))
+        .min_by_key(|block| block.line_end - block.line_start)
+}
+
+/// R72.1-1 (part a): the identity of each twin of a list. The `cfg` condition of the twin; for an
+/// `impl` block also its header: the trait reference or the self type of the compiler, else the
+/// header text (the fall-back of R70.1-1, for each twin of the list if one twin has no record);
+/// for a member of an `impl` block the identity of its block.
+fn twin_identities(ws: &Workspace, paths: &[String]) -> Vec<String> {
+    let blocks: Vec<Option<String>> = paths
+        .iter()
+        .map(|path| {
+            let item = ws.items.get(path)?;
+            if item.kind == ItemKind::Impl { Some(path.clone()) } else { impl_block_of(ws, item).map(|block| block.path.clone()) }
+        })
+        .collect();
+    let records: Vec<Option<String>> = blocks.iter().map(|block| block.as_ref().and_then(|block| crate::records::impl_trait_ref(ws, block))).collect();
+    let all_records = blocks.iter().zip(&records).all(|(block, record)| block.is_none() || record.is_some());
+    paths
+        .iter()
+        .enumerate()
+        .map(|(at, path)| {
+            let header = blocks[at].as_ref().map(|block| match (&records[at], all_records) {
+                (Some(record), true) => record.clone(),
+                _ => ws.items.get(block).map(|item| without_free_parts(&item.signature).join(" ")).unwrap_or_default(),
+            });
+            let own = ws.items.get(path).is_some_and(|item| item.kind == ItemKind::Impl);
+            match header {
+                Some(header) if own => format!("{} | {header}", cfg_key(ws, path).join(" ")),
+                Some(header) => format!("{} | in {header}", cfg_key(ws, path).join(" ")),
+                None => cfg_key(ws, path).join(" "),
+            }
+        })
+        .collect()
+}
+
+/// One pair of twins of the matcher: the old path, the new path, the key of the pair in the
+/// compare, and the key of the ladder that made the pair. A twin with no pair and a free number
+/// for the compare has an empty path on the other side and no key.
+pub(crate) type TwinPair = (String, String, String, Option<Key>);
+
+/// The pairs of the twins of a step (design 59, part C, and R72.1-1, part a). Twins are the
+/// items of one parent with one path and one kind (the suffix `#N` in source order). The twins of
+/// one path pair by the one matcher: the identity (the `cfg` condition; the header of an `impl`
+/// block; the block of a member), then equal tokens (the tokens of the item and of each item in
+/// it), then the best similarity of the tokens, then the source order for a tie. Twins of one
+/// identity always pair. A twin with no partner is an added or a removed item.
+///
+/// The compare pairs items by their keys. If a pair has two different numbers, one tree gets
+/// new keys: the tree with fewer twins of the path takes the numbers of the other tree for its
+/// paired twins. Thus each twin with no partner keeps the number of its own tree, and the keys
+/// of each tree stay different. The items in a twin (the items of a twin module) get the new
+/// key of the twin. The list has each pair with two different numbers or with a weak key (the
+/// note of R72.1-3).
+pub(crate) fn twin_pairs(before: &Workspace, after: &Workspace) -> (Option<(Workspace, Workspace)>, Vec<TwinPair>) {
     // The groups: the base path, the kind, and the flag of a macro definition.
     type Group = (String, &'static str, bool);
     let groups = |ws: &Workspace| -> BTreeMap<Group, Vec<(usize, String)>> {
@@ -1086,86 +1154,66 @@ pub(crate) fn twin_pairs(before: &Workspace, after: &Workspace) -> Option<(Works
     let (old_groups, new_groups) = (groups(before), groups(after));
     // For each tree: the twin keys that change (the old key to the new key).
     let mut keys: [BTreeMap<String, String>; 2] = Default::default();
-    let mut moved: Vec<(String, String, String)> = Vec::new();
+    let mut listed: Vec<TwinPair> = Vec::new();
     for (group, old_list) in &old_groups {
         let Some(new_list) = new_groups.get(group) else { continue };
-        let mut partner: Vec<Option<usize>> = vec![None; old_list.len()];
-        let mut taken = vec![false; new_list.len()];
-        let old_texts: Vec<Vec<(String, String)>> = old_list.iter().map(|(_, path)| text(before, path)).collect();
-        let new_texts: Vec<Vec<(String, String)>> = new_list.iter().map(|(_, path)| text(after, path)).collect();
-        // Pass 1: equal tokens. First the longest list of equal pairs in their order, then each
-        // other twin with an equal twin that remains, in source order.
-        let anchors = crate::positions::matches(old_list.len(), new_list.len(), &|i, j| old_texts[i] == new_texts[j]);
-        for (i, j) in &anchors {
-            partner[*i] = Some(*j);
-            taken[*j] = true;
-        }
-        for i in 0..old_list.len() {
-            if partner[i].is_some() {
-                continue;
-            }
-            if let Some(j) = (0..new_list.len()).find(|&j| !taken[j] && new_texts[j] == old_texts[i]) {
-                partner[i] = Some(j);
-                taken[j] = true;
-            }
-        }
-        // R68.2-1, pass 1b: the `cfg` condition. A twin that remains pairs with the one twin
-        // that remains in the other tree with the same `cfg` attributes, if no other twin of the
-        // two trees has these attributes. Each `cfg` variant of an item exists in its own build,
-        // so its condition is its identity: the source order is not.
-        let old_cfgs: Vec<Vec<String>> = old_list.iter().map(|(_, path)| cfg_key(before, path)).collect();
-        let new_cfgs: Vec<Vec<String>> = new_list.iter().map(|(_, path)| cfg_key(after, path)).collect();
-        for i in 0..old_list.len() {
-            if partner[i].is_some() || old_cfgs[i].is_empty() {
-                continue;
-            }
-            let olds: Vec<usize> = (0..old_list.len()).filter(|&k| partner[k].is_none() && old_cfgs[k] == old_cfgs[i]).collect();
-            let news: Vec<usize> = (0..new_list.len()).filter(|&j| !taken[j] && new_cfgs[j] == old_cfgs[i]).collect();
-            if let ([_], [j]) = (olds.as_slice(), news.as_slice()) {
-                partner[i] = Some(*j);
-                taken[*j] = true;
-            }
-        }
-        // Pass 2: the source order, in each gap between two pairs of pass 1 in their order.
-        let mut start = (0, 0);
-        for (end_i, end_j) in anchors.iter().copied().chain(std::iter::once((old_list.len(), new_list.len()))) {
-            let mut free = (start.1..end_j).filter(|&j| !taken[j]).collect::<Vec<usize>>().into_iter();
-            for i in start.0..end_i {
-                if partner[i].is_some() {
-                    continue;
-                }
-                let Some(j) = free.next() else { break };
-                partner[i] = Some(j);
-                taken[j] = true;
-            }
-            start = (end_i + 1, end_j + 1);
-        }
-        let pairs: Vec<(usize, usize)> = partner.iter().enumerate().filter_map(|(i, j)| j.map(|j| (i, j))).collect();
-        if pairs.iter().all(|(i, j)| old_list[*i].0 == new_list[*j].0) {
-            continue;
-        }
+        let paths = |list: &Vec<(usize, String)>| list.iter().map(|(_, path)| path.clone()).collect::<Vec<_>>();
+        let (old_ids, new_ids) = (twin_identities(before, &paths(old_list)), twin_identities(after, &paths(new_list)));
+        let content = |ws: &Workspace, path: &str| text(ws, path).into_iter().map(|(key, text)| format!("{key}\u{0}{text}")).collect::<Vec<_>>().join("\u{1}");
+        let old_things: Vec<Thing> = old_list.iter().zip(&old_ids).map(|((_, path), id)| Thing { group: String::new(), identity: Some(id.clone()), content: Some(content(before, path)) }).collect();
+        let new_things: Vec<Thing> = new_list.iter().zip(&new_ids).map(|((_, path), id)| Thing { group: String::new(), identity: Some(id.clone()), content: Some(content(after, path)) }).collect();
+        let tokens = |ws: &Workspace, path: &str| ws.items.get(path).map(|item| item.text.split(' ').map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
+        let (old_tokens, new_tokens): (Vec<Vec<String>>, Vec<Vec<String>>) = (old_list.iter().map(|(_, path)| tokens(before, path)).collect(), new_list.iter().map(|(_, path)| tokens(after, path)).collect());
+        let similarity = |a: usize, b: usize| semilla_core::matcher::token_similarity(&old_tokens[a], &new_tokens[b]);
+        let ladder = Ladder { similarity: &similarity, threshold: TWIN_THRESHOLD, in_order: None };
+        let found = semilla_core::matcher::pair(&old_things, &new_things, &ladder);
+        let pairs: Vec<(usize, usize, Key)> = found.iter().map(|pair| (pair.old, pair.new, pair.key)).collect();
         // The tree with fewer twins takes the numbers of the other tree.
         let (side, from, to): (usize, &Vec<(usize, String)>, &Vec<(usize, String)>) = if old_list.len() <= new_list.len() { (0, old_list, new_list) } else { (1, new_list, old_list) };
+        let own_pairs: Vec<(usize, usize, Key)> = pairs.iter().map(|(i, j, key)| if side == 0 { (*i, *j, *key) } else { (*j, *i, *key) }).collect();
         let mut map = BTreeMap::new();
-        for (i, j) in &pairs {
-            let (own, other) = if side == 0 { (*i, *j) } else { (*j, *i) };
-            if from[own].1 != to[other].1 {
-                map.insert(from[own].1.clone(), to[other].1.clone());
+        for (own, other, _) in &own_pairs {
+            if from[*own].1 != to[*other].1 {
+                map.insert(from[*own].1.clone(), to[*other].1.clone());
             }
+        }
+        // R72.1-1: a twin with no partner is added or removed. A twin of `from` with no partner
+        // whose key a twin of the other tree has would pair by its key in the compare (the source
+        // order): it gets a free number for the compare, and a note.
+        let paired_from: BTreeSet<usize> = own_pairs.iter().map(|(own, _, _)| *own).collect();
+        let base = &group.0;
+        let mut next = from.iter().chain(to.iter()).map(|(number, _)| number + 1).max().unwrap_or(0);
+        let mut lone: Vec<(String, String)> = Vec::new();
+        for (at, (_, path)) in from.iter().enumerate() {
+            if paired_from.contains(&at) || !to.iter().any(|(_, other)| other == path) {
+                continue;
+            }
+            let ws = if side == 0 { before } else { after };
+            while ws.items.contains_key(&format!("{base}#{next}")) || [before, after].iter().any(|tree| tree.items.contains_key(&format!("{base}#{next}"))) {
+                next += 1;
+            }
+            let fresh = format!("{base}#{next}");
+            next += 1;
+            map.insert(path.clone(), fresh.clone());
+            lone.push((path.clone(), fresh));
+        }
+        if map.is_empty() {
+            continue;
         }
         // The keys of a tree stay different: else the group keeps the source order.
         let ws = if side == 0 { before } else { after };
         let result: BTreeSet<&String> = from.iter().map(|(_, path)| map.get(path).unwrap_or(path)).collect();
-        if result.len() != from.len() || map.values().any(|new| !from.iter().any(|(_, other)| other == new) && ws.items.contains_key(new)) {
+        if result.len() != from.len() || map.values().any(|new| !from.iter().any(|(_, other)| other == new) && !lone.iter().any(|(_, fresh)| fresh == new) && ws.items.contains_key(new)) {
             continue;
         }
-        moved.extend(pairs.iter().filter(|(i, j)| old_list[*i].0 != new_list[*j].0).map(|(i, j)| (old_list[*i].1.clone(), new_list[*j].1.clone(), if side == 0 { new_list[*j].1.clone() } else { old_list[*i].1.clone() })));
+        listed.extend(pairs.iter().filter(|(i, j, _)| old_list[*i].0 != new_list[*j].0).map(|(i, j, key)| (old_list[*i].1.clone(), new_list[*j].1.clone(), if side == 0 { new_list[*j].1.clone() } else { old_list[*i].1.clone() }, Some(*key))));
+        listed.extend(lone.into_iter().map(|(path, fresh)| if side == 0 { (path, String::new(), fresh, None) } else { (String::new(), path, fresh, None) }));
         keys[side].extend(map);
     }
     if keys.iter().all(BTreeMap::is_empty) {
-        return None;
+        return (None, listed);
     }
-    Some((rekeyed(before, &keys[0]), rekeyed(after, &keys[1]), moved))
+    (Some((rekeyed(before, &keys[0]), rekeyed(after, &keys[1]))), listed)
 }
 
 /// A copy of a workspace with new keys: each key of the map, and each key in it (an item of a
@@ -1211,24 +1259,24 @@ fn rekeyed(ws: &Workspace, map: &BTreeMap<String, String>) -> Workspace {
 pub(crate) fn trait_path_pairs(before: &Workspace, after: &Workspace) -> Option<(Workspace, Workspace)> {
     before.names.get()?;
     after.names.get()?;
-    let lone = |ws: &Workspace, other: &Workspace| -> BTreeMap<String, Vec<String>> {
-        let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for (path, item) in &ws.items {
-            if item.kind == ItemKind::Impl && !other.items.contains_key(path)
-                && let Some(key) = crate::records::impl_trait_ref(ws, path)
-            {
-                out.entry(key).or_default().push(path.clone());
-            }
-        }
-        out
+    // The impls of a tree that the other tree does not have, with the identity of the compiler.
+    let lone = |ws: &Workspace, other: &Workspace| -> Vec<(String, Thing)> {
+        ws.items
+            .iter()
+            .filter(|(path, item)| item.kind == ItemKind::Impl && !other.items.contains_key(*path))
+            .filter_map(|(path, _)| Some((path.clone(), Thing { group: String::new(), identity: Some(crate::records::impl_trait_ref(ws, path)?), content: None })))
+            .collect()
     };
     let (old, new) = (lone(before, after), lone(after, before));
+    // R72.1-1 (part b): only the identity pairs two impls: an impl with a different trait or
+    // self type is a different impl (no similarity).
+    let none = |_: usize, _: usize| 0.0;
+    let ladder = Ladder { similarity: &none, threshold: 1.0, in_order: None };
+    let things = |list: &[(String, Thing)]| list.iter().map(|(_, thing)| thing.clone()).collect::<Vec<_>>();
     let mut map = BTreeMap::new();
-    for (key, paths) in &old {
-        if let (Some([from]), Some([to])) = (Some(paths.as_slice()), new.get(key).map(Vec::as_slice))
-            && from != to
-            && !before.items.contains_key(to)
-        {
+    for pair in semilla_core::matcher::pair(&things(&old), &things(&new), &ladder).into_iter().filter(|pair| pair.key == Key::Identity) {
+        let (from, to) = (&old[pair.old].0, &new[pair.new].0);
+        if from != to && !before.items.contains_key(to) {
             map.insert(from.clone(), to.clone());
             // The items of an impl have the key `m::<X as T>::name`.
             if let (Some(from_items), Some(to_items)) = (impl_items_key(from), impl_items_key(to)) {

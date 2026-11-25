@@ -1,5 +1,5 @@
 note: two closures with no change keep their pair and their graph: no line for them
-rule-: R60.3-9
+rule-: R72.1-1
 option: --compiled
 === both Cargo.toml
 [package]

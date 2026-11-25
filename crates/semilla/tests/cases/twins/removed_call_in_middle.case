@@ -1,6 +1,6 @@
 note: a removed call in the middle gives one fact: the removed call
-rule+: R59.3-1
-rule+: R59.3-2
+rule+: R72.1-1
+rule+: R72.1-1
 rule+: R59.3-4
 === both Cargo.toml
 [package]

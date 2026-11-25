@@ -86,7 +86,8 @@ pub struct Def {
     pub in_library: bool,
     pub unsafe_def: bool,
     pub under_cfg: bool,
-    /// An impl of a trait: the trait reference with the self type.
+    /// An impl of a trait: the trait reference with the self type. An inherent impl: its self
+    /// type in the form `<shop::W<u8>>` (R72.1-1 (b)).
     pub trait_ref: Option<String>,
     /// An impl of a trait: the path of the trait. An item of a trait impl: the path of the item
     /// of the trait.

@@ -1,5 +1,5 @@
 note: two calls with equal tokens, and one goes away: one removed call
-rule+: R59.3-1
+rule+: R72.1-1
 === both Cargo.toml
 [package]
 name = "depot"

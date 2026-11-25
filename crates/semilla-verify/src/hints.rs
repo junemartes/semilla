@@ -91,6 +91,15 @@ pub fn suggest(edit: &Edit) -> &'static str {
     if crate::facts::is_fact_edit(edit) {
         return "no claim: Semilla derives this fact";
     }
+    // R72.1-1 (part d): an edit of a full match arm.
+    if edit.node_after == Some("arm") || edit.node_before == Some("arm") {
+        return match edit.kind {
+            EditKind::Inserted => "add-arm",
+            EditKind::Deleted => "remove-arm",
+            EditKind::Moved => "move-arm",
+            _ => "replace-arm",
+        };
+    }
     match edit.kind {
         EditKind::ItemAdded => "add-item",
         EditKind::ItemRemoved => "remove-item",
@@ -170,6 +179,13 @@ pub fn suggest_claims_with_renames(edits: &[Edit], owners: &[Option<usize>], ren
             _ => {}
         }
         let at = if checks_file_level(op) { None } else { at };
+        // R72.1-1 (part d): the claim of an arm edit names the `match`, not the arm.
+        let at = at.map(|mut at| {
+            if edit.node_before == Some("arm") || edit.node_after == Some("arm") {
+                at.path.pop();
+            }
+            at
+        });
         claims.push(Claim { id: format!("s{}", claims.len() + 1), op: op.to_string(), at, args });
     }
     claims

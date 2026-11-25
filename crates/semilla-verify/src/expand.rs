@@ -22,6 +22,8 @@ use semilla_core::{Category, Step};
 use semilla_syntax::Workspace;
 
 use crate::inputs::{self, State};
+use semilla_core::matcher::{Key, Ladder, Thing};
+
 use crate::{ExprOracle, NoOracle, StepInput, StepOutcome};
 
 /// One macro call and its expanded code, in the form of the driver (R63.1-1).
@@ -125,37 +127,81 @@ impl ExpansionUnit {
     }
 }
 
-/// The pairs of the units of the two trees (R63.9-1): each unit of the new tree gets at most one
-/// unit of the old tree, and each unit of the old tree is in at most one pair. A unit pairs with
-/// a unit of the same target. With two such units (a crate that the build compiles two times,
-/// for two sets of features), the unit with the same features, then the unit with the most
-/// calls at the same place with the same text, is the pair. A unit with no such unit pairs with
-/// the one unit of the same crate name and kind whose root file is not in the new tree (a moved
-/// root file).
+/// The pairs of the units of the two trees (R63.9-1 before batch 11d, now R72.1-1, part e): each
+/// unit of the new tree gets at most one unit of the old tree, and each unit of the old tree is
+/// in at most one pair. The one matcher pairs the units of one configuration, package, and kind
+/// of target: the identity is the crate name of the target; the similarity gives 0.5 for the same
+/// root file, 0.2 for the same features, and 0.3 times the share of the calls with the same place
+/// and text. So two units of one target (a test and a bench of one name, a crate that the build
+/// compiles two times) pair by their root file and their calls, a moved root file keeps its pair,
+/// and a target with a new name and the same root file and calls pairs by similarity.
 fn unit_pairs(old_units: &[ExpansionUnit], new_units: &[ExpansionUnit]) -> Vec<(Option<usize>, Option<usize>)> {
-    let mut used = vec![false; old_units.len()];
-    let mut pairs = Vec::new();
+    let kind = |unit: &ExpansionUnit| unit.target.split('.').nth(1).unwrap_or("").to_string();
+    let thing = |unit: &ExpansionUnit| Thing { group: format!("{}\u{0}{}\u{0}{}", unit.config, unit.package, kind(unit)), identity: Some(unit.crate_name().to_string()), content: None };
+    let (old_things, new_things): (Vec<Thing>, Vec<Thing>) = (old_units.iter().map(thing).collect(), new_units.iter().map(thing).collect());
     let place = |unit: &ExpansionUnit| -> BTreeSet<(String, usize, usize, String, String)> { unit.list.iter().filter(|e| e.outer.is_none()).map(|e| (e.file.clone(), e.line, e.col, e.name.clone(), e.text.clone())).collect() };
-    for (index, unit) in new_units.iter().enumerate() {
-        let candidates: Vec<usize> = (0..old_units.len()).filter(|at| !used[*at] && old_units[*at].same_target(unit)).collect();
-        let found = match candidates.as_slice() {
-            [] => {
-                let moved: Vec<usize> = (0..old_units.len()).filter(|at| !used[*at] && old_units[*at].same_kind(unit) && !new_units.iter().any(|new| new.same_target(&old_units[*at]))).collect();
-                (moved.len() == 1).then(|| moved[0])
-            }
-            [one] => Some(*one),
-            more => {
-                let mine = place(unit);
-                more.iter().copied().max_by_key(|at| (old_units[*at].cfg == unit.cfg, place(&old_units[*at]).intersection(&mine).count(), std::cmp::Reverse(*at)))
-            }
-        };
-        if let Some(at) = found {
-            used[at] = true;
-        }
-        pairs.push((found, Some(index)));
+    let (old_places, new_places): (Vec<_>, Vec<_>) = (old_units.iter().map(place).collect(), new_units.iter().map(place).collect());
+    let similarity = |a: usize, b: usize| {
+        let (x, y) = (&old_places[a], &new_places[b]);
+        let union = x.union(y).count();
+        let calls = if union == 0 { 1.0 } else { x.intersection(y).count() as f64 / union as f64 };
+        0.5 * f64::from(u8::from(old_units[a].root == new_units[b].root)) + 0.2 * f64::from(u8::from(old_units[a].cfg == new_units[b].cfg)) + 0.3 * calls
+    };
+    let ladder = Ladder { similarity: &similarity, threshold: UNIT_THRESHOLD, in_order: None };
+    let found = semilla_core::matcher::pair(&old_things, &new_things, &ladder);
+    let mut partner: Vec<Option<usize>> = vec![None; new_units.len()];
+    let mut used = vec![false; old_units.len()];
+    for pair in found {
+        partner[pair.new] = Some(pair.old);
+        used[pair.old] = true;
     }
+    let mut pairs: Vec<(Option<usize>, Option<usize>)> = partner.into_iter().enumerate().map(|(index, found)| (found, Some(index))).collect();
     pairs.extend((0..old_units.len()).filter(|at| !used[*at]).map(|at| (Some(at), None)));
     pairs
+}
+
+/// The smallest similarity of a pair of two units with two crate names (Decided by Claude, design
+/// 72.4): the same root file, or the same features and most calls.
+const UNIT_THRESHOLD: f64 = 0.5;
+
+/// The smallest similarity of a pair of two calls by similarity (Decided by Claude, design 72.4).
+const CALL_THRESHOLD: f64 = 0.6;
+
+/// R72.1-1 (part e): the identity of the macro of a call, by the compiler: the definition of a
+/// macro of another crate or of a proc macro (its crate and the hash of its definition in the
+/// record, the same for `format!` and `alloc::format!`); for a macro of the workspace, the file of
+/// its definition and its last name (the line moves with an edit above it).
+fn macro_identity(expansion: &Expansion) -> String {
+    let own = format!("{}: ", expansion.name);
+    if let Some(found) = expansion.ids.iter().find_map(|id| id.strip_prefix(own.as_str())) {
+        return found.to_string();
+    }
+    let last = expansion.name.rsplit("::").next().unwrap_or(&expansion.name);
+    let file = expansion.def.rsplit_once(':').filter(|(_, line)| !line.is_empty() && line.chars().all(|c| c.is_ascii_digit())).map_or(expansion.def.as_str(), |(file, _)| file);
+    format!("{file} {last}")
+}
+
+/// The tokens of the text of a call for its similarity: each name or number, and each other
+/// character that is not a space.
+fn call_tokens(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut word = String::new();
+    for c in text.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            word.push(c);
+            continue;
+        }
+        if !word.is_empty() {
+            out.push(std::mem::take(&mut word));
+        }
+        if !c.is_whitespace() {
+            out.push(c.to_string());
+        }
+    }
+    if !word.is_empty() {
+        out.push(word);
+    }
+    out
 }
 
 /// The most lines of the diff of an expansion in a stored step and in the views (R63.5-3).
@@ -169,6 +215,8 @@ struct Site<'a> {
     at: [Option<semilla_core::Anchor>; 2],
     crate_name: String,
     configs: Vec<String>,
+    /// The key of the ladder that made the pair (R72.1-3): a weak key shows in the line.
+    key: Option<Key>,
 }
 
 /// The place of a call site in its tree: the anchor of the smallest node at the start.
@@ -177,26 +225,6 @@ fn anchor(ws: &Workspace, expansion: &Expansion) -> Option<semilla_core::Anchor>
         return None;
     }
     semilla_syntax::anchor_at(ws, &expansion.file, expansion.line, Some(expansion.col)).or_else(|| semilla_syntax::anchor_at(ws, &expansion.file, expansion.line, None))
-}
-
-/// The key of a call site for the pair of the two trees (R63.2-2): the item that holds the call
-/// (with the rename map of the step), the macro, the kind, and the number of the call among
-/// the calls of the same macro in that item, in source order.
-fn keys<'a>(list: &'a [Expansion], ws: &Workspace, map: &dyn Fn(&str) -> String) -> Vec<((String, String, String, usize), &'a Expansion, Option<semilla_core::Anchor>)> {
-    let mut found: Vec<(&Expansion, Option<semilla_core::Anchor>)> = list.iter().filter(|expansion| expansion.outer.is_none()).map(|expansion| (expansion, anchor(ws, expansion))).collect();
-    found.sort_by(|a, b| (a.0.file.as_str(), a.0.line, a.0.col, a.0.r).cmp(&(b.0.file.as_str(), b.0.line, b.0.col, b.0.r)));
-    let mut counts: BTreeMap<(String, String, String), usize> = BTreeMap::new();
-    found
-        .into_iter()
-        .map(|(expansion, at)| {
-            let item = at.as_ref().map(|at| map(&at.item)).unwrap_or_else(|| format!("{}:{}", expansion.file, expansion.module));
-            let base = (item, expansion.name.clone(), expansion.kind.clone());
-            let count = counts.entry(base.clone()).or_default();
-            let key = (base.0, base.1, base.2, *count);
-            *count += 1;
-            (key, expansion, at)
-        })
-        .collect()
 }
 
 /// A folder that the pass removes at its end.
@@ -490,15 +518,53 @@ pub fn cut_diff(diff: &[String], limit: usize, command: &str) -> Vec<String> {
     out
 }
 
-/// The pairs of the call sites of the two trees (R63.2-2), joined over the units: one site for
-/// each pair of texts, with the configurations. The second list has the pairs with equal
-/// texts (with `keep_equal`, also joined; else one entry for each pair).
+/// One call of a unit for the pair of the two trees: the expansion, the anchor of the call, its
+/// owner (the item that holds the call, the old path through the rename map of the step), and
+/// true for a call in an expansion.
+struct Call<'a> {
+    expansion: &'a Expansion,
+    at: Option<semilla_core::Anchor>,
+    owner: String,
+    nested: bool,
+}
+
+/// The calls of a unit for the pair (R72.1-1, part e): each outer call, and each call in an
+/// expansion whose tokens have a place in a file (an attribute macro can give an item with a
+/// derive to the compiler: the derive is then a call in the expansion). In source order.
+fn calls<'a>(list: &'a [Expansion], ws: &Workspace, map: &dyn Fn(&str) -> String) -> Vec<Call<'a>> {
+    let mut found: Vec<Call<'a>> = list
+        .iter()
+        .filter(|expansion| expansion.outer.is_none() || !expansion.file.is_empty())
+        .map(|expansion| {
+            let at = anchor(ws, expansion);
+            let owner = at.as_ref().map(|at| map(&at.item)).unwrap_or_else(|| format!("{}:{}", expansion.file, expansion.module));
+            Call { expansion, at, owner, nested: expansion.outer.is_some() }
+        })
+        .collect();
+    found.sort_by(|a, b| (a.expansion.file.as_str(), a.expansion.line, a.expansion.col, a.expansion.r, a.nested).cmp(&(b.expansion.file.as_str(), b.expansion.line, b.expansion.col, b.expansion.r, b.nested)));
+    found
+}
+
+/// The pairs of the call sites of the two trees (R72.1-1, part e; before batch 11d: R63.3-1 and
+/// R63.9-2), joined over the units: one site for each pair of texts, with the configurations.
+/// The second list has the pairs with equal texts (with `keep_equal`, also joined; else one entry
+/// for each pair).
+///
+/// The one matcher pairs the calls of each pair of units. The identity of a call: in a file that
+/// the step does not change, its place (the file, the line, the column), its macro, and its kind:
+/// only the call and its place make this key, so no edit in a different file can change it; in
+/// each other file, the item that holds it, the definition of its macro (not the text of its
+/// path: `format!` and `alloc::format!` are one macro), and its kind. Then equal call texts in one
+/// item, then the best similarity of the call texts in one item (the threshold
+/// [`CALL_THRESHOLD`]), then the source order. A call in an expansion takes part, so that the call
+/// pairs with the call of the other tree when it moves out of an expansion or into one; a pair of
+/// two such calls and such a call with no pair give no line: the text of the outer call has them.
 fn pair_sites<'a>(units: [&'a [ExpansionUnit]; 2], trees: [&Workspace; 2], map: &dyn Fn(&str) -> String, keep_equal: bool) -> (Vec<Site<'a>>, Vec<Site<'a>>) {
     let [old_units, new_units] = units;
     let same = |path: &str| path.to_string();
     let mut sites: Vec<Site> = Vec::new();
     let mut equal: Vec<Site> = Vec::new();
-    let push = |list: &mut Vec<Site<'a>>, old: Option<&'a Expansion>, new: Option<&'a Expansion>, at: [Option<semilla_core::Anchor>; 2], unit: &ExpansionUnit, join: bool| {
+    let push = |list: &mut Vec<Site<'a>>, old: Option<&'a Expansion>, new: Option<&'a Expansion>, at: [Option<semilla_core::Anchor>; 2], unit: &ExpansionUnit, join: bool, key: Option<Key>| {
         let found = if join { list.iter_mut().find(|site| site.old.map(|e| &e.text) == old.map(|e| &e.text) && site.new.map(|e| &e.text) == new.map(|e| &e.text) && site.at == at) } else { None };
         match found {
             Some(site) => {
@@ -506,55 +572,55 @@ fn pair_sites<'a>(units: [&'a [ExpansionUnit]; 2], trees: [&Workspace; 2], map: 
                     site.configs.push(unit.config.clone());
                 }
             }
-            None => list.push(Site { old, new, at, crate_name: unit.crate_name().to_string(), configs: vec![unit.config.clone()] }),
+            None => list.push(Site { old, new, at, crate_name: unit.crate_name().to_string(), configs: vec![unit.config.clone()], key }),
         }
     };
-    // The files with the same text in the two trees (R63.9-2).
+    // The files with the same text in the two trees.
     let unchanged: BTreeSet<&str> = trees[0].rust_files.iter().filter(|(path, text)| trees[1].rust_files.get(*path) == Some(*text)).map(|(path, _)| path.as_str()).collect();
     for (a, b) in unit_pairs(old_units, new_units) {
         let unit = b.map(|b| &new_units[b]).or(a.map(|a| &old_units[a])).expect("a pair has a unit");
-        let old_keys = a.map(|a| keys(&old_units[a].list, trees[0], map)).unwrap_or_default();
-        let new_keys = b.map(|b| keys(&new_units[b].list, trees[1], &same)).unwrap_or_default();
-        let mut found: Vec<Option<usize>> = vec![None; new_keys.len()];
-        let mut used = vec![false; old_keys.len()];
-        // R63.9-2: in a file that the step does not change, a call pairs with the call at the
-        // same place (the file, the line, and the column) of the same macro and kind. Only the
-        // call and its place make this key, so no edit in a different file can change it.
-        for (index, (_, new, _)) in new_keys.iter().enumerate() {
-            if new.file.is_empty() || !unchanged.contains(new.file.as_str()) {
+        let old_calls = a.map(|a| calls(&old_units[a].list, trees[0], map)).unwrap_or_default();
+        let new_calls = b.map(|b| calls(&new_units[b].list, trees[1], &same)).unwrap_or_default();
+        let thing = |call: &Call| {
+            let e = call.expansion;
+            let identity = if !e.file.is_empty() && unchanged.contains(e.file.as_str()) { format!("place\u{0}{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}", e.file, e.line, e.col, e.name, e.kind) } else { format!("item\u{0}{}\u{0}{}\u{0}{}", call.owner, macro_identity(e), e.kind) };
+            Thing { group: String::new(), identity: Some(identity), content: Some(format!("{}\u{0}{}\u{0}{}", call.owner, e.kind, e.call)) }
+        };
+        let (old_things, new_things): (Vec<Thing>, Vec<Thing>) = (old_calls.iter().map(thing).collect(), new_calls.iter().map(thing).collect());
+        let (old_tokens, new_tokens): (Vec<Vec<String>>, Vec<Vec<String>>) = (old_calls.iter().map(|call| call_tokens(&call.expansion.call)).collect(), new_calls.iter().map(|call| call_tokens(&call.expansion.call)).collect());
+        let similarity = |x: usize, y: usize| {
+            let (o, n) = (&old_calls[x], &new_calls[y]);
+            if o.owner != n.owner || o.expansion.kind != n.expansion.kind || o.nested || n.nested {
+                return 0.0;
+            }
+            semilla_core::matcher::token_similarity(&old_tokens[x], &new_tokens[y])
+        };
+        let ladder = Ladder { similarity: &similarity, threshold: CALL_THRESHOLD, in_order: None };
+        let found = semilla_core::matcher::pair(&old_things, &new_things, &ladder);
+        let mut partner: Vec<Option<(usize, Key)>> = vec![None; new_calls.len()];
+        let mut used = vec![false; old_calls.len()];
+        for pair in &found {
+            partner[pair.new] = Some((pair.old, pair.key));
+            used[pair.old] = true;
+        }
+        let mut pairs: Vec<(Option<usize>, Option<usize>, Option<Key>)> = partner.into_iter().enumerate().map(|(index, found)| (found.map(|(at, _)| at), Some(index), found.map(|(_, key)| key))).collect();
+        pairs.extend(used.iter().enumerate().filter(|(_, used)| !**used).map(|(at, _)| (Some(at), None, None)));
+        for (x, y, key) in pairs {
+            let old = x.map(|x| &old_calls[x]);
+            let new = y.map(|y| &new_calls[y]);
+            // A call in an expansion gives a line only in a pair with an outer call.
+            if old.is_none_or(|call| call.nested) && new.is_none_or(|call| call.nested) {
                 continue;
             }
-            let at = old_keys.iter().enumerate().position(|(at, (_, old, _))| !used[at] && old.file == new.file && old.line == new.line && old.col == new.col && old.name == new.name && old.kind == new.kind);
-            if let Some(at) = at {
-                used[at] = true;
-                found[index] = Some(at);
-            }
-        }
-        // Else the key of R63.3-1: the item, the macro, the kind, and the number in the item.
-        for (index, (key, _, _)) in new_keys.iter().enumerate() {
-            if found[index].is_some() {
-                continue;
-            }
-            let at = old_keys.iter().enumerate().position(|(at, (other, _, _))| !used[at] && other == key);
-            if let Some(at) = at {
-                used[at] = true;
-                found[index] = Some(at);
-            }
-        }
-        let mut pairs: Vec<(Option<usize>, Option<usize>)> = found.into_iter().enumerate().map(|(index, at)| (at, Some(index))).collect();
-        pairs.extend(used.iter().enumerate().filter(|(_, used)| !**used).map(|(at, _)| (Some(at), None)));
-        for (a, b) in pairs {
-            let old = a.map(|a| &old_keys[a]);
-            let new = b.map(|b| &new_keys[b]);
-            let at = [old.and_then(|o| o.2.clone()), new.and_then(|n| n.2.clone())];
-            let (old, new) = (old.map(|o| o.1), new.map(|n| n.1));
+            let at = [old.and_then(|call| call.at.clone()), new.and_then(|call| call.at.clone())];
+            let (old, new) = (old.map(|call| call.expansion), new.map(|call| call.expansion));
             if let (Some(o), Some(n)) = (old, new)
                 && o.text == n.text
             {
-                push(&mut equal, old, new, at, unit, keep_equal);
+                push(&mut equal, old, new, at, unit, keep_equal, key);
                 continue;
             }
-            push(&mut sites, old, new, at, unit, true);
+            push(&mut sites, old, new, at, unit, true, key);
         }
     }
     (sites, equal)
@@ -797,6 +863,11 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
                     _ => inputs::no_owner_cause(&not_seen, NO_CHANGED_INPUT),
                 };
             }
+        }
+        // R72.1-3: a pair of two calls by a weak key says so.
+        if let Some(key) = site.key.filter(Key::weak).filter(|_| site.old.is_some() && site.new.is_some()) {
+            let words = format!("the two calls are {}", key.words());
+            cause = if cause.is_empty() { words } else { format!("{cause}; {words}") };
         }
         let configs = if site.configs.len() == all_configs.len() { Vec::new() } else { site.configs.clone() };
         let shown_call = shown(any);
@@ -1355,8 +1426,8 @@ mod tests {
         ExpansionUnit { config: "dev".into(), target: target.into(), package: "shop".into(), root: root.into(), cfg: Vec::new(), list, names: None }
     }
 
-    // rule+ R63.9-1
-    // rule- R63.9-1
+    // rule+ R72.1-1
+    // rule- R72.1-1
     #[test]
     fn a_unit_pairs_with_the_unit_of_its_root_file() {
         // A test and a bench with one name and one kind: the order of the files changes, and a
@@ -1377,6 +1448,36 @@ mod tests {
         let twice = vec![unit("load.lib.1", "src/lib.rs", &[("src/lib.rs", 1, "a")]), unit("load.lib.2", "src/lib.rs", &[("src/lib.rs", 1, "b")])];
         let again = vec![unit("load.lib.3", "src/lib.rs", &[("src/lib.rs", 1, "b")]), unit("load.lib.4", "src/lib.rs", &[("src/lib.rs", 1, "a")])];
         assert_eq!(unit_pairs(&twice, &again), vec![(Some(1), Some(0)), (Some(0), Some(1))]);
+    }
+
+    // rule+ R72.1-1
+    // rule- R72.1-1
+    #[test]
+    fn a_target_with_a_new_name_pairs_by_its_root_file_and_its_calls() {
+        // A binary target gets a new name: the same root file and the same calls.
+        let old = vec![unit("tool.bin.aaaa", "src/main.rs", &[("src/main.rs", 2, "a"), ("src/main.rs", 3, "b")])];
+        let new = vec![unit("toolbox.bin.bbbb", "src/main.rs", &[("src/main.rs", 2, "a"), ("src/main.rs", 3, "b")])];
+        assert_eq!(unit_pairs(&old, &new), vec![(Some(0), Some(0))]);
+        // A removed target and a new target with a different root file and other calls: no pair.
+        let other = vec![unit("other.bin.cccc", "src/bin/other.rs", &[("src/bin/other.rs", 9, "z")])];
+        assert_eq!(unit_pairs(&old, &other), vec![(None, Some(0)), (Some(0), None)]);
+    }
+
+    // rule+ R72.1-1
+    // rule- R72.1-1
+    #[test]
+    fn a_call_is_identified_by_the_definition_of_its_macro() {
+        let call = |name: &str, def: &str, ids: &[&str]| Expansion { name: name.into(), def: def.into(), ids: ids.iter().map(|id| id.to_string()).collect(), ..Default::default() };
+        // `format!` and `alloc::format!`: one definition of the compiler.
+        let a = call("format", "crate alloc", &["format: macro of crate alloc (definition 749bf28f6f9814cd)"]);
+        let b = call("alloc::format", "crate alloc", &["alloc::format: macro of crate alloc (definition 749bf28f6f9814cd)"]);
+        assert_eq!(macro_identity(&a), macro_identity(&b));
+        // A different macro of the same crate is a different identity.
+        let c = call("vec", "crate alloc", &["vec: macro of crate alloc (definition 13b1c1d7b0b0b0b0)"]);
+        assert_ne!(macro_identity(&a), macro_identity(&c));
+        // A macro of the workspace: the file of the definition and the last name, not the line.
+        assert_eq!(macro_identity(&call("table", "src/lib.rs:1", &[])), macro_identity(&call("crate::table", "src/lib.rs:7", &[])));
+        assert_ne!(macro_identity(&call("table", "src/lib.rs:1", &[])), macro_identity(&call("table", "src/other.rs:1", &[])));
     }
 
     // rule+ R63.9-8

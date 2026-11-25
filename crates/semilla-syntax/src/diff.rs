@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use semilla_core::matcher::{Key, Ladder, Thing, token_similarity};
 use semilla_core::{Anchor, View};
 use serde::Serialize;
 
@@ -120,6 +121,16 @@ pub enum Refactor {
         expr: String,
         #[serde(skip)]
         region: [Vec<(Pos, Pos)>; 2],
+    },
+    /// A match arm that the step adds, removes, moves, or changes in its parts (R72.1-1, part
+    /// d). `region`: the place of the whole arm on each side; on the side with no arm, the
+    /// point where the arm comes in or goes out (a place of no length). `passed`: the arms that
+    /// a move passes over.
+    Arm {
+        #[serde(skip)]
+        region: [Vec<(Pos, Pos)>; 2],
+        #[serde(skip)]
+        passed: [Vec<(Pos, Pos)>; 2],
     },
 }
 
@@ -984,6 +995,59 @@ fn dedent(text: &str, column: usize) -> String {
     std::iter::once(first.to_string()).chain(rest).collect::<Vec<_>>().join("\n")
 }
 
+/// The smallest similarity of a pair of two match arms by similarity (Decided by Claude, design
+/// 72.4).
+pub const ARM_THRESHOLD: f64 = 0.5;
+
+/// The own tokens of each arm of a `match` node, from the own text of the node: the tokens from
+/// the end of the arm before it to its last part (an attribute, `if`, `=>`), with no comma.
+/// `None` if the own text does not split into the arms.
+fn arm_own_tokens(node: &Node, arms: &[Vec<(&str, &Node)>]) -> Option<Vec<String>> {
+    let text = node.own_text(&[]);
+    let tokens: Vec<&str> = text.split(' ').filter(|token| !token.is_empty()).collect();
+    let mut at = tokens.iter().position(|token| *token == "{")? + 1;
+    let mut out = Vec::new();
+    for arm in arms {
+        let mut marks = arm.len();
+        let mut own = Vec::new();
+        while marks > 0 {
+            let token = *tokens.get(at)?;
+            at += 1;
+            if token == crate::tree::CHILD_MARK {
+                marks -= 1;
+            }
+            own.push(token);
+        }
+        if tokens.get(at) == Some(&",") {
+            at += 1;
+        }
+        out.push(own.join(" "));
+    }
+    (tokens.get(at) == Some(&"}")).then_some(out)
+}
+
+/// The scrutinee of a `match` node, and the parts of each arm, by the index in the role
+/// `arm[N].part`.
+fn arms(node: &Node) -> (Option<&Node>, Vec<Vec<(&str, &Node)>>) {
+    let mut scrutinee = None;
+    let mut out: Vec<Vec<(&str, &Node)>> = Vec::new();
+    for child in &node.children {
+        let Some(rest) = child.role.strip_prefix("arm[") else {
+            if child.role == "scrutinee" {
+                scrutinee = Some(child);
+            }
+            continue;
+        };
+        let Some((index, part)) = rest.split_once("].") else { continue };
+        let Ok(index) = index.parse::<usize>() else { continue };
+        while out.len() <= index {
+            out.push(Vec::new());
+        }
+        out[index].push((part, child));
+    }
+    (scrutinee, out)
+}
+
 impl Context<'_> {
     /// Keeps a node pair of the compare (design 59, B-d). The compare is strict: a rename map
     /// does not make two tokens equal here. For a block, the place of each statement in the own
@@ -1000,65 +1064,261 @@ impl Context<'_> {
         self.pairs.push(NodePair { ranges: [(before.start, before.end), (after.start, after.end)], kinds: [before.kind, after.kind], equal, own_equal, graph_only: false });
     }
 
-    /// Keeps the node pairs of the arms of two `match` nodes that the compare replaces (design
-    /// 60, R60.3-10). The pairs are only for the control flow graph: they give no edit, and the
-    /// positions of the facts do not read them. The arms with equal parts pair in order (a
-    /// longest common subsequence); then, between two such arms, the arms with an equal
-    /// pattern and an equal guard pair in order. Each part of a pair of arms (the pattern, the
-    /// guard, the body) is a pair; the scrutinee is a pair too.
-    fn arm_pairs(&mut self, before: &Node, after: &Node) {
-        // The parts of each arm, by the index in the role `arm[N].part`.
-        fn arms(node: &Node) -> (Option<&Node>, Vec<Vec<(&str, &Node)>>) {
-            let mut scrutinee = None;
-            let mut out: Vec<Vec<(&str, &Node)>> = Vec::new();
-            for child in &node.children {
-                let Some(rest) = child.role.strip_prefix("arm[") else {
-                    if child.role == "scrutinee" {
-                        scrutinee = Some(child);
-                    }
-                    continue;
-                };
-                let Some((index, part)) = rest.split_once("].") else { continue };
-                let Ok(index) = index.parse::<usize>() else { continue };
-                while out.len() <= index {
-                    out.push(Vec::new());
-                }
-                out[index].push((part, child));
-            }
-            (scrutinee, out)
-        }
-        let (old_scrutinee, old) = arms(before);
-        let (new_scrutinee, new) = arms(after);
-        let keep = |a: &Node, b: &Node, pairs: &mut Vec<NodePair>| {
-            if a.start.0 > 0 && b.start.0 > 0 {
-                let equal = a.text == b.text;
-                pairs.push(NodePair { ranges: [(a.start, a.end), (b.start, b.end)], kinds: [a.kind, b.kind], equal, own_equal: equal, graph_only: true });
+    /// The pairs of the arms of two `match` nodes, by the one matcher (R72.1-1, part d). The
+    /// identity of an arm is its pattern and its guard (the old text after the rename map): an
+    /// arm that keeps them pairs by them, also when its body changes. Then equal tokens of the
+    /// arm, then the best similarity (half the pattern and the guard, half the body) with the
+    /// threshold [`ARM_THRESHOLD`] for the arms whose pattern or guard changes. Each pair: the
+    /// index of the old arm, of the new arm, and the key.
+    fn arm_matches(&self, before: &Node, after: &Node) -> Vec<(usize, usize, Key)> {
+        let (_, old) = arms(before);
+        let (_, new) = arms(after);
+        // The old text with the renames of the claims and the local renames of the mapper (a
+        // binding of the pattern with a new name keeps the identity of its arm).
+        let old_text = |text: &str| -> String {
+            let renamed = self.renames.apply(self.item_before, text);
+            match &self.map {
+                Some(map) => map.old_text(&renamed),
+                None => renamed,
             }
         };
+        let text = |arm: &Vec<(&str, &Node)>, old: bool, head: bool| -> Vec<String> {
+            arm.iter()
+                .filter(|(part, _)| !head || *part != "body")
+                .map(|(part, node)| format!("{part}: {}", if old { old_text(&node.text) } else { node.text.clone() }))
+                .flat_map(|part| part.split(' ').map(str::to_string).collect::<Vec<_>>())
+                .collect()
+        };
+        let body = |arm: &Vec<(&str, &Node)>, old: bool| -> Vec<String> {
+            arm.iter().filter(|(part, _)| *part == "body").flat_map(|(_, node)| if old { old_text(&node.text) } else { node.text.clone() }.split(' ').map(str::to_string).collect::<Vec<_>>()).collect()
+        };
+        let thing = |arm: &Vec<(&str, &Node)>, old: bool| Thing { group: String::new(), identity: Some(text(arm, old, true).join(" ")), content: Some(text(arm, old, false).join(" ")) };
+        let old_things: Vec<Thing> = old.iter().map(|arm| thing(arm, true)).collect();
+        let new_things: Vec<Thing> = new.iter().map(|arm| thing(arm, false)).collect();
+        let similarity = |a: usize, b: usize| 0.5 * token_similarity(&text(&old[a], true, true), &text(&new[b], false, true)) + 0.5 * token_similarity(&body(&old[a], true), &body(&new[b], false));
+        let ladder = Ladder { similarity: &similarity, threshold: ARM_THRESHOLD, in_order: None };
+        semilla_core::matcher::pair(&old_things, &new_things, &ladder).into_iter().map(|pair| (pair.old, pair.new, pair.key)).collect()
+    }
+
+    /// Compares two `match` nodes arm by arm (R72.1-1, part d). The scrutinee compares as a
+    /// child. Each pair of arms compares its parts (the pattern, the guard, the body) at the new
+    /// places, so a changed value of an arm is a fact of that part. A pair out of the order of
+    /// the other pairs (the longest list of pairs in their order) is a moved arm: the order of
+    /// the arms is a part of the meaning. An arm with no pair is an added or a removed arm. A
+    /// pair whose arms have different parts (a guard comes or goes) is one changed arm. Nothing
+    /// falls back to one edit of the full `match`, except a node with other children.
+    fn match_arms(&mut self, before: &Node, after: &Node, before_path: &[String], after_path: &[String]) {
+        let (old_scrutinee, old) = arms(before);
+        let (new_scrutinee, new) = arms(after);
+        let known = |node: &Node| node.children.iter().all(|child| child.role == "scrutinee" || child.role.starts_with("arm["));
+        if !known(before) || !known(after) || old_scrutinee.is_some() != new_scrutinee.is_some() {
+            self.edit(EditKind::Replaced, Some((before, before_path)), Some((after, after_path)));
+            return;
+        }
+        let edits_before = self.edits.len();
+        let variables_before = self.variable_edits.len();
+        let child_path = |path: &[String], role: &str| {
+            let mut path = path.to_vec();
+            path.push(role.to_string());
+            path
+        };
         if let (Some(a), Some(b)) = (old_scrutinee, new_scrutinee) {
-            keep(a, b, &mut self.pairs);
+            self.child(a, b, &child_path(before_path, &a.role), &child_path(after_path, &b.role));
         }
-        let texts = |arm: &Vec<(&str, &Node)>| arm.iter().map(|(part, node)| (part.to_string(), node.text.clone())).collect::<Vec<_>>();
-        let head = |arm: &Vec<(&str, &Node)>| arm.iter().filter(|(part, _)| *part != "body").map(|(part, node)| (part.to_string(), node.text.clone())).collect::<Vec<_>>();
-        let (old_texts, new_texts): (Vec<_>, Vec<_>) = (old.iter().map(texts).collect(), new.iter().map(texts).collect());
-        let equal = lcs(&old_texts, &new_texts, |a, b| a == b);
-        let mut paired: Vec<(usize, usize)> = equal.clone();
-        let (mut i, mut j) = (0, 0);
-        for (pi, pj) in equal.into_iter().chain(std::iter::once((old.len(), new.len()))) {
-            let (old_heads, new_heads): (Vec<_>, Vec<_>) = (old[i..pi].iter().map(head).collect(), new[j..pj].iter().map(head).collect());
-            paired.extend(lcs(&old_heads, &new_heads, |a, b| !a.is_empty() && a == b).into_iter().map(|(a, b)| (i + a, j + b)));
-            i = pi + 1;
-            j = pj + 1;
+        let mut pairs = self.arm_matches(before, after);
+        let mut partner: Vec<Option<usize>> = vec![None; old.len()];
+        let mut taken = vec![false; new.len()];
+        for (i, j, _) in &pairs {
+            partner[*i] = Some(*j);
+            taken[*j] = true;
         }
-        paired.sort();
-        for (a, b) in paired {
-            for (part, node) in &old[a] {
-                if let Some((_, other)) = new[b].iter().find(|(other_part, _)| other_part == part) {
-                    keep(node, other, &mut self.pairs);
+        let mut in_order: BTreeSet<usize> = semilla_core::matcher::lcs(old.len(), new.len(), &|i, j| partner[i] == Some(j)).into_iter().map(|(i, _)| i).collect();
+        // The last rung (the source order): an old arm and a new arm with no pair, each one
+        // alone in one gap between two pairs in order, are at one place (a new pattern and a new
+        // body, a binding with a new name). They pair, as the statements of a gap of batch 8b.
+        let anchors: Vec<(usize, usize)> = in_order.iter().map(|&i| (i, partner[i].unwrap_or(0))).collect();
+        let mut start = (0usize, 0usize);
+        for (end_i, end_j) in anchors.iter().copied().chain(std::iter::once((old.len(), new.len()))) {
+            let olds: Vec<usize> = (start.0..end_i).filter(|&i| partner[i].is_none()).collect();
+            let news: Vec<usize> = (start.1..end_j).filter(|&j| !taken[j]).collect();
+            if let ([i], [j]) = (olds.as_slice(), news.as_slice()) {
+                partner[*i] = Some(*j);
+                taken[*j] = true;
+                in_order.insert(*i);
+                pairs.push((*i, *j, Key::Order));
+            }
+            start = (end_i + 1, end_j + 1);
+        }
+        // The place of each arm: from the line after the end of the arm before it (or of the
+        // scrutinee) to the end of its last part, so that its attributes and the comments above
+        // it are in its place.
+        let places = |list: &Vec<Vec<(&str, &Node)>>, scrutinee: Option<&Node>| -> Vec<(Pos, Pos)> {
+            let mut out = Vec::new();
+            let mut previous = scrutinee.map(|node| node.end);
+            for arm in list {
+                let start = arm.iter().map(|(_, node)| node.start).min().unwrap_or((0, 0));
+                let end = arm.iter().map(|(_, node)| node.end).max().unwrap_or((0, 0));
+                let from = match previous {
+                    Some(previous) if previous.0 > 0 && previous.0 < start.0 => (previous.0 + 1, 0),
+                    _ => start,
+                };
+                out.push((from, end));
+                previous = Some(end);
+            }
+            out
+        };
+        let (old_places, new_places) = (places(&old, old_scrutinee), places(&new, new_scrutinee));
+        // The attributes of each arm (its own tokens before its first part), in the source form.
+        let attributes = |node: &Node, list: &Vec<Vec<(&str, &Node)>>, source: &Item| -> Vec<Option<String>> {
+            let own = arm_own_tokens(node, list).unwrap_or_default();
+            list.iter()
+                .enumerate()
+                .map(|(at, arm)| {
+                    own.get(at).filter(|own| own.starts_with('#'))?;
+                    let start = arm.iter().map(|(_, node)| node.start).min()?;
+                    let from = if at == 0 { node.children.iter().find(|child| child.role == "scrutinee").map(|child| child.end)? } else { list[at - 1].iter().map(|(_, node)| node.end).max()? };
+                    let text = source_between(source, from, start)?;
+                    let text = text.trim_start_matches(|c: char| c == ',' || c == '{' || c.is_whitespace());
+                    text.starts_with('#').then(|| crate::tree::one_line(text.trim_end()))
+                })
+                .collect()
+        };
+        let (old_attributes, new_attributes) = (attributes(before, &old, self.source_before), attributes(after, &new, self.source_after));
+        for &(i, j, key) in &pairs {
+            let parts = |arm: &Vec<(&str, &Node)>| arm.iter().map(|(part, _)| part.to_string()).collect::<Vec<_>>();
+            if parts(&old[i]) != parts(&new[j]) {
+                self.arm_edit(EditKind::Replaced, Some(&old[i]), Some(&new[j]), before_path, after_path, None, [vec![old_places[i]], vec![new_places[j]]], [Vec::new(), Vec::new()]);
+                self.arm_attributes(old_attributes.get(i), new_attributes.get(j));
+                continue;
+            }
+            if !in_order.contains(&i) {
+                // The arms that the move passes over (the pairs whose order to this pair
+                // changes) are places of the move, as for a moved statement (design 41.7).
+                let crossed: Vec<(usize, usize)> = pairs.iter().filter(|(a, b, _)| *a != i && (*a < i) != (*b < j)).map(|(a, b, _)| (*a, *b)).collect();
+                let passed: [Vec<(Pos, Pos)>; 2] = [crossed.iter().map(|(a, _)| old_places[*a]).collect(), crossed.iter().map(|(_, b)| new_places[*b]).collect()];
+                // R72.1-3: a moved arm of a pair by similarity says so.
+                self.arm_edit(EditKind::Moved, Some(&old[i]), Some(&new[j]), before_path, after_path, key.weak().then(|| key.words()), [vec![old_places[i]], vec![new_places[j]]], passed);
+                self.arm_attributes(old_attributes.get(i), new_attributes.get(j));
+            }
+            for ((_, a), (_, b)) in old[i].iter().zip(&new[j]) {
+                self.child(a, b, &child_path(before_path, &a.role), &child_path(after_path, &b.role));
+            }
+        }
+        // The own tokens of each pair of arms (an attribute of the arm, `if`, `=>`): a change is
+        // one edit of the own tokens of the `match`, as the rule of each other node (52.1).
+        if let (Some(a), Some(b)) = (arm_own_tokens(before, &old), arm_own_tokens(after, &new))
+            && pairs.iter().any(|(i, j, _)| self.renames.apply(self.item_before, &a[*i]) != b[*j])
+        {
+            self.own_edit(before, after, before_path, after_path);
+        }
+        // The point of the other side where an arm with no pair comes in or goes out: the end of
+        // the partner of the nearest arm before it in order, else the end of the scrutinee.
+        let mut back: Vec<Option<usize>> = vec![None; new.len()];
+        for (i, j) in partner.iter().enumerate() {
+            if let Some(j) = j {
+                back[*j] = Some(i);
+            }
+        }
+        let point = |index: usize, partners: &[Option<usize>], other_places: &[(Pos, Pos)], other_scrutinee: Option<&Node>| -> Vec<(Pos, Pos)> {
+            let end = (0..index).rev().find_map(|at| partners[at]).and_then(|at| other_places.get(at).map(|place| place.1)).or(other_scrutinee.map(|node| node.end));
+            end.filter(|end| end.0 > 0).map(|end| vec![(end, end)]).unwrap_or_default()
+        };
+        for (i, arm) in old.iter().enumerate().filter(|(i, _)| partner[*i].is_none()) {
+            let region = [vec![old_places[i]], point(i, &partner, &new_places, new_scrutinee)];
+            self.arm_edit(EditKind::Deleted, Some(arm), None, before_path, after_path, None, region, [Vec::new(), Vec::new()]);
+            self.arm_attributes(old_attributes.get(i), None);
+        }
+        for (j, arm) in new.iter().enumerate().filter(|(j, _)| !taken[*j]) {
+            let region = [point(j, &back, &old_places, old_scrutinee), vec![new_places[j]]];
+            self.arm_edit(EditKind::Inserted, None, Some(arm), before_path, after_path, None, region, [Vec::new(), Vec::new()]);
+            self.arm_attributes(None, new_attributes.get(j));
+        }
+        // A change that no edit above shows (the own tokens of the `match`): one edit of the
+        // node, as the rule of each other node (no edit is hidden). In a mapped body, a
+        // statement that moves in or out of an arm, and a use of a variable, have their own
+        // edits: a `match` whose other text is equal has no edit of its own.
+        let explained = self.map.as_ref().is_some_and(|map| self.variable_edits.len() > variables_before || map.old_text(&self.renames.apply(self.item_before, &crate::mapper::shell(before))) == crate::mapper::shell(after));
+        if self.edits.len() == edits_before && !explained && !self.same(before, after) {
+            self.edit(EditKind::Modified, Some((before, before_path)), Some((after, after_path)));
+        }
+    }
+
+    /// The attributes of the arms of the last arm edit in front of its texts.
+    fn arm_attributes(&mut self, old: Option<&Option<String>>, new: Option<&Option<String>>) {
+        let Some(edit) = self.edits.last_mut() else { return };
+        for (text, source, attribute) in [(&mut edit.text_before, &mut edit.source_before, old), (&mut edit.text_after, &mut edit.source_after, new)] {
+            if let Some(Some(attribute)) = attribute {
+                for slot in [text, source] {
+                    if let Some(value) = slot.as_mut() {
+                        *value = format!("{attribute} {value}");
+                    }
                 }
             }
         }
     }
+
+    /// One edit of a full match arm: its anchor is the pattern of the arm, its text is the text
+    /// of the arm, and its places (`Refactor::Arm`) are `places` (the place of the arm with its
+    /// attributes, or the point of the other side) and `passed` (the arms that a move passes
+    /// over).
+    #[allow(clippy::too_many_arguments)]
+    fn arm_edit(&mut self, kind: EditKind, old: Option<&Vec<(&str, &Node)>>, new: Option<&Vec<(&str, &Node)>>, before_path: &[String], after_path: &[String], note: Option<String>, places: [Vec<(Pos, Pos)>; 2], passed: [Vec<(Pos, Pos)>; 2]) {
+        let head = |arm: &Vec<(&str, &Node)>| -> Option<Node> { arm.first().map(|(_, node)| (*node).clone()) };
+        let range = |arm: &Vec<(&str, &Node)>| -> (Pos, Pos) {
+            let start = arm.iter().map(|(_, node)| node.start).min().unwrap_or((0, 0));
+            let end = arm.iter().map(|(_, node)| node.end).max().unwrap_or((0, 0));
+            (start, end)
+        };
+        let text = |arm: &Vec<(&str, &Node)>| -> String {
+            let part = |name: &str| arm.iter().find(|(part, _)| *part == name).map(|(_, node)| node.text.clone());
+            let guard = part("guard").map(|guard| format!(" if {guard}")).unwrap_or_default();
+            format!("{}{guard} => {}", part("pat").unwrap_or_default(), part("body").unwrap_or_default())
+        };
+        let (old_head, new_head) = (old.and_then(head), new.and_then(head));
+        let path = |base: &[String], node: &Option<Node>| -> Vec<String> {
+            let mut path = base.to_vec();
+            path.extend(node.as_ref().map(|node| node.role.clone()));
+            path
+        };
+        let (old_path, new_path) = (path(before_path, &old_head), path(after_path, &new_head));
+        self.edit(kind, old_head.as_ref().map(|node| (node, old_path.as_slice())), new_head.as_ref().map(|node| (node, new_path.as_slice())));
+        let (source_before, source_after) = (self.source_before, self.source_after);
+        if let Some(edit) = self.edits.last_mut() {
+            edit.node_before = old.map(|_| "arm");
+            edit.node_after = new.map(|_| "arm");
+            edit.text_before = old.map(text);
+            edit.text_after = new.map(text);
+            edit.source_before = old.and_then(|arm| {
+                let (start, end) = range(arm);
+                source_between(source_before, start, end)
+            });
+            edit.source_after = new.and_then(|arm| {
+                let (start, end) = range(arm);
+                source_between(source_after, start, end)
+            });
+            edit.refactor = Some(Refactor::Arm { region: places, passed });
+            edit.note = note;
+        }
+    }
+
+    /// Compares two children of a node: two blocks by their statements, else two nodes.
+    fn child(&mut self, old_child: &Node, new_child: &Node, bp: &[String], ap: &[String]) {
+        if old_child.kind == "block" && new_child.kind == "block" {
+            if !self.same(old_child, new_child) {
+                if self.own_changed(old_child, new_child, false) {
+                    self.own_edit(old_child, new_child, bp, ap);
+                }
+                self.block(old_child, new_child, bp, ap);
+            } else {
+                self.pair(old_child, new_child, true);
+                self.mark_visited(old_child, new_child);
+            }
+        } else {
+            self.node(old_child, new_child, bp, ap);
+        }
+    }
+
+
 
     /// True if a node did not change: the text is equal, or the text with the renames is equal.
     /// A rename of a name applies only where the text changed (design 37.10): a different item
@@ -1251,6 +1511,7 @@ impl Context<'_> {
     fn visit(&mut self, old: &Node, new: &Node, before_path: Vec<String>, after_path: Vec<String>, moved: bool) {
         let Some(map) = self.map.as_ref() else { return };
         let (Some(&o), Some(&n)) = (map.old_at.get(&at(old)), map.new_at.get(&at(new))) else { return };
+        let weak = map.weak.get(&o).copied();
         if self.visited[o] {
             return;
         }
@@ -1267,6 +1528,8 @@ impl Context<'_> {
             self.edit(EditKind::Moved, Some((old, &before_path)), Some((new, &after_path)));
             if let Some(edit) = self.edits.last_mut() {
                 edit.refactor = Some(Refactor::Moved { jumped: [Vec::new(), Vec::new()] });
+                // R72.1-3: a moved statement of a pair by similarity says so.
+                edit.note = weak.map(|score| semilla_core::matcher::Key::Similarity(score).words());
             }
             self.moves.push((self.edits.len() - 1, o, n));
         }
@@ -1523,11 +1786,14 @@ impl Context<'_> {
         }
         let roles = |node: &Node| node.children.iter().map(|child| child.role.clone()).collect::<Vec<_>>();
         let leaf = before.children.is_empty() && after.children.is_empty();
+        // R72.1-1 (part d): two `match` nodes compare arm by arm (the identity of an arm is its
+        // pattern and its guard).
+        if before.kind == "match" && after.kind == "match" && !leaf {
+            self.match_arms(before, after, before_path, after_path);
+            return;
+        }
         if before.kind != after.kind || roles(before) != roles(after) || leaf {
             self.edit(EditKind::Replaced, Some((before, before_path)), Some((after, after_path)));
-            if before.kind == "match" && after.kind == "match" {
-                self.arm_pairs(before, after);
-            }
             return;
         }
         let edits_before = self.edits.len();
@@ -1537,22 +1803,10 @@ impl Context<'_> {
             bp.push(old_child.role.clone());
             let mut ap = after_path.to_vec();
             ap.push(new_child.role.clone());
-            if old_child.kind == "block" && new_child.kind == "block" {
-                if !self.same(old_child, new_child) {
-                    // The own tokens of a block: its delimiters and its inner attributes. The
-                    // count of the statements can be different: each statement has its own
-                    // edit. The item compare has the inner attributes of the body of an item.
-                    if self.own_changed(old_child, new_child, false) {
-                        self.own_edit(old_child, new_child, &bp, &ap);
-                    }
-                    self.block(old_child, new_child, &bp, &ap);
-                } else {
-                    self.pair(old_child, new_child, true);
-                    self.mark_visited(old_child, new_child);
-                }
-            } else {
-                self.node(old_child, new_child, &bp, &ap);
-            }
+            // Two blocks: the own tokens of a block are its delimiters and its inner
+            // attributes; the count of the statements can be different: each statement has its
+            // own edit. The item compare has the inner attributes of the body of an item.
+            self.child(old_child, new_child, &bp, &ap);
         }
         // The own tokens of the node (design 52.1): each token that is not in a child. The
         // rule does not depend on the kind of the node.

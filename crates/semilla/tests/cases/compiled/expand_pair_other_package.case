@@ -1,6 +1,6 @@
 note: batch 10c2, item 1: a workspace with two packages; the step changes only `shop`; the item-level calls in `depot`, a package that the step does not change, are not added or removed; `depot` has a library and a binary with one name, so the two test builds have one crate name and one kind
-rule+: R63.9-1 R63.9-2
-rule-: R63.9-1
+rule+: R72.1-1
+rule-: R72.1-1
 must_not_match: \(depot/src/(lib|main)\.rs:-?\d+\): expansion (added|removed)
 must_match: `twice!\(<\(u8, u8, u8\)>::size\(\)\)` at `shop::price/tail` \(shop/src/lib\.rs:5\): expansion changed
 option: --compiled

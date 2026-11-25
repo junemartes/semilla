@@ -1,5 +1,7 @@
 note: U2: two `cfg` variants of one constant in a new order, and one value changes: the variants pair by their `cfg` condition, so one value fact with the two values of the 32-bit variant, and no `cfg` attribute fact
-rule+: R68.2-1
+rule+: R72.1-1
+rule-: R72.1-3
+must_match: a pair by its identity
 rule+: R68.2-2
 must_match: value of `shop::K#1` changed: 0x9E37_79B9 → 0x9E37_79B1
 must_not_match: attributes of
@@ -44,7 +46,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   expansions: not read: the build check did not run, so no build made the expansion records
   names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-  note: twins: `shop::K#0` of the old tree and `shop::K#1` of the new tree are one pair (equal tokens first, then the `cfg` condition, then the source order); the facts name the pair `shop::K#1`
+  note: twins: `shop::K#0` of the old tree and `shop::K#1` of the new tree are one pair (a pair by its identity); the facts name the pair `shop::K#1`
 
 === positions
 ◆ f1 derived: value of `shop::K#1` changed: 0x9E37_79B9 → 0x9E37_79B1 [semantics]

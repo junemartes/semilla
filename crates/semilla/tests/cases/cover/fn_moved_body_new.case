@@ -60,7 +60,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::probe=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::probe=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: moved statement `result.dirs.push(dir)` from `depot::probe/S1/body/S2` to `depot::probe/S2/body/S1/then/S0` [semantics]
+  ◆ f1 derived: moved statement `result.dirs.push(dir)` from `depot::probe/S1/body/S2` to `depot::probe/S2/body/S1/then/S0` (a pair by similarity (0.89)) [semantics]
       docs of `depot::probe`, no edit in this step (src/lib.rs:3): `/// Finds the things.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f3 derived: added `if` `if result.file.is_none() { result.file = Some(0); }` at `depot::probe/S1` [semantics]
@@ -79,7 +79,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: moved statement `result.dirs.push(dir)` from `depot::probe/S1/body/S2` to `depot::probe/S2/body/S1/then/S0` [semantics]
+◆ f1 derived: moved statement `result.dirs.push(dir)` from `depot::probe/S1/body/S2` to `depot::probe/S2/body/S1/then/S0` (a pair by similarity (0.89)) [semantics]
     lines: src/lib.rs:12-13, src/lib.rs:-18
 ◆ f3 derived: added `if` `if result.file.is_none() { result.file = Some(0); }` at `depot::probe/S1` [semantics]
     lines: src/lib.rs:6-9

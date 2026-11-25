@@ -117,7 +117,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       Semilla sees: f1 variant `depot::Mode::Idle` removed: `Idle` (the public API can change: a different crate can use the item) [removed]
       Semilla sees: f4 changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics]
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
-  ? 1 place: remove arm, see f3 (f3)
+  ? 1 place: removed match arm `Mode::Idle => "idle"` (f3)
       in: depot::mode_name
       lines: src/lib.rs:24, src/lib.rs:-23
       to state it: --change 'depot::mode_name=TEXT'
@@ -132,7 +132,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   declarations, filled in by Semilla:
   ◆ f2 derived: return type of `depot::start` `-> Mode` → `-> Other` (the public API can change: a different crate can use the item) [declaration]
   other facts, filled in by Semilla:
-  ◆ f3 derived: remove arm `match m { Mode::Idle => "idle", Mode::Busy => "busy" }` → `match m { Mode::Busy => "busy" }` at `depot::mode_name/S0` [semantics]
+  ◆ f3 derived: removed match arm `Mode::Idle => "idle"` at `depot::mode_name/S0/arm[0].pat` [semantics]
   ◆ f4 derived: changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics]
   cover: each of the 7 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records
@@ -142,7 +142,7 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --change 'depot::mode_name=the text of the test' --change 'depot::start=the text of the test'
-◆ f3 stated: remove arm `match m { Mode::Idle => "idle", Mode::Busy => "busy" }` → `match m { Mode::Busy => "busy" }` at `depot::mode_name/S0` [semantics]
+◆ f3 stated: removed match arm `Mode::Idle => "idle"` at `depot::mode_name/S0/arm[0].pat` [semantics]
     lines: src/lib.rs:24, src/lib.rs:-23
 ◆ f2 stated: return type of `depot::start` `-> Mode` → `-> Other` (the public API can change: a different crate can use the item) [declaration]
     lines: src/lib.rs:25, src/lib.rs:-24

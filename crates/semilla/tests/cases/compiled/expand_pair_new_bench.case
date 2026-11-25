@@ -1,6 +1,6 @@
 note: batch 10c2, item 1: a new file in `benches/` is a new target that cargo finds by itself; the package has a test target and a bench target with one name, and a bench with `required-features`; no call in an unchanged file is added or removed
-rule+: R63.9-1 R63.9-2
-rule-: R63.9-1
+rule+: R72.1-1
+rule-: R72.1-1
 must_not_match: \((tests|benches)/(load|heavy)\.rs:-?\d+\): expansion (added|removed)
 must_match: `ck!\(shop::one\(\)\)` at `shop \(bench "extra"\)::x/S0` \(benches/extra\.rs:5\): expansion added
 must_match: `base!\(\)` at `shop::one/tail` \(src/lib\.rs:3\): expansion changed

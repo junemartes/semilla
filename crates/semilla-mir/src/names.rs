@@ -257,6 +257,12 @@ pub fn collect(tcx: TyCtxt<'_>) -> Names {
             trait_ref = Some(ty::print::with_no_visible_paths!(ty::print::with_resolve_crate_name!(ty::print::with_no_trimmed_paths!(format!("{header}")))));
             of = Some(table.def(header.def_id));
         }
+        // R72.1-1 (b): an inherent impl is identified by its self type (`<shop::W<u8>>`), as an
+        // impl of a trait by its trait reference.
+        if let DefKind::Impl { of_trait: false } = kind {
+            let self_ty = tcx.type_of(def_id).instantiate_identity().skip_norm_wip();
+            trait_ref = Some(ty::print::with_no_visible_paths!(ty::print::with_resolve_crate_name!(ty::print::with_no_trimmed_paths!(format!("<{self_ty}>")))));
+        }
         if matches!(kind, DefKind::AssocFn | DefKind::AssocConst { .. } | DefKind::AssocTy) {
             let item = tcx.associated_item(def_id);
             if let Some(trait_item) = item.trait_item_def_id() {

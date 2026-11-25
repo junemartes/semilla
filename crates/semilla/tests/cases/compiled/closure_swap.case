@@ -1,5 +1,5 @@
 note: two closures that swap their places pair with their own source, and each keeps its graph
-rule+: R60.3-9
+rule+: R72.1-1
 option: --compiled
 === both Cargo.toml
 [package]

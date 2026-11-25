@@ -18,6 +18,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use semilla_core::matcher::{Key, Ladder, Pair, Thing};
+
 use crate::tree::Node;
 
 /// The most statement pairs that the mapper scores in one body (the rename votes, round 3, and
@@ -92,6 +94,9 @@ pub(crate) struct BodyMap<'a> {
     /// The pairs of round 3 and of the composite step.
     pub round3: usize,
     pub composites: usize,
+    /// R72.1-3: the score of each pair by similarity (round 3 and the composites), by the index
+    /// of the old statement. A moved statement of such a pair says so.
+    pub weak: HashMap<usize, f64>,
 }
 
 impl BodyMap<'_> {
@@ -432,6 +437,8 @@ struct Mapper<'a, 'f> {
     /// The counts of the pairs of round 3 and of the composite step (design 41.8).
     round3: usize,
     composites: usize,
+    /// The score of each pair by similarity, by the old index (R72.1-3).
+    weak: HashMap<usize, f64>,
 }
 
 impl Mapper<'_, '_> {
@@ -539,8 +546,13 @@ impl Mapper<'_, '_> {
         }
     }
 
-    /// Round 3: the leaf pairs with the best score after the replacements. `variables`: the
-    /// extract and inline candidates (`(var, expr, inline)`): a use counts as equal.
+    /// Round 3: the leaf pairs with the best similarity after the replacements, by the one
+    /// matcher (R72.1-1, part c): the pairs of rounds 1 and 2 (equal texts) are the stronger
+    /// pairs, the score of design 41 is the similarity, and a pair that crosses a stronger pair
+    /// of the same blocks or that goes to a different block needs a margin (R72.1-2). In a table
+    /// of rows of one form, an equal row is as similar as the other row: a row at a new place with
+    /// other data is a removed row and an added row, not a move. `variables`: the extract and
+    /// inline candidates (`(var, expr, inline)`): a use counts as equal.
     fn round_replacements(&mut self, variables: &[Candidate], skip_old: &BTreeSet<usize>, skip_new: &BTreeSet<usize>) -> bool {
         let olds: Vec<usize> = (0..self.old.len()).filter(|&o| self.old[o].leaf && self.pair_old[o].is_none() && !skip_old.contains(&o)).collect();
         let news: Vec<usize> = (0..self.new.len()).filter(|&n| self.new[n].leaf && self.pair_new[n].is_none() && !skip_new.contains(&n)).collect();
@@ -549,69 +561,58 @@ impl Mapper<'_, '_> {
             return false;
         }
         self.budget -= pairs;
-        let (old_rows, new_rows) = (Self::rows(&self.old), Self::rows(&self.new));
-        let mut candidates: Vec<(f64, bool, usize, usize, usize)> = Vec::new();
-        for &o in &olds {
-            for &n in &news {
-                if !crate::diff::same_kind(self.old[o].node, self.new[n].node) || word_score(&self.old[o].key, &self.new[n].key, variables) < MIN_WORDS {
-                    continue;
-                }
-                // R68.13-1: a row of a table (a statement whose form another statement of its
-                // block has) pairs with a different text only in the order of the equal pairs
-                // of its block. In a table, the place identifies a row: a row at a new place
-                // with other data is a removed row and an added row, not a move.
-                if (old_rows[o] || new_rows[n]) && self.crosses(o, n) {
-                    continue;
-                }
-                let score = structural(self.old[o].node, self.new[n].node, self.old_text, variables);
-                // A pair whose parents correspond is preferred: a pair at a different place
-                // needs a clearly higher score (design 41.2, D2 of fix round 1).
-                let local = self.local(o, n);
-                if score >= MIN_SCORE && (local || score >= FAR_SCORE) {
-                    candidates.push((score + if local { LOCAL_BONUS } else { 0.0 }, local, self.distance(o, n), o, n));
-                }
-            }
+        if olds.is_empty() || news.is_empty() {
+            return true;
         }
-        candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)).then(a.4.cmp(&b.4)));
-        for (_, _, _, o, n) in candidates {
+        let (free_old, free_new): (BTreeSet<usize>, BTreeSet<usize>) = (olds.iter().copied().collect(), news.iter().copied().collect());
+        let group = |leaf: bool, free: bool, paired: bool| if leaf && (free || paired) { "leaf" } else { "other" };
+        let old_things: Vec<Thing> = (0..self.old.len()).map(|o| Thing { group: group(self.old[o].leaf, free_old.contains(&o), self.pair_old[o].is_some()).into(), identity: None, content: None }).collect();
+        let new_things: Vec<Thing> = (0..self.new.len()).map(|n| Thing { group: group(self.new[n].leaf, free_new.contains(&n), self.pair_new[n].is_some()).into(), identity: None, content: None }).collect();
+        let fixed: Vec<Pair> = (0..self.old.len()).filter_map(|o| self.pair_old[o].map(|n| Pair { old: o, new: n, key: Key::Content })).collect();
+        let cache: std::cell::RefCell<HashMap<(usize, usize), f64>> = Default::default();
+        let similarity = |o: usize, n: usize| -> f64 {
+            if let Some(found) = cache.borrow().get(&(o, n)) {
+                return *found;
+            }
+            let found = if !self.old[o].leaf || !self.new[n].leaf || !crate::diff::same_kind(self.old[o].node, self.new[n].node) || word_score(&self.old[o].key, &self.new[n].key, variables) < MIN_WORDS {
+                0.0
+            } else {
+                let score = structural(self.old[o].node, self.new[n].node, self.old_text, variables);
+                // A pair whose parents correspond is preferred: a pair at a different place needs
+                // a clearly higher score (design 41.2, D2 of fix round 1).
+                let local = self.local(o, n);
+                if score >= MIN_SCORE && (local || score >= FAR_SCORE) { score + if local { LOCAL_BONUS } else { 0.0 } } else { 0.0 }
+            };
+            cache.borrow_mut().insert((o, n), found);
+            found
+        };
+        let in_order = |pair: (usize, usize), other: (usize, usize)| self.in_order(pair, other);
+        let ladder = Ladder { similarity: &similarity, threshold: MIN_SCORE, in_order: Some(&in_order) };
+        let found = semilla_core::matcher::pair_with(&old_things, &new_things, &ladder, &fixed);
+        let made: Vec<(usize, usize, f64)> = found.iter().filter_map(|pair| if let Key::Similarity(score) = pair.key { Some((pair.old, pair.new, score)) } else { None }).collect();
+        for (o, n, score) in made {
             if self.pair_old[o].is_none() && self.pair_new[n].is_none() {
                 self.map(o, n);
                 self.round3 += 1;
+                // The score of design 41 without the bonus of a local pair.
+                self.weak.insert(o, if self.local(o, n) { score - LOCAL_BONUS } else { score });
             }
         }
         true
     }
 
-    /// R68.13-1: for each statement, true if it is a row of a table: another leaf statement of
-    /// the same block has the same form (the compare text with each literal as one mark).
-    fn rows(stmts: &[Stmt]) -> Vec<bool> {
-        fn form(text: &str) -> Vec<String> {
-            tokens(text).into_iter().map(|token| if token.starts_with(|c: char| c.is_ascii_digit() || c == '"' || c == '\'') { "#".to_string() } else { token.to_string() }).collect()
-        }
-        let keys: Vec<Option<(Option<usize>, String, Vec<String>)>> = (0..stmts.len()).map(|index| stmts[index].leaf.then(|| (stmts[index].parent, Self::parent_key(stmts, index), form(&stmts[index].key)))).collect();
-        let mut counts: HashMap<&(Option<usize>, String, Vec<String>), usize> = HashMap::new();
-        for key in keys.iter().flatten() {
-            *counts.entry(key).or_insert(0) += 1;
-        }
-        keys.iter().map(|key| key.as_ref().is_some_and(|key| counts.get(key).copied().unwrap_or(0) > 1)).collect()
-    }
-
-    /// R68.13-1: true if a pair of two statements of corresponding blocks crosses a pair of the
-    /// same two blocks that an earlier round mapped: one statement is before its partner's
-    /// partner and the other is after.
-    fn crosses(&self, o: usize, n: usize) -> bool {
+    /// R72.1-2: true if the pair `pair` keeps the order of the stronger pair `other`. A pair whose
+    /// parents correspond crosses only a pair of the same two blocks in the other order. A pair
+    /// at a different block (a move to that block) crosses each pair of the block that it leaves
+    /// and of the block that it enters.
+    fn in_order(&self, pair: (usize, usize), other: (usize, usize)) -> bool {
+        let ((o, n), (a, b)) = (pair, other);
+        let same_old = self.old[a].parent == self.old[o].parent && self.old[a].block == self.old[o].block;
+        let same_new = self.new[b].parent == self.new[n].parent && self.new[b].block == self.new[n].block;
         if !self.local(o, n) {
-            return false;
+            return !same_old && !same_new;
         }
-        let (old_block, new_block) = (Self::parent_key(&self.old, o), Self::parent_key(&self.new, n));
-        (0..self.old.len()).any(|other| {
-            let Some(partner) = self.pair_old[other] else { return false };
-            other != o
-                && Self::parent_key(&self.old, other) == old_block
-                && Self::parent_key(&self.new, partner) == new_block
-                && self.old[other].parent == self.old[o].parent
-                && (self.old[other].index < self.old[o].index) != (self.new[partner].index < self.new[n].index)
-        })
+        !(same_old && same_new) || (self.old[a].index < self.old[o].index) == (self.new[b].index < self.new[n].index)
     }
 
     /// True if the parents of two statements correspond: they map to each other, or they have
@@ -621,43 +622,51 @@ impl Mapper<'_, '_> {
     }
 
     /// The composites: the same kind and child roles, an equal or similar header, and a large
-    /// share of mapped children.
+    /// share of mapped children. The one matcher (R72.1-1, part c) takes the pairs with the best
+    /// sum of the share and the header score.
     fn round_composites(&mut self, variables: &[Candidate]) -> bool {
         for _ in 0..2 {
-            let olds: Vec<usize> = (0..self.old.len()).filter(|&o| !self.old[o].leaf && self.pair_old[o].is_none()).collect();
-            let news: Vec<usize> = (0..self.new.len()).filter(|&n| !self.new[n].leaf && self.pair_new[n].is_none()).collect();
+            let olds: BTreeSet<usize> = (0..self.old.len()).filter(|&o| !self.old[o].leaf && self.pair_old[o].is_none()).collect();
+            let news: BTreeSet<usize> = (0..self.new.len()).filter(|&n| !self.new[n].leaf && self.pair_new[n].is_none()).collect();
             let pairs = olds.len() * news.len();
             if pairs > self.budget {
                 return false;
             }
             self.budget -= pairs;
+            if olds.is_empty() || news.is_empty() {
+                continue;
+            }
             fn roles(node: &Node) -> Vec<&str> {
                 node.children.iter().map(|child| child.role.as_str()).collect()
             }
-            let mut candidates: Vec<(f64, bool, usize, usize, usize)> = Vec::new();
-            for &o in &olds {
-                for &n in &news {
-                    let (a, b) = (&self.old[o], &self.new[n]);
-                    if a.node.kind != b.node.kind || roles(a.node) != roles(b.node) {
-                        continue;
-                    }
-                    let mapped = (o + 1..a.end).filter(|&x| self.pair_old[x].is_some_and(|y| n < y && y < b.end)).count();
-                    let size = (a.end - o - 1).max(b.end - n - 1);
-                    let share = if size == 0 { 0.0 } else { mapped as f64 / size as f64 };
-                    // The header score counts the tokens of a replaced part as replaced (design
-                    // 41.3), as in round 3.
-                    let similar = if a.header == b.header { 1.0 } else { structural(a.node, b.node, self.old_text, variables) };
-                    if share >= MIN_SHARE && similar >= MIN_HEADER {
-                        candidates.push((share + similar, self.parents_map(o, n), self.distance(o, n), o, n));
-                    }
+            let group = |leaf: bool, free: bool, paired: bool| if !leaf && (free || paired) { "composite" } else { "other" };
+            let old_things: Vec<Thing> = (0..self.old.len()).map(|o| Thing { group: group(self.old[o].leaf, olds.contains(&o), self.pair_old[o].is_some()).into(), identity: None, content: None }).collect();
+            let new_things: Vec<Thing> = (0..self.new.len()).map(|n| Thing { group: group(self.new[n].leaf, news.contains(&n), self.pair_new[n].is_some()).into(), identity: None, content: None }).collect();
+            let fixed: Vec<Pair> = (0..self.old.len()).filter_map(|o| self.pair_old[o].map(|n| Pair { old: o, new: n, key: Key::Content })).collect();
+            let similarity = |o: usize, n: usize| -> f64 {
+                let (a, b) = (&self.old[o], &self.new[n]);
+                if a.leaf || b.leaf || a.node.kind != b.node.kind || roles(a.node) != roles(b.node) {
+                    return 0.0;
                 }
-            }
-            candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)).then(a.4.cmp(&b.4)));
-            for (_, _, _, o, n) in candidates {
-                if self.pair_old[o].is_none() && self.pair_new[n].is_none() {
-                    self.pair_old[o] = Some(n);
-                    self.pair_new[n] = Some(o);
+                let mapped = (o + 1..a.end).filter(|&x| self.pair_old[x].is_some_and(|y| n < y && y < b.end)).count();
+                let size = (a.end - o - 1).max(b.end - n - 1);
+                let share = if size == 0 { 0.0 } else { mapped as f64 / size as f64 };
+                // The header score counts the tokens of a replaced part as replaced (design
+                // 41.3), as in round 3.
+                let similar = if a.header == b.header { 1.0 } else { structural(a.node, b.node, self.old_text, variables) };
+                if share >= MIN_SHARE && similar >= MIN_HEADER { share + similar } else { 0.0 }
+            };
+            let in_order = |pair: (usize, usize), other: (usize, usize)| self.in_order(pair, other);
+            let ladder = Ladder { similarity: &similarity, threshold: MIN_SHARE + MIN_HEADER, in_order: Some(&in_order) };
+            let found = semilla_core::matcher::pair_with(&old_things, &new_things, &ladder, &fixed);
+            for pair in found {
+                let Key::Similarity(score) = pair.key else { continue };
+                if self.pair_old[pair.old].is_none() && self.pair_new[pair.new].is_none() {
+                    self.pair_old[pair.old] = Some(pair.new);
+                    self.pair_new[pair.new] = Some(pair.old);
                     self.composites += 1;
+                    // The share and the header score, each from 0 to 1.
+                    self.weak.insert(pair.old, score / 2.0);
                 }
             }
         }
@@ -746,7 +755,7 @@ pub(crate) fn map_body<'a>(old_body: &'a Node, new_body: &'a Node, old_text: &dy
         stmt.words = header_words(stmt.node, &|text: &str| text.to_string());
     }
     let (n_old, n_new) = (old.len(), new.len());
-    let mut mapper = Mapper { old_text: &full_old, old, new, pair_old: vec![None; n_old], pair_new: vec![None; n_new], budget, round3: 0, composites: 0 };
+    let mut mapper = Mapper { old_text: &full_old, old, new, pair_old: vec![None; n_old], pair_new: vec![None; n_new], budget, round3: 0, composites: 0, weak: HashMap::new() };
 
     // Round 1 and round 2.
     mapper.round_same_parent();
@@ -799,8 +808,8 @@ pub(crate) fn map_body<'a>(old_body: &'a Node, new_body: &'a Node, old_text: &dy
     }
     let old_at = mapper.old.iter().enumerate().map(|(i, stmt)| (at(stmt.node), i)).collect();
     let new_at = mapper.new.iter().enumerate().map(|(i, stmt)| (at(stmt.node), i)).collect();
-    let Mapper { old, new, pair_old, pair_new, round3, composites, .. } = mapper;
-    Some(BodyMap { old, new, pair_old, pair_new, old_at, new_at, renames, variables, round3, composites })
+    let Mapper { old, new, pair_old, pair_new, round3, composites, weak, .. } = mapper;
+    Some(BodyMap { old, new, pair_old, pair_new, old_at, new_at, renames, variables, round3, composites, weak })
 }
 
 /// The uses of a variable in a statement pair, without the statements of the inner blocks.
@@ -838,6 +847,7 @@ mod tests {
             Some(Refactor::Moved { .. }) => " (move)".to_string(),
             Some(Refactor::Extract { var, .. }) => format!(" (extract {var})"),
             Some(Refactor::Inline { var, .. }) => format!(" (inline {var})"),
+            Some(Refactor::Arm { .. }) => " (arm)".to_string(),
             None => String::new(),
         };
         (edits.iter().map(|e| format!("{:?} {} → {}{}", e.kind, text(&e.before), text(&e.after), mark(&e.refactor))).collect(), maps)

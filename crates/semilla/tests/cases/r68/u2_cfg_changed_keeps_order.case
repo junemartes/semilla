@@ -1,5 +1,5 @@
 note: U2: one `cfg` condition of two variants changes, and the other stays: the stay pairs by its condition, the changed one pairs by the source order, and its `cfg` attribute fact stays
-rule-: R68.2-1
+rule-: R72.1-1
 must_match: attributes of `depot::sep#1`: changed `#\[cfg\(windows\)\]` → `#\[cfg\(not\(unix\)\)\]`
 === both Cargo.toml
 [package]

@@ -866,16 +866,12 @@ struct NestedSide {
     kind: String,
 }
 
-/// The bodies of the step for the graph compare (R60.3-9). A nested body (a closure, a
-/// coroutine, a constant block, a nested function: a body whose name has the name of a body of
-/// the same item first) pairs through the tree compare, not by its number:
-///
-/// 1. the old body and the new body pair if the smallest node pair that holds the node of each
-///    is the same pair, and that pair holds no other nested body of the same kind with no pair.
-///    In a pair with equal tokens, the nested bodies pair in source order (an equal count). An
-///    item with no edit in its body and no node pair (a moved item) is one such pair;
-/// 2. the bodies with no pair: an equal graph and an equal source text, in source order;
-/// 3. the other bodies are added or removed.
+/// The bodies of the step for the graph compare (R60.3-9 before batch 11d, now R72.1-1, part f).
+/// A nested body (a closure, a coroutine, a constant block, a nested function: a body whose name
+/// has the name of a body of the same item first) pairs by the one matcher, not by its number:
+/// the identity is the smallest node pair of the tree compare that holds the node of the body;
+/// then an equal source text and graph; then the best similarity of the source texts; the other
+/// bodies are added or removed.
 ///
 /// The old texts of each graph get the new names of the nested bodies (a closure type in a
 /// generic argument), and an old nested body with no pair gets a name that no new text has.
@@ -960,74 +956,51 @@ fn works(outcome: &crate::StepOutcome, index: &crate::checks::BodyIndex, map: &m
         for list in lists.iter_mut() {
             list.sort_by(|a, b| a.place.cmp(&b.place).then(a.body.cmp(&b.body)));
         }
-        let mut partner: [Vec<Option<usize>>; 2] = [vec![None; lists[0].len()], vec![None; lists[1].len()]];
-        // A body with no place on the two sides (a record with no graph) keeps the pair by its
-        // name: Semilla has no node for it.
-        for a in 0..lists[0].len() {
-            if lists[0][a].place.is_none()
-                && let Some(b) = (0..lists[1].len()).find(|b| lists[1][*b].body == lists[0][a].body && lists[1][*b].place.is_none())
-            {
-                partner[0][a] = Some(b);
-                partner[1][b] = Some(a);
-            }
-        }
-        // Rule 1: the smallest node pair that holds the node of each body.
+        // R72.1-1 (part f): the nested bodies pair by the one matcher. The identity: a body with
+        // no place on the two sides (a record with no graph) keeps its name: Semilla has no node
+        // for it; else the smallest node pair of the tree compare that holds the node of the body
+        // (the definition of the body in its item); an item with no edit in its body and no node
+        // pair (a moved item), or with no body node (a `const`, a `static`: R71.2-1), is one
+        // identity. Then an equal source text and an equal graph, then the best similarity of the
+        // source texts, then the source order.
         let holder = |side: usize, found: &NestedSide| -> Option<usize> {
             let (start, end) = (found.node?, found.end?);
             pairs.iter().enumerate().filter(|(_, pair)| pair.ranges[side].0 <= start && end <= pair.ranges[side].1).max_by(|(_, a), (_, b)| a.ranges[side].0.cmp(&b.ranges[side].0).then(b.ranges[side].1.cmp(&a.ranges[side].1)).then(a.equal.cmp(&b.equal))).map(|(at, _)| at)
         };
-        let holders: [Vec<Option<usize>>; 2] = [lists[0].iter().map(|found| holder(0, found)).collect(), lists[1].iter().map(|found| holder(1, found)).collect()];
-        let mut by_holder: BTreeMap<(usize, &str), [Vec<usize>; 2]> = BTreeMap::new();
-        for side in 0..2 {
-            for (at, found) in lists[side].iter().enumerate() {
-                if let Some(pair) = holders[side][at] {
-                    by_holder.entry((pair, found.kind.as_str())).or_default()[side].push(at);
-                }
-            }
-        }
-        for ((pair, _), [old, new]) in &by_holder {
-            if (old.len() == 1 && new.len() == 1) || (pairs[*pair].equal && old.len() == new.len()) {
-                for (a, b) in old.iter().zip(new) {
-                    partner[0][*a] = Some(*b);
-                    partner[1][*b] = Some(*a);
-                }
-            }
-        }
-        // An item with no edit in its body and no node pair: the bodies pair in source order.
-        // An item with no body node (a `const`, a `static`) has no node pair: its bodies also
-        // pair in source order (R71.2-1).
         let no_node = match (&item, &old_item) {
             (Some(item), Some(old)) => no_body_node(item, old, sides),
             _ => false,
         };
-        if pairs.is_empty() && (!edit || no_node) {
-            for kind in lists[0].iter().map(|found| found.kind.clone()).collect::<BTreeSet<_>>() {
-                let open = |side: usize, partner: &[Vec<Option<usize>>; 2]| -> Vec<usize> { (0..lists[side].len()).filter(|at| partner[side][*at].is_none() && lists[side][*at].kind == kind).collect() };
-                let (old, new) = (open(0, &partner), open(1, &partner));
-                if old.len() == new.len() {
-                    for (a, b) in old.into_iter().zip(new) {
-                        partner[0][a] = Some(b);
-                        partner[1][b] = Some(a);
-                    }
-                }
-            }
-        }
-        // Rule 2: an equal graph and an equal source text, in source order.
+        let one_identity = pairs.is_empty() && (!edit || no_node);
         let first_graph = |found: &NestedSide| -> Option<FlowGraph> {
             found.sides.iter().find_map(|(_, side)| match side {
                 FlowSide::Graph(graph) => Some(graph.clone()),
                 _ => None,
             })
         };
-        let open: [Vec<usize>; 2] = [(0..lists[0].len()).filter(|at| partner[0][*at].is_none()).collect(), (0..lists[1].len()).filter(|at| partner[1][*at].is_none()).collect()];
-        let graphs: [Vec<Option<FlowGraph>>; 2] = [lists[0].iter().map(first_graph).collect(), lists[1].iter().map(first_graph).collect()];
-        let equal = |a: usize, b: usize| {
-            let (x, y) = (&lists[0][a], &lists[1][b]);
-            x.kind == y.kind && !x.source.is_empty() && x.source == y.source && matches!((&graphs[0][a], &graphs[1][b]), (Some(g), Some(h)) if same_shape(g, h))
+        let thing = |side: usize, found: &NestedSide| -> semilla_core::matcher::Thing {
+            let identity = if found.place.is_none() {
+                Some(format!("name\u{0}{}", bodies[found.body].name))
+            } else if let Some(pair) = holder(side, found) {
+                Some(format!("holder\u{0}{pair}"))
+            } else {
+                one_identity.then(|| "item".to_string())
+            };
+            let shape = first_graph(found).filter(|graph| !graph.coroutine).map(|graph| format!("{:?}", (graph.points.iter().map(|point| (point.kind.clone(), point.text.clone())).collect::<Vec<_>>(), graph.arrows)));
+            let content = (!found.source.is_empty()).then(|| format!("{}\u{0}{:?}", found.source, shape));
+            semilla_core::matcher::Thing { group: found.kind.clone(), identity, content }
         };
-        for (a, b) in lcs(&open[0], &open[1], &equal) {
-            partner[0][a] = Some(b);
-            partner[1][b] = Some(a);
+        let things: [Vec<semilla_core::matcher::Thing>; 2] = [lists[0].iter().map(|found| thing(0, found)).collect(), lists[1].iter().map(|found| thing(1, found)).collect()];
+        let words = |text: &str| -> Vec<String> { text.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|word| !word.is_empty()).map(str::to_string).collect() };
+        let source_words: [Vec<Vec<String>>; 2] = [lists[0].iter().map(|found| words(&found.source)).collect(), lists[1].iter().map(|found| words(&found.source)).collect()];
+        let similarity = |a: usize, b: usize| if lists[0][a].source.is_empty() || lists[1][b].source.is_empty() { 0.0 } else { semilla_core::matcher::token_similarity(&source_words[0][a], &source_words[1][b]) };
+        let ladder = semilla_core::matcher::Ladder { similarity: &similarity, threshold: NESTED_THRESHOLD, in_order: None };
+        let mut partner: [Vec<Option<usize>>; 2] = [vec![None; lists[0].len()], vec![None; lists[1].len()]];
+        let mut weak: Vec<Option<semilla_core::matcher::Key>> = vec![None; lists[1].len()];
+        for pair in semilla_core::matcher::pair(&things[0], &things[1], &ladder) {
+            partner[0][pair.old] = Some(pair.new);
+            partner[1][pair.new] = Some(pair.old);
+            weak[pair.new] = pair.key.weak().then_some(pair.key);
         }
         // The works of the group.
         let shown = |lines: &mut Lines, side: usize, found: &NestedSide| -> (String, String) {
@@ -1064,7 +1037,11 @@ fn works(outcome: &crate::StepOutcome, index: &crate::checks::BodyIndex, map: &m
         for (b, found) in lists[1].iter().enumerate() {
             new_names.insert(bodies[found.body].name.clone());
             let old = partner[1][b].map(|a| &lists[0][a]);
-            let (shown, place) = shown(lines, 1, found);
+            let (mut shown, place) = shown(lines, 1, found);
+            // R72.1-3: a pair by a weak key says so.
+            if let Some(key) = weak[b] {
+                shown.push_str(&format!(" ({})", key.words()));
+            }
             let name = bodies[found.body].name.clone();
             // A pair by the name keeps the status of the MIR compare; a different pair has no
             // proof of an equal MIR text.
@@ -1120,7 +1097,11 @@ fn works(outcome: &crate::StepOutcome, index: &crate::checks::BodyIndex, map: &m
     out
 }
 
-/// The text with the new name of each nested body (R60.3-9): one pass, the longest name first,
+/// The smallest similarity of a pair of two nested bodies by the similarity of their source texts
+/// (Decided by Claude, design 72.4).
+const NESTED_THRESHOLD: f64 = 0.5;
+
+/// The text with the new name of each nested body (R72.1-1, part f): one pass, the longest name first,
 /// so a new name is never replaced again.
 fn nested_names(text: &str, names: &BTreeMap<String, String>) -> String {
     if !text.contains('{') {
@@ -1733,8 +1714,8 @@ mod tests {
         assert_eq!(diff(&old, &new, &holders(vec![None; 3], vec![None; 3])).result(), FlowResult::Same);
     }
 
-    // rule+ R60.3-9
-    // rule- R60.3-9
+    // rule+ R72.1-1
+    // rule- R72.1-1
     #[test]
     fn the_old_texts_get_the_new_names_of_the_nested_bodies_in_one_pass() {
         let names: BTreeMap<String, String> = [("shop::f::{closure#0}".to_string(), "shop::f::{closure#1}".to_string()), ("shop::f::{closure#1}".to_string(), "shop::f::{closure#1} (old)".to_string())].into_iter().collect();

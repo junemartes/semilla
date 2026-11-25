@@ -1,0 +1,41 @@
+note: G2: `format!` → `alloc::format!` with the same input: the identity of a call is the definition of its macro (the record of the compiler), not the text of its path: no added and no removed expansion
+rule+: R72.1-1
+build_check: on
+must_not_match: expansion added
+must_not_match: expansion removed
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+extern crate alloc;
+
+pub fn label(n: u32) -> alloc::string::String {
+    format!("n = {}", n)
+}
+=== new src/lib.rs
+extern crate alloc;
+
+pub fn label(n: u32) -> alloc::string::String {
+    alloc::format!("n = {}", n)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` (f1)
+      in: shop::label
+      lines: src/lib.rs:4, src/lib.rs:-4
+      to state it: --change 'shop::label=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::label=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` at `shop::label/tail` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` at `shop::label/tail` [semantics]
+    lines: src/lib.rs:4, src/lib.rs:-4

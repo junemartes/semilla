@@ -76,31 +76,33 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f2, f3)
+      in: depot::<Source as Draw>::sample
+      lines: src/lib.rs:10-11, src/lib.rs:-10
+      to state it: --change 'depot::<Source as Draw>::sample=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::<Source as Draw>::sample=TEXT'
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: trait impl `<Source as Draw<Small>>` removed with: `fn sample` (the public API can change: a different crate can use the item) [removed]
-  ◆ f2 derived: trait impl `<Source as Draw<Small>>#0` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
-  ◆ f3 derived: trait impl `<Source as Draw<Large>>#1` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
-  ◆ f4 derived: added `depot::<Source as Draw>::sample#0` (the public API can change: Semilla did not find the impl block of the method) [added]
-  ◆ f5 derived: added `depot::<Source as Draw>::sample#1` (the public API can change: Semilla did not find the impl block of the method) [added]
+  ◆ f1 derived: trait impl `<Source as Draw<Large>>#1` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+  ◆ f4 derived: added `depot::<Source as Draw>::sample#1` (a twin of `depot::<Source as Draw>::sample`) with the body: [1] [added]
+        [1] { const { assert!(true) }; #[cfg(target_pointer_width = "32")] let value = seed as u32 as usize; #[cfg(target_pointer_width = "64")] let value = seed as u64 as usize; #[cfg(not(any( target_pointer_width = "32", target_pointer_width = "64" )))] compile_error!("no width"); Large::new(value) }
+  other facts, filled in by Semilla:
+  ◆ f2 derived: deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics]
+  ◆ f3 derived: added `const_block` `const { assert!(true) }` at `depot::<Source as Draw>::sample/S0` [semantics]
   cover: each of the 21 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records
   names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-  ! spotlight: cfg attribute: depot::<Source as Draw>::sample
-  ! spotlight: cfg attribute: depot::<Source as Draw>::sample#0
   ! spotlight: cfg attribute: depot::<Source as Draw>::sample#1
-  ! spotlight: cfg attribute: depot::impl <Source as Draw>
-  ! spotlight: cfg attribute: depot::impl <Source as Draw>#0
   ! spotlight: cfg attribute: depot::impl <Source as Draw>#1
+  note: twins: `depot::<Source as Draw>::sample` of the old tree and `depot::<Source as Draw>::sample#0` of the new tree are one pair (a pair by its identity); the facts name the pair `depot::<Source as Draw>::sample`
 
 === positions
-◆ f1 derived: trait impl `<Source as Draw<Small>>` removed with: `fn sample` (the public API can change: a different crate can use the item) [removed]
-    lines: src/lib.rs:-10
-◆ f2 derived: trait impl `<Source as Draw<Small>>#0` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
-    lines: src/lib.rs:10-11
-◆ f3 derived: trait impl `<Source as Draw<Large>>#1` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+◆ f1 derived: trait impl `<Source as Draw<Large>>#1` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
     lines: src/lib.rs:25-42
-◆ f4 derived: added `depot::<Source as Draw>::sample#0` (the public API can change: Semilla did not find the impl block of the method) [added]
-    lines: src/lib.rs:10-11
-◆ f5 derived: added `depot::<Source as Draw>::sample#1` (the public API can change: Semilla did not find the impl block of the method) [added]
+◆ f4 derived: added `depot::<Source as Draw>::sample#1` (a twin of `depot::<Source as Draw>::sample`) with the body: [1] [added]
     lines: src/lib.rs:27-41
+◆ f2 derived: deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics]
+    lines: src/lib.rs:-10
+◆ f3 derived: added `const_block` `const { assert!(true) }` at `depot::<Source as Draw>::sample/S0` [semantics]
+    lines: src/lib.rs:10-11

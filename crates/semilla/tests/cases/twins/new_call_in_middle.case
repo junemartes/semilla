@@ -1,5 +1,5 @@
 note: a new call in the middle gives one fact: the added call
-rule+: R59.3-1
+rule+: R72.1-1
 === both Cargo.toml
 [package]
 name = "depot"

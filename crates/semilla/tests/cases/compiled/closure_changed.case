@@ -1,5 +1,5 @@
 note: a closure that changes and a new closure before it: the changed closure pairs with its old body, and the new closure is a new graph
-rule+: R60.3-9
+rule+: R72.1-1
 option: --compiled
 === both Cargo.toml
 [package]

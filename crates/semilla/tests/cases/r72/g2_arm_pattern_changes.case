@@ -1,0 +1,47 @@
+note: G2 (verification correction): one arm changes its pattern and keeps its body: no identity, so the arm pairs by similarity at its place, and the fact is the changed pattern of that arm
+rule+: R72.1-1
+must_match: changed (literal|pattern) `2` → `5` at `depot::f/S0/arm\[1\].pat`
+must_not_match: changed match
+must_not_match: added match arm
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn f(x: u32) -> u32 {
+    match x {
+        1 => 10,
+        2 => 20,
+        _ => 0,
+    }
+}
+=== new src/lib.rs
+pub fn f(x: u32) -> u32 {
+    match x {
+        1 => 10,
+        5 => 20,
+        _ => 0,
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed pattern `2` → `5` (f1)
+      in: depot::f
+      lines: src/lib.rs:4, src/lib.rs:-4
+      to state it: --change 'depot::f=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::f=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed pattern `2` → `5` at `depot::f/S0/arm[1].pat` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
+  names from the text: the build check did not run, so no build made the expansion records
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed pattern `2` → `5` at `depot::f/S0/arm[1].pat` [semantics]
+    lines: src/lib.rs:4, src/lib.rs:-4
