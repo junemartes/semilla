@@ -50,6 +50,8 @@ use serde::Deserialize;
 
 use crate::solver::{Answer, Solver};
 
+pub mod claim;
+
 // ---------------------------------------------------------------------------------------------
 // The form of the driver.
 
@@ -90,6 +92,9 @@ pub enum IrTy {
         #[serde(default)]
         dt: Option<u32>,
         e: bool,
+        /// The name of each field of each variant (design 67, part B).
+        #[serde(default)]
+        fs: Vec<Vec<String>>,
     },
     Ref(bool, u32),
     Opaque {
@@ -3200,7 +3205,14 @@ fn outcome_differs(a: &PathOut, b: &PathOut) -> T {
     match (&a.exit, &b.exit) {
         (Exit::Return(x), Exit::Return(y)) => parts.push(differ(x, y)),
         (Exit::Panic { kind: k1, args: a1 }, Exit::Panic { kind: k2, args: a2 }) => {
-            if k1 != k2 || a1.len() != a2.len() {
+            if k1 != k2 {
+                return t("true");
+            }
+            // `except = [panic_message]` of a claim (R67.3-7): the kind decides.
+            if claim::IGNORE_PANIC_ARGS.with(|cell| cell.get()) {
+                return or(&parts);
+            }
+            if a1.len() != a2.len() {
                 return t("true");
             }
             for (p, q) in a1.iter().zip(a2) {

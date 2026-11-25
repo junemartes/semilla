@@ -7694,6 +7694,156 @@ The cause: the variant builds start only after the walk and each body check of t
 - An expansion that is not known shows in each step that checks its target, also with no change (as R66.10-1).
 - R66.11-3 does not make a variant build cheaper, and a build stays one at a time. CPU of the builds and of the solver now overlap.
 
+## 67. Batch 10r1: the intent language in Rust form, part 1 (the language, the references, the claims that the check can prove now)
+
+The decisions of the user (2026-11-24):
+
+> "Hints and proofs should be the same, we should have a unique language to allow agents to specify intent behind the PR changes"
+
+> "To make it easier for agents to adopt could we create an AST in rust so that they can use their existing tooling for it?"
+
+> "The intent files should live outside of the production rust code, in separate files. They can reference rust code but we shouldn't need to change the production code"
+
+> "first cargo check rust workspace then check the references from semilla"
+
+> "The agents should be able to see semilla output to iterate on the diff"
+
+The language is draft 2 of the intent language (Decided by Claude, from these decisions and from a pilot with 12 pull requests): an intent file is a Rust source file; each claim is a plain Rust function with an attribute; the body is a `bool` expression that must be true for each value of the parameters; `before::PATH` names an item of the old version, and `after::PATH` names an item of the new version. Semilla never compiles or runs an intent file. This batch is part 1 of 3: 10r2 adds the loop relations and the lemmas; 10r3 adds the contracts, the invariants, the type relations, and `assume`.
+
+**The general rules.**
+
+- A claim is a line of the step. It never changes a fact, a gap, a compare result, or an equivalence result. A "proved" claim is a proof, with the rules of a proof of design 61: it comes only from an `unsat` answer of Z3 or from an equal MIR text with no changed callee.
+- A "false" claim comes only from an exact model (R61.4-2): the input is an input that the check verified on the two versions.
+- Each part that the check does not model gives "claimed" with the cause. A claim is proved only if each part of it is checked, in each checked configuration.
+- The default mode (no `--compiled`) and a step with no intent file give the same output as before.
+
+### 67.1 Part A: the crate `semilla-intent`
+
+1. [R67.1-1] **One parser of Rust syntax.** The crate `semilla-intent` parses an intent file with the syntax tree of rust-analyzer (`ra_ap_syntax`, already a dependency), then makes the syntax tree of the language: the items (`intent!("TEXT")`, a claim, a relation), the claims (the kind, the targets, the options, the function), the expressions, the types, and the paths with their version prefix. `#[same(A, B, C)]` gives one claim for each item. A construct that the language of this batch does not have (`match`, a loop, a macro call, a closure with parameters) is a node `Other`, not an error: the check gives "claimed" with the construct as the cause. An error names the file, the line, and the column, and says what the parser expected ("`i.rs:2:7`: the Rust parser expected a type"; "expected a claim attribute (`same`, `change`, …); `#[sme]` is not one").
+
+The prelude names are documented Rust items of `semilla_intent::prelude`: `intent!`, `panics`, `panics_with`, `returns`, `same_outcome`, `old` (10r3), and the tables `FUNCTIONS`, `METHODS`, `CLAIMS`, `EXCEPT`, and `VARIANTS`. The parser and the check read the tables; a unit test makes sure that each `pub fn` of the prelude has a row and each row has a `pub fn` (one source for each name).
+
+**Decided by Claude.**
+
+- An attribute argument is parsed as the argument list of a call (`_a(ARGS)`) with the same parser: a target is a path or a text literal; an option is `cfg = "…"`, `reason = "…"`, or `except = [NAME, …]`. A text target is the record name of a body (`#[same("<shop::Cart as core::fmt::Debug>::fmt")]`): the path form of Rust has no `<Type as Trait>` part.
+- A claim attribute of a later batch (`pair_loop`, `lemma`, `contract`, `invariant`, `relation`, `assume`) parses with any arguments. Alone, it is a claim with the result "claimed (the check of `#[X]` comes in batch 10rN)". Next to a claim of this batch, it is an `except` observation of that claim, so the claim is "claimed" (R67.3-8).
+- A `different` claim with parameters, a `change` claim with an empty body, and a form of `--same` with a body are errors of the parser.
+
+### 67.2 Part B: the references
+
+1. [R67.2-1] **The references resolve against the compiler data of each version.** After the build check and the driver run of the step, each path, field, method, and type of a claim resolves against the records of the version that the path names: a body by its record name, a type by its text in the type tables of the forms of the version (the forms of the bodies that the claim calls first), a field by its name. The driver now writes the name of each field of each ADT (`fs` of `IrTy::Adt`: a field of a tuple struct has its index as its name). No list of names: the data come from the compiler. Privacy does not apply: a claim reads a private field. An error names the place in the intent file, the version, and the candidates: "`after::shop::Cart.items`: the new `shop::Cart` has no field `items`; its fields: `entries`, `len`".
+2. [R67.2-2] **The typed subset.** The check type-checks each expression in the operations that the model encodes. A part outside it makes the claim "claimed" with the cause and its place; it is never an error that stops the step. A type mismatch (an argument of a type that is not the type of the parameter, two sides of `==` with different types, a literal that does not fit) is a type error.
+3. [R67.2-3] **The item of a claim must have a body in a version.** The item of `#[same(ITEM)]`, `#[change(ITEM)]`, and `#[different(ITEM)]` resolves in the old version, the new version, or both (with the rename map of the step). An item with no body in either version is an error with the candidates. `semilla intent check [FILE]` gives the parse, reference, and type errors only, and the exit code 1 if a claim has one.
+4. [R67.2-4] **A loose path.** A path that is not a record name resolves to the one body with the same plain form: no generic arguments, the type in place of `<Type as Trait>`, and the type of an `impl` block in place of `m::<impl Type>` (`hashbrown::raw::RawTable::reserve` names `hashbrown::raw::RawTable::<T, A>::reserve`). Two or more bodies with one plain form are an error with each name.
+
+**Decided by Claude.**
+
+- A path with no prefix in a call or a type must resolve to the same definition in the two versions (a body that the step does not change, a type with the same structure after the rename map); else the error asks for the prefix ("`shop::f` has a different body in the two versions: write `before::shop::f` or `after::shop::f`").
+- A call path that names no body of either version and whose first segment is a crate of the workspace is a reference error with the candidates. A call of a function outside the workspace (`std::cmp::max`) is outside the model of this batch: "claimed".
+- A value of an old type can go to a function of the new version if the two types have the same structure after the rename map (the same field types in the same order). The model passes the same value.
+- In the default mode, the references are not resolved: the default mode has no compiler data. `semilla intent check` builds the compiled records (as `semilla expand`).
+
+### 67.3 Part C: the property claims
+
+1. [R67.3-1] **A property body is true for each input.** The parameters of a claim are inputs of the model, as the parameters of a body in the equivalence check (`input` of design 61.4). A call `before::PATH(…)` or `after::PATH(…)` runs the body of that version with the inline rules of the equivalence check. The check then asks Z3 for an input where a path of the body gives `false`, a panic outside `panics`, `panics_with`, `returns`, and `same_outcome`, or an abort. `unsat` is "proved (by SMT)". The first try inlines only the bodies that the step changes; a second try inlines each callee with a form (as `check_bodies`).
+2. [R67.3-2] **A false claim needs an exact model.** "false" comes only from a failed path whose condition and value are exact (R61.4-2). An inexact failed path next to an exact one: the check asks for the exact one. No exact failed path: "claimed (no exact input)". A `#[different(ITEM)]` claim has no parameters: its one input is the literals of the body, so a proof is the difference on that input, and "false" is an exact input with the same outcome.
+3. [R67.3-3] **The checks of a debug build.** An arithmetic operation of a claim has the checks of a debug build: an overflow of `+`, `-`, `*`, `-x`, a division or a remainder by zero, `MIN / -1`, a shift past the width, and an index out of bounds panic. A claim that holds for most inputs (an overflow at `u32::MAX`, an empty input, a negative value) is false with that input.
+4. [R67.3-4] **`==` compares values only where `PartialEq` does.** `==` on integers, `bool`, `char`, `()`, tuples, sequences of scalars, and `Option` and `Result` of these compares the values. `==` on two values of one type of the workspace runs its `PartialEq::eq` of that version. `==` on another type (a float, a type of the standard library, an opaque type) is outside the model: "claimed". `&a == &b` compares the values behind the references.
+5. [R67.3-5] **The inline rules of the equivalence check.** A callee that the step changes, and each body of the reverse closure that the walk of the step does not prove equivalent (R61.10-3), must be inlined: a call of an old and a new version of such a callee is never one value. Each call of a claim starts in the world of the input: a call does not see the effects of another call of the claim; the k-th effect of two calls with the same callee and inputs has the same result (design 64).
+6. [R67.3-6] **`panics_with` and the text of a panic.** The model has no text of a panic message. On a path that panics, `panics_with` is an unknown value that is not exact: the claim is never proved there and never false there. On a path that returns, it is `false` (exact).
+7. [R67.3-7] **`except = [panic_message]`.** Two panics of one kind (one callee, one check) are the same panic, also with other arguments. This holds for `same_outcome` and for the equivalence check of an empty `#[same]` claim.
+8. [R67.3-8] **An unknown observation of `except` gives "claimed".** The check cannot ignore an observation that it does not model, and a difference can be a difference of that observation. So a claim with an `except` name other than `panic_message` (or with an attribute of a later batch) is "claimed", also when the check without it gives "proved" or "false"; the line names the result of the check without it.
+9. [R67.3-9] **`cfg = "…"`.** The claim is about the configurations whose units make the `cfg` predicate true (`all`, `any`, `not`, a name, `key = "value"`, against the true `cfg` atoms of the units of the configuration). No matching configuration: "claimed" with the checked configurations.
+10. [R67.3-10] **The results of the configurations.** A claim is proved only if each checked configuration of the claim proves it. A false result in one configuration makes the claim false, with the name of the configuration ("false: in release: …"). When the configurations do not agree, the line has the result of each.
+
+**Decided by Claude.**
+
+- A panic of a call outside the prelude functions makes the claim false for that input. A claim that wants a panic says so with `panics(|| …)`.
+- The methods of the modeled types (`METHODS` of the prelude): `len`, `is_empty` of a sequence; `is_some`, `is_none`, `is_ok`, `is_err`, `unwrap` of `Option` and `Result`. A method on a type of a version calls the method of that version (`Type::name`, or `<Type as Trait>::name`), with an auto reference for `&self`; `&mut self` is outside the model of this batch.
+- `==` between an old and a new value of one type of the workspace compares the fields: the two types are two Rust types, so no `PartialEq` exists.
+- A call that returns a reference to a value of the callee, a `&mut` parameter, and a closure outside a prelude function are outside the model of this batch.
+- The time budget of one claim in one configuration is 20 s; the query limit of the solver is 5 s (`EQUIV_TIMEOUT`). A budget that stops the check gives "claimed (the budget of the step)".
+
+### 67.4 Part C: the claims with an empty body
+
+1. [R67.4-1] **The forms of `--same`.** `#[rename(A, B)]`, `#[moved(A, B)]`, and `#[rewrite(A, B)]` with an empty body are the facts `--same 'rename A B'`, `--same 'move A B'`, and `--same 'rewrite A => B'` (the version prefix goes away), with the checks of design 48 and 54.3. The claim line has the result of the fact: "proved: the check of `--same '…'` holds (fact a1 of the agent: …)" or "false". A false form rejects the step, as a false `--same` does. In the default mode the forms keep their checks.
+2. [R67.4-2] **An empty `#[same(ITEM)]` is the equivalence check of the item.** The result is the result of the equivalence check of the step for the item in each configuration (R61.4-1 and R61.10-1): equivalent is "proved", different is "false" with the input and the two outcomes, not decided is "claimed" with the cause. An item with a body in one version only is "claimed (no compare)".
+3. [R67.4-3] **A `#[change(ITEM)]` claim states its item.** It is also the fact `--change 'ITEM=the claim `fn NAME` of the intent file …'`: the item is not in the gap list, and the item must have an edit that can change the behavior (design 54.2). A change claim on an item with no such edit rejects the step.
+
+**Decided by Claude.** A `#[same(ITEM)]` claim with a property body does not state its item for the gap list: a property is about some inputs only, and the gap list names each edit that can change the behavior.
+
+### 67.5 Part D: store, show, check again
+
+1. [R67.5-1] **The section "intent".** `semilla step "TITLE" --intent FILE` (repeatable) and `semilla fact --step N --intent FILE` store the path and the text of each file in the step note (`intent` of the facts of the agent). The step output has a section "intent" with one line for each item: the number (`i1`), the claim, the place, the options, the result (`proved`, `false`, `claimed`, `shown`, `error`, `pending`), and the method, the input, or the cause. `semilla status --verbose`, the JSON (`intent_claims` of a step), and the MCP tool `results` have the same data; the MCP tool `step` has the key `intent`. In the default mode a claim with a property body and an empty `#[same]` claim are "claimed (the check needs `--compiled`)". A step with no intent file has no section.
+2. [R67.5-2] **A false claim or an error rejects the step.** A false claim and a reference or type error make the step not accepted, as a false `--same` does: the rejected output has the line of the claim with the input or the error. A proved, claimed, or shown claim does not.
+3. [R67.5-3] **A later step checks a claim again.** A claim of an earlier step whose `after::` bodies a later step changes (a fact of the item, or a body of the control flow section) is "stale" in the later step: the later step checks it again with the tree before the earlier step and the tree after the later step, and shows the line `s0.i4 … (stale before this check: this step changes `shop::half`)` with the new result. A false result rejects the later step.
+4. [R67.5-4] **A stored claim is checked again from the stored text.** `semilla tag`, `semilla fact --again`, and each later check read the stored text of the file, not the file on disk. `semilla fact --intent FILE` with the path of a stored file replaces it; the same text adds nothing; a false claim or an error stores nothing. The stored step keeps the hash of each body that each claim reads (`intent_reads`: `ID before::PATH HASH`); a claim whose bodies have another hash at the next check has the mark "stale" with the bodies.
+5. [R67.5-5] **An intent file lives outside the production code.** A path in a `src` folder is refused. The default folder is `.semilla/intent/`.
+
+**Decided by Claude.** The number of a claim counts the items of the files of the step in order (an `intent!` text is a number too); a stale claim of an earlier step has the number `sSTEP.iN`.
+
+### 67.6 Part E: the help for the agent
+
+1. [R67.6-1] **The help names the form to give.** In a step with an intent file, a body whose equivalence check is "not decided (the parameters change)" or "not decided (the return type changes)" gets a note with the two signatures and a template of a `#[same]` claim with the parameters of the old version: "intent help for `shop::parse`: … `fn parse (x : u32) -> bool` → `fn parse (x : u32 , strict : bool) -> bool`. A property claim relates them; a template for the intent file: `#[same(shop::parse)] fn parse(x: u32) -> bool { after::shop::parse(/* x: u32, strict: bool */) == before::shop::parse(x) }`". A cause that no claim of this batch can close (a loop, no MIR) says so. A body with another cause gets no note.
+
+**Decided by Claude.** Only a step with an intent file gets the help: a step with no intent file keeps its output. `docs/agent-guide.md` tells the agent to give an intent file (also a file with only `intent!`) to get the help.
+
+### 67.7 The tests and the mutation check
+
+Rule index: no rule: the subsection lists the tests and the mutation check.
+
+- `crates/semilla-intent` (unit tests): the parser (the example of draft 2, the errors with their places, the constructs outside the language), the prelude table against its items, the `cfg` predicates, the loose path, the candidates, and the template of part E.
+- `crates/semilla/tests/intent.rs`: the driver writes the forms of the crate `shop` before and after a change, and `semilla_smt::mir::claim::check_claim` checks 19 claims: a correct claim (proved), a wrong claim (false with the exact input `x = 4`), claims that hold for most inputs (an overflow of `a + b`, `x = u8::MAX`), a private field, a field that the version does not have (the error with the fields), a function that the version does not have (the candidates), `match` (claimed), `#[different]` (proved, and false), a changed callee of an unchanged body (false), an unchanged callee (proved), `==` on `f64` (claimed) and on a type with a derived `PartialEq` (proved), and `panics_with` (claimed on a panic, false on a return).
+- `crates/semilla/tests/intent_cli.rs`: the commands on a repository of the crate `shop`: the default mode (each property claim "claimed (the check needs `--compiled`)", the forms of `--same` checked, the section in `status --verbose` and in the JSON), a step with no intent file (no section, no help), the compiled step (each claim kind, `cfg`, `except = [panic_message]`, an unknown `except` name, the help of part E), a false claim (the reject with the input; a configuration that the `cfg` option leaves out; a panic with another argument), `semilla intent check` (the errors with the candidates, a type of one version only, a parse error), a reference error in a step, a later step that breaks a claim of an earlier step (stale, false, reject) and one that keeps its bodies, `fact --again` and `fact --intent`, a file in `src`, a false form of `--same`, and a change claim on an item with no edit.
+- Each rule of this section has its markers `rule+` and `rule-`; `INDEXED` is `48..=67`.
+
+Five changes, each of one part of the check of a claim, each undone after its run (`b10r1/mutate.py`, `cargo test -p semilla --test intent`):
+
+| Change | Failed tests |
+|---|---|
+| M1: the property on one input only (each integer input is 0) | 2: `a_wrong_property_claim_is_false_with_an_exact_input`, `a_claim_that_holds_for_most_inputs_is_never_proved` |
+| M2: a `before::` path resolves in the new version | 7 (the false claims, the proofs, the changed callee, the panic message) |
+| M3: "claimed" counts as "proved" | 3: `a_construct_outside_the_model_gives_claimed_with_the_cause`, `a_panic_message_is_outside_the_model`, `equality_on_a_float_is_outside_the_model` |
+| M4: no confirmation of an exact input | 1: `a_panic_message_is_outside_the_model` |
+| M5: a panic outside `panics` is ignored | 1: `a_claim_that_holds_for_most_inputs_is_never_proved` |
+
+### 67.8 The results, the limits, the open questions, and the plan of 10r2 and 10r3
+
+Rule index: no rule: the subsection has the results, the limits, the open questions, and the plan.
+
+**The training set** (a copy at `old` with the diff, `semilla step "the change" --compiled --intent .semilla/intent/pr.rs`, the release binaries of this batch, the cache of a run with no intent file; the intent files are mine, as the author of each change, from the text of the pull request and the code):
+
+| PR | Items | Results | Time (s) | Causes |
+|---|---|---|---|---|
+| hashbrown #693 | 9 | 1 shown, 8 claimed | 37.9 | `#[same]` of `reserve`, `shrink_to`, `into_allocation`, `allocation_info`, `with_capacity`, `new_uninitialized`, `clone`, `clone_from`: a cleanup path with a call, a cast (`Transmute`), an intrinsic statement, a changed impl of a trait method, a call that returns a reference |
+| uuid #932 | 5 | 1 shown, 4 claimed | 9.7 | a call that returns a reference (`try_parse`, `std::str::from_utf8`), the return type changes (`parse_str`: `ErrorKind` changes), the parameters change (the derived `Debug`) |
+| bitflags #465 | 4 | 1 shown, 3 claimed | 4.7 | a call that returns a reference (`self.flags.get`), a call that can write through its `&mut` argument, `#[invariant]` (batch 10r3) |
+
+- No claim of the training set is proved or false: each body that the claims name has a part outside the model of the equivalence check (the same causes as its equivalence line). The results agree with the equivalence lines of the steps. I think no result is wrong.
+- The loop of the agent worked: `semilla intent check` found 3 errors in the first file of uuid (a loose path of a method of `<impl uuid::Uuid>`, a tuple struct with two fields) and 2 in bitflags (one source body with the names of `core::iter::Iterator` and `std::iter::Iterator`). The fixes of this batch: R67.2-4 (the type of an `impl` block, one source body).
+- The output of each of the three pull requests with no intent file is the same as with the binaries of `0621f1b` for hashbrown and bitflags. For uuid only the lines "not checked alone (the budget of the step)" of the variants differ: two runs of the same new binary differ in the same way (18 changed lines each), so this is the time budget of the step (R61.14-5) with another load of the machine, not this batch.
+
+**Limits.**
+
+- The model of a claim is the model of the equivalence check: a loop, a call that returns a reference, a raw pointer, a float, `&mut`, a text, and a type of the standard library outside `Option`, `Result`, and the sequences give "claimed". On the training set each claim is "claimed".
+- A panic message is not in the model (R67.3-6): `panics_with` is never proved on a path that panics, and `except = [panic_message]` helps only for a panic call with modeled arguments.
+- A call of a claim starts in the world of the input (R67.3-5): a claim cannot say "after this call, that call gives …".
+- A trait method of a type has no path form: the claim gives its record name as a text, or a loose path that names one source body.
+- The stale mark by the hash of a body (R67.5-4) has no test of its own: the hash of a body of a stored step changes only with a new driver.
+- The default mode resolves no reference of a property claim.
+
+**Open questions for the user.**
+
+- Should a proved `#[same(ITEM)]` claim with a property body take its item out of the gap list (Decided by Claude: no)?
+- Should the help of part E show in a step with no intent file (Decided by Claude: no, the output of such a step stays the same)?
+- Should a false claim of an earlier step reject the later step that breaks it (Decided by Claude: yes)?
+
+**The plan of 10r2 and 10r3, as I see it after this batch.**
+
+- 10r2: `#[pair_loop]` with `loop_state!` gives the map of the locals at the two loop heads to the inductive check of design 61.11 (the check of a map exists; the claim gives the map); `#[lemma]` at two program points. The training set needs the loops most (`IterNames::next`, the parsers of uuid).
+- 10r3: `#[contract]`, `#[invariant]`, `#[relation]` (the coupling of two representations, for `==` between an old and a new type with other fields), and `#[assume]` ("holds if"). A model of a returned reference (the memory of a call) and of `&str` would close the next largest group of causes.
+
+
 ## 68. Batch 10u: the defects of the facts that review agents found, a tag range after a tool error, and a reason for a stored step
 
 The cause of the batch: in a pilot, review agents read the Semilla output of real pull requests and listed false lines and missing lines (U1 to U12). The batch also does two open items of 10t (T1, T2). The decisions of the user that apply:

@@ -727,6 +727,7 @@ dependencies = [
  "anyhow",
  "clap",
  "semilla-core",
+ "semilla-intent",
  "semilla-normal",
  "semilla-smt",
  "semilla-syntax",
@@ -745,6 +746,14 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "semilla-intent"
+version = "0.1.0"
+dependencies = [
+ "ra_ap_syntax",
+ "serde",
 ]
 
 [[package]]
@@ -784,6 +793,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "semilla-core",
+ "semilla-intent",
  "semilla-syntax",
  "serde",
 ]
@@ -822,6 +832,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "semilla-core",
+ "semilla-intent",
  "semilla-syntax",
  "serde",
  "serde_json",

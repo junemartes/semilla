@@ -75,6 +75,10 @@ pub enum IrTy {
         #[serde(skip_serializing_if = "Option::is_none")]
         dt: Option<u32>,
         e: bool,
+        /// The name of each field of each variant (design 67, part B: a claim reads a field by
+        /// its name, also a private field). A field of a tuple struct has its index as name.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        fs: Vec<Vec<String>>,
     },
     /// A reference: true for `&mut`, the type of the target.
     Ref(bool, u32),
@@ -414,7 +418,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 let mut discriminants = Vec::new();
                 let mut discr_ty = None;
                 let mut names = Vec::new();
+                let mut field_names = Vec::new();
                 for variant in def.variants_iter() {
+                    field_names.push(variant.fields().iter().map(|field| field.name.to_string()).collect::<Vec<String>>());
                     // A field type with a projection that the environment cannot normalize
                     // makes the type opaque (design 61.9, part 0).
                     let Some(types) = (0..variant.fields().len()).map(|field_index| crate::safe::field_ty(self.tcx, self.typing, def, variant.idx(), field_index, &args)).collect::<Option<Vec<_>>>() else {
@@ -430,7 +436,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     }
                 }
                 let dt = discr_ty.map(|ty| self.ty(ty, depth + 1));
-                IrTy::Adt { n: format!("{}", rustc_public::rustc_internal::internal(self.tcx, ty)), v: variants, vn: names, d: discriminants, dt, e: enum_like }
+                IrTy::Adt { n: format!("{}", rustc_public::rustc_internal::internal(self.tcx, ty)), v: variants, vn: names, d: discriminants, dt, e: enum_like, fs: field_names }
             }
             _ => self.opaque(ty),
         }

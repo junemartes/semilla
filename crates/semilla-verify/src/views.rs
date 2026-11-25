@@ -1421,6 +1421,8 @@ pub fn agent_lines(step: &StepReport, limit: Option<usize>, below: &dyn Fn(usize
         lines.extend(fact.lines().iter().map(|line| format!("      {line}")));
         lines.extend(below(index));
     }
+    // Design 67, part D: the claims of the intent files.
+    lines.extend(crate::intent::lines(&step.intent_claims));
     lines.extend(step.gap_lines(limit));
     if let Some(command) = step.gap_command(limit) {
         lines.push(format!("  {command}"));

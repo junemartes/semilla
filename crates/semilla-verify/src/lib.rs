@@ -23,6 +23,7 @@ pub mod files;
 pub mod flow;
 pub mod hints;
 pub mod identity;
+pub mod intent;
 mod inner;
 pub mod organize;
 mod overrides;
@@ -442,6 +443,12 @@ pub trait BodyOracle {
     /// The equivalence check of two versions of each body (design 61, part C): one answer for
     /// each query, `None` if the oracle cannot check it. `renames` is the rename map of the step
     /// (old path to new path).
+    /// The check of the claims of the intent files of a step (design 67): one answer for each
+    /// query. `None`: the oracle has no compiler data (the default mode, or phase 1).
+    fn intent(&self, _step: &Step, _renames: &BTreeMap<String, String>, _queries: &[intent::Query]) -> Option<Vec<intent::Answer>> {
+        None
+    }
+
     fn equivalence(&self, _step: &Step, _renames: &BTreeMap<String, String>, queries: &[equiv::Query]) -> Vec<Option<equiv::Answer>> {
         vec![None; queries.len()]
     }
@@ -642,6 +649,17 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
             *change = format!("{}={text}", items.split(',').map(macro_call_key).collect::<Vec<_>>().join(","));
         }
     }
+    // Design 67: a claim of the forms of `--same` in an intent file is a `same` fact.
+    for text in intent::same_facts(&step.agent.intent) {
+        if !step.agent.same.contains(&text) {
+            step.agent.same.push(text);
+        }
+    }
+    for text in intent::change_facts(&step.agent.intent) {
+        if !step.agent.change.contains(&text) {
+            step.agent.change.push(text);
+        }
+    }
     impl_names(&mut step, input.before, input.after);
     let input = &StepInput { step: &step, before: input.before, after: input.after };
     // The opaque inputs of each check of this step, also of the rename search (R61.15-2).
@@ -660,6 +678,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         macro_module_spotlight(input, &mut plain.report);
         twin_notes(twin_moves, &mut plain.report);
         agent::apply(input, &mut plain);
+        intent::apply(input, bodies, &mut plain);
         tags::apply(input, &mut plain);
         comments::apply(input, &mut plain);
         return plain;
@@ -678,6 +697,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     macro_module_spotlight(input, &mut outcome.report);
     twin_notes(twin_moves, &mut outcome.report);
     agent::apply(input, &mut outcome);
+    intent::apply(input, bodies, &mut outcome);
     tags::apply(input, &mut outcome);
     comments::apply(input, &mut outcome);
     outcome

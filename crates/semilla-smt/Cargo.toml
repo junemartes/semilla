@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 semilla-core = { path = "../semilla-core" }
+semilla-intent = { path = "../semilla-intent" }
 semilla-syntax = { path = "../semilla-syntax" }
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"

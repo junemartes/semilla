@@ -758,7 +758,7 @@ impl App {
             }
             // Design 54: the facts of the agent of the step. The check of the change set
             // checks each fact; a fact with a wrong form is a problem of the plan.
-            let agent = semilla_core::AgentFacts { same: step.same.clone(), change: step.change.clone() };
+            let agent = semilla_core::AgentFacts { same: step.same.clone(), change: step.change.clone(), ..Default::default() };
             // Design 55.3: the tags of the step. A tag with a wrong form is a problem of the plan.
             let tag_form = step.tag.iter().find_map(|tag| semilla_core::report::parse_tag(tag).err().map(|error| format!("tag `{tag}`: {error}")));
             match semilla_verify::agent::check_form(&agent).and(tag_form.map_or(Ok(()), Err)) {

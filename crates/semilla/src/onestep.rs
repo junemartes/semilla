@@ -48,6 +48,8 @@ pub struct StepRequest {
     pub same: Vec<String>,
     /// Each `change` fact of the agent (design 54): `ITEM[,ITEM]=TEXT`.
     pub change: Vec<String>,
+    /// Each intent file of the agent (design 67): the path and the text.
+    pub intent_files: Vec<semilla_core::IntentFile>,
     /// Each tag of the agent (design 55.3): `PLACE[,PLACE]=NAME`.
     pub tags: Vec<String>,
     pub tree: bool,
@@ -143,7 +145,7 @@ impl StepRequest {
         if let Some(group) = &self.group {
             parts.push(format!("--group {}", quote(group)));
         }
-        parts.extend(semilla_core::AgentFacts { same: self.same.clone(), change: self.change.clone() }.options());
+        parts.extend(semilla_core::AgentFacts { same: self.same.clone(), change: self.change.clone(), intent: self.intent_files.clone(), ..Default::default() }.options());
         for tag in &self.tags {
             parts.push(format!("--tag {}", quote(tag)));
         }
@@ -339,7 +341,7 @@ impl App {
             bail!("the working tree has no change since the last step (tree {tree}); edit the code first");
         }
         // The form of each fact of the agent (design 54). The check of the facts comes later.
-        let agent = semilla_core::AgentFacts { same: request.same.clone(), change: request.change.clone() };
+        let agent = semilla_core::AgentFacts { same: request.same.clone(), change: request.change.clone(), intent: request.intent_files.clone(), ..Default::default() };
         if let Err(message) = semilla_verify::agent::check_form(&agent) {
             bail!("{message}");
         }
@@ -698,6 +700,12 @@ impl App {
                 corrected.same.retain(|option| fact.kind != "same" || !fact.options.contains(option));
                 corrected.change.retain(|option| fact.kind != "change" || !fact.options.contains(option));
             }
+            // Design 67: a false claim or an error of an intent file. The section "intent"
+            // below shows the input or the error. The claim or the code must change.
+            for claim in report.intent_claims.iter().filter(|claim| claim.blocks()) {
+                put_line(&mut text, &format!("  ✗ the intent claim {}", claim.line()));
+                blocked.push(format!("the intent claim {} is {}: correct the claim or the code", claim.id, claim.result.word()));
+            }
             // Design 55.3: a tag with a position that has no edit. The body below shows the
             // cause. The command to run again omits the tag: a tag changes no fact.
             let bad_tags: Vec<&semilla_core::report::Tag> = report.tags.iter().filter(|tag| tag.error.is_some()).collect();
@@ -795,6 +803,14 @@ impl App {
         }
         self.save_session(&session)?;
         let stored = self.step_end_with(false)?;
+        // Design 67, part D: the stored step keeps the hash of each body that its claims read.
+        if !report.intent_claims.is_empty() {
+            let mut session = self.load_session()?;
+            if let Some(step) = session.changeset.steps.get_mut(index) {
+                step.agent.intent_reads = crate::app::intent_reads(&report);
+            }
+            self.save_session(&session)?;
+        }
         let title = request.group.clone().unwrap_or_else(|| request.intent.clone());
         let mut session = self.load_session()?;
         // The kind comes from the facts and the compare results (phase 2). In phase 1 a compare
@@ -907,7 +923,7 @@ impl App {
     /// the step do not change, so the stored result of the build check stays, and no build
     /// check runs. Only the check of the facts runs again. A false fact stores nothing.
     /// Returns the text, and true if the facts are stored.
-    pub fn add_facts(&mut self, step: Option<usize>, same: &[String], change: &[String], tags: &[String], reasons: &[String]) -> Result<(String, bool)> {
+    pub fn add_facts(&mut self, step: Option<usize>, same: &[String], change: &[String], tags: &[String], reasons: &[String], intent: &[semilla_core::IntentFile], again: bool) -> Result<(String, bool)> {
         let previous = self.load_session()?;
         if previous.open.is_some() || previous.replay.is_some() {
             bail!("a step of the old protocol or a replay is open; `semilla fact` adds facts to a stored step of `semilla step`");
@@ -920,8 +936,8 @@ impl App {
         if index > last {
             bail!("no step {index}; the last stored step is step {last}");
         }
-        let added = semilla_core::AgentFacts { same: same.to_vec(), change: change.to_vec() };
-        if added.is_empty() && tags.is_empty() && reasons.is_empty() {
+        let added = semilla_core::AgentFacts { same: same.to_vec(), change: change.to_vec(), intent: intent.to_vec(), ..Default::default() };
+        if added.is_empty() && tags.is_empty() && reasons.is_empty() && !again {
             bail!("give one fact or more: `semilla fact --same 'rewrite FROM => TO'` or `semilla fact --change 'ITEM=TEXT'`; or give a tag: `semilla fact --tag 'PLACE=NAME'`; or give a reason: `semilla fact --reason 'KEY=TEXT'`");
         }
         // R68.11-1: a reason for a spotlight of a stored step, as `semilla step --reason`.
@@ -942,6 +958,20 @@ impl App {
             for text in texts {
                 if !list.contains(text) {
                     list.push(text.clone());
+                    count += 1;
+                }
+            }
+        }
+        // Design 67: an intent file with the path of a stored file replaces it.
+        for file in intent {
+            match stored.agent.intent.iter_mut().find(|known| known.path == file.path) {
+                Some(known) if known.text == file.text => {}
+                Some(known) => {
+                    *known = file.clone();
+                    count += 1;
+                }
+                None => {
+                    stored.agent.intent.push(file.clone());
                     count += 1;
                 }
             }
@@ -1023,6 +1053,16 @@ impl App {
             put_line(&mut text, "correct the positions of the tag, then run the command again.");
             return Ok((text, false));
         }
+        // Design 67: a false claim or an error of an intent file stores nothing.
+        if report.intent_claims.iter().any(|claim| claim.blocks()) {
+            self.save_session(&previous)?;
+            put_line(&mut text, &format!("rejected: nothing is added to step {index} {}", semilla_core::text::quoted(&intent)));
+            for line in &lines {
+                put_line(&mut text, line);
+            }
+            put_line(&mut text, "correct each false claim and each error of the intent file (or the code), then run the command again. `semilla intent check FILE` checks the references and the types.");
+            return Ok((text, false));
+        }
         if report.agent_facts.iter().any(|fact| !fact.holds) {
             self.save_session(&previous)?;
             put_line(&mut text, &format!("rejected: no fact is added to step {index} {}", semilla_core::text::quoted(&intent)));
@@ -1042,9 +1082,17 @@ impl App {
         }
         let new_tags = if tags.is_empty() { String::new() } else { format!(" and {tag_count} new tag(s)") };
         let new_reasons = if reasons.is_empty() { String::new() } else { format!(", {reason_count} new reason(s)") };
+        let new_tags = if again { format!("{new_tags}; the claims of the intent files are checked again") } else { new_tags };
         put_line(&mut text, &format!("stored: {count} new fact(s) of the agent{new_reasons}{new_tags} in step {index} {}; no build check runs again (the trees of the step are the same)", semilla_core::text::quoted(&intent)));
         for line in &lines {
             put_line(&mut text, line);
+        }
+        if !report.intent_claims.is_empty() {
+            let mut session = self.load_session()?;
+            if let Some(step) = session.changeset.steps.get_mut(index) {
+                step.agent.intent_reads = crate::app::intent_reads(&report);
+            }
+            self.save_session(&session)?;
         }
         put_line(&mut text, "For each fact of the step, run `semilla status --verbose`.");
         Ok((text, true))
