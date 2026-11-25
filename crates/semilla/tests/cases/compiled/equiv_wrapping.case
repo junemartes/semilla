@@ -32,10 +32,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + panic `overflow` (src/lib.rs:2)
       control flow: − call `num::<impl u32>::wrapping_add` (src/lib.rs:-2): return → return
       control flow: … 2 more (semilla status --verbose)
-      equivalence: different in dev: for x = 4294967295: before returns 0, after panics (overflow add); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
+      equivalence: different in dev: for x = 4294967295: before returns 0, after panics (overflow add) (confirmed by a run); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::next (src/lib.rs:1): graph changes: +1 check, +1 panic, −1 call, +3 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); different in dev (for x = 4294967295: before returns 0, after panics (overflow add)); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
+    shop::next (src/lib.rs:1): graph changes: +1 check, +1 panic, −1 call, +3 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); different in dev (for x = 4294967295: before returns 0, after panics (overflow add); confirmed by a run); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -112,7 +112,7 @@ impl NormalOracle {
                 let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
                 let new = EquivSide::new(sides.after.get("n0").unwrap_or(&empty));
                 let walk = walks.as_ref().and_then(|walks| walks.iter().find(|(name, _)| *name == config.name()).map(|(_, walk)| walk.clone()));
-                let one = self.claim_in(&solver, query, &old, &new, &pairs, walk.as_ref(), dry);
+                let one = self.claim_in(&solver, query, &old, &new, &pairs, walk.as_ref(), dry, (step, &config.name()));
                 results.push((config.name(), one));
             }
             answers.push(join(results, skipped, query));
@@ -122,7 +122,7 @@ impl NormalOracle {
 
     /// The check of one claim in one configuration.
     #[allow(clippy::too_many_arguments)]
-    fn claim_in(&self, solver: &semilla_smt::Solver, query: &Query, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], walk: Option<&super::reach::ConfigReach>, dry: bool) -> One {
+    fn claim_in(&self, solver: &semilla_smt::Solver, query: &Query, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], walk: Option<&super::reach::ConfigReach>, dry: bool, (change, config): (&Step, &str)) -> One {
         let claim = &query.claim;
         // [R67.2-4] The names of the bodies, one for each source body: two names of one source
         // body (the same place and plain form, for example an impl of `core::iter::Iterator` and of
@@ -201,9 +201,17 @@ impl NormalOracle {
             let check = || self.check_pair(solver, a, b, old, new, renames, true, &changed, equal_proof, deadline);
             let answer = if claim.options.except.iter().any(|name| name == "panic_message") { semilla_smt::mir::claim::with_panic_messages_ignored(check) } else { check() };
             use semilla_verify::equiv::Verdict;
-            let (result, detail) = match answer.map(|answer| answer.verdict) {
+            // [R74.1-1] A difference gets its run (design 74).
+            let mut verdict = answer.map(|answer| answer.verdict);
+            if let Some(found) = verdict.as_mut() {
+                self.confirm(change, &mut [(config, change.tree_before.as_str(), change.tree_after.as_str(), found)]);
+            }
+            let (result, detail) = match verdict {
                 Some(Verdict::Equivalent(method)) => (IntentResult::Proved, format!("equivalent by {method}")),
-                Some(Verdict::Different { input, before, after }) => (IntentResult::False, format!("for {input}: before {before}, after {after}")),
+                Some(Verdict::Different { input, before, after, run }) => {
+                    let note = run.text();
+                    (IntentResult::False, if note.is_empty() { format!("for {input}: before {before}, after {after}") } else { format!("for {input}: before {before}, after {after} ({note})") })
+                }
                 Some(Verdict::NotDecided(cause)) | Some(Verdict::NotChecked(cause)) => (IntentResult::Claimed, cause),
                 None => (IntentResult::Claimed, "no check of the item".into()),
             };
@@ -232,7 +240,27 @@ impl NormalOracle {
         use semilla_smt::mir::claim::ClaimVerdict;
         let (result, detail) = match checked.verdict {
             ClaimVerdict::Proved { method } => (IntentResult::Proved, format!("by {method}")),
-            ClaimVerdict::False { input, detail } => (IntentResult::False, format!("for {input}: {detail}")),
+            ClaimVerdict::False { input, detail, run } => {
+                // [R74.1-1] The run of the calls on the failed path (design 74): each call gets the
+                // target of its body (the library of a name first).
+                let mut verdict = semilla_verify::equiv::Verdict::Different { input: input.clone(), before: String::new(), after: String::new(), run: semilla_verify::equiv::RunNote::None };
+                if let Some(mut case) = run {
+                    for call in &mut case.calls {
+                        let side = if call.side == semilla_core::run::RunSide::Before { old } else { new };
+                        call.target = side.find(&call.name, "", "").map(|record| record.target.clone()).unwrap_or_default();
+                    }
+                    verdict = semilla_verify::equiv::Verdict::Different { input: input.clone(), before: String::new(), after: String::new(), run: semilla_verify::equiv::RunNote::Open(case) };
+                    self.confirm(change, &mut [(config, change.tree_before.as_str(), change.tree_after.as_str(), &mut verdict)]);
+                }
+                match verdict {
+                    semilla_verify::equiv::Verdict::Different { run, .. } => {
+                        let note = run.text();
+                        (IntentResult::False, if note.is_empty() { format!("for {input}: {detail}") } else { format!("for {input}: {detail} ({note})") })
+                    }
+                    semilla_verify::equiv::Verdict::NotDecided(cause) => (IntentResult::Claimed, format!("for {input}: {cause}")),
+                    _ => (IntentResult::False, format!("for {input}: {detail}")),
+                }
+            }
             ClaimVerdict::Claimed { cause } => (IntentResult::Claimed, cause),
         };
         One { result, detail, reads, errors }

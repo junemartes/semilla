@@ -133,11 +133,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different]
       affected bodies: shop::tier
-      equivalence: different: for k = 1: before returns 4, after returns 5
+      equivalence: different: for k = 1: before returns 4, after returns 5 (confirmed by a run)
       reaches: 12 public functions: shop::scale_0, shop::scale_1, shop::scale_10, and 9 more (semilla status --verbose)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::tier (src/lib.rs:1): same graph (the edit keeps the control flow); different (for k = 1: before returns 4, after returns 5)
+    shop::tier (src/lib.rs:1): same graph (the edit keeps the control flow); different (for k = 1: before returns 4, after returns 5; confirmed by a run)
     reached bodies: 12
       12 bodies: reached through shop::tier, not decided (a cast (IntToFloat)): shop::scale_0, shop::scale_1, shop::scale_10, and 9 more (semilla status --verbose)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

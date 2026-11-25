@@ -14,6 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use semilla_core::Category;
+pub use semilla_core::run::RunNote;
 use semilla_syntax::Workspace;
 
 /// One check: a body in one configuration.
@@ -33,8 +34,9 @@ pub struct Query {
 pub enum Verdict {
     /// A proof: the method (`equal MIR`, `SMT`, `SMT after inlining …`).
     Equivalent(String),
-    /// An exact input and the two outcomes.
-    Different { input: String, before: String, after: String },
+    /// An exact input and the two outcomes, and the state of the run of the real code that
+    /// confirms it (design 74, R74.1-1).
+    Different { input: String, before: String, after: String, run: RunNote },
     /// No proof and no exact input: the cause.
     NotDecided(String),
     /// No check: the cause (the budget of the step, design 61.14, R61.14-6).
@@ -45,7 +47,7 @@ pub enum Verdict {
 /// them).
 pub(crate) fn result_words() -> Vec<&'static str> {
     let empty = String::new;
-    [Verdict::Equivalent(empty()), Verdict::Different { input: empty(), before: empty(), after: empty() }, Verdict::NotDecided(empty()), Verdict::NotChecked(empty())].iter().map(Verdict::word).collect()
+    [Verdict::Equivalent(empty()), Verdict::Different { input: empty(), before: empty(), after: empty(), run: RunNote::None }, Verdict::NotDecided(empty()), Verdict::NotChecked(empty())].iter().map(Verdict::word).collect()
 }
 
 /// The cause of a check that the budget of the step stopped (R61.14-6).
@@ -116,7 +118,7 @@ impl Reached {
         for (verdict, configs) in &groups {
             let configs = if one { String::new() } else { format!(" in {}", configs.join(", ")) };
             let (text, key) = match verdict {
-                Verdict::Different { input, before, after } => (format!("different through {through}{configs}: {}: {}", for_input(input), outcomes(before, after)), format!("different through {through}{configs}")),
+                Verdict::Different { input, before, after, run } => (format!("different through {through}{configs}: {}: {}{}", for_input(input), outcomes(before, after), run_text(run, false)), format!("different through {through}{configs}")),
                 // A proof with each changed callee inlined (the check never treats a changed
                 // callee as an effect).
                 Verdict::Equivalent(_) => (format!("equivalent{configs} (proved after inlining {through})"), format!("equivalent{configs} (proved after inlining {through})")),
@@ -162,8 +164,8 @@ impl Verdict {
     fn rest(&self, step: bool) -> String {
         match self {
             Verdict::Equivalent(method) => format!(" (proved by {method})"),
-            Verdict::Different { input, before, after } if step => format!(" ({}: {})", for_input(input), outcomes(before, after)),
-            Verdict::Different { input, before, after } => format!(": {}: {}", for_input(input), outcomes(before, after)),
+            Verdict::Different { input, before, after, run } if step => format!(" ({}: {}{})", for_input(input), outcomes(before, after), run_text(run, true)),
+            Verdict::Different { input, before, after, run } => format!(": {}: {}{}", for_input(input), outcomes(before, after), run_text(run, false)),
             Verdict::NotDecided(cause) if step => format!(" ({cause})"),
             Verdict::NotDecided(cause) => format!(": {cause}"),
             // A short text on each line: the step section has the line of the budget.
@@ -183,6 +185,19 @@ pub(crate) fn outcomes(before: &str, after: &str) -> String {
         return format!("before and after return arrays that differ at {change}");
     }
     format!("before {before}, after {after}")
+}
+
+/// [R74.1-1] The text of the run of a difference after its outcomes: "; confirmed by a run" in
+/// the step line, " (confirmed by a run)" in a fact line. Empty with no data of a run.
+fn run_text(run: &RunNote, step: bool) -> String {
+    let text = run.text();
+    if text.is_empty() {
+        String::new()
+    } else if step {
+        format!("; {text}")
+    } else {
+        format!(" ({text})")
+    }
 }
 
 /// The words of an input: `for x = 4`, or `for each input` for a body with no parameter.
@@ -506,6 +521,9 @@ pub(crate) fn apply(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, ou
         }
         flow.equivalence_stop = Some(format!("the equivalence check stopped{seconds}: {}; semilla status --verbose", parts.join(", ")));
     }
+    // [R74.1-2] One line for the step when a run of the real code disagrees with the model.
+    let defect = |verdict: &Verdict| matches!(verdict, Verdict::NotDecided(cause) if cause.starts_with(semilla_core::run::DISAGREE));
+    flow.run_defects += body_results.iter().filter(|results| results.iter().any(|(_, verdict, _)| defect(verdict))).count() + fact_results.values().filter(|results| results.iter().any(|(_, verdict)| defect(verdict))).count();
     outcome.report.flow = Some(flow);
     reach_lines(input, oracle, outcome, checks, &facts_of);
 }
@@ -534,6 +552,8 @@ fn reach_lines(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcome
     let public = |name: &str| item_of(name).is_some_and(|(item, _)| item.vis == "pub" && matches!(item.kind, semilla_syntax::ItemKind::Fn));
     let place = |cause: &str| cause_text(cause, before, after);
     for body in &report.bodies {
+        // [R74.1-2] A reached body whose run disagrees with the model.
+        flow.run_defects += usize::from(body.results.iter().any(|(_, verdict)| matches!(verdict, Verdict::NotDecided(cause) if cause.starts_with(semilla_core::run::DISAGREE))));
         let (text, key) = body.text(&place);
         flow.reached.push(semilla_core::report::ReachedBody { name: body.name.clone(), place: place_of(&body.name), text, chain: body.chain.join(" → "), key });
     }
@@ -770,7 +790,7 @@ mod tests {
     #[test]
     fn the_results_of_the_configurations_join_into_one_text_when_they_agree() {
         let equal = Verdict::Equivalent("SMT".into());
-        let different = Verdict::Different { input: "x = 4294967295".into(), before: "returns 0".into(), after: "panics (overflow add)".into() };
+        let different = Verdict::Different { input: "x = 4294967295".into(), before: "returns 0".into(), after: "panics (overflow add)".into(), run: RunNote::None };
         assert_eq!(joined(&[("dev".into(), equal.clone()), ("release".into(), equal.clone())], false, false), "equivalent (proved by SMT)");
         assert_eq!(
             joined(&[("dev".into(), different.clone()), ("release".into(), equal.clone())], false, false),

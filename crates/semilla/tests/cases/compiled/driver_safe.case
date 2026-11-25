@@ -177,7 +177,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: ~ check `overflow: s.loud() + 1` → `overflow: s.loud() + 2` (src/lib.rs:-43, src/lib.rs:43)
       equivalence: `shop::bits`: not decided: the difference depends on the result of a call or on a value that the check does not model
       equivalence: `shop::copy_one`: not decided: a raw pointer
-      equivalence: `shop::first`: different: for it = a value: before returns (a value, 1), after returns (a value, 2)
+      equivalence: `shop::first`: different: for it = a value: before returns (a value, 1), after returns (a value, 2) (not confirmed by a run: the difference is in a part of the outcome that the probe does not see (an effect, or a value that the model does not give))
       equivalence: `shop::later`: not decided: a coroutine value: { x + 1 } (src/lib.rs:-69)
       equivalence: `shop::run_later`: not decided: a coroutine value: { x + 1 } (src/lib.rs:-69)
       equivalence: `shop::talk`: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
@@ -187,7 +187,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   control flow: 8 bodies
     shop::bits (src/lib.rs:46): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); not decided (the difference depends on the result of a call or on a value that the check does not model)
     shop::copy_one (src/lib.rs:50): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); not decided (a raw pointer)
-    shop::first (src/lib.rs:55): same graph (the edit keeps the control flow); different (for it = a value: before returns (a value, 1), after returns (a value, 2))
+    shop::first (src/lib.rs:55): same graph (the edit keeps the control flow); different (for it = a value: before returns (a value, 1), after returns (a value, 2); not confirmed by a run: the difference is in a part of the outcome that the probe does not see (an effect, or a value that the model does not give))
     shop::later (src/lib.rs:69): same graph; not decided (a coroutine value: { x + 1 } (src/lib.rs:-69))
     shop::later::{closure#0} { x + 2 } (src/lib.rs:69): graph not shown: coroutine: the MIR of the driver is the state machine of the coroutine, not the source
     shop::run_later (src/lib.rs:73): same graph (the edit keeps the control flow); not decided (a coroutine value: { x + 1 } (src/lib.rs:-69))

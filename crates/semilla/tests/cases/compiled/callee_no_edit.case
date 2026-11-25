@@ -49,7 +49,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
     shop::make (src/lib.rs:7): same graph (the edit keeps the control flow); not decided (the return type changes)
-    shop::total (src/lib.rs:9): same structure: 1 changed call target; no edit in the body; different (for each input: before returns 5, after returns 20)
+    shop::total (src/lib.rs:9): same structure: 1 changed call target; no edit in the body; different (for each input: before returns 5, after returns 20; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

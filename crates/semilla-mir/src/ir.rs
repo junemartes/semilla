@@ -79,6 +79,11 @@ pub enum IrTy {
         /// its name, also a private field). A field of a tuple struct has its index as name.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         fs: Vec<Vec<String>>,
+        /// [R74.1-2] True if the `Debug` impl of the type is the impl of `#[derive(Debug)]` (the
+        /// compiler marks it `#[automatically_derived]`): the probe of design 74 then knows the
+        /// `Debug` text of a value from its fields.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        g: bool,
     },
     /// A reference: true for `&mut`, the type of the target.
     Ref(bool, u32),
@@ -236,6 +241,11 @@ pub struct IrTerm {
     /// of that crate, so the check does not know if the code generation keeps the check.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub o: bool,
+    /// [R74.1-2] The message of the panic of a check, as the compiler gives it
+    /// (`AssertKind::description`: "attempt to add with overflow"). The probe of design 74
+    /// compares it with the message of a run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub m: Option<String>,
 }
 
 /// [R69.1-1] The settings of the code generation of the session that builds the machine code of
@@ -252,6 +262,12 @@ pub struct Gen {
 impl Gen {
     /// The settings of the session of the compiler.
     pub fn of_session(tcx: rustc_middle::ty::TyCtxt<'_>) -> Gen {
+        // [R74.1-2] A switch for the test of a model defect (design 74): with the variable
+        // `SEMILLA_TEST_RULE_OFF=R69.1-1`, the driver keeps each optional overflow check, as the
+        // driver before batch 11a did. Only the test of the probe sets it.
+        if std::env::var("SEMILLA_TEST_RULE_OFF").is_ok_and(|rule| rule == "R69.1-1") {
+            return Gen { overflow_checks: true, abort: !tcx.sess.panic_strategy().unwinds() };
+        }
         Gen { overflow_checks: tcx.sess.overflow_checks(), abort: !tcx.sess.panic_strategy().unwinds() }
     }
 
@@ -266,11 +282,11 @@ impl Gen {
     }
 }
 
-/// [R69.1-1] True if the code generation removes the check when the session has no overflow
-/// checks: the predicate of the compiler on the kind of the check.
-fn optional_overflow_check(msg: &AssertMessage) -> bool {
+/// The kind of a check in the form of the compiler, for the kinds whose data the predicates
+/// below do not read. `None` for a kind with data of another type.
+fn internal_kind(msg: &AssertMessage) -> Option<rustc_middle::mir::AssertKind<()>> {
     use rustc_middle::mir::AssertKind;
-    let internal: AssertKind<()> = match msg {
+    Some(match msg {
         AssertMessage::Overflow(op, ..) => {
             let op = rustc_middle::ty::tls::with(|tcx| rustc_public::rustc_internal::internal(tcx, *op));
             AssertKind::Overflow(op, (), ())
@@ -279,10 +295,84 @@ fn optional_overflow_check(msg: &AssertMessage) -> bool {
         AssertMessage::DivisionByZero(_) => AssertKind::DivisionByZero(()),
         AssertMessage::RemainderByZero(_) => AssertKind::RemainderByZero(()),
         AssertMessage::BoundsCheck { .. } => AssertKind::BoundsCheck { len: (), index: () },
-        // A kind with data of another type: the code generation always keeps it.
-        _ => return false,
-    };
-    internal.is_optional_overflow_check()
+        _ => return None,
+    })
+}
+
+/// [R69.1-1] True if the code generation removes the check when the session has no overflow
+/// checks: the predicate of the compiler on the kind of the check.
+fn optional_overflow_check(msg: &AssertMessage) -> bool {
+    // A kind with data of another type: the code generation always keeps it.
+    internal_kind(msg).is_some_and(|kind| kind.is_optional_overflow_check())
+}
+
+/// [R74.1-2] The message of the panic of a check at run time: the text that the panic function
+/// of the kind (the lang item of `AssertKind::panic_function`) gives to `panic_fmt`, from the MIR
+/// of that function. `None` for a message with the values of the check (an index out of bounds),
+/// for a kind with data of another type, and for a panic function with no such text.
+fn assert_message(msg: &AssertMessage) -> Option<String> {
+    use rustc_middle::mir::AssertKind;
+    let kind = internal_kind(msg)?;
+    if matches!(kind, AssertKind::BoundsCheck { .. }) {
+        return None;
+    }
+    let item = kind.panic_function();
+    thread_local! {
+        static KNOWN: std::cell::RefCell<HashMap<rustc_attr_ir::LangItem, Option<String>>> = std::cell::RefCell::new(HashMap::new());
+    }
+    if let Some(known) = KNOWN.with(|known| known.borrow().get(&item).cloned()) {
+        return known;
+    }
+    let found = crate::guarded(|| rustc_middle::ty::tls::with(|tcx| panic_text(tcx, item))).flatten();
+    KNOWN.with(|known| known.borrow_mut().insert(item, found.clone()));
+    found
+}
+
+/// The one text constant (`&str`) that the MIR of a panic function passes to a call.
+fn panic_text(tcx: rustc_middle::ty::TyCtxt<'_>, item: rustc_attr_ir::LangItem) -> Option<String> {
+    let def = tcx.lang_items().get(item)?;
+    let body = if tcx.is_const_fn(def) { tcx.mir_for_ctfe(def) } else if tcx.is_mir_available(def) { tcx.optimized_mir(def) } else { return None };
+    let mut texts = Vec::new();
+    for block in body.basic_blocks.iter() {
+        let rustc_middle::mir::TerminatorKind::Call { args, .. } = &block.terminator().kind else { continue };
+        for arg in args.iter() {
+            let rustc_middle::mir::Operand::Constant(constant) = &arg.node else { continue };
+            let rustc_middle::mir::Const::Val(value, ty) = constant.const_ else { continue };
+            if !(ty.is_ref() && ty.peel_refs().is_str()) {
+                continue;
+            }
+            let bytes = value.try_get_slice_bytes_for_diagnostics(tcx)?;
+            texts.push(String::from_utf8(bytes.to_vec()).ok()?);
+        }
+    }
+    (texts.len() == 1).then(|| texts.remove(0))
+}
+
+/// [R74.1-2] True if the `Debug` impl of an ADT is an impl that `#[derive(Debug)]` makes: each
+/// impl of `Debug` for the type has the mark `#[automatically_derived]` of the compiler.
+fn debug_derived(tcx: rustc_middle::ty::TyCtxt<'_>, did: rustc_span::def_id::DefId) -> bool {
+    thread_local! {
+        static KNOWN: std::cell::RefCell<HashMap<rustc_span::def_id::DefId, bool>> = std::cell::RefCell::new(HashMap::new());
+    }
+    if let Some(known) = KNOWN.with(|known| known.borrow().get(&did).copied()) {
+        return known;
+    }
+    let found = debug_derived_now(tcx, did);
+    KNOWN.with(|known| known.borrow_mut().insert(did, found));
+    found
+}
+
+fn debug_derived_now(tcx: rustc_middle::ty::TyCtxt<'_>, did: rustc_span::def_id::DefId) -> bool {
+    let Some(debug) = tcx.get_diagnostic_item(rustc_span::sym::Debug) else { return false };
+    let self_ty = tcx.type_of(did).instantiate_identity().skip_norm_wip();
+    // The impls for the type itself: a blanket impl (`impl<F: FnPtr> Debug for F`) is not one.
+    let mut impls = Vec::new();
+    tcx.for_each_relevant_impl(debug, self_ty, |imp| {
+        if tcx.type_of(imp).instantiate_identity().skip_norm_wip().ty_adt_def().is_some_and(|adt| adt.did() == did) {
+            impls.push(imp);
+        }
+    });
+    !impls.is_empty() && impls.into_iter().all(|imp| tcx.is_automatically_derived(imp))
 }
 
 /// [R69.1-1] The value of a runtime check operand in a session: the function of the compiler.
@@ -509,7 +599,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     }
                 }
                 let dt = discr_ty.map(|ty| self.ty(ty, depth + 1));
-                IrTy::Adt { n: format!("{}", rustc_public::rustc_internal::internal(self.tcx, ty)), v: variants, vn: names, d: discriminants, dt, e: enum_like, fs: field_names }
+                let g = crate::guarded(|| debug_derived(self.tcx, rustc_public::rustc_internal::internal(self.tcx, def.def_id()))).unwrap_or(false);
+                IrTy::Adt { n: format!("{}", rustc_public::rustc_internal::internal(self.tcx, ty)), v: variants, vn: names, d: discriminants, dt, e: enum_like, fs: field_names, g }
             }
             _ => self.opaque(ty),
         }
@@ -551,7 +642,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         let (r, c) = self.place_of(block.terminator.source_info.span);
         // [R69.1-2] An optional overflow check whose settings the driver does not know.
         let o = self.settings.is_none() && matches!(&block.terminator.kind, TerminatorKind::Assert { msg, .. } if optional_overflow_check(msg));
-        IrBlock { s: statements, t: IrTerm { k: self.terminator(&block.terminator.kind), r, c, o } }
+        let m = match &block.terminator.kind {
+            TerminatorKind::Assert { msg, .. } => assert_message(msg),
+            _ => None,
+        };
+        IrBlock { s: statements, t: IrTerm { k: self.terminator(&block.terminator.kind), r, c, o, m } }
     }
 
     fn place(&mut self, place: &Place) -> IrPlace {

@@ -29,10 +29,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `1` → `2` at `shop::bump/S0/rhs/args[0]` [semantics · code different]
       affected bodies: shop::bump
-      equivalence: different: for x = &0, n = 0: before returns () with `*x` = 1, after returns () with `*x` = 2
+      equivalence: different: for x = &0, n = 0: before returns () with `*x` = 1, after returns () with `*x` = 2 (confirmed by a run)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::bump (src/lib.rs:1): same graph (the edit keeps the control flow); different (for x = &0, n = 0: before returns () with `*x` = 1, after returns () with `*x` = 2)
+    shop::bump (src/lib.rs:1): same graph (the edit keeps the control flow); different (for x = &0, n = 0: before returns () with `*x` = 1, after returns () with `*x` = 2; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

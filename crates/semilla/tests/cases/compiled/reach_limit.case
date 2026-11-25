@@ -50,15 +50,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different]
       affected bodies: shop::tier
-      equivalence: different: for k = 1: before returns 4, after returns 5
+      equivalence: different: for k = 1: before returns 4, after returns 5 (confirmed by a run)
       reaches: 4 public functions: shop::c1, shop::c2, shop::c3, and 1 more (semilla status --verbose)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::tier (src/lib.rs:1): same graph (the edit keeps the control flow); different (for k = 1: before returns 4, after returns 5)
+    shop::tier (src/lib.rs:1): same graph (the edit keeps the control flow); different (for k = 1: before returns 4, after returns 5; confirmed by a run)
     reached bodies: 4
-      shop::c1 (src/lib.rs:9): different through shop::tier: for k = 1: before returns 5, after returns 6
-      shop::c2 (src/lib.rs:10): different through shop::c1: for k = 1: before returns 6, after returns 7
-      shop::c3 (src/lib.rs:11): different through shop::c2: for k = 1: before returns 7, after returns 8
+      shop::c1 (src/lib.rs:9): different through shop::tier: for k = 1: before returns 5, after returns 6 (confirmed by a run)
+      shop::c2 (src/lib.rs:10): different through shop::c1: for k = 1: before returns 6, after returns 7 (confirmed by a run)
+      shop::c3 (src/lib.rs:11): different through shop::c2: for k = 1: before returns 7, after returns 8 (confirmed by a run)
       shop::c4 (src/lib.rs:12): reached through shop::c3, not decided (the callee `shop::tier` changes in the step, and the inline step is too deep: tier(k) (src/lib.rs:-9))
       the walk stopped at depth 4: 2 more caller(s) not checked
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

@@ -79,6 +79,10 @@ pub fn keep(p: Option<Pad>) -> Pad { p.unwrap() }
 pub fn size() -> usize { std::mem::size_of::<Pad>() }
 pub fn stop(x: u32) -> u32 { if x > 3 { panic!("no") } x }
 pub fn leave(x: i32) -> i32 { if x > 3 { std::process::exit(x) } x }
+#[derive(Debug)]
+pub struct Shown { pub a: u8 }
+pub fn shown(x: u8) -> Shown { Shown { a: x } }
+pub fn pad(x: u32) -> Pad { Pad { a: x, b: 0 } }
 "##;
 
 const NEW: &str = r##"
@@ -93,6 +97,10 @@ pub fn keep(p: Option<Pad>) -> Pad { p.unwrap() }
 pub fn size() -> usize { std::mem::size_of::<Pad>() }
 pub fn stop(x: u32) -> u32 { if x > 3 { panic!("no") } x }
 pub fn leave(x: i32) -> i32 { if x > 3 { std::process::exit(x) } x }
+#[derive(Debug)]
+pub struct Shown { pub a: u8 }
+pub fn shown(x: u8) -> Shown { Shown { a: x.wrapping_add(1) } }
+pub fn pad(x: u32) -> Pad { Pad { a: x, b: 1 } }
 "##;
 
 /// The records of the two versions in `dev` and in `release`.
@@ -161,7 +169,7 @@ fn an_overflow_of_the_code_of_the_step_stays_a_difference_in_dev() {
     }
     let builds = builds();
     let dev = verdict(&builds.dev.0, &builds.dev.1, "probe::next");
-    assert!(matches!(&dev, Verdict::Different { input, before, after } if input == "x = 4294967295" && before.contains("overflow add") && after == "returns 0"), "{dev:?}");
+    assert!(matches!(&dev, Verdict::Different { input, before, after, .. } if input == "x = 4294967295" && before.contains("overflow add") && after == "returns 0"), "{dev:?}");
     let release = verdict(&builds.release.0, &builds.release.1, "probe::next");
     assert!(matches!(release, Verdict::Equivalent { .. }), "{release:?}");
 }
@@ -175,7 +183,7 @@ fn two_panics_with_other_messages_are_different() {
     let builds = builds();
     let found = verdict(&builds.dev.0, &builds.dev.1, "probe::guard");
     assert!(
-        matches!(&found, Verdict::Different { input, before, after } if input == "x = 10" && before.contains("with the message \"too big\"") && after.contains("with the message \"x is too big\"")),
+        matches!(&found, Verdict::Different { input, before, after, .. } if input == "x = 10" && before.contains("with the message \"too big\"") && after.contains("with the message \"x is too big\"")),
         "{found:?}"
     );
 }
@@ -221,4 +229,41 @@ fn an_exit_of_the_standard_library_is_an_end() {
     let builds = builds();
     let ends = record(&builds.dev.0, "probe::leave").sure_ends.clone().unwrap_or_default();
     assert!(ends.get("ends").is_some_and(|list| list.iter().any(|end| end.contains("exit"))), "{ends:?}");
+}
+
+/// The outcome of each version that the run of a difference expects (design 74).
+fn expected(found: &Verdict) -> (semilla_core::run::RunExit, semilla_core::run::RunExit) {
+    let Verdict::Different { run: Some(case), .. } = found else { panic!("no run case: {found:?}") };
+    (case.calls[0].expect.exit.clone(), case.calls[1].expect.exit.clone())
+}
+
+// rule+ R74.1-2
+#[test]
+fn the_model_gives_the_message_of_a_check_and_the_debug_text_of_a_derived_type() {
+    use semilla_core::run::RunExit;
+    if !solver_ok() {
+        return;
+    }
+    let builds = builds();
+    // The message of the panic of an overflow check: from the panic function of the compiler.
+    let (before, after) = expected(&verdict(&builds.dev.0, &builds.dev.1, "probe::next"));
+    assert_eq!(before, RunExit::Panics(Some("attempt to add with overflow".into())));
+    assert_eq!(after, RunExit::Returns(Some("0".into())));
+    // A struct with `#[derive(Debug)]`: its `Debug` text with the names of the fields.
+    let (before, after) = expected(&verdict(&builds.dev.0, &builds.dev.1, "probe::shown"));
+    assert_eq!((before, after), (RunExit::Returns(Some("Shown { a: 0 }".into())), RunExit::Returns(Some("Shown { a: 1 }".into()))));
+}
+
+// rule- R74.1-2
+#[test]
+fn a_type_with_no_derived_debug_has_no_debug_text_in_the_model() {
+    use semilla_core::run::RunExit;
+    if !solver_ok() {
+        return;
+    }
+    let builds = builds();
+    let found = verdict(&builds.dev.0, &builds.dev.1, "probe::pad");
+    assert_eq!(expected(&found), (RunExit::Returns(None), RunExit::Returns(None)));
+    let Verdict::Different { run: Some(case), .. } = &found else { panic!("{found:?}") };
+    assert!(case.blind.as_deref().is_some_and(|cause| cause.contains("does not see")), "{case:?}");
 }

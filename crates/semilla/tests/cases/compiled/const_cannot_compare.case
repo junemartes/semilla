@@ -187,7 +187,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
     shop::far (src/lib.rs:69): same graph; reads a constant that the check cannot compare: `shop::Big::<T>::FAR` (the limit of the digest); not decided (a constant that the check cannot compare: `shop::Big::<T>::FAR::<T>` (the limit of the digest))
-    shop::price (src/lib.rs:75): same graph; reads a changed constant: `shop::RATE` (7 → 6); different (for n = 1: before returns 7, after returns 6)
+    shop::price (src/lib.rs:75): same graph; reads a changed constant: `shop::RATE` (7 → 6); different (for n = 1: before returns 7, after returns 6; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

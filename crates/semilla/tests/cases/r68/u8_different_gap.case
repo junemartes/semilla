@@ -31,10 +31,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `7` → `6` at `shop::price/tail/args[0]` [semantics · code different]
       affected bodies: shop::price
-      equivalence: different: for n = 1: before returns 7, after returns 6
+      equivalence: different: for n = 1: before returns 7, after returns 6 (confirmed by a run)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:1): same graph (the edit keeps the control flow); different (for n = 1: before returns 7, after returns 6)
+    shop::price (src/lib.rs:1): same graph (the edit keeps the control flow); different (for n = 1: before returns 7, after returns 6; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

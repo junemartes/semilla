@@ -41,7 +41,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f2 derived: changed expression `0` → `n` at `shop::steps/S0/init` [semantics · code different]
       affected bodies: shop::steps (with 2 other edits of this body)
-      equivalence: different alone: for n = 1 (a bounded run of at most 4 loop iterations): before returns 2, after returns 0; the body: not decided: the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input
+      equivalence: different alone: for n = 1 (a bounded run of at most 4 loop iterations): before returns 2, after returns 0 (confirmed by a run); the body: not decided: the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input
   ◆ f3 derived: change condition `i < n` → `left > 0` at `shop::steps/S2/cond` [semantics · code different]
       affected bodies: shop::steps (with 2 other edits of this body)
       control flow: ~ branch `i < n` → `left > 0` (src/lib.rs:-4, src/lib.rs:4)

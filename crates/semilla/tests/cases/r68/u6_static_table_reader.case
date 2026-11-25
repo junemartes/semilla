@@ -80,11 +80,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: value of `shop::TABLE` changed: [1, 2, 3, 4, 5, 6, 7, 8] → [1, 2, 9, 4, 5, 6, 7, 8] [semantics · code different]
       affected bodies: shop::TABLE, shop::look
       through: `shop::TABLE` (1 body)
-      equivalence: different: for each input: before and after return arrays that differ at [2] 3 → 9 (1 of 8 elements differ)
+      equivalence: different: for each input: before and after return arrays that differ at [2] 3 → 9 (1 of 8 elements differ) (not confirmed by a run: the compiler does not accept the call in the probe (E0603: static `TABLE` is private))
   cover: each of the 4 changed line(s) is in a fact
   control flow: 4 bodies
     shop::COUNT (src/lib.rs:4): same graph (the edit keeps the control flow); not decided (a cast (Transmute))
-    shop::TABLE (src/lib.rs:2): same graph (the edit keeps the control flow); different (for each input: before and after return arrays that differ at [2] 3 → 9 (1 of 8 elements differ))
+    shop::TABLE (src/lib.rs:2): same graph (the edit keeps the control flow); different (for each input: before and after return arrays that differ at [2] 3 → 9 (1 of 8 elements differ); not confirmed by a run: the compiler does not accept the call in the probe (E0603: static `TABLE` is private))
     shop::count (src/lib.rs:18): same graph; reads a static whose initial value changes: `shop::COUNT` (value #23e6e3619be4eff3 → value #be3f487516aedd8b) (the check reads the static from the world)
     shop::look (src/lib.rs:6): same graph; reads a changed constant: `shop::TABLE` ([2] 3 → 9 (1 of 8 elements differ)); not decided (a deref of a value that is not a reference (a `Box`, a raw pointer): TABLE[i & 7] (src/lib.rs:-7))
     reached bodies: 1

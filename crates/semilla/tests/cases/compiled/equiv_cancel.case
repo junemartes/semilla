@@ -30,10 +30,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `5` → `6` at `shop::mask/tail/lhs/rhs` [semantics · code different]
       affected bodies: shop::mask (with 1 other edit of this body)
-      equivalence: different alone: for x = 0: before returns 6, after returns 5; the body: equivalent (proved by SMT)
+      equivalence: different alone: for x = 0: before returns 6, after returns 5 (confirmed by a run); the body: equivalent (proved by SMT) (the same line for f2)
   ◆ f2 derived: changed literal `3` → `0` at `shop::mask/tail/rhs` [semantics · code different]
       affected bodies: shop::mask (with 1 other edit of this body)
-      equivalence: different alone: for x = 0: before returns 6, after returns 5; the body: equivalent (proved by SMT)
+      equivalence: the same line as f1
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     shop::mask (src/lib.rs:1): same graph (the edit keeps the control flow); equivalent (proved by SMT)

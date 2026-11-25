@@ -47,10 +47,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: ~ check `overflow: b + 1` → `overflow: b + wide::make()` (src/lib.rs:-9, src/lib.rs:9)
       control flow: + arrow entry (src/lib.rs:8) → call `make` (src/lib.rs:9)
       control flow: … 1 more (semilla status --verbose)
-      equivalence: different: for b = 0: before returns 1, after returns 8
+      equivalence: different: for b = 0: before returns 1, after returns 8 (confirmed by a run)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::width (src/lib.rs:8): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for b = 0: before returns 1, after returns 8)
+    shop::width (src/lib.rs:8): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for b = 0: before returns 1, after returns 8; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

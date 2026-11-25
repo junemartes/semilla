@@ -230,7 +230,7 @@ fn ratio_float(x: f64) -> bool {
 
 #[same(shop::pair)]
 fn pair_partial_eq(x: u32) -> bool {
-    after::shop::pair(x) == after::shop::pair(x) && before::shop::pair(x) == before::shop::pair(x)
+    after::shop::pair(x) == before::shop::pair(x)
 }
 
 #[change(shop::first)]
@@ -296,6 +296,35 @@ fn coercion_outside_the_model(v: Vec<u32>) -> bool {
 fn scalar_mismatch(x: u64) -> bool {
     after::shop::small(x) == before::shop::small(1)
 }
+
+#[same(shop::half)]
+fn half_or_true(x: i32) -> bool {
+    x == x || before::shop::half(x) == after::shop::half(x)
+}
+
+#[same(shop::small)]
+fn small_same(x: u32) -> bool {
+    before::shop::small(x) == after::shop::small(x)
+}
+
+fn old_is_input(old: u32, new: u32, x: u32) -> bool {
+    old == x
+}
+
+#[same(shop::small)]
+fn relation_ignores_new(x: u32) -> bool {
+    old_is_input(before::shop::small(x), after::shop::small(x), x)
+}
+
+#[same(shop::helper)]
+fn through_a_callee(x: u32) -> bool {
+    before::shop::uses(x) == before::shop::helper(x) && after::shop::uses(x) == after::shop::helper(x)
+}
+
+#[same(shop::small)]
+fn panic_free(x: u32) -> bool {
+    returns(|| before::shop::small(x)) && returns(|| after::shop::small(x))
+}
 "#;
 
 fn verdicts() -> &'static Vec<(ClaimVerdict, Vec<String>)> {
@@ -309,7 +338,7 @@ fn proved(found: &(ClaimVerdict, Vec<String>)) -> bool {
 
 fn false_input(found: &(ClaimVerdict, Vec<String>)) -> String {
     match &found.0 {
-        ClaimVerdict::False { input, detail } => format!("{input} | {detail}"),
+        ClaimVerdict::False { input, detail, .. } => format!("{input} | {detail}"),
         other => panic!("not false: {other:?} {:?}", found.1),
     }
 }
@@ -474,6 +503,34 @@ fn a_claim_that_calls_the_two_versions_through_a_relation_is_proved() {
     assert!(proved(&verdicts()[18]), "{:?}", verdicts()[18]);
 }
 
+// rule+ R74.2-1
+#[test]
+fn a_claim_that_is_true_for_any_result_of_a_version_of_its_item_is_claimed() {
+    // A part that does not decide the truth calls the two versions.
+    let cause = claimed(&verdicts()[28]);
+    assert!(cause.contains("true for any result of `before::shop::half`"), "{cause}");
+    // A relation that ignores the new version: the claim is about the old version only.
+    let cause = claimed(&verdicts()[30]);
+    assert!(cause.contains("true for any result of `after::shop::small`"), "{cause}");
+    // A callee of the claim calls the item: its calls get the free result too.
+    let cause = claimed(&verdicts()[31]);
+    assert!(cause.contains("true for any result of `before::shop::helper`"), "{cause}");
+    // A claim that only states that each version returns: a free call returns.
+    let cause = claimed(&verdicts()[32]);
+    assert!(cause.contains("true for any result of `before::shop::small`"), "{cause}");
+}
+
+// rule- R74.2-1
+#[test]
+fn a_claim_whose_truth_depends_on_each_version_stays_proved() {
+    // The two versions compared: a free result of either one makes the body false.
+    assert!(proved(&verdicts()[29]), "{:?}", verdicts()[29]);
+    // The proofs of the other claims of this file depend on each version.
+    for index in [0, 2, 4, 8, 15, 18, 20, 24] {
+        assert!(proved(&verdicts()[index]), "{index}: {:?}", verdicts()[index]);
+    }
+}
+
 // rule+ R69.5-2
 #[test]
 fn a_coercion_of_rust_is_never_a_type_error() {
@@ -490,3 +547,4 @@ fn a_scalar_of_another_type_is_a_type_error() {
     let found = &verdicts()[27];
     assert!(found.1.len() == 1 && found.1[0].contains("has the type `u64`; the parameter has the type `u32`"), "{found:?}");
 }
+

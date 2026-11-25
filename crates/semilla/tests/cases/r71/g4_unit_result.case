@@ -29,13 +29,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + arrow entry (src/lib.rs:1) → branch `x > 4` (src/lib.rs:1)
       control flow: … 1 more (semilla status --verbose)
       equivalence: `shop::F`: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
-      equivalence: `shop::F::{closure#0} |x| if x > 4 { x } else { 0 }`: different: for captures = &a closure, x = 4: before returns 4, after returns 0
+      equivalence: `shop::F::{closure#0} |x| if x > 4 { x } else { 0 }`: different: for captures = &a closure, x = 4: before returns 4, after returns 0 (not confirmed by a run: the body has no path that a call can name (a closure or a nested body))
       reaches: 1 body, no public function: shop::F (semilla status --verbose)
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
     shop::F (src/lib.rs:1): same graph; not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined)); with its nested bodies: different in `shop::F::{closure#0}`
-    shop::F::{closure#0} |x| if x > 4 { x } else { 0 } (src/lib.rs:1): graph changes: +1 branch, −1 branch, +3 arrows, −3 arrows; different (for captures = &a closure, x = 4: before returns 4, after returns 0)
+    shop::F::{closure#0} |x| if x > 4 { x } else { 0 } (src/lib.rs:1): graph changes: +1 branch, −1 branch, +3 arrows, −3 arrows; different (for captures = &a closure, x = 4: before returns 4, after returns 0; not confirmed by a run: the body has no path that a call can name (a closure or a nested body))
     reached bodies: 1
       shop::F (src/lib.rs:1): reached through shop::F::{closure#0}, not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

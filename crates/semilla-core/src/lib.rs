@@ -15,6 +15,7 @@ pub mod namerec;
 pub mod names;
 pub mod ops;
 pub mod report;
+pub mod run;
 pub mod text;
 pub mod view;
 

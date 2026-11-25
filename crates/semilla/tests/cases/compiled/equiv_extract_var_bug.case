@@ -33,16 +33,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: shop::total (with 1 other edit of this body)
       control flow: + check `overflow: n + p` (src/lib.rs:2): ok → check `overflow: sum + 1`, fail → panic `overflow`
       control flow: + arrow entry (src/lib.rs:1) → check `overflow: n + p` (src/lib.rs:2)
-      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: different in dev: for n = 0, p = 1: before returns 1, after returns 2; different in release: for n = 1, p = 0: before returns 1, after returns 2
+      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: different in dev: for n = 0, p = 1: before returns 1, after returns 2 (confirmed by a run); different in release: for n = 1, p = 0: before returns 1, after returns 2 (confirmed by a run)
   ◆ f2 derived: changed expression `n * p` → `sum` at `shop::total/tail/lhs` [semantics · code different]
       affected bodies: shop::total (with 1 other edit of this body)
       control flow: − check `overflow: n * p` (src/lib.rs:-2): ok → check `overflow: n * p + 1`, fail → panic `overflow`
       control flow: ~ check `overflow: n * p + 1` → `overflow: sum + 1` (src/lib.rs:-2, src/lib.rs:3)
       control flow: − arrow entry (src/lib.rs:-1) → check `overflow: n * p` (src/lib.rs:-2)
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: different in dev: for n = 0, p = 1: before returns 1, after returns 2; different in release: for n = 1, p = 0: before returns 1, after returns 2
+      equivalence: not decided alone: the variant with only this edit does not compile; the body: different in dev: for n = 0, p = 1: before returns 1, after returns 2 (confirmed by a run); different in release: for n = 1, p = 0: before returns 1, after returns 2 (confirmed by a run)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    shop::total (src/lib.rs:1): graph changes: +1 check, −1 check, 1 changed check, +3 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); different in dev (for n = 0, p = 1: before returns 1, after returns 2); different in release (for n = 1, p = 0: before returns 1, after returns 2)
+    shop::total (src/lib.rs:1): graph changes: +1 check, −1 check, 1 changed check, +3 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); different in dev (for n = 0, p = 1: before returns 1, after returns 2; confirmed by a run); different in release (for n = 1, p = 0: before returns 1, after returns 2; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

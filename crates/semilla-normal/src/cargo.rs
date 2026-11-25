@@ -646,6 +646,100 @@ pub fn run_cargo_check_delta_config(
     Ok(built)
 }
 
+/// [R74.1-1] The build of a probe crate (design 74).
+#[derive(Debug, Default)]
+pub struct ProbeBuild {
+    pub ok: bool,
+    /// True if the time limit stopped the build.
+    pub stopped: bool,
+    /// Each compiler error: the line of its first span in `src/main.rs` of the probe (if it has
+    /// one), its code, and its text.
+    pub errors: Vec<(Option<usize>, String, String)>,
+    /// The last lines of the error output of cargo, for a failure with no compiler error.
+    pub tail: String,
+}
+
+/// [R74.1-1] Builds a probe crate (design 74): `cargo build --offline` in the probe folder with
+/// the toolchain of the driver, in the sandbox of a check build (it writes only the target
+/// folder and the lock file of the probe, it reads the probe, the trees, the toolchain, and the
+/// cargo registry, and it makes no socket), with a time limit.
+pub fn probe_build(probe: &Path, trees: &[PathBuf], target_dir: &Path, release: bool, limit: std::time::Duration) -> Result<ProbeBuild> {
+    let root = toolchain_root()?;
+    std::fs::create_dir_all(target_dir).with_context(|| format!("cannot create {}", target_dir.display()))?;
+    let target_dir = std::fs::canonicalize(target_dir)?;
+    let temporary = target_dir.join("tmp");
+    std::fs::create_dir_all(&temporary)?;
+    let probe_real = std::fs::canonicalize(probe)?;
+    let mut command = Command::new(root.join("bin/cargo"));
+    command.args(["build", "--quiet", "--offline", "--message-format=json"]);
+    if release {
+        command.arg("--release");
+    }
+    command.arg("--target-dir").arg(&target_dir).current_dir(&probe_real);
+    build_environment(&mut command, &root, Some(&temporary));
+    let mut read = read_list(&probe_real, &root);
+    for tree in trees {
+        read.push(std::fs::canonicalize(tree).unwrap_or_else(|_| tree.clone()));
+    }
+    let lock = probe_real.join("Cargo.lock");
+    if !lock.exists() {
+        std::fs::write(&lock, "")?;
+    }
+    let sandbox = crate::sandbox::Sandbox { folders: vec![target_dir.clone()], files: vec![lock], read };
+    sandbox.apply(&mut command).map_err(|cause| anyhow::anyhow!("cannot start the sandbox for the probe build: {cause}"))?;
+    let (output, stopped) = crate::sandbox::run_within(&mut command, limit).context("cannot run cargo")?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut errors = Vec::new();
+    for line in stdout.lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if message.get("reason").and_then(|r| r.as_str()) != Some("compiler-message") {
+            continue;
+        }
+        let diagnostic = &message["message"];
+        if diagnostic["level"].as_str().is_none_or(|level| !level.starts_with("error")) {
+            continue;
+        }
+        let text = diagnostic["message"].as_str().unwrap_or_default().to_string();
+        if text.contains("aborting due to") {
+            continue;
+        }
+        let code = diagnostic["code"]["code"].as_str().unwrap_or_default().to_string();
+        let in_main = message["manifest_path"].as_str().is_some_and(|path| Path::new(path).starts_with(&probe_real));
+        let line = in_main
+            .then(|| diagnostic["spans"].as_array().into_iter().flatten().find(|span| span["file_name"].as_str().is_some_and(|file| file.ends_with("main.rs"))).and_then(|span| span["line_start"].as_u64()))
+            .flatten()
+            .map(|line| line as usize);
+        errors.push((line, code, text));
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let tail = stderr.lines().filter(|line| !line.trim().is_empty()).rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+    Ok(ProbeBuild { ok: output.status.success() && !stopped, stopped, errors, tail })
+}
+
+/// [R74.1-1] The end of a run of a probe: the exit code or the signal, and true if the time
+/// limit stopped it.
+#[derive(Debug)]
+pub struct ProbeRun {
+    pub code: Option<i32>,
+    pub signal: Option<i32>,
+    pub stopped: bool,
+}
+
+/// [R74.1-1] Runs a probe binary in the sandbox (design 74): it reads the binary and the system
+/// folders, it writes only the file `out` and the folder `scratch`, and it makes no socket. The
+/// environment is empty except `HOME` and `TMPDIR` (the folder `scratch`).
+pub fn probe_run(binary: &Path, args: &[String], out: &Path, scratch: &Path, limit: std::time::Duration) -> Result<ProbeRun> {
+    std::fs::create_dir_all(scratch)?;
+    std::fs::write(out, "")?;
+    let mut command = Command::new(binary);
+    command.args(args).current_dir(scratch).env_clear().env("PATH", "/usr/bin:/bin").env("HOME", scratch).env("TMPDIR", scratch);
+    let sandbox = crate::sandbox::Sandbox { folders: vec![scratch.to_path_buf()], files: vec![out.to_path_buf()], read: vec![binary.to_path_buf()] };
+    sandbox.apply(&mut command).map_err(|cause| anyhow::anyhow!("cannot start the sandbox for the probe run: {cause}"))?;
+    let (output, stopped) = crate::sandbox::run_within(&mut command, limit).context("cannot run the probe")?;
+    use std::os::unix::process::ExitStatusExt;
+    Ok(ProbeRun { code: output.status.code(), signal: output.status.signal(), stopped })
+}
+
 /// A check build that cargo ran and that failed, with the standard output of cargo.
 #[derive(Debug)]
 struct FailedBuild {
@@ -1389,6 +1483,10 @@ fn run_check_once(
     command.env("RUSTC_WORKSPACE_WRAPPER", &driver).env("SEMILLA_MIR_LEVEL", level).env("SEMILLA_MIR_OUT", &out).env("SEMILLA_MIR_RUN", nonce);
     // No file of an internal compiler error in the tree.
     command.env("RUSTC_ICE", "0");
+    // [R74.1-2] The switch of the test of a model defect (design 74) goes to the driver.
+    if let Ok(rule) = std::env::var("SEMILLA_TEST_RULE_OFF") {
+        command.env("SEMILLA_TEST_RULE_OFF", rule);
+    }
     if !forms {
         command.env("SEMILLA_MIR_FORMS", "off");
     }

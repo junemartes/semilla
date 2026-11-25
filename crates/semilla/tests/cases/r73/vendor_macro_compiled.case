@@ -56,7 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ✗ spotlight: Rust code that Semilla does not parse: this file is code of the lib target `depot` of the package in `vendor/depot` (not a workspace member); it needs a reason: --reason 'vendor/depot/src/lib.rs:=…'
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (shop/src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); no edit in the body; different (for v = 0: before returns 10, after returns 12); the expansion of `depot::fee!(v)` changes (semilla expand shop/src/lib.rs:1)
+    shop::price (shop/src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); no edit in the body; different (for v = 0: before returns 10, after returns 12; confirmed by a run); the expansion of `depot::fee!(v)` changes (semilla expand shop/src/lib.rs:1)
   expansions: 1 changed
     `depot::fee!(v)` at `shop::price/tail` (shop/src/lib.rs:1): expansion changed: `macro_rules! depot::fee` (vendor/depot/src/lib.rs:2): changed literal `10` → `12` at `expansion/rhs` [semantics]; from `macro_rules! depot::fee` (vendor/depot/src/lib.rs:2)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

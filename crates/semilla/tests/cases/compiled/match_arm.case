@@ -57,10 +57,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: depot::cost
       control flow: + call `cost_of` (src/lib.rs:10): return → return
       control flow: + arrow branch `s` (src/lib.rs:8) → call `cost_of` (src/lib.rs:10) (depot::Shape::Line)
-      equivalence: different: for s = &Line: before returns 2, after returns 3
+      equivalence: different: for s = &Line: before returns 2, after returns 3 (confirmed by a run)
   cover: each of the 1 changed line(s) is in a fact
   control flow: 1 body
-    depot::cost (src/lib.rs:7): graph changes: +1 call, +3 arrows, −1 arrow; different (for s = &Line: before returns 2, after returns 3)
+    depot::cost (src/lib.rs:7): graph changes: +1 call, +3 arrows, −1 arrow; different (for s = &Line: before returns 2, after returns 3; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
