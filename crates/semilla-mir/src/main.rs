@@ -900,7 +900,7 @@ fn add_forms(found: &mut BodyRecord, item: CrateItem, body: &Body) {
         found.q = serde_json::to_string(&ir::Ir { u: Some(cause), ..ir::Ir::default() }).ok();
         return;
     }
-    let form = guarded(|| ir::build(body, Some(item.def_id()))).unwrap_or_else(|| ir::Ir { u: Some(safe::no_form("the driver failed to read the body")), ..ir::Ir::default() });
+    let form = guarded(|| ir::build(body, Some(item.def_id()), rustc_middle::ty::tls::with(|tcx| Some(ir::Gen::of_session(tcx))))).unwrap_or_else(|| ir::Ir { u: Some(safe::no_form("the driver failed to read the body")), ..ir::Ir::default() });
     match guarded(|| ir::std_callees(&form, body)) {
         Some(callees) => found.qx = (!callees.is_empty()).then(|| serde_json::to_string(&callees).unwrap_or_default()),
         None => found.qx = None,

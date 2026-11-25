@@ -118,6 +118,9 @@ pub struct Pair { a: u32, b: u32 }
 pub fn pair(x: u32) -> Pair { Pair { a: x, b: 1 } }
 pub fn helper(x: u32) -> u32 { x ^ 9 }
 pub fn uses(x: u32) -> u32 { helper(x) }
+pub fn guard(x: u32) -> u32 { assert!(x < 10, "too big"); x }
+pub fn total(v: &[u32]) -> usize { v.len() }
+pub fn small(x: u32) -> u32 { x }
 "##;
 
 const NEW: &str = r##"
@@ -138,6 +141,9 @@ pub struct Pair { a: u32, b: u32 }
 pub fn pair(x: u32) -> Pair { Pair { a: x, b: 1 } }
 pub fn helper(x: u32) -> u32 { x ^ 9 }
 pub fn uses(x: u32) -> u32 { let y = x; helper(y) }
+pub fn guard(x: u32) -> u32 { assert!(x < 10, "x is too big"); x }
+pub fn total(v: &[u32]) -> usize { v.len() + 0 }
+pub fn small(x: u32) -> u32 { x }
 "##;
 
 const CLAIMS: &str = r#"
@@ -174,7 +180,7 @@ fn half_even(x: i32) -> bool {
 
 #[same(shop::cart_len)]
 fn private_field(c: &before::shop::Cart) -> bool {
-    before::shop::cart_len(c) == c.len
+    before::shop::cart_len(c) == c.len && after::shop::cart_len(c) == c.len
 }
 
 #[same(shop::count)]
@@ -224,7 +230,7 @@ fn ratio_float(x: f64) -> bool {
 
 #[same(shop::pair)]
 fn pair_partial_eq(x: u32) -> bool {
-    after::shop::pair(x) == after::shop::pair(x)
+    after::shop::pair(x) == after::shop::pair(x) && before::shop::pair(x) == before::shop::pair(x)
 }
 
 #[change(shop::first)]
@@ -240,6 +246,55 @@ fn half_message(x: i32) -> bool {
 #[same(shop::uses)]
 fn unchanged_callee(x: u32) -> bool {
     after::shop::uses(x) == before::shop::uses(x)
+}
+
+#[same(shop::guard)]
+fn guard_message(x: u32) -> bool {
+    same_outcome(|| before::shop::guard(x), || after::shop::guard(x))
+}
+
+#[same(shop::guard, except = [panic_message])]
+fn guard_kind(x: u32) -> bool {
+    same_outcome(|| before::shop::guard(x), || after::shop::guard(x))
+}
+
+#[same(shop::half)]
+fn trivial(x: i32) -> bool {
+    x == x
+}
+
+#[same(shop::half)]
+fn only_before(x: i32) -> bool {
+    before::shop::half(x) <= x || x < 0
+}
+
+#[same(shop::uses)]
+fn about_another_item(x: u32) -> bool {
+    before::shop::helper(x) == after::shop::helper(x)
+}
+
+fn same_helper(x: u32) -> bool {
+    before::shop::helper(x) == after::shop::helper(x)
+}
+
+#[same(shop::helper)]
+fn through_a_relation(x: u32) -> bool {
+    same_helper(x)
+}
+
+#[same(shop::total)]
+fn vector_to_slice(v: Vec<u32>) -> bool {
+    after::shop::total(&v) == before::shop::total(&v)
+}
+
+#[same(shop::total)]
+fn coercion_outside_the_model(v: Vec<u32>) -> bool {
+    after::shop::total(&&v) == before::shop::total(&v)
+}
+
+#[same(shop::small)]
+fn scalar_mismatch(x: u64) -> bool {
+    after::shop::small(x) == before::shop::small(1)
 }
 "#;
 
@@ -386,4 +441,52 @@ fn a_claim_inside_the_model_is_not_claimed() {
 fn a_different_claim_with_no_difference_is_false() {
     let text = false_input(&verdicts()[9]);
     assert!(text.starts_with("the input of the claim |"), "{text}");
+}
+
+// rule+ R69.3-1
+#[test]
+fn a_claim_sees_two_panic_messages_as_two_outcomes() {
+    let text = false_input(&verdicts()[19]);
+    assert!(text.starts_with("x = 10 |") && text.contains("with the message \"too big\"") && text.contains("with the message \"x is too big\""), "{text}");
+}
+
+// rule- R69.3-1
+#[test]
+fn except_panic_message_ignores_the_message() {
+    assert!(proved(&verdicts()[20]), "{:?}", verdicts()[20]);
+}
+
+// rule+ R69.4-1
+#[test]
+fn a_claim_that_does_not_call_the_two_versions_of_its_item_is_claimed() {
+    let cause = claimed(&verdicts()[21]);
+    assert!(cause.contains("does not call `before::shop::half` and `after::shop::half`"), "{cause}");
+    let cause = claimed(&verdicts()[22]);
+    assert!(cause.contains("does not call `after::shop::half`") && !cause.contains("before::shop::half`"), "{cause}");
+    let cause = claimed(&verdicts()[23]);
+    assert!(cause.contains("does not call `before::shop::uses` and `after::shop::uses`"), "{cause}");
+}
+
+// rule- R69.4-1
+#[test]
+fn a_claim_that_calls_the_two_versions_through_a_relation_is_proved() {
+    assert!(proved(&verdicts()[24]), "{:?}", verdicts()[24]);
+    assert!(proved(&verdicts()[18]), "{:?}", verdicts()[18]);
+}
+
+// rule+ R69.5-2
+#[test]
+fn a_coercion_of_rust_is_never_a_type_error() {
+    // The model encodes `&Vec<u32>` to `&[u32]`.
+    assert!(proved(&verdicts()[25]), "{:?}", verdicts()[25]);
+    // `&&Vec<u32>` to `&[u32]` is a coercion of Rust that the model does not encode.
+    let cause = claimed(&verdicts()[26]);
+    assert!(cause.contains("Rust can coerce it") && verdicts()[26].1.is_empty(), "{cause}");
+}
+
+// rule- R69.5-2
+#[test]
+fn a_scalar_of_another_type_is_a_type_error() {
+    let found = &verdicts()[27];
+    assert!(found.1.len() == 1 && found.1[0].contains("has the type `u64`; the parameter has the type `u32`"), "{found:?}");
 }

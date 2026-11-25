@@ -307,9 +307,11 @@ fn each_effect_keeps_the_order_of_a_call_and_a_call_with_no_effect_is_a_value() 
         ("shop::one_mut_loop", "not decided", "the order of the calls changes: shop::spin, shop::twist"),
         ("shop::read_other", "equivalent", ""),
         ("shop::read_same", "different", "a = &"),
-        ("shop::two_panics", "not decided", "the order of the calls changes: shop::check_small, shop::check_even"),
+        // R69.3-1: the message of a panic is a part of its outcome, so two panics in another
+        // order are a sure difference when their messages differ.
+        ("shop::two_panics", "different", "before: \"panics (`std::rt::panic_fmt` with the message \\\"too large\\\")\", after: \"panics (`std::rt::panic_fmt` with the message \\\"odd\\\")"),
         ("shop::panic_and_pure", "equivalent", ""),
-        ("shop::panic_and_write", "not decided", "the order of the calls changes: shop::check_small, shop::inc"),
+        ("shop::panic_and_write", "different", "with `*a` = 3\", after: \"panics (`std::rt::panic_fmt` with the message \\\"too large\\\") with `*a` = 4"),
         ("shop::two_cells", "not decided", "the order of the calls changes: shop::touch"),
         ("shop::static_hits", "equivalent", ""),
         ("shop::static_twice", "not decided", ""),

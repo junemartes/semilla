@@ -79,12 +79,12 @@ fn half(x: i32) -> bool {
 
 #[same(shop::cart_len)]
 fn private_field(c: &after::shop::Cart) -> bool {
-    after::shop::cart_len(c) == c.len
+    after::shop::cart_len(c) == c.len && before::shop::cart_len(c) == c.len
 }
 
 #[same(shop::mode, cfg = "debug_assertions")]
 fn mode_in_dev() -> bool {
-    after::shop::mode() == 1
+    after::shop::mode() == before::shop::mode() && after::shop::mode() == 1
 }
 
 #[same(shop::limit, except = [panic_message])]
@@ -322,4 +322,54 @@ fn a_false_form_of_same_or_a_change_claim_with_no_edit_rejects_the_step() {
     let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/forms.rs"], 1);
     assert!(claim_line(&text, "i1").contains("false"), "{text}");
     assert!(text.lines().any(|line| line.contains("✗") && line.contains("change") && line.contains("shop::cart_len")), "{text}");
+}
+
+// rule+ R69.5-1
+#[test]
+fn a_relation_before_a_claim_keeps_the_error_of_the_claim_in_the_step() {
+    let (_dir, repo) = setup();
+    let text = "fn same_len(b: &before::shop::Cart, a: &after::shop::Cart) -> bool { b.len == a.len }\n\n#[same(shop::cart_len)]\nfn field(c: &after::shop::Cart) -> bool { c.items.len() == 0 }\n";
+    write(&repo, ".semilla/intent/relation.rs", text);
+    let check = run(&repo, &["intent", "check", ".semilla/intent/relation.rs"], 1);
+    assert!(check.contains("✗ i1 ") && check.contains("has no field `items`"), "{check}");
+    // The step finds the same error with the same id; it never shows "pending".
+    let step = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/relation.rs", "--compiled"], 1);
+    assert!(claim_line(&step, "i1").contains("error") && step.contains("has no field `items`") && !step.contains("pending"), "{step}");
+}
+
+/// A repository of the crate `shop` with a method whose type of `self` changes a field.
+fn setup_self_type() -> (common::TestDir, PathBuf) {
+    let dir = common::TestDir::new();
+    let repo = dir.path().join("repo");
+    write(&repo, "Cargo.toml", "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n");
+    write(&repo, ".gitignore", "/target\n/.semilla/\n");
+    write(&repo, "src/lib.rs", "pub struct Pt { x: u32, n: u8 }\nimpl Pt {\n    pub fn get(&self) -> u64 { self.x as u64 }\n}\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base"]);
+    write(&repo, "src/lib.rs", "pub struct Pt { x: u64, n: u8 }\nimpl Pt {\n    pub fn get(&self) -> u64 { self.x }\n}\n");
+    write(&repo, ".semilla/intent/step.rs", "intent!(\"widen x\");\n");
+    (dir, repo)
+}
+
+// rule+ R69.5-3
+#[test]
+fn the_help_names_the_changed_field_of_the_type_of_self() {
+    let (_dir, repo) = setup_self_type();
+    let text = run(&repo, &["step", "widen x", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    assert!(text.contains("intent help for `shop::Pt::get`") && text.contains("`fn get (& self) -> u64`: the type of `self` changes: `shop::Pt`: `x: u32` → `x: u64`"), "{text}");
+    assert!(!text.contains("`fn get (& self) -> u64` → `fn get (& self) -> u64`"), "{text}");
+    // The result is "not decided": the help gives a template for each case, and the receiver
+    // is a value of the old type.
+    assert!(text.contains("if the behavior does not change: `#[same(shop::Pt::get)] fn get(this: &before::shop::Pt)"), "{text}");
+    assert!(text.contains("if it changes: `#[change(shop::Pt::get, reason = \"…\")] fn get(this: &before::shop::Pt)"), "{text}");
+}
+
+// rule- R69.5-3
+#[test]
+fn the_help_of_two_different_signatures_names_the_two_signatures() {
+    let (_dir, repo) = setup();
+    write(&repo, ".semilla/intent/step.rs", "intent!(\"strict parse\");\n");
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    assert!(text.contains("`fn parse (x : u32) -> bool` → `fn parse (x : u32 , strict : bool) -> bool`") && !text.contains("the type of `self` changes"), "{text}");
 }

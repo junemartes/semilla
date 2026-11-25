@@ -231,6 +231,69 @@ pub struct IrTerm {
     pub r: Option<[i64; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub c: Option<[i64; 3]>,
+    /// [R69.1-2] An optional overflow check (the compiler: `is_optional_overflow_check`) of a
+    /// body whose machine code an upstream crate builds: the driver does not know the settings
+    /// of that crate, so the check does not know if the code generation keeps the check.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub o: bool,
+}
+
+/// [R69.1-1] The settings of the code generation of the session that builds the machine code of
+/// a body (design 69, G5). The code generation reads them, not the MIR: it removes an optional
+/// overflow check when the session has no overflow checks, it gives each runtime check operand
+/// (`RuntimeChecks`) the value of the session, and with the panic strategy `abort` a panic runs
+/// no cleanup path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Gen {
+    pub overflow_checks: bool,
+    pub abort: bool,
+}
+
+impl Gen {
+    /// The settings of the session of the compiler.
+    pub fn of_session(tcx: rustc_middle::ty::TyCtxt<'_>) -> Gen {
+        Gen { overflow_checks: tcx.sess.overflow_checks(), abort: !tcx.sess.panic_strategy().unwinds() }
+    }
+
+    /// The settings of the code of an instance: the session, or no settings if the compiler takes
+    /// the machine code of the instance from an upstream crate (a shared generic instance): the
+    /// driver does not know the settings of that crate.
+    pub fn of_instance(instance: &rustc_public::mir::mono::Instance) -> Option<Gen> {
+        rustc_middle::ty::tls::with(|tcx| {
+            let internal = rustc_public::rustc_internal::internal(tcx, *instance);
+            internal.upstream_monomorphization(tcx).is_none().then(|| Gen::of_session(tcx))
+        })
+    }
+}
+
+/// [R69.1-1] True if the code generation removes the check when the session has no overflow
+/// checks: the predicate of the compiler on the kind of the check.
+fn optional_overflow_check(msg: &AssertMessage) -> bool {
+    use rustc_middle::mir::AssertKind;
+    let internal: AssertKind<()> = match msg {
+        AssertMessage::Overflow(op, ..) => {
+            let op = rustc_middle::ty::tls::with(|tcx| rustc_public::rustc_internal::internal(tcx, *op));
+            AssertKind::Overflow(op, (), ())
+        }
+        AssertMessage::OverflowNeg(_) => AssertKind::OverflowNeg(()),
+        AssertMessage::DivisionByZero(_) => AssertKind::DivisionByZero(()),
+        AssertMessage::RemainderByZero(_) => AssertKind::RemainderByZero(()),
+        AssertMessage::BoundsCheck { .. } => AssertKind::BoundsCheck { len: (), index: () },
+        // A kind with data of another type: the code generation always keeps it.
+        _ => return false,
+    };
+    internal.is_optional_overflow_check()
+}
+
+/// [R69.1-1] The value of a runtime check operand in a session: the function of the compiler.
+fn runtime_check(tcx: rustc_middle::ty::TyCtxt<'_>, kind: &rustc_public::mir::RuntimeChecks) -> bool {
+    use rustc_middle::mir::RuntimeChecks as Internal;
+    let internal = match kind {
+        rustc_public::mir::RuntimeChecks::UbChecks => Internal::UbChecks,
+        rustc_public::mir::RuntimeChecks::ContractChecks => Internal::ContractChecks,
+        rustc_public::mir::RuntimeChecks::OverflowChecks => Internal::OverflowChecks,
+    };
+    internal.value(tcx.sess)
 }
 
 /// What a panic or an unwind on the cleanup path does.
@@ -286,6 +349,12 @@ pub struct IrCallee {
     /// call, and the closure that the check inlines if the value is a closure of the body.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub f: Option<IrOp>,
+    /// [R69.3-1] The call makes the message of a panic from its literal pieces: a `const fn`
+    /// whose result is a `fmt::Arguments` (the lang item `format_arguments`) and whose each
+    /// argument is a constant. A `const fn` with constant arguments has no effect, and its value
+    /// is the list of the constant pieces.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub a: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -316,10 +385,14 @@ struct Builder<'a, 'tcx> {
     ids: HashMap<Ty, u32>,
     files: Vec<String>,
     item: Option<rustc_public::DefId>,
+    /// The settings of the code generation of the body (R69.1-1); `None`: not known.
+    settings: Option<Gen>,
 }
 
-/// Builds the form of a body. `item` is the def of the body (for the typing environment).
-pub fn build(body: &Body, item: Option<rustc_public::DefId>) -> Ir {
+/// Builds the form of a body. `item` is the def of the body (for the typing environment). `settings`
+/// is the settings of the session that builds the machine code of the body (R69.1-1): the form
+/// is the MIR as the code generation reads it.
+pub fn build(body: &Body, item: Option<rustc_public::DefId>, settings: Option<Gen>) -> Ir {
     rustc_middle::ty::tls::with(|tcx| {
         let local = item.map(|item| rustc_public::rustc_internal::internal(tcx, item));
         if let Some(def) = local
@@ -334,7 +407,7 @@ pub fn build(body: &Body, item: Option<rustc_public::DefId>) -> Ir {
             Some(def) => rustc_middle::ty::TypingEnv::post_analysis(tcx, def),
             None => rustc_middle::ty::TypingEnv::fully_monomorphized(),
         };
-        let mut builder = Builder { body, tcx, typing, types: Vec::new(), ids: HashMap::new(), files: Vec::new(), item };
+        let mut builder = Builder { body, tcx, typing, types: Vec::new(), ids: HashMap::new(), files: Vec::new(), item, settings };
         let locals: Vec<u32> = body.locals().iter().map(|decl| builder.ty(decl.ty, 0)).collect();
         let blocks = body.blocks.iter().map(|block| builder.block(block)).collect();
         let args = body.arg_locals().len();
@@ -476,7 +549,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             statements.push(IrStmt { k: kind, r, c });
         }
         let (r, c) = self.place_of(block.terminator.source_info.span);
-        IrBlock { s: statements, t: IrTerm { k: self.terminator(&block.terminator.kind), r, c } }
+        // [R69.1-2] An optional overflow check whose settings the driver does not know.
+        let o = self.settings.is_none() && matches!(&block.terminator.kind, TerminatorKind::Assert { msg, .. } if optional_overflow_check(msg));
+        IrBlock { s: statements, t: IrTerm { k: self.terminator(&block.terminator.kind), r, c, o } }
     }
 
     fn place(&mut self, place: &Place) -> IrPlace {
@@ -501,7 +576,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             Operand::Copy(place) => IrOp::C(self.place(place)),
             Operand::Move(place) => IrOp::M(self.place(place)),
             Operand::Constant(constant) => IrOp::K(self.constant(&constant.const_)),
-            Operand::RuntimeChecks(kind) => IrOp::R(format!("{kind:?}")),
+            // [R69.1-1] A runtime check has the value of the session that builds the code.
+            Operand::RuntimeChecks(kind) => match self.settings {
+                Some(_) => IrOp::K(IrConst::I(u8::from(runtime_check(self.tcx, kind)).to_string(), self.ty(Ty::bool_ty(), 0))),
+                None => IrOp::R(format!("{kind:?}")),
+            },
         }
     }
 
@@ -733,6 +812,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
     /// The cleanup path of an unwind action: the drops in order up to `resume`.
     fn unwind(&mut self, action: Option<&UnwindAction>) -> IrUnwind {
+        // [R69.1-1] With the panic strategy `abort`, a panic stops the process: no cleanup path
+        // runs.
+        if self.settings.is_some_and(|settings| settings.abort) && matches!(action, Some(UnwindAction::Cleanup(_))) {
+            return IrUnwind::Drops(Vec::new());
+        }
         match action {
             None | Some(UnwindAction::Continue) => IrUnwind::Drops(Vec::new()),
             Some(UnwindAction::Unreachable) => IrUnwind::Drops(Vec::new()),
@@ -789,6 +873,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 IrTermKind::Drop(self.place(place), *target, text, uw)
             }
             TerminatorKind::Assert { cond, expected, msg, target, unwind } => {
+                // [R69.1-1] The code generation of a session with no overflow checks removes an
+                // optional overflow check (also in the code of another crate that the session
+                // builds, such as a `#[rustc_inherit_overflow_checks]` helper of `core`).
+                if self.settings.is_some_and(|settings| !settings.overflow_checks) && optional_overflow_check(msg) {
+                    return IrTermKind::Goto(*target);
+                }
                 let uw = self.unwind(Some(unwind));
                 IrTermKind::Assert(self.operand(cond), *expected, assert_name(msg), *target, uw)
             }
@@ -797,11 +887,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     // The opaque wrap of the driver (`black_box`) is the identity.
                     let value = args.first().map(|arg| self.operand(arg));
                     return match (value, target) {
-                        (Some(value), Some(target)) => IrTermKind::Call(IrCallee { p: "black_box".into(), w: None, k: Some("black_box".into()), m: None, g: false, e: Some(crate::effects::IrEff::default()), s: None, c: None, q: Vec::new(), f: None }, vec![value], self.place(destination), Some(*target), IrUnwind::Drops(Vec::new())),
+                        (Some(value), Some(target)) => IrTermKind::Call(IrCallee { p: "black_box".into(), w: None, k: Some("black_box".into()), m: None, g: false, e: Some(crate::effects::IrEff::default()), s: None, c: None, q: Vec::new(), f: None, a: false }, vec![value], self.place(destination), Some(*target), IrUnwind::Drops(Vec::new())),
                         _ => IrTermKind::U("an opaque wrap".into()),
                     };
                 }
                 let mut callee = self.callee(func, self.span_of(kind));
+                callee.a = crate::guarded(|| message_call(self.body, func, args, destination)).unwrap_or(false);
                 callee.e = crate::guarded(|| crate::effects::of_call(self.body, func, args));
                 callee.s = crate::guarded(|| crate::effects::seq_model(func, self.body)).flatten();
                 callee.q = crate::guarded(|| closure_keys(func, self.body)).unwrap_or_default();
@@ -825,7 +916,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
     fn callee(&mut self, func: &Operand, span: rustc_span::Span) -> IrCallee {
         let typing = self.item.and_then(|item| rustc_public::rustc_internal::internal(self.tcx, item).as_local()).map(|local| rustc_middle::ty::TypingEnv::post_analysis(self.tcx, local.to_def_id()));
         let (text, mark) = crate::graph::callee_text(self.tcx, typing.or(Some(self.typing)), self.body, func, span);
-        let mut callee = IrCallee { p: text, w: None, k: None, m: mark.map(str::to_string), g: false, e: None, s: None, c: None, q: Vec::new(), f: None };
+        let mut callee = IrCallee { p: text, w: None, k: None, m: mark.map(str::to_string), g: false, e: None, s: None, c: None, q: Vec::new(), f: None, a: false };
         let Ok(ty) = func.ty(self.body.locals()) else { return callee };
         let TyKind::RigidTy(RigidTy::FnDef(def, args)) = ty.kind() else { return callee };
         // A call of a closure whose body the check knows (design 66, part A).
@@ -871,6 +962,24 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         }
         callee
     }
+}
+
+/// [R69.3-1] True for a call that makes the message of a panic from its literal pieces: the
+/// callee is a `const fn` (the compiler: `is_const_fn`), the result has the type of the lang item
+/// `format_arguments`, and each argument is a constant. No name decides it.
+fn message_call(body: &Body, func: &Operand, args: &[Operand], destination: &Place) -> bool {
+    if args.is_empty() || !args.iter().all(|arg| matches!(arg, Operand::Constant(_))) {
+        return false;
+    }
+    let Ok(ty) = func.ty(body.locals()) else { return false };
+    let TyKind::RigidTy(RigidTy::FnDef(def, _)) = ty.kind() else { return false };
+    let Ok(result) = destination.ty(body.locals()) else { return false };
+    rustc_middle::ty::tls::with(|tcx| {
+        let def = rustc_public::rustc_internal::internal(tcx, def.def_id());
+        let result = rustc_public::rustc_internal::internal(tcx, result);
+        let arguments = tcx.lang_items().format_arguments();
+        tcx.is_const_fn(def) && result.ty_adt_def().is_some_and(|adt| Some(adt.did()) == arguments)
+    })
 }
 
 /// True if generic arguments have no parameter and no bound variable: only then can the driver
@@ -944,7 +1053,7 @@ pub fn std_callees(ir: &Ir, body: &Body) -> BTreeMap<String, Ir> {
                 {
                     let in_std = info.std;
                     if callee.blocks.len() <= if in_std { MAX_STD_BLOCKS } else { MAX_BLOCKS } {
-                        found.insert(info.key.clone(), build(&callee, None));
+                        found.insert(info.key.clone(), build(&callee, None, rustc_middle::ty::tls::with(|tcx| Some(Gen::of_session(tcx)))));
                         if depth < 1 {
                             todo.push((callee, depth + 1));
                         }
@@ -973,7 +1082,7 @@ pub fn std_callees(ir: &Ir, body: &Body) -> BTreeMap<String, Ir> {
             if callee.blocks.len() > if in_std { MAX_STD_BLOCKS } else { MAX_BLOCKS } {
                 continue;
             }
-            let form = build(&callee, None);
+            let form = build(&callee, None, Gen::of_instance(&instance));
             found.insert(text, form);
             if depth < 1 {
                 todo.push((callee, depth + 1));

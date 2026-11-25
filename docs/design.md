@@ -7947,6 +7947,107 @@ Rule index: no rule: the subsection has the limits and the open questions.
 - R68.12-1 reads `RUSTFLAGS`, not the flags of a cargo configuration file of the tree (it says so), and not a cargo configuration outside the tree. It does not see the conditions in the input of a macro call. In the compiled mode the spotlight "inactive code" is the rule.
 - R68.13-1 uses the form of the compare text: a row of a table with a changed name (not a literal) is not a twin form.
 
+## 69. Batch 11a: the check follows the code generation, a result never claims more than Semilla checked, a claim depends on its items
+
+The decision of the user (2026-11-25): "It seems that we have a lot of special casing here. Can we take a step back, list all the bugs and issues and try to come up with general rules to fix it", then "Yes let's follow your recommendations". This batch has three general rules. The known defects are test cases of the rules, not separate rules. The other decisions that apply:
+
+- 2026-11-23: "a complete semantic diff with as much information as possible, for fast human review". A false line costs the reviewer time.
+- 2026-11-24: "In general we should ensure we don't special case to a specific set of crates or symbols if not necessary".
+- 2026-11-24 (10r): one intent language; Semilla resolves the references of a claim against the compiler data of each version.
+- 2026-11-25: a sure difference gets a confirmation by a run of the real compiled code (part 4: not done in this batch, 69.6).
+
+The general rules:
+
+- **G5.** The model of the check follows the code generation, never a name. A body with MIR gets its meaning from its MIR, with the settings that the code generation uses for the session that builds its machine code. A body with no MIR is an intrinsic (a closed set of the language, by its identity) or "the world".
+- **G6.** A result never claims more than Semilla checked. An uncertainty of Semilla is "not decided" or "claimed", never "error" and never "proved". An error comes only from a fact (the compiler, or a name that does not exist in the version that the claim names). A result that one phase finds stays in each later phase. A suggestion is neutral when the result is "not decided".
+- **G3 (claims).** A proof of a claim on an item depends on the two versions of the item.
+
+### 69.1 G5, part 1: the settings of the code generation
+
+1. [R69.1-1] **A form is the MIR as the code generation of its session reads it.** The driver writes each form with the settings of the session that builds the machine code of the body (`ir::Gen`): the session of the record for a body of the crate and for a local copy of a callee of another crate (an `#[inline]` or generic callee, the forms `qx`). The code generation removes an optional overflow check (the predicate of the compiler `AssertKind::is_optional_overflow_check`: the overflow of `+`, `-`, `*`, `<<`, `>>`, and of a negation) when the session has no overflow checks; the form then has a `goto` in place of the check. A runtime check operand (`RuntimeChecks`: `ub_checks()`, the contract checks, the overflow checks) gets the value of the session (`RuntimeChecks::value` of the compiler). With the panic strategy `abort`, a panic runs no cleanup path (no drop on the unwind). Test case: `if x < 0 { -x } else { x }` → `x.abs()` for `i32` was "different in release: for x = -2147483648: … after panics (overflow neg)"; a real release build returns `i32::MIN` (69.6 has the run), and the result is now "equivalent" in each configuration. The negative case: an overflow of the code of the step itself stays "different" in `dev` (`x + 1` → `x.wrapping_add(1)`), because the session of `dev` has overflow checks (`tests/codegen.rs`).
+2. [R69.1-2] **Unknown settings give a value that is never exact.** The compiler can take the machine code of a generic instance from an upstream crate (`Instance::upstream_monomorphization`: a shared generic). The driver does not know the settings of that crate, so the form keeps the optional check with the mark `o`, and a runtime check operand stays a flag. The check makes such a check pass when an unknown flag is false; the flag is the same on the two sides and it is never exact. So a proof holds for each value of the flag, and a difference that depends on it is "not decided" (unit tests of `mir.rs`: the same body with an active check gives "different").
+
+**Decided by Claude.** The driver applies the settings (it has the session and the predicates of the compiler); the check reads the form. Before this batch, the check took each form as a `dev` form for the overflow checks of inlined code, and a runtime check operand was a shared unknown flag that was exact.
+
+### 69.2 G5, part 2: the audit of the names
+
+1. [R69.2-1] **A callee keeps the values of its generic arguments whole if its MIR only moves them.** The driver reads the generic MIR of a callee of another crate: no transmute, no inline assembly, no constant that depends on a generic parameter (`<T as SizedTypeProperties>::SIZE` of `size_of` reads the layout), and no callee with generic arguments that does not have the same property (to the depth 3); a trait method is whole by R65.3-9. This replaces the list `WHOLE_VALUE` (the inherent methods of `Option` and `Result`; the row of `docs/name-lists.md` is removed). The negative case: `std::mem::size_of::<Pad>()` is a `touch` use (`tests/codegen.rs`). Decided by Claude: a callee of the local crate keeps the old answer (a `touch` use), so the driver does not ask the compiler to optimize a body of the workspace.
+2. [R69.2-2] **A panic function is a function that never returns and has `#[track_caller]`.** The end facts of a body (`sure_ends`, the claims of 5f) took a function of the standard library with a part `panic`, `unwind`, `_failed`, or `_fail` in its name as panic code. Now the two marks of the compiler decide (the structural rule of R65.4-1). The negative case: `std::process::exit` stays an end (`tests/codegen.rs`). A never-returning function of the standard library with no `#[track_caller]` (`resume_unwind`) is now an end: the safe side of a claim "no exit".
+
+The audit of each decision by a name that the check reads (the equivalence check, the claims, and the facts of the driver that they read):
+
+| Decision | Where | Result | Reason |
+|---|---|---|---|
+| `WHOLE_VALUE` | `semilla-mir/src/reach.rs` | replaced (R69.2-1) | the MIR of the callee decides |
+| `panic_code` (parts of a name) | `semilla-mir/src/reach.rs` | replaced (R69.2-2) | the marks of the compiler decide |
+| the overflow checks of an inlined body | `semilla-mir/src/ir.rs` | replaced (R69.1-1) | before: no name, but the settings of `dev` for each form |
+| `PURE_INTRINSICS`, `intrinsic()` | `semilla-mir/src/effects.rs`, `semilla-smt/src/mir.rs` | kept | an intrinsic is a closed set of the language, by its identity; the compiler has no mark of purity; an intrinsic outside the list is the world |
+| `drop_is_free` (`Vec`, `String`, `Box` of the global allocator) | `semilla-mir/src/effects.rs` | kept (open question) | the MIR of their drop reaches raw pointers and the allocator, which the check does not model; the compiler has no mark for a drop that only frees owned memory |
+| the sequence model (`seq_model`, `scalar_vec`) | `semilla-mir/src/effects.rs` | kept (open question) | the MIR of `Vec` and of slices uses raw pointers; the model is the contract of the standard library (design 64); the confirmation by a run (69.6) is its check |
+| `modeled` (`Option`, `Result`, `Ordering`, `ControlFlow`, `Range`) | `semilla-mir/src/ir.rs` | kept (open question) | the general rule (each type by its fields, from the compiler) changes the form of each body and the results of the training set; it needs its own measure |
+| `CommandExt::exec` | `semilla-mir/src/reach.rs` | kept | `exec` returns by its signature; the end of the process is a fact of a platform call with no MIR |
+| `std_path` (the `Option` and `Result` of the prelude) | `semilla-smt/src/mir/claim.rs` | kept | the own language of Semilla (design 67) names these types |
+| a closure type text (`{closure`) | `semilla-smt/src/mir.rs` | kept | the printer text of a closure that the driver does not know; it gives only inexact values |
+| `is_fixed_int_const`, `FREE_ALIASES`, `PURE_BUILTIN`, `NOT_CONFIG` | `semilla-mir/src/config.rs` | kept | facts of the language or of the tool chain for the configuration check, not for the model of a body |
+| `PLAIN_TYPES`, `STD_NO_IO` | `semilla-verify/src/scope.rs` | kept | the default mode (no compiler data); the compiled mode has the effect summary |
+
+### 69.3 G5, part 3: the message of a panic is a value
+
+1. [R69.3-1] **The literal pieces of a panic message are a part of the outcome.** The driver marks a call that makes the message from its literal pieces (`a` of the callee): the callee is a `const fn` (`is_const_fn` of the compiler), the result has the type of the lang item `format_arguments`, and each argument is a constant. No name decides it. The check gives such a call no effect (a `const fn` with constant arguments), and its value is one opaque constant of its constant pieces: two messages with other pieces are two different values, and one text gives one value. A panic shows the text: "panics (`std::rt::panic_fmt` with the message "too big")". `panics_with(|| …, "TEXT")` compares the text of such a message; `except = [panic_message]` ignores the arguments of a panic (R67.3-7). Test case: `assert!(x < 10, "too big")` → `assert!(x < 10, "x is too big")`: with `same_outcome`, the claim with no option is false for `x = 10`; with `except = [panic_message]` it is proved. The negative case: two panics with one message are equal (`tests/codegen.rs`).
+
+A message with an argument (`panic!("x = {x}")`) is not made only from constants: it keeps the old rule (a call result, not exact). This narrows R67.3-6: a literal message is a value of the model now.
+
+### 69.4 G3: a proof of a claim depends on its items
+
+1. [R69.4-1] **A claim on an item is a proof only if it calls the two versions of the item.** The claim must call `before::ITEM` and `after::ITEM` (the names after the rename map of the step), in its body or in a relation that it calls (the reads of the check). Else a "proved" result is "claimed" with the cause: "the claim does not call `after::shop::half`: a proof of a claim on `shop::half` needs the two versions of the item (the body alone is true by SMT)". Test cases: `#[same(depot::f)] fn t(x: u32) -> bool { x == x }`, a body that reads only `before::depot::f`, and `#[same(depot::g)]` with a body about `depot::f`. The negative case: a claim that calls the two versions through a relation is proved.
+
+**Decided by Claude.**
+
+- A claim with two or more items (`#[same(A, B)]`) is one claim for each item (R67.1-1), and each claim needs the two versions of its own item. So a body about `A` only gives "proved" for `A` and "claimed" for `B`.
+- A "false" result stays "false": an exact input where the statement of the agent is false is a fact. Only a proof needs the dependence.
+- An empty `#[same(ITEM)]` is the equivalence check of the item: it depends on the two versions by its form.
+
+### 69.5 G6: a result never claims more than Semilla checked
+
+1. [R69.5-1] **One numbering of the claims, and no "pending" after a check that ran.** The cause of the test case "a claim reads a field that only the old version has: `semilla intent check` gives the error, the step marks the claim pending and accepts it": the queries of the oracle counted each item of an intent file (also a relation), and the claim lines did not count a relation. With a relation before the claim, the answer of the claim had another id, so the step found no answer and gave "pending: the compiled check of the step gives the result (phase 2)", which does not reject a step. Now one function gives the ids (`item_ids`: an `intent!` text and each claim; a relation gets no id). A claim with no answer when the oracle answered the other claims is "claimed: the compiled check gave no result for this claim (a defect of Semilla)". "Pending" stays only for phase 1 of a compiled step. A compiled step that the command does not check (its build code does not run) gets "claimed" with the cause.
+2. [R69.5-2] **A coercion of Rust is never a type error.** The type check of a claim knows only the coercions that the model encodes: `&Vec<T>` and `&[T; N]` to `&[T]` (one sequence of the model, R64.4-1). Each other mismatch where Rust can coerce (the parameter is a reference or a type that the model does not know, or the value has the type `!`) gives "claimed: … Rust can coerce it, and the check does not model this coercion". A mismatch of two scalars, tuples, sequences, or types of the workspace by value stays an error (a fact of the language). Test case: `after::depot::f(&v)` with `v: Vec<u32>` and a parameter `&[u32]`.
+3. [R69.5-3] **The help note names the part that changes, and it is neutral.** When the two signature texts are equal, the note names each type of the signature, and the type of `self` of a method, whose definition changes, with its changed fields: "`fn get (& self) -> u64`: the type of `self` changes: `shop::Pt`: `x: u32` → `x: u64`". The result is "not decided", so the note gives a template for each case on its own line: "if the behavior does not change: `#[same(…)] …`" and "if it changes: `#[change(…, reason = "…")] …`". The receiver of a method in a template is a value of the old type (`this: &before::shop::Pt`).
+
+### 69.6 G5, part 4: the confirmation by a run (not done in this batch)
+
+Rule index: no rule: the subsection has the options and their measured cost; the batch stops this part.
+
+The options (measured on this machine, at a load average of 6 to 16):
+
+- **Miri.** Not installed, and no network.
+- **The interpreter of the compiler in the driver** (`rustc_const_eval`). The machine of the constant evaluation refuses a call of a function that is not `const fn`, so it cannot run most bodies. A machine that runs each body is the size of Miri (memory, intrinsics, the panic runtime, foreign calls). Too large for this batch.
+- **A probe binary for a public item** (measured). A temporary crate depends on a copy of each tree (the two packages with two versions), calls the item with the input of the result in `std::panic::catch_unwind`, and prints the outcome (`{:?}` of the value, or the panic message). One build for each configuration: the abs example 0.57 s (`dev`) and 0.45 s (`release`); num-traits #334 1.9 s and 1.4 s; hashbrown #693 1.4 s and 2.2 s; a new probe main after the first build 0.1 to 0.65 s. The run of the abs example in `release` prints `-2147483648` for the two versions (the result of R69.1-1); in `dev` both panic ("attempt to negate with overflow"). The limits: only an item that a path from the crate root names; only inputs that a literal gives (integers, `bool`, `char`, references to them, sequences); an output with `Debug`; a workspace member that inherits its version needs the version of the root changed in the copy.
+
+The recommendation: implement the probe binary in the next batch, one build for each step and configuration with all sure differences of the step. A result that the run does not confirm gets "not decided: the model and the run disagree (a defect of Semilla)".
+
+### 69.7 The results, the tests, and the mutation checks
+
+Rule index: no rule: the subsection has the results of the batch.
+
+The mutation checks (each change breaks one rule part; each is undone): R69.1-1 (the driver keeps each optional check), R69.1-2 (no unknown flag), R69.2-1 (each callee is whole), R69.2-2 (each never-returning function is panic code), R69.3-1 (no message value), R69.4-1 (no dependence check), R69.5-1 (a relation gets a number again), R69.5-2 (each coercion is an error), R69.5-3 (no changed types in the note): each one makes at least one test fail (1 to 3 tests).
+
+The training set (7 pull requests, `semilla step --compiled`, the release binaries of 10r1 and of this batch, at a load average of 10 to 90): no equivalence result changes its kind. bitflags, itertools, num-traits, and winnow give the same output. hashbrown: 2 bodies (`RawTableInner::allocation_info`, `RawTableInner::new_uninitialized`) keep "not decided", with a new cause in `dev` (a raw pointer, after the `ub_checks()` precondition of `core` that the session of `dev` keeps, R69.1-1; `release` keeps "a cast (Transmute)"). indexmap: the digest of one constant definition changes its text (the forms of the driver changed), and lines of the time budget differ. uuid: only lines of the time budget differ (R61.14-5: two runs of one binary differ in the same way).
+
+The counts: +9 rules with an identity; −1 row of `docs/name-lists.md` (`WHOLE_VALUE`); −2 code paths that decide by a name (`WHOLE_VALUE`, `panic_code`), none added.
+
+The tests: `crates/semilla/tests/codegen.rs` (new: R69.1-1, R69.2-1, R69.2-2, R69.3-1), unit tests of `semilla-smt/src/mir.rs` (R69.1-2, R69.3-1) and `semilla-verify/src/intent.rs` (R69.5-1), new claims of `tests/intent.rs` (R69.3-1, R69.4-1, R69.5-2), and `tests/intent_cli.rs` (R69.5-1, R69.5-3). The changed expected results: `tests/effects.rs` (`two_panics` and `panic_and_write` are "different" now: the two panics have other messages), the cases `compiled/assert_added` and `compiled/panic_macros` ("not decided: a raw pointer" → "different" with the messages), and three claims of the intent tests that read one version only (they now read both versions).
+
+### 69.8 Limits and open questions
+
+Rule index: no rule: the subsection has the limits and the open questions.
+
+- The forms of the standard library (`qx`) of one tree and configuration are one map by the callee text: a workspace whose packages have other overflow settings (a profile override for one package) uses the form of the first record.
+- A message with arguments, and a message of the standard library (`unwrap` on `None`, `attempt to add with overflow`), is not a value of the model (R67.3-6 stays for them).
+- The open questions of the audit (69.2): model each type of the standard library by its fields (`modeled`), and check the sequence model and `drop_is_free` by a run.
+- R69.4-1 reads the calls of the claim, not their part in the truth of the body: `x == x || before::f(x) == after::f(x)` calls the two versions and stays "proved" (no ablation in the product, decision of 2026-11-21).
+- R69.5-2 gives "claimed" also for a reference mismatch that Rust does not coerce (`&Vec<u64>` to `&[u32]`): the safe side of the rule.
+- Part 4 (69.6) is not done.
+
 ## 71. Batch 11c: one size rule for each text of a line, and the item as a unit
 
 The decision of the user (2026-11-25): "It seems that we have a lot of special casing here. Can we take a step back, list all the bugs and issues and try to come up with general rules to fix it". Then: "Yes let's follow your recommendations". Earlier batches made one rule for each defect: a size line only for an expansion (R65.10-3), a diff of the entries only for an array (R68.6-3), a count of panics with closures only for one line (R68.7-1). This batch has two general rules (71.1, 71.2) and the suggestion part of a third (71.3). The known defects are test cases of the rules. Each rule replaces the narrow rules that it covers (71.4). Other decisions of the user that apply: the goal is "a complete semantic diff with as much information as possible, for fast human review" (2026-11-23); the fact of a changed item includes its comments and docs (2026-11-22); an expansion text over 50 kB shows a count and its size, and `semilla expand` shows the full text (2026-11-25).

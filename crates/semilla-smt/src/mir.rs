@@ -232,6 +232,11 @@ pub struct IrTerm {
     pub r: Option<Range>,
     #[serde(default)]
     pub c: Option<Range>,
+    /// [R69.1-2] An optional overflow check whose state in the code generation the driver does
+    /// not know (the code of an instance that an upstream crate builds). The driver removes an
+    /// optional check that the settings of the session remove, so each other check is active.
+    #[serde(default)]
+    pub o: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -274,6 +279,10 @@ pub struct IrCallee {
     /// The function pointer of a call through a pointer (design 66, part A).
     #[serde(default)]
     pub f: Option<IrOp>,
+    /// [R69.3-1] The call makes the message of a panic from its literal pieces (a `const fn`
+    /// with constant arguments whose result is a `fmt::Arguments`).
+    #[serde(default)]
+    pub a: bool,
 }
 
 /// The effect summary of a call from the driver (design 64, part B).
@@ -675,6 +684,8 @@ struct Decls {
     /// The constants that the compiler does not evaluate here (design 66, part B): the side,
     /// the path, and the digest.
     gconsts: Vec<(bool, String, Vec<(String, String)>, V)>,
+    /// [R69.3-1] The symbol of each message of a panic, with the text of its literal pieces.
+    messages: BTreeMap<String, String>,
 }
 
 /// A closure body that a run met (design 66, part A): the side, the key, the name of the body,
@@ -722,7 +733,9 @@ struct Stop(String);
 #[derive(Clone, Debug)]
 enum Exit {
     Return(V),
-    Panic { kind: String, args: Vec<V> },
+    /// A panic: the kind, the arguments of a panic call, and the literal pieces of its message
+    /// (R69.3-1, for the text of an outcome).
+    Panic { kind: String, args: Vec<V>, msg: Option<String> },
     Abort,
     /// The path reaches the head of the loop (design 61.11): the end of a segment of the loop
     /// check.
@@ -980,10 +993,10 @@ impl<'a, 'b> Run<'a, 'b> {
                 self.constant(&ir, constant)
             }
             IrOp::R(name) => {
-                // The value of the flag is not known here, and it is the same on the two sides.
-                let symbol = format!("|flag {}|", sym_name(name));
-                self.decls.declare(&symbol, format!("(declare-const {symbol} Bool)"));
-                Ok(V::Bool(tx(symbol, false)))
+                // [R69.1-2] The driver gives a runtime check the value of the session that builds
+                // the code (R69.1-1). Here the settings are not known (the code of an upstream crate): the
+                // flag is the same on the two sides, and it is never exact.
+                Ok(V::Bool(self.flag(name)))
             }
         }
     }
@@ -1135,6 +1148,14 @@ impl<'a, 'b> Run<'a, 'b> {
 
     /// The symbol of an opaque constant: the same text gives the same symbol on the two sides,
     /// and two different texts are two different values.
+    /// A setting of the code generation that the check does not know: one `bool` for the two
+    /// sides, never exact (R69.1-2).
+    fn flag(&mut self, name: &str) -> T {
+        let symbol = format!("|flag {}|", sym_name(name));
+        self.decls.declare(&symbol, format!("(declare-const {symbol} Bool)"));
+        tx(symbol, false)
+    }
+
     fn opaque_const(&mut self, text: &str) -> String {
         let name = format!("|k {}|", sym_name(text));
         self.decls.declare("Opq", "(declare-sort Opq 0)".into());
@@ -1206,7 +1227,8 @@ impl<'a, 'b> Run<'a, 'b> {
             }
             let term = block.t.k.clone();
             let range = block.t.r;
-            return self.terminator(state, &term).map_err(|Stop(cause)| Stop(self.placed(cause, &frame.ir, range)));
+            let optional = block.t.o;
+            return self.terminator(state, &term, optional).map_err(|Stop(cause)| Stop(self.placed(cause, &frame.ir, range)));
         }
     }
 
@@ -1408,7 +1430,7 @@ impl<'a, 'b> Run<'a, 'b> {
         matches!(self.place_ty(state, place).as_ref().and_then(|ty| ty.get()), Some(IrTy::Int(_, true)))
     }
 
-    fn terminator(&mut self, state: &mut State, kind: &IrTermKind) -> Result<Next, Stop> {
+    fn terminator(&mut self, state: &mut State, kind: &IrTermKind, optional: bool) -> Result<Next, Stop> {
         match kind {
             IrTermKind::Goto(target) => {
                 self.jump(state, *target)?;
@@ -1470,7 +1492,13 @@ impl<'a, 'b> Run<'a, 'b> {
             IrTermKind::Assert(cond, expected, kind, target, unwind) => {
                 let value = self.operand(state, cond)?;
                 let V::Bool(c) = value else { return Err(Stop("a check of a value that is not a `bool`".into())) };
-                let pass = if *expected { c.clone() } else { not(&c) };
+                let mut pass = if *expected { c.clone() } else { not(&c) };
+                // [R69.1-2] An optional check whose state the driver does not know: it fails only
+                // if the code generation keeps it, an unknown flag (never exact).
+                if optional {
+                    let flag = self.flag("overflow checks of an upstream crate");
+                    pass = or(&[pass, not(&flag)]);
+                }
                 let mut states = Vec::new();
                 if lit_bool(&pass) != Some(true) {
                     let mut failed = state.clone();
@@ -1569,7 +1597,11 @@ impl<'a, 'b> Run<'a, 'b> {
                 return Ok(());
             }
         };
-        let exit = if drops.last() == Some(&V::Opq(t("abort"))) { Exit::Abort } else { Exit::Panic { kind, args } };
+        let msg = args.iter().find_map(|arg| match arg {
+            V::Opq(term) => self.decls.messages.get(&term.s).cloned(),
+            _ => None,
+        });
+        let exit = if drops.last() == Some(&V::Opq(t("abort"))) { Exit::Abort } else { Exit::Panic { kind, args, msg } };
         after.extend(drops);
         self.outs.push(PathOut { pc, effects: state.effects.clone(), calls: state.calls.clone(), exit, after, cut: None });
         Ok(())
@@ -1582,6 +1614,30 @@ impl<'a, 'b> Run<'a, 'b> {
         }
         let dest_ty = self.place_ty(state, dest);
         let dest_loc = self.loc(state, dest)?;
+        // [R69.3-1] The message of a panic is a value of its literal pieces: two messages with
+        // other pieces are two different values, and one text gives one value. The call has no
+        // effect (a `const fn` with constant arguments).
+        if callee.a
+            && let Some(target) = target
+        {
+            let mut exact = true;
+            let mut key = Vec::new();
+            let mut pieces = Vec::new();
+            for (arg, value) in args.iter().zip(&values) {
+                for (_, term) in flatten(value) {
+                    exact &= term.x;
+                    key.push(term.s);
+                }
+                if let IrOp::K(IrConst::O(text, ..)) = arg {
+                    pieces.push(literal_text(text).unwrap_or_else(|| "…".to_string()));
+                }
+            }
+            let symbol = self.opaque_const(&format!("message {}", key.join(" ")));
+            self.decls.messages.insert(symbol.clone(), pieces.join(""));
+            self.write(state, &dest_loc, V::Opq(tx(symbol, exact)))?;
+            self.jump(state, target)?;
+            return Ok(Next::Continue);
+        }
         // An intrinsic that the check models.
         if let Some(name) = &callee.k
             && let Some(found) = intrinsic(name, &values, dest_ty.as_ref())?
@@ -1809,7 +1865,7 @@ impl<'a, 'b> Run<'a, 'b> {
         let Some(form) = form else { return Ok(None) };
         let ty = form.l.get(1).and_then(|id| form.t.get(*id as usize)).cloned();
         let Some(IrTy::Ref(false, inner)) = ty else { return Ok(None) };
-        let callee = IrCallee { p: seen.key.clone(), w: Some(seen.name.clone()), k: None, m: Some("closure".into()), g: seen.inst, e: None, s: None, c: Some(2), q: Vec::new(), f: None };
+        let callee = IrCallee { p: seen.key.clone(), w: Some(seen.name.clone()), k: None, m: Some("closure".into()), g: seen.inst, e: None, s: None, c: Some(2), q: Vec::new(), f: None, a: false };
         let tuple = if values.is_empty() { V::Unit } else { V::Tup(values.to_vec()) };
         let first_ty = Some(Ty { ir: form.clone(), id: inner });
         self.closure_call(state, &callee, 2, vec![pointer.clone(), tuple], first_ty, dest_loc.clone(), target, unwind).map(Some)
@@ -3204,7 +3260,7 @@ fn outcome_differs(a: &PathOut, b: &PathOut) -> T {
     }
     match (&a.exit, &b.exit) {
         (Exit::Return(x), Exit::Return(y)) => parts.push(differ(x, y)),
-        (Exit::Panic { kind: k1, args: a1 }, Exit::Panic { kind: k2, args: a2 }) => {
+        (Exit::Panic { kind: k1, args: a1, .. }, Exit::Panic { kind: k2, args: a2, .. }) => {
             if k1 != k2 {
                 return t("true");
             }
@@ -3397,8 +3453,7 @@ fn parse_bv(text: &str) -> Option<u128> {
 fn outcome_text(out: &PathOut, ret: Option<&Ty>, model: &BTreeMap<String, String>, other: &PathOut, muts: &[(String, Option<Ty>)]) -> String {
     let mut text = match &out.exit {
         Exit::Return(value) => format!("returns {}", value_text(value, ret, model)),
-        Exit::Panic { kind, .. } if kind.starts_with("call ") => format!("panics ({})", kind.trim_start_matches("call ")),
-        Exit::Panic { kind, .. } => format!("panics ({kind})"),
+        Exit::Panic { .. } => format!("panics ({})", panic_text(&out.exit)),
         Exit::Abort => "aborts".into(),
         Exit::Cut => "reaches the loop head".into(),
     };
@@ -3416,6 +3471,26 @@ fn outcome_text(out: &PathOut, ret: Option<&Ty>, model: &BTreeMap<String, String
         }
     }
     text
+}
+
+/// The kind of a panic for a text, with the literal pieces of its message (R69.3-1).
+fn panic_text(exit: &Exit) -> String {
+    let Exit::Panic { kind, msg, .. } = exit else { return String::new() };
+    let kind = kind.trim_start_matches("call ");
+    match msg {
+        Some(msg) => format!("{kind} with the message {msg:?}"),
+        None => kind.to_string(),
+    }
+}
+
+/// [R69.3-1] The text of a constant string of the printer of the compiler: the bytes of its
+/// memory (`… @0=memory [7820697320746f6f20626967] …`) as UTF-8.
+fn literal_text(text: &str) -> Option<String> {
+    let start = text.find("memory [")? + "memory [".len();
+    let end = start + text[start..].find(']')?;
+    let hex: String = text[start..end].chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    let bytes: Option<Vec<u8>> = (0..hex.len() / 2).map(|at| u8::from_str_radix(&hex[2 * at..2 * at + 2], 16).ok()).collect();
+    String::from_utf8(bytes?).ok()
 }
 
 /// The terms of a value, for a request of their values in a model.
@@ -4066,6 +4141,75 @@ mod tests {
         }
     }
 
+    /// The check of `x + 1` with an overflow check (`o`: its settings are not known) against
+    /// `x.wrapping_add(1)`, for `x: u32`.
+    fn optional_check_verdict(unknown: bool) -> Verdict {
+        let place = |l: usize, p: Vec<IrProj>| IrPlace { l, p };
+        let one = || IrOp::K(IrConst::I("1".into(), 0));
+        let stmt = |k: IrStmtKind| IrStmt { k, r: None, c: None };
+        let term = |k: IrTermKind, o: bool| IrTerm { k, r: None, c: None, o };
+        let old = Ir {
+            a: 1,
+            l: vec![0, 0, 2],
+            t: vec![IrTy::Int(32, false), IrTy::Bool, IrTy::Tuple(vec![0, 1])],
+            b: vec![
+                IrBlock {
+                    s: vec![stmt(IrStmtKind::Set(place(2, Vec::new()), IrRvalue::Chk("add".into(), IrOp::C(place(1, Vec::new())), one())))],
+                    t: term(IrTermKind::Assert(IrOp::C(place(2, vec![IrProj::F(1)])), false, "overflow add".into(), 1, IrUnwind::Drops(Vec::new())), unknown),
+                },
+                IrBlock { s: vec![stmt(IrStmtKind::Set(place(0, Vec::new()), IrRvalue::Use(IrOp::C(place(2, vec![IrProj::F(0)])))))], t: term(IrTermKind::Ret, false) },
+            ],
+            n: vec!["x".into()],
+            ..Ir::default()
+        };
+        let new = Ir {
+            a: 1,
+            l: vec![0, 0],
+            t: vec![IrTy::Int(32, false)],
+            b: vec![IrBlock { s: vec![stmt(IrStmtKind::Set(place(0, Vec::new()), IrRvalue::Bin("add".into(), IrOp::C(place(1, Vec::new())), one())))], t: term(IrTermKind::Ret, false) }],
+            n: vec!["x".into()],
+            ..Ir::default()
+        };
+        let std = BTreeMap::new();
+        let none = |_: &str| None;
+        let same = |text: &str| text.to_string();
+        let changed = |_: &str| false;
+        let step = Step { changed: &changed, changed_names: &[] };
+        let solver = Solver::find_for(&[], None).expect("the solver of the workspace");
+        let side = |ir: Ir| Side { ir: Arc::new(ir), workspace: &none, std: &std, rename: &same };
+        check_bodies(&solver, &side(old), &side(new), &step).verdict
+    }
+
+    // rule+ R69.1-2
+    #[test]
+    fn an_optional_check_whose_settings_are_not_known_is_never_a_sure_difference() {
+        let found = optional_check_verdict(true);
+        assert!(matches!(&found, Verdict::NotDecided { cause } if cause.contains("depends on")), "{found:?}");
+    }
+
+    // rule- R69.1-2
+    #[test]
+    fn an_active_check_gives_a_sure_difference() {
+        let found = optional_check_verdict(false);
+        assert!(matches!(&found, Verdict::Different { before, .. } if before.contains("overflow add")), "{found:?}");
+    }
+
+    // rule+ R69.3-1
+    #[test]
+    fn the_text_of_a_constant_string_is_its_memory() {
+        assert_eq!(literal_text("const &str = [00000000000000000c00000000000000 @0=memory [7820697320746f6f20626967] align 1 Not] align 8 Mut").as_deref(), Some("x is too big"));
+        let exit = Exit::Panic { kind: "call `std::rt::panic_fmt`".into(), args: Vec::new(), msg: Some("too big".into()) };
+        assert_eq!(panic_text(&exit), "`std::rt::panic_fmt` with the message \"too big\"");
+    }
+
+    // rule- R69.3-1
+    #[test]
+    fn a_constant_with_no_memory_has_no_text() {
+        assert_eq!(literal_text("const 5_u32"), None);
+        let exit = Exit::Panic { kind: "overflow add".into(), args: Vec::new(), msg: None };
+        assert_eq!(panic_text(&exit), "overflow add");
+    }
+
     // rule- R61.12-1
     #[test]
     fn two_equal_terms_are_an_exact_equality_and_two_different_ones_are_not_literal() {
@@ -4126,7 +4270,7 @@ mod tests {
 
     #[test]
     fn a_loop_head_is_the_target_of_a_back_edge() {
-        let block = |k: IrTermKind| IrBlock { s: Vec::new(), t: IrTerm { k, r: None, c: None } };
+        let block = |k: IrTermKind| IrBlock { s: Vec::new(), t: IrTerm { k, r: None, c: None, o: false } };
         let ir = Ir { a: 0, l: vec![0], t: vec![IrTy::Unit], b: vec![block(IrTermKind::Goto(1)), block(IrTermKind::Sw(IrOp::R("f".into()), vec![("0".into(), 2)], 1)), block(IrTermKind::Ret)], f: Vec::new(), n: Vec::new(), u: None };
         assert_eq!(loop_heads(&ir), BTreeSet::from([1]));
     }

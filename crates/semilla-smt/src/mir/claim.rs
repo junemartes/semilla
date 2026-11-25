@@ -23,7 +23,7 @@
 //!   of the workspace, `==` calls `PartialEq::eq` of the version. `==` on another type is
 //!   outside the model.
 
-use semilla_intent::{BinOp, Claim, Error, Expr, ExprKind, File, Func, IPath, Lit, Stmt, Type, UnOp, Version};
+use semilla_intent::{BinOp, Claim, Error, Expr, ExprKind, File, Func, IPath, Lit, Stmt, Target, Type, UnOp, Version};
 
 use super::*;
 
@@ -100,7 +100,48 @@ pub fn check_claim(solver: &Solver, file: &File, claim: &Claim, old: &Tree, new:
         }
     }
     DEADLINE.with(|cell| cell.set(outer));
+    // [R69.4-1] A proof of a claim on an item depends on the two versions of the item: the
+    // claim calls `before::ITEM` and `after::ITEM`, in its body or in a relation that it calls.
+    // Else the result is "claimed" with the cause.
+    if matches!(first.verdict, ClaimVerdict::Proved { .. }) {
+        let ev = Eval::new(file, old, new, step, options, false);
+        let (old_name, new_name) = ev.item_versions(claim);
+        let item = claim.targets.first().map(Target::text).unwrap_or_default();
+        let missing: Vec<String> = [(Version::Before, old_name), (Version::After, new_name)]
+            .into_iter()
+            .filter(|(version, name)| name.as_ref().is_none_or(|name| !first.reads.contains(&(*version, name.clone()))))
+            .map(|(version, name)| format!("`{}::{}`", version.prefix(), name.unwrap_or_else(|| item.trim_start_matches("before::").trim_start_matches("after::").to_string())))
+            .collect();
+        if !missing.is_empty() {
+            let method = match &first.verdict {
+                ClaimVerdict::Proved { method } => method.clone(),
+                _ => String::new(),
+            };
+            first.verdict = ClaimVerdict::Claimed {
+                cause: format!("the claim does not call {}: a proof of a claim on `{item}` needs the two versions of the item (the body alone is true by {method})", missing.join(" and ")),
+            };
+        }
+    }
     ClaimCheck { verdict: first.verdict, errors: first.errors, reads: first.reads.into_iter().collect(), queries, millis: started.elapsed().as_millis() }
+}
+
+/// [R69.5-2] True for a coercion that the model encodes: a shared reference to a vector or an
+/// array of one element type to a shared reference to a slice of that type.
+fn coerces_to_slice(value: &Ty, param: &Ty) -> bool {
+    let (Some(IrTy::Ref(false, from)), Some(IrTy::Ref(false, to))) = (value.get(), param.get()) else { return false };
+    let (from, to) = (value.at(*from), param.at(*to));
+    match (from.get(), to.get()) {
+        (Some(IrTy::Seq { e: x, k, .. }), Some(IrTy::Seq { e: y, k: slice, n: None })) => slice == "s" && k != "s" && same_type(&from.at(*x), &to.at(*y), 0, &|text: &str| text.to_string()),
+        _ => false,
+    }
+}
+
+/// [R69.5-2] True if Rust can coerce a value of one type to the other: the parameter is a
+/// reference, a value that the model does not know (a box, a trait object, a pointer), or the
+/// value has the type `!`. A scalar, a tuple, a sequence, or a type of the workspace by value
+/// has no coercion.
+fn may_coerce(value: &Ty, param: &Ty) -> bool {
+    matches!(param.get(), Some(IrTy::Ref(..) | IrTy::Opaque { .. })) || matches!(value.get(), Some(IrTy::Never | IrTy::Opaque { .. }))
 }
 
 struct Attempt {
@@ -156,7 +197,7 @@ enum Shown {
 enum Out {
     Val(Val),
     /// A panic: the kind, the arguments, and the text of the expression.
-    Panic { kind: String, args: Vec<V>, at: String },
+    Panic { kind: String, args: Vec<V>, msg: Option<String>, at: String },
     /// An abort: the text of the expression.
     Abort(String),
 }
@@ -779,7 +820,7 @@ impl<'a, 'b> Eval<'a, 'b> {
         parts.dedup();
         let head = match out {
             Out::Val(_) => "the body is false".to_string(),
-            Out::Panic { kind, at, .. } => format!("`{at}` panics ({}) outside `panics`", kind.trim_start_matches("call ")),
+            Out::Panic { kind, msg, at, .. } => format!("`{at}` panics ({}) outside `panics`", super::panic_text(&Exit::Panic { kind: kind.clone(), args: Vec::new(), msg: msg.clone() })),
             Out::Abort(at) => format!("`{at}` aborts"),
         };
         let detail = if parts.is_empty() { head } else { format!("{head}: {}", parts.join("; ")) };
@@ -864,7 +905,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                         let inside = sq.has(i);
                         let mut out = Vec::new();
                         if let Some(next) = Self::with(&world, &not(&inside)) {
-                            out.push((next, Out::Panic { kind: "index out of bounds".into(), args: Vec::new(), at: e.text.clone() }));
+                            out.push((next, Out::Panic { kind: "index out of bounds".into(), args: Vec::new(), msg: None, at: e.text.clone() }));
                         }
                         if let Some(next) = Self::with(&world, &inside) {
                             out.push((next, Self::val(sq.at(i), seq.ty.at(elem), seq.ver)));
@@ -1219,7 +1260,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                 let overflow = eq_t(term, &min);
                 let mut out = Vec::new();
                 if let Some(next) = Self::with(&world, &overflow) {
-                    out.push((next, Out::Panic { kind: "overflow neg".into(), args: Vec::new(), at: e.text.clone() }));
+                    out.push((next, Out::Panic { kind: "overflow neg".into(), args: Vec::new(), msg: None, at: e.text.clone() }));
                 }
                 if let Some(next) = Self::with(&world, &not(&overflow)) {
                     out.push((next, Self::val(V::Bv(app("bvneg", &[term]), *w), value.ty.clone(), None)));
@@ -1338,11 +1379,11 @@ impl<'a, 'b> Eval<'a, 'b> {
                         let found = binary(name, &a.v, &b.v, signed, None).map_err(|Stop(cause)| Fail::Claimed(cause))?;
                         let mut out = Vec::new();
                         if let Some(next) = Self::with(&world, &zero) {
-                            out.push((next, Out::Panic { kind: if op == BinOp::Div { "division by zero".into() } else { "remainder by zero".into() }, args: Vec::new(), at: e.text.clone() }));
+                            out.push((next, Out::Panic { kind: if op == BinOp::Div { "division by zero".into() } else { "remainder by zero".into() }, args: Vec::new(), msg: None, at: e.text.clone() }));
                         }
                         let rest = not(&zero);
                         if let Some(next) = Self::with(&world, &and(&[rest.clone(), overflow.clone()])) {
-                            out.push((next, Out::Panic { kind: format!("overflow {name}"), args: Vec::new(), at: e.text.clone() }));
+                            out.push((next, Out::Panic { kind: format!("overflow {name}"), args: Vec::new(), msg: None, at: e.text.clone() }));
                         }
                         if let Some(next) = Self::with(&world, &and(&[rest, not(&overflow)])) {
                             out.push((next, Self::val(found, ty, None)));
@@ -1358,7 +1399,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                 };
                 let mut out = Vec::new();
                 if let Some(next) = Self::with(&world, &fails) {
-                    out.push((next, Out::Panic { kind, args: Vec::new(), at: e.text.clone() }));
+                    out.push((next, Out::Panic { kind, args: Vec::new(), msg: None, at: e.text.clone() }));
                 }
                 if let Some(next) = Self::with(&world, &not(&fails)) {
                     out.push((next, Self::val(value, ty, None)));
@@ -1477,7 +1518,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                         let field_ty = value.ty.at(v[good][0]);
                         let mut out = Vec::new();
                         if let Some(next) = Self::with(&world, &not(&is(good))) {
-                            out.push((next, Out::Panic { kind: format!("`unwrap` on {}", if kind == "Option" { "`None`" } else { "`Err`" }), args: Vec::new(), at: e.text.clone() }));
+                            out.push((next, Out::Panic { kind: format!("`unwrap` on {}", if kind == "Option" { "`None`" } else { "`Err`" }), args: Vec::new(), msg: None, at: e.text.clone() }));
                         }
                         if let Some(next) = Self::with(&world, &is(good)) {
                             out.push((next, Self::val(f[good][0].clone(), field_ty, value.ver)));
@@ -1627,7 +1668,20 @@ impl<'a, 'b> Eval<'a, 'b> {
                     _ => same_type(&value.ty, &param, 0, &|text: &str| text.to_string()),
                 };
                 if !fits {
-                    return Err(Fail::Error(Error { place: place.clone(), message: format!("the argument {} of `{}::{name}` has the type `{}`; the parameter has the type `{}`", index + 1, version.prefix(), ty_text(&value.ty), ty_text(&param)) }));
+                    // [R69.5-2] A coercion of Rust that the model encodes gives the same value:
+                    // `&Vec<T>` and `&[T; N]` to `&[T]` (a vector, an array, and its slice are one
+                    // sequence of the model, R64.4-1).
+                    if coerces_to_slice(&value.ty, &param) {
+                        continue;
+                    }
+                    let message = format!("the argument {} of `{}::{name}` has the type `{}`; the parameter has the type `{}`", index + 1, version.prefix(), ty_text(&value.ty), ty_text(&param));
+                    // [R69.5-2] Rust can coerce at a reference, a pointer, a box, a trait object,
+                    // or a function pointer, and from `!`: the hand type check does not know
+                    // each coercion, so the claim is "claimed", never an error.
+                    if may_coerce(&value.ty, &param) {
+                        return Err(Fail::Claimed(format!("{message}: Rust can coerce it, and the check does not model this coercion")));
+                    }
+                    return Err(Fail::Error(Error { place: place.clone(), message }));
                 }
                 if let Some(IrTy::Ref(true, _)) = param.get() {
                     return Err(Fail::Claimed(format!("the parameter {} of `{name}` is `&mut`: the claims of this batch read values only", index + 1)));
@@ -1635,6 +1689,31 @@ impl<'a, 'b> Eval<'a, 'b> {
             }
             ev.run_call(world, version, name, form.clone(), all, &text)
         })
+    }
+
+    /// [R69.4-1] The record names of the two versions of the item of a claim: the old name and
+    /// the new name (each `None` if that version has no body of the item).
+    fn item_versions(&self, claim: &Claim) -> (Option<String>, Option<String>) {
+        let (name, version) = match claim.targets.first() {
+            Some(Target::Path(path)) => (path.name(), path.version),
+            Some(Target::Text(text, _)) => (text.clone(), None),
+            None => return (None, None),
+        };
+        let place = semilla_intent::Place::default();
+        let find = |version: Version, name: &str| self.function(version, name, &place).ok().flatten().map(|(found, _)| found);
+        match version {
+            Some(Version::Before) => {
+                let old = find(Version::Before, &name);
+                let new = old.as_ref().and_then(|old| find(Version::After, &(self.old.rename)(old)));
+                (old, new)
+            }
+            _ => {
+                let new = find(Version::After, &name);
+                let renamed = new.as_ref().and_then(|new| self.old.names.iter().find(|old| (self.old.rename)(old) == *new && *old != new).cloned());
+                let old = renamed.or_else(|| find(Version::Before, &name));
+                (old, new)
+            }
+        }
     }
 
     /// Runs the body of a version with the arguments (R67.3-5).
@@ -1676,9 +1755,10 @@ impl<'a, 'b> Eval<'a, 'b> {
                     next.shown.push((text.to_string(), Shown::Value(value.clone(), ret.clone())));
                     out.push((next, Self::val(value, ret.clone(), Some(version))));
                 }
-                Exit::Panic { kind, args } => {
-                    next.shown.push((text.to_string(), Shown::Text(format!("panics ({})", kind.trim_start_matches("call ")))));
-                    out.push((next, Out::Panic { kind, args, at: text.to_string() }));
+                Exit::Panic { .. } => {
+                    next.shown.push((text.to_string(), Shown::Text(format!("panics ({})", super::panic_text(&path.exit)))));
+                    let Exit::Panic { kind, args, msg } = path.exit else { unreachable!() };
+                    out.push((next, Out::Panic { kind, args, msg, at: text.to_string() }));
                 }
                 Exit::Abort => out.push((next, Out::Abort(text.to_string()))),
                 Exit::Cut => return Err(Fail::Claimed("a loop head".into())),
@@ -1825,7 +1905,16 @@ impl<'a, 'b> Eval<'a, 'b> {
                         }
                         (Out::Val(_), "returns") | (Out::Panic { .. }, "panics") => t("true"),
                         (Out::Val(_), _) | (Out::Panic { .. }, "returns") => t("false"),
-                        // [R67.3-6] The text of a panic message is outside the model: an unknown
+                        // [R69.3-1] A message of literal pieces is a value: `panics_with`
+                        // compares its text.
+                        (Out::Panic { msg: Some(text), .. }, _) => {
+                            let wanted = match &args[1].kind {
+                                ExprKind::Lit(Lit::Str(wanted)) => wanted.clone(),
+                                _ => String::new(),
+                            };
+                            t(if *text == wanted { "true" } else { "false" })
+                        }
+                        // [R67.3-6] Another panic message is outside the model: an unknown
                         // value, so the claim is never proved on a path that panics and never
                         // false there.
                         (Out::Panic { .. }, _) => {
@@ -1858,7 +1947,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                         let as_path = |outcome: &Out, effects: &[Effect]| -> PathOut {
                             let exit = match outcome {
                                 Out::Val(value) => Exit::Return(value.v.clone()),
-                                Out::Panic { kind, args, .. } => Exit::Panic { kind: kind.clone(), args: if self.options.except_panic_message { Vec::new() } else { args.clone() } },
+                                Out::Panic { kind, args, msg, .. } => Exit::Panic { kind: kind.clone(), args: if self.options.except_panic_message { Vec::new() } else { args.clone() }, msg: msg.clone() },
                                 Out::Abort(_) => Exit::Abort,
                             };
                             PathOut { pc: t("true"), effects: effects.to_vec(), calls: Vec::new(), exit, after: Vec::new(), cut: None }
