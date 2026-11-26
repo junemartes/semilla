@@ -282,7 +282,8 @@ impl Pattern {
             // One variable has one value at one site: the value of the old side is the value
             // of the new side, or the pattern covers the difference of the two values.
             let mut inner = 0;
-            if new_values.iter().all(|(name, new)| old_values.get(name).is_some_and(|old| old.text == new.text || self.covers(old, new, &mut inner))) {
+            // [R77.3-6] Two values are equal by the syntax tree: the parentheses do not count.
+            if new_values.iter().all(|(name, new)| old_values.get(name).is_some_and(|old| old.text == new.text || same_form(old, new) || self.covers(old, new, &mut inner))) {
                 *sites += 1 + inner;
                 return true;
             }
@@ -299,7 +300,9 @@ impl Pattern {
 
 /// The name of a variable node of a pattern.
 fn variable(node: &Node) -> Option<&str> {
-    (node.kind == "path" && !node.text.contains(' ')).then(|| node.text.strip_prefix(crate::pattern::META)).flatten()
+    // [R77.3-6] `($a)` is the variable `$a`: the parentheses are not a part of the form.
+    let text = without_parens(&node.text);
+    (node.kind == "path" && !text.contains(' ')).then(|| text.strip_prefix(crate::pattern::META)).flatten()
 }
 
 /// The names of the variables of a pattern.
@@ -315,7 +318,9 @@ fn names(node: &Node, out: &mut BTreeSet<String>) {
 fn bind<'a>(pattern: &Node, node: &'a Node, values: &mut BTreeMap<String, &'a Node>) -> bool {
     if let Some(name) = variable(pattern) {
         return match values.get(name) {
-            Some(value) => value.text == node.text,
+            // [R77.3-6] Two values of one variable are the same expression by the syntax tree: the
+            // parentheses of an expression are not a part of its form.
+            Some(value) => same_form(value, node),
             None => {
                 values.insert(name.to_string(), node);
                 true
@@ -326,9 +331,52 @@ fn bind<'a>(pattern: &Node, node: &'a Node, values: &mut BTreeMap<String, &'a No
         return false;
     }
     if pattern.children.is_empty() {
-        return pattern.text == node.text;
+        return without_parens(&pattern.text) == without_parens(&node.text);
     }
     pattern.children.iter().zip(&node.children).all(|(p, n)| p.role == n.role && bind(p, n, values))
+}
+
+/// [R77.3-6] The text of a leaf with no parentheses around it.
+fn without_parens(text: &str) -> &str {
+    let mut text = text.trim();
+    while let Some(inner) = text.strip_prefix('(').and_then(|rest| rest.strip_suffix(')')) {
+        text = inner.trim();
+    }
+    text
+}
+
+/// [R77.3-6] True if two nodes are one expression by the syntax tree (the kinds, the roles, and
+/// the leaf texts; the parentheses do not count).
+fn same_form(a: &Node, b: &Node) -> bool {
+    if a.kind != b.kind || a.attr != b.attr || a.children.len() != b.children.len() {
+        return false;
+    }
+    if a.children.is_empty() {
+        return without_parens(&a.text) == without_parens(&b.text);
+    }
+    a.children.iter().zip(&b.children).all(|(x, y)| x.role == y.role && same_form(x, y))
+}
+
+/// [R77.3-6] True if an expression of this kind needs parentheses in the place of a child of a
+/// node of the kind `parent` (a receiver, a field base, an index base, an operand).
+fn needs_parens(kind: &str, parent: Option<&str>) -> bool {
+    // The precedence of the Rust grammar, from the highest: a postfix operation (a method call,
+    // a field, an index, `?`, `.await`), a unary operation and `&`, `as`, then the binary
+    // operations. A child of a lower rank than its parent needs parentheses (a binary child of a
+    // binary operation too: the safe side for two ranks of binary operations).
+    let rank = |kind: &str| -> u8 {
+        match kind {
+            "method_call" | "field" | "index" | "try" | "await" => 4,
+            "unary" | "ref" => 3,
+            "cast" => 2,
+            "binary" => 1,
+            "assign" => 0,
+            _ => 5,
+        }
+    };
+    let Some(parent) = parent else { return false };
+    let (own, outer) = (rank(kind), rank(parent));
+    outer < 5 && (own < outer || (own == 1 && outer == 1))
 }
 
 /// The pattern that one edit gives (design 54.4): the old text and the new text, with a
@@ -358,16 +406,20 @@ fn generalize(old: &Node, new: &Node, old_file: &str, new_file: &str) -> Option<
     }
     let name = |text: &str| texts.iter().position(|t| *t == text).map(|index| format!("${}", (b'a' + (index % 26) as u8) as char));
     // The text of a side, with the name of the variable in place of each picked part.
-    fn replace(node: &Node, root: bool, source: &str, start: usize, name: &dyn Fn(&str) -> Option<String>, out: &mut Vec<(usize, usize, String)>) {
+    // [R77.3-6] A variable in the place of a receiver or an operand gets parentheses when its
+    // value is an expression of a lower rank (a binary operation, a cast): the text of the
+    // pattern is then valid Rust for each value.
+    fn replace(node: &Node, root: bool, source: &str, start: usize, name: &dyn Fn(&str) -> Option<String>, out: &mut Vec<(usize, usize, String)>, parent: Option<&str>) {
         if let Some(name) = name(&node.text).filter(|_| !root && node.span.1 > node.span.0) {
-            out.push((node.span.0.saturating_sub(start), node.span.1.saturating_sub(start), name));
+            let text = if needs_parens(&node.kind, parent) { format!("({name})") } else { name };
+            out.push((node.span.0.saturating_sub(start), node.span.1.saturating_sub(start), text));
             return;
         }
-        node.children.iter().for_each(|child| replace(child, false, source, start, name, out));
+        node.children.iter().for_each(|child| replace(child, false, source, start, name, out, Some(&*node.kind)));
     }
     let side = |node: &Node, text: &str| -> Option<String> {
         let mut changes = Vec::new();
-        replace(node, true, text, node.span.0, &name, &mut changes);
+        replace(node, true, text, node.span.0, &name, &mut changes, None);
         changes.sort();
         let (mut out, mut at) = (String::new(), 0);
         for (start, end, name) in changes {
@@ -1065,7 +1117,8 @@ fn bench_file(file: &str) -> bool {
 /// Checks the facts of the agent of a step, sets the origin of each fact, and makes the gap
 /// list (design 54). The pass is the last pass of a step check.
 pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
-    let StepOutcome { report, edits, fact_of, renames, stated_causes, .. } = outcome;
+    let StepOutcome { report, edits, fact_of, renames, stated_causes, explained, .. } = outcome;
+    let explained = &*explained;
     // The units: each edit of a fact, and the place of each fact with no edit.
     let mut units: Vec<Unit> = Vec::new();
     for (index, edit) in edits.iter().enumerate() {
@@ -1180,7 +1233,8 @@ pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
     let mut lines: Vec<Line> = Vec::new();
     for (index, unit) in check.units.iter().enumerate() {
         let fact = &facts[unit.fact];
-        if covered_by[index].is_some() || !fact.category.agent_states() || check.test_unit(unit) || !check.existing(unit) {
+        // [R77.1-3] A unit of an item whose changed bodies a proved claim explains has no line.
+        if covered_by[index].is_some() || !fact.category.agent_states() || check.test_unit(unit) || !check.existing(unit) || unit.items.last().is_some_and(|item| explained.contains(item)) {
             continue;
         }
         // The edit without the place: the text of a fold, or the text of the fact.

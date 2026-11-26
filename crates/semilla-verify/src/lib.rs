@@ -455,9 +455,10 @@ pub trait BodyOracle {
         vec![None; queries.len()]
     }
 
-    /// The time budget of the equivalence check of a step in seconds (design 61.14, R61.14-6),
-    /// for the line of a check that the budget stopped. `None`: no budget.
-    fn equivalence_budget(&self, _step: &Step) -> Option<u64> {
+    /// The budget of the equivalence check of a step (design 61.14, R61.14-6, R77.2-2): the text
+    /// of its parts (solver steps, variant builds), for the line of a check that the budget
+    /// stopped. `None`: no budget.
+    fn equivalence_budget(&self, _step: &Step) -> Option<String> {
         None
     }
 
@@ -637,6 +638,14 @@ pub struct StepOutcome {
     /// The node pairs of the tree compare of each body, by the path of the old item (design
     /// 59, B-d).
     pub node_pairs: BTreeMap<String, Vec<semilla_syntax::NodePair>>,
+    /// [R77.1-2] The results of the equivalence check of each body of the section "control
+    /// flow", by the name of the body: each configuration with its verdict.
+    pub verdicts: BTreeMap<String, Vec<(String, equiv::Verdict)>>,
+    /// [R77.1-1] The claims of the intent files and the answers of the oracle (`intent::check`,
+    /// before the gap list).
+    pub intent_answers: Option<(Vec<intent::Query>, Option<Vec<intent::Answer>>)>,
+    /// [R77.1-3] The items whose changed bodies proved claims explain: no line of the gap list.
+    pub explained: BTreeSet<String>,
 }
 
 /// Checks one step with the old protocol: an edit with no claim and no type-level fact is
@@ -733,6 +742,7 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
         expand::apply(input, bodies, exprs, &mut plain);
         macro_module_spotlight(input, &mut plain.report);
         twin_notes(twin_moves, &mut plain.report);
+        intent::check(input, bodies, &mut plain);
         agent::apply(input, &mut plain);
         intent::apply(input, bodies, &mut plain);
         tags::apply(input, &mut plain);
@@ -752,6 +762,7 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
     expand::apply(input, bodies, exprs, &mut outcome);
     macro_module_spotlight(input, &mut outcome.report);
     twin_notes(twin_moves, &mut outcome.report);
+    intent::check(input, bodies, &mut outcome);
     agent::apply(input, &mut outcome);
     intent::apply(input, bodies, &mut outcome);
     tags::apply(input, &mut outcome);
@@ -1898,7 +1909,7 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     // to `facts`. The report shows each distinct error one time, complete.
     let mut seen = std::collections::BTreeSet::new();
     report.errors.retain(|error| seen.insert(error.clone()));
-    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections, node_pairs: body_maps.pairs }
+    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections, node_pairs: body_maps.pairs, verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new() }
 }
 
 /// Sets the compare result of each fact (design 35, "Decided by Claude").
@@ -2838,8 +2849,16 @@ fn impl_reach(workspace: &Workspace, item: &semilla_syntax::Item) -> Reach {
     if let Some(self_ty) = parsed.self_ty() {
         names.push((last(&self_ty), text(&self_ty)));
     }
-    let (mut maybe, mut unknown): (Option<String>, Option<String>) = (None, None);
-    for (name, shown) in names {
+    // [R77.3-7] The effective visibility of the compiler decides first (R70.2-1 (b)).
+    if let Some(public) = records::item_public(workspace, &item.path) {
+        return if public { Reach::Yes } else { Reach::No };
+    }
+    // [R77.3-7] A different crate can use a trait impl only if it can use the trait and the self
+    // type: each part must be reachable. A name that is not an item of the crate (a trait or a
+    // type of another crate, a generic parameter) is reachable. Before, one reachable part was
+    // enough, so the impl of a trait of another crate for a private type had the note.
+    let mut maybe: Option<String> = None;
+    for (name, _shown) in names {
         let found: Vec<&semilla_syntax::Item> = match &name {
             Some(name) => workspace
                 .items
@@ -2850,21 +2869,29 @@ fn impl_reach(workspace: &Workspace, item: &semilla_syntax::Item) -> Reach {
             None => Vec::new(),
         };
         if found.is_empty() {
-            unknown.get_or_insert(format!("`{shown}` is not an item of the crate, and a different crate can name it"));
             continue;
         }
+        // Two items with one name: the part is reachable if one of them is.
+        let mut part = Reach::No;
         for other in found {
             match api_reach(workspace, &other.path) {
-                Reach::Yes => return Reach::Yes,
-                Reach::Maybe(cause) => {
-                    maybe.get_or_insert(cause);
+                Reach::Yes => {
+                    part = Reach::Yes;
+                    break;
                 }
+                Reach::Maybe(cause) => part = Reach::Maybe(cause),
                 Reach::No => {}
             }
         }
+        match part {
+            Reach::No => return Reach::No,
+            Reach::Maybe(cause) => {
+                maybe.get_or_insert(cause);
+            }
+            Reach::Yes => {}
+        }
     }
-    // The cause of an item of the crate is the better text.
-    maybe.or(unknown).map_or(Reach::No, Reach::Maybe)
+    maybe.map_or(Reach::Yes, Reach::Maybe)
 }
 
 /// The answer to "can a different crate use this associated constant or type?" (design
@@ -3442,7 +3469,7 @@ pub fn verify_changeset_cached(
             }
             Err(error) => {
                 let step_report = StepReport { step: step.index, intent: step.intent.clone(), errors: vec![format!("{error:#}")], ..Default::default() };
-                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new(), node_pairs: BTreeMap::new() });
+                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new(), node_pairs: BTreeMap::new(), verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new() });
             }
         }
     }

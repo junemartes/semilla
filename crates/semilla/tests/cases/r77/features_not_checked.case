@@ -1,0 +1,50 @@
+note: batch 13a, test case "mutually exclusive features": the configuration with all features does not build, so no checked configuration enables `a` or `b`; one line names them (G6)
+rule+: R77.3-8
+option: --compiled
+must_match: ! features that no checked configuration enables: `shop/a`, `shop/b`; no result covers the code or the dependencies that they enable
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+a = []
+b = []
+=== old src/lib.rs
+#[cfg(all(feature = "a", feature = "b"))]
+compile_error!("a and b");
+#[cfg(feature = "a")]
+pub fn fa() -> u32 { 1 }
+pub fn base() -> u32 { 3 }
+=== new src/lib.rs
+#[cfg(all(feature = "a", feature = "b"))]
+compile_error!("a and b");
+#[cfg(feature = "a")]
+pub fn fa() -> u32 { 1 }
+pub fn base() -> u32 { 30 }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  ! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error: a and b
+  ! features that no checked configuration enables: `shop/a`, `shop/b`; no result covers the code or the dependencies that they enable
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `3` → `30` (f1)
+      in: shop::base
+      lines: src/lib.rs:5, src/lib.rs:-5
+      to state it: --change 'shop::base=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::base=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `3` → `30` at `shop::base/tail` [semantics · code different]
+      affected bodies: shop::base
+      equivalence: different: for each input: before returns 3, after returns 30 (confirmed by a run)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::base (src/lib.rs:5): same graph (the edit keeps the control flow); different (for each input: before returns 3, after returns 30; confirmed by a run)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `3` → `30` at `shop::base/tail` [semantics · code different]
+    lines: src/lib.rs:5, src/lib.rs:-5

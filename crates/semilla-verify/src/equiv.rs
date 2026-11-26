@@ -53,6 +53,10 @@ pub(crate) fn result_words() -> Vec<&'static str> {
 /// The cause of a check that the budget of the step stopped (R61.14-6).
 pub const BUDGET_CAUSE: &str = "the budget of the step";
 
+/// [R77.2-3] The cause of a check that the safety time limit stopped (the text of
+/// `semilla_smt::budget::SAFETY_CAUSE`): a separate cause, never the cause of the budget.
+pub const SAFETY_CAUSE: &str = "the safety time limit";
+
 /// The answer of the oracle to one query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Answer {
@@ -449,6 +453,8 @@ pub(crate) fn apply(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, ou
             continue;
         }
         let plain: Vec<(String, Verdict)> = results.iter().map(|(config, verdict, _)| (config.clone(), verdict.clone())).collect();
+        // [R77.1-2] The results of the body for the coverage of the claims.
+        outcome.verdicts.entry(flow.bodies[check.index].name.clone()).or_default().extend(plain.iter().cloned());
         let body = &mut flow.bodies[check.index];
         body.line.push_str(&format!("; {}", joined(&plain, true, false)));
         // `status --verbose`: the method, the inlined callees, the time, and the query count.
@@ -506,12 +512,15 @@ pub(crate) fn apply(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, ou
         let word = nested.iter().find(|(rank, _, _)| *rank == best).map(|(_, _, word)| *word).unwrap_or_default();
         flow.bodies[check.index].line.push_str(&format!("; with its nested bodies: {word} in {}", names.join(", ")));
     }
-    // One line for the step when the budget stopped a check (R61.14-6).
+    // One line for the step when the budget stopped a check (R61.14-6). [R77.2-3] The safety time
+    // limit has its own line.
+    let safety = |verdict: &Verdict| matches!(verdict, Verdict::NotChecked(cause) if cause == SAFETY_CAUSE);
+    let by_safety = body_results.iter().filter(|results| results.iter().any(|(_, verdict, _)| safety(verdict))).count() + fact_results.values().filter(|results| results.iter().any(|(_, verdict)| safety(verdict))).count();
     let stopped = |verdict: &Verdict| matches!(verdict, Verdict::NotChecked(cause) if cause == BUDGET_CAUSE);
     let bodies = body_results.iter().filter(|results| results.iter().any(|(_, verdict, _)| stopped(verdict))).count();
     let alone = fact_results.values().filter(|results| results.iter().any(|(_, verdict)| stopped(verdict))).count();
     if bodies + alone > 0 {
-        let seconds = oracle.equivalence_budget(input.step).map(|seconds| format!(" after {seconds} s")).unwrap_or_default();
+        let seconds = oracle.equivalence_budget(input.step).map(|parts| format!(" at its budget ({parts})")).unwrap_or_default();
         let mut parts = Vec::new();
         if bodies > 0 {
             parts.push(format!("{bodies} bod{} not checked", if bodies == 1 { "y" } else { "ies" }));
@@ -520,6 +529,13 @@ pub(crate) fn apply(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, ou
             parts.push(format!("{alone} fact{} not checked alone", if alone == 1 { "" } else { "s" }));
         }
         flow.equivalence_stop = Some(format!("the equivalence check stopped{seconds}: {}; {}", parts.join(", "), semilla_core::budget::step_text_command(outcome.report.step)));
+    }
+    if by_safety > 0 {
+        let line = format!("the safety time limit stopped the equivalence check: {by_safety} result(s) not checked (the safety time limit); semilla status --verbose");
+        flow.equivalence_stop = Some(match flow.equivalence_stop.take() {
+            Some(found) => format!("{found}; {line}"),
+            None => line,
+        });
     }
     // [R74.1-2] One line for the step when a run of the real code disagrees with the model.
     let defect = |verdict: &Verdict| matches!(verdict, Verdict::NotDecided(cause) if cause.starts_with(semilla_core::run::DISAGREE));

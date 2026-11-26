@@ -97,13 +97,6 @@ pub struct Added {
     /// The walk of the reverse call graph of each configuration of a step (design 61.10, part
     /// A), by the two trees of the step.
     reached: BTreeMap<(String, String), std::sync::Arc<Vec<(String, reach::ConfigReach)>>>,
-    /// The first use of each step in this oracle, and the time budget of its equivalence check
-    /// (R61.14-5), by the two trees of the step.
-    step_started: BTreeMap<(String, String), std::time::Instant>,
-    budgets: BTreeMap<(String, String), std::time::Duration>,
-    /// The time of the last build of each level and configuration (the name of the build
-    /// folder), in this process.
-    builds: BTreeMap<String, std::time::Duration>,
 }
 
 /// The key of a record set: the two trees of a step, and the configuration.
@@ -565,11 +558,8 @@ impl NormalOracle {
             }
         };
         crate::timing(&format!("cargo check {name} of tree {}", &tree[..8.min(tree.len())]), started);
-        let took = started.elapsed();
-        self.added.lock().unwrap_or_else(|error| error.into_inner()).builds.insert(name.clone(), took);
         remove_cache(&cache);
         std::fs::create_dir_all(&cache)?;
-        std::fs::write(cache.join(BUILD_TIME_FILE), format!("{:.3}\n", took.as_secs_f64()))?;
         // The cache gets only the record file of each unit of this build (design 28.8). Each
         // other file of the records folder stays out, and the result names it. A program of
         // the build decides the name: each hidden character becomes an escape.
@@ -1290,9 +1280,11 @@ fn variant_order(queries: &[semilla_verify::equiv::Query], rank: &dyn Fn(&str) -
     keys
 }
 
-/// The time limit of one solver query of the equivalence check (design 61, C8).
-pub(crate) const EQUIV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-/// The budget of the equivalence check of one step: the most solver queries, and the most time.
+/// [R77.2-1] The safety time limit of one solver query of the equivalence check (design 61, C8):
+/// the result of a query comes from its limit in solver steps.
+pub(crate) const EQUIV_TIMEOUT: std::time::Duration = semilla_smt::budget::SAFETY_QUERY;
+/// The budget of the equivalence check of one step: the most solver queries, and the most solver
+/// steps (R77.2-2).
 const EQUIV_QUERIES: usize = 400;
 
 /// The query budget of a step: `EQUIV_QUERIES`, or `SEMILLA_EQUIV_QUERIES=N` (for a test of the
@@ -1300,18 +1292,37 @@ const EQUIV_QUERIES: usize = 400;
 fn equiv_queries() -> usize {
     std::env::var("SEMILLA_EQUIV_QUERIES").ok().and_then(|text| text.trim().parse::<usize>().ok()).unwrap_or(EQUIV_QUERIES)
 }
-/// The time budget of the check of a step (R61.14-5): a quarter of the time of the step before
-/// the check (the builds), at least `EQUIV_TIME_MIN`, at most `EQUIV_TIME`. It includes the walk
-/// and the builds of the variants.
-const EQUIV_TIME: std::time::Duration = std::time::Duration::from_secs(60);
-const EQUIV_TIME_MIN: std::time::Duration = std::time::Duration::from_secs(10);
-/// The longest time of one body check: half of a time budget, at least 5 s (R66.9-2).
-pub(crate) fn check_share(budget: std::time::Duration) -> std::time::Duration {
-    (budget / 2).max(std::time::Duration::from_secs(5))
+/// [R77.2-2] The budget of the equivalence check of a step in solver steps (the body checks of the
+/// step and of the variants, in their order), or `SEMILLA_EQUIV_BUDGET=STEPS` (for a test of the
+/// budget).
+pub(crate) const EQUIV_STEPS: u64 = 200_000_000;
+/// [R77.2-2] The budget of one body check in solver steps (R66.9-2 in solver steps).
+pub(crate) const BODY_STEPS: u64 = 60_000_000;
+/// [R77.2-2] The most builds of a variant (a tree with one edit of a fact) for each step, in the
+/// order of R66.11-3. The case set uses at most 8 in a step.
+pub(crate) const VARIANT_BUILDS: usize = 8;
+
+/// The count of variant builds of a step: `VARIANT_BUILDS`, or `SEMILLA_VARIANT_BUILDS=N` (for a
+/// test of the count).
+fn variant_builds() -> usize {
+    std::env::var("SEMILLA_VARIANT_BUILDS").ok().and_then(|text| text.trim().parse::<usize>().ok()).unwrap_or(VARIANT_BUILDS)
+}
+/// [R77.2-3] The safety time limit of the equivalence check of one step (the body checks, the
+/// walk, and the builds of the variants). It never decides a result on a usual machine.
+pub(crate) const SAFETY_STEP: std::time::Duration = std::time::Duration::from_secs(1200);
+
+/// The budget of the equivalence check of a step in solver steps.
+pub(crate) fn equiv_steps() -> u64 {
+    std::env::var("SEMILLA_EQUIV_BUDGET").ok().and_then(|text| text.trim().parse::<u64>().ok()).unwrap_or(EQUIV_STEPS)
 }
 
-/// The file of the time of the build of a record folder, in seconds (R61.14-5).
-const BUILD_TIME_FILE: &str = ".seconds";
+/// [R77.2-2] The budget of one body check: [`BODY_STEPS`], never more than the budget of the step,
+/// with the safety time limit of the step.
+pub(crate) fn body_budget(step: u64, safety: std::time::Instant) -> semilla_smt::budget::Budget {
+    semilla_smt::budget::Budget::with_safety(BODY_STEPS.min(step), Some(safety))
+}
+
+
 
 /// The N0 records of one side of a configuration, for the equivalence check: by name.
 pub(crate) struct EquivSide<'a> {
@@ -1498,14 +1509,14 @@ impl NormalOracle {
     /// the two sides of the configuration. `reach` is the walk of the configuration: the set of
     /// the bodies to inline and the trait methods of the impl methods.
     #[allow(clippy::too_many_arguments)]
-    fn equivalence_one(&self, solver: &semilla_smt::Solver, query: &semilla_verify::equiv::Query, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], renamed: bool, reach: &reach::ConfigReach, deadline: Option<std::time::Instant>) -> Option<semilla_verify::equiv::Answer> {
+    fn equivalence_one(&self, solver: &semilla_smt::Solver, query: &semilla_verify::equiv::Query, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], renamed: bool, reach: &reach::ConfigReach, budget: Option<semilla_smt::budget::Budget>) -> Option<semilla_verify::equiv::Answer> {
         let a = old.find(&query.old.0, &query.old.1, "")?;
         let b = new.find(&query.new.0, &query.new.1, &a.unit)?;
         let rename_text = |text: &str| if renamed { semilla_normal::paths::rename(text, renames) } else { text.to_string() };
         let callees = changed_callees(a, b, &reach.must_inline, &reach.trait_methods, &rename_text);
         // An equal MIR text at N0 is a proof with no solver only if no callee changes: else the
         // body-local result has its own name, and the check inlines each changed callee.
-        let mut answer = self.check_pair(solver, a, b, old, new, renames, renamed, &reach.must_inline, callees.is_empty(), deadline)?;
+        let mut answer = self.check_pair(solver, a, b, old, new, renames, renamed, &reach.must_inline, callees.is_empty(), budget)?;
         if !callees.is_empty() && rename_text(&a.text) == b.text {
             answer.local = Some(format!("same body code; changed callee: {}", callees.join(", ")));
         }
@@ -1515,7 +1526,7 @@ impl NormalOracle {
     /// Checks two records with each body of `changed` inlined. `equal_proof`: an equal MIR text
     /// at N0 is a proof (only for a body with no changed callee).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn check_pair(&self, solver: &semilla_smt::Solver, a: &semilla_normal::BodyRecord, b: &semilla_normal::BodyRecord, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], renamed: bool, changed: &std::sync::Arc<std::collections::BTreeSet<String>>, equal_proof: bool, deadline: Option<std::time::Instant>) -> Option<semilla_verify::equiv::Answer> {
+    pub(crate) fn check_pair(&self, solver: &semilla_smt::Solver, a: &semilla_normal::BodyRecord, b: &semilla_normal::BodyRecord, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], renamed: bool, changed: &std::sync::Arc<std::collections::BTreeSet<String>>, equal_proof: bool, budget: Option<semilla_smt::budget::Budget>) -> Option<semilla_verify::equiv::Answer> {
         use semilla_verify::equiv::{Answer, Verdict};
         let rename_text = |text: &str| if renamed { semilla_normal::paths::rename(text, renames) } else { text.to_string() };
         // An equal text is a proof only if each constant item that the two texts name by its
@@ -1524,9 +1535,17 @@ impl NormalOracle {
             return Some(Answer { verdict: Verdict::Equivalent("equal MIR".into()), inlined: Vec::new(), queries: 0, millis: 0, local: None });
         }
         // [R66.10-5] The budget stops only the costly part: the compare of two equal MIR texts
-        // above needs no solver, so it gives its proof also past the deadline.
-        if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
-            return Some(Answer { verdict: Verdict::NotChecked(semilla_verify::equiv::BUDGET_CAUSE.into()), inlined: Vec::new(), queries: 0, millis: 0, local: None });
+        // above needs no solver, so it gives its proof also past the budget (R77.2-2: a budget of
+        // 0 solver steps).
+        if let Some(budget) = budget {
+            let cause = if budget.safety.is_some_and(|safety| std::time::Instant::now() >= safety) {
+                Some(semilla_smt::budget::SAFETY_CAUSE)
+            } else {
+                (budget.steps == 0).then_some(semilla_verify::equiv::BUDGET_CAUSE)
+            };
+            if let Some(cause) = cause {
+                return Some(Answer { verdict: Verdict::NotChecked(cause.into()), inlined: Vec::new(), queries: 0, millis: 0, local: None });
+            }
         }
         let form_started = std::time::Instant::now();
         let forms = (record_form(a), record_form(b));
@@ -1571,11 +1590,11 @@ impl NormalOracle {
         let side_a = semilla_smt::mir::Side { ir: form_a, workspace: &workspace_a, std: &std_a, rename: &rename_a };
         let side_b = semilla_smt::mir::Side { ir: form_b, workspace: &workspace_b, std: &std_b, rename: &same };
         let solve_started = std::time::Instant::now();
-        let checked = semilla_smt::mir::check_bodies_until(solver, &side_a, &side_b, &step, deadline);
+        let checked = semilla_smt::mir::check_bodies_until(solver, &side_a, &side_b, &step, budget);
         SOLVE_TIME.add(solve_started);
         // A body check over 1 s (design 66, part D): one line with `SEMILLA_TIMING`.
-        if std::env::var_os("SEMILLA_TIMING").is_some() && solve_started.elapsed() > std::time::Duration::from_secs(1) {
-            eprintln!("[timing] the body check of {}: {:.2} s ({} solver queries)", b.name, solve_started.elapsed().as_secs_f64(), checked.queries);
+        if std::env::var_os("SEMILLA_TIMING").is_some() && (solve_started.elapsed() > std::time::Duration::from_secs(1) || checked.steps > 10_000_000) {
+            eprintln!("[timing] the body check of {}: {:.2} s ({} solver queries, {} solver steps)", b.name, solve_started.elapsed().as_secs_f64(), checked.queries, checked.steps);
         }
         let verdict = match checked.verdict {
             semilla_smt::mir::Verdict::Equivalent { method } => Verdict::Equivalent(method),
@@ -1595,45 +1614,17 @@ impl NormalOracle {
                 };
                 Verdict::Different { input, before, after, run }
             }
-            // A check that its deadline stops (R66.9-2): not checked, as a check that the budget
-            // of the step does not start.
-            semilla_smt::mir::Verdict::NotDecided { cause } if cause == semilla_smt::mir::DEADLINE_CAUSE => Verdict::NotChecked(semilla_verify::equiv::BUDGET_CAUSE.into()),
+            // A check that its budget stops (R66.9-2, R77.2-2): not checked, as a check that the
+            // budget of the step does not start. The safety time limit has its own cause.
+            semilla_smt::mir::Verdict::NotDecided { cause } if semilla_smt::budget::is_stop(&cause) => Verdict::NotChecked(cause),
             semilla_smt::mir::Verdict::NotDecided { cause } => Verdict::NotDecided(cause),
         };
         Some(Answer { verdict, inlined: checked.inlined, queries: checked.queries, millis: checked.millis, local: None })
     }
 
-    /// The time budget of the equivalence check of a step (R61.14-5), fixed at its first use: a
-    /// quarter of the time since the first use of the step in this oracle (its builds), at least
-    /// `EQUIV_TIME_MIN` and at most `EQUIV_TIME`.
-    fn equivalence_time(&self, step: &Step) -> std::time::Duration {
-        let key = (step.tree_before.clone(), step.tree_after.clone());
-        let mut state = self.added.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some(found) = state.budgets.get(&key) {
-            return *found;
-        }
-        let before = state.step_started.get(&key).map(|started| started.elapsed()).unwrap_or_default();
-        // `SEMILLA_EQUIV_BUDGET=SECONDS` sets the budget (for a test of the budget).
-        let fixed = std::env::var("SEMILLA_EQUIV_BUDGET").ok().and_then(|text| text.trim().parse::<u64>().ok()).map(std::time::Duration::from_secs);
-        let budget = fixed.unwrap_or_else(|| (before / 4).clamp(EQUIV_TIME_MIN, EQUIV_TIME));
-        state.budgets.insert(key, budget);
-        budget
-    }
-
-    /// The time of the last N0 build of a configuration: in this process, else the time of the
-    /// build of the records of the tree (zero if no time is known).
-    fn last_build_time(&self, tree: &str, config: &Configuration) -> std::time::Duration {
-        let name = format!("n0{}", config.suffix());
-        if let Some(found) = self.added.lock().unwrap_or_else(|error| error.into_inner()).builds.get(&name) {
-            return *found;
-        }
-        let Ok((_, cache, _, _)) = self.cache_folder(tree, "n0", config) else { return std::time::Duration::ZERO };
-        std::fs::read_to_string(cache.join(BUILD_TIME_FILE)).ok().and_then(|text| text.trim().parse::<f64>().ok()).map(std::time::Duration::from_secs_f64).unwrap_or_default()
-    }
-
     /// The walk of each checked configuration of a step, one time for the step (design 61.10,
     /// part A), in the time `limit`.
-    fn reach_all(&self, step: &Step, renames: &BTreeMap<String, String>, limit: std::time::Duration) -> Option<std::sync::Arc<Vec<(String, reach::ConfigReach)>>> {
+    fn reach_all(&self, step: &Step, renames: &BTreeMap<String, String>, limit: u64) -> Option<std::sync::Arc<Vec<(String, reach::ConfigReach)>>> {
         let key = (step.tree_before.clone(), step.tree_after.clone());
         if let Some(found) = self.added.lock().unwrap_or_else(|error| error.into_inner()).reached.get(&key).cloned() {
             return Some(found);
@@ -1641,14 +1632,15 @@ impl NormalOracle {
         let solver = semilla_smt::Solver::find_for(&crate::store::tool_dirs(&self.repo.root), Some(&self.repo.root)).ok()?.with_timeout(EQUIV_TIMEOUT);
         let checked = self.checked(step).ok()?;
         let renames: Vec<(String, String)> = renames.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
-        let started = std::time::Instant::now();
+        let safety = std::time::Instant::now() + SAFETY_STEP;
+        let mut spent = 0u64;
         let mut out = Vec::new();
         for config in &checked {
             let Ok(sides) = self.sides(step, config) else { continue };
             let empty = Vec::new();
             let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
             let new = EquivSide::new(sides.after.get("n0").unwrap_or(&empty));
-            out.push((config.name(), self.reach_config(&solver, &old, &new, &renames, started, limit)));
+            out.push((config.name(), self.reach_config(&solver, &old, &new, &renames, &mut spent, limit, safety)));
         }
         let found = std::sync::Arc::new(out);
         self.added.lock().unwrap_or_else(|error| error.into_inner()).reached.insert(key, found.clone());
@@ -1775,48 +1767,50 @@ impl BodyOracle for NormalOracle {
         let solver = solver.with_timeout(EQUIV_TIMEOUT);
         let Ok(checked) = self.checked(step) else { return vec![None; queries.len()] };
         let renames: Vec<(String, String)> = renames.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
-        // One time budget for the check of the step: the walk, the checks, and the builds of
-        // the variants (R61.14-5).
-        let budget = self.equivalence_time(step);
-        let started = std::time::Instant::now();
-        let used = std::sync::atomic::AtomicUsize::new(0);
-        let budget_of = |answer: Option<Answer>| -> Option<Answer> {
-            let answer = answer?;
-            used.fetch_add(answer.queries, std::sync::atomic::Ordering::Relaxed);
-            Some(answer)
-        };
-        // [R66.10-5] Each part of the budget stops only the work that it counts: the query budget
-        // stops the solver, and the time budget stops the solver and the builds of the variants.
-        // A check that needs neither (two equal MIR texts) gives its result past each budget.
+        // [R77.2-2] One budget in solver steps for the body checks of the step and of the
+        // variants, and the query budget. A job is the check of one query; its result and its
+        // cost (solver steps and queries) depend only on the trees, never on the order of the
+        // threads. The jobs have one order (the bodies of the step, then the variants): a job gets
+        // its own result only if the jobs before it in the order used less than each budget; else
+        // it gets the result past the budget (R66.10-5: a proof by two equal MIR texts, else "not
+        // checked (the budget of the step)"). So the same trees give the same results on each
+        // machine and at each load. [R77.2-3] The safety time limit stops the rest of the work
+        // with its own cause.
+        let step_steps = equiv_steps();
         let queries_limit = equiv_queries();
-        let time_over = || started.elapsed() > budget;
-        let over = || used.load(std::sync::atomic::Ordering::Relaxed) > queries_limit || time_over();
-        // The share of one body check (R66.9-2): at most half of the budget of the step, and
-        // never past its end.
-        let share_end = || (std::time::Instant::now() + check_share(budget)).min(started + budget);
-        let spent = || Some(Answer { verdict: Verdict::NotChecked(semilla_verify::equiv::BUDGET_CAUSE.into()), inlined: Vec::new(), queries: 0, millis: 0, local: None });
-        let mut answers: Vec<Option<Answer>> = vec![None; queries.len()];
+        let started = std::time::Instant::now();
+        let safety = started + SAFETY_STEP;
         let threads = std::thread::available_parallelism().map(|count| count.get()).unwrap_or(4).clamp(1, 8);
         type Walks = Option<std::sync::Arc<Vec<(String, reach::ConfigReach)>>>;
+        // The cost of each job: the solver steps and the queries (`None` until it ends).
+        type Cost = (u64, usize);
+        // The prefix rule: the sum of the known costs of the jobs before a position.
+        let over = |costs: &[Option<Cost>], at: usize| -> bool {
+            let (steps, count) = costs[..at].iter().flatten().fold((0u64, 0usize), |(a, b), (x, y)| (a.saturating_add(*x), b + y));
+            steps >= step_steps || count > queries_limit
+        };
         // Runs the checks of some queries in up to 8 threads. `variant`: the records of the
         // variant tree of the queries. `walks`: the walk of each configuration (design 61.10),
-        // for the queries of the step.
-        let run = |jobs: &[usize], variant: Option<&[semilla_normal::BodyRecord]>, walks: &Walks| -> Vec<(usize, Option<Answer>)> {
+        // for the queries of the step. `order`: the position of each job in the order of the
+        // step; `costs`: the cost of each position. Each job gives its answer, its cost, and true
+        // if it ran past the budget.
+        let run = |jobs: &[(usize, usize)], variant: Option<&[semilla_normal::BodyRecord]>, walks: &Walks, costs: &std::sync::Mutex<Vec<Option<Cost>>>| -> Vec<(usize, Option<Answer>, bool)> {
             let walk_of = |config: &str| walks.as_ref().and_then(|walks| walks.iter().find(|(name, _)| name == config).map(|(_, reach)| reach.clone()));
             let next = std::sync::atomic::AtomicUsize::new(0);
-            let results: std::sync::Mutex<Vec<(usize, Option<Answer>)>> = std::sync::Mutex::new(Vec::new());
+            let results: std::sync::Mutex<Vec<(usize, Option<Answer>, bool)>> = std::sync::Mutex::new(Vec::new());
             // The changed bodies of the variant (one variant tree for each call).
             let changed: std::sync::OnceLock<reach::ConfigReach> = std::sync::OnceLock::new();
             std::thread::scope(|scope| {
                 for _ in 0..threads.min(jobs.len().max(1)) {
                     scope.spawn(|| loop {
                         let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(index) = jobs.get(at).copied() else { break };
+                        let Some((index, position)) = jobs.get(at).copied() else { break };
                         let query = &queries[index];
-                        // R66.10-5: past the budget, a check still gives the proof of two equal
-                        // MIR texts (no solver); `check_pair` stops before the solver.
-                        let late = over();
-                        let deadline = || if late { std::time::Instant::now() } else { share_end() };
+                        // R66.10-5: past the budget (the known costs before this position use
+                        // it), a check still gives the proof of two equal MIR texts (no solver).
+                        let late = over(&costs.lock().unwrap_or_else(|error| error.into_inner()), position);
+                        let budget = if late { semilla_smt::budget::Budget::with_safety(0, Some(safety)) } else { body_budget(step_steps, safety) };
+                        let before = semilla_smt::budget::used();
                         let answer = {
                             let config = checked.iter().find(|config| config.name() == query.config);
                             let sides = config.and_then(|config| self.sides(step, config).ok());
@@ -1827,46 +1821,64 @@ impl BodyOracle for NormalOracle {
                                     None => {
                                         let new = EquivSide::new(sides.after.get("n0").unwrap_or(&empty));
                                         let walk = walk_of(&query.config).unwrap_or_else(|| reach::ConfigReach { must_inline: std::sync::Arc::new(changed_names(&old, &new, &renames)), ..Default::default() });
-                                        budget_of(self.equivalence_one(&solver, query, &old, &new, &renames, true, &walk, Some(deadline())))
+                                        self.equivalence_one(&solver, query, &old, &new, &renames, true, &walk, Some(budget))
                                     }
                                     Some(records) => {
                                         let new = EquivSide::new(records);
                                         let walk = changed.get_or_init(|| reach::ConfigReach { must_inline: std::sync::Arc::new(changed_names(&old, &new, &[])), ..Default::default() });
-                                        budget_of(self.equivalence_one(&solver, query, &old, &new, &[], false, walk, Some(deadline())))
+                                        self.equivalence_one(&solver, query, &old, &new, &[], false, walk, Some(budget))
                                     }
                                 }
                             })
                         };
-                        results.lock().unwrap_or_else(|error| error.into_inner()).push((index, answer));
+                        let cost = (semilla_smt::budget::used() - before, answer.as_ref().map(|answer| answer.queries).unwrap_or(0));
+                        costs.lock().unwrap_or_else(|error| error.into_inner())[position] = Some(cost);
+                        results.lock().unwrap_or_else(|error| error.into_inner()).push((index, answer, late));
                     });
                 }
             });
             results.into_inner().unwrap_or_else(|error| error.into_inner())
         };
         // The order of the value (R61.14-5): first each check that needs no build (each body of
-        // the step), then the variants of the facts, one build at a time.
+        // the step), then the variants of the facts.
         // The bodies in the first configuration come first: a stop of the budget leaves a result
         // of each body in at least one configuration when it can.
         let rank = |config: &str| checked.iter().position(|known| known.name() == config).unwrap_or(usize::MAX);
         let mut plain: Vec<usize> = (0..queries.len()).filter(|index| queries[*index].variant.is_none()).collect();
         plain.sort_by_key(|index| (rank(&queries[*index].config), *index));
         let keys = variant_order(queries, &rank);
+        // The position of each job in the one order: the plain jobs, then the jobs of each variant.
+        let mut order: Vec<usize> = plain.clone();
+        for (_, config_name, files) in &keys {
+            let key = (config_name.clone(), files.clone());
+            order.extend((0..queries.len()).filter(|index| queries[*index].variant.as_ref().is_some_and(|files| query_key(&queries[*index], files) == key)));
+        }
+        let position_of: BTreeMap<usize, usize> = order.iter().enumerate().map(|(position, index)| (*index, position)).collect();
+        let costs: std::sync::Mutex<Vec<Option<Cost>>> = std::sync::Mutex::new(vec![None; order.len()]);
+        let with_positions = |list: Vec<usize>| -> Vec<(usize, usize)> { list.into_iter().map(|index| (index, position_of[&index])).collect() };
         // A variant changes only files of the step. With the build code of the base in the two
         // trees of the step, the variant has it too, and it builds in the delta build folder of
         // the configuration: only the changed crates compile again (R61.14-5).
         let clean = self.code.clean.contains(&step.tree_before) && self.code.clean.contains(&step.tree_after);
-        // The builds of the variants and their checks, one build at a time.
-        let variants = || -> Vec<(usize, Option<Answer>)> {
+        let safety_answer = || Some(Answer { verdict: Verdict::NotChecked(semilla_smt::budget::SAFETY_CAUSE.into()), inlined: Vec::new(), queries: 0, millis: 0, local: None });
+        // [R77.2-2] The builds of the variants and their checks, one build at a time. A build is
+        // not a solver step: a count of builds bounds them (`VARIANT_BUILDS`), and the safety time
+        // limit stops them.
+        let variants = || -> Vec<(usize, Option<Answer>, bool)> {
             let mut out = Vec::new();
-            for (_, config_name, files) in &keys {
+            for (at, (_, config_name, files)) in keys.iter().enumerate() {
                 let key = (config_name.clone(), files.clone());
                 let jobs: Vec<usize> = (0..queries.len()).filter(|index| queries[*index].variant.as_ref().is_some_and(|files| query_key(&queries[*index], files) == key)).collect();
                 let config = checked.iter().find(|config| config.name() == key.0);
-                // A build starts only if the rest of the budget is larger than the time of the
-                // last build of the configuration.
-                let last = config.map(|config| self.last_build_time(&step.tree_after, config)).unwrap_or_default();
-                if time_over() || budget.saturating_sub(started.elapsed()) <= last {
-                    out.extend(jobs.into_iter().map(|index| (index, spent())));
+                // [R77.2-2] At most `VARIANT_BUILDS` builds of a variant for each step, in the
+                // order of R66.11-3 (each fact in the first configuration first): a count, so the
+                // same step gets the same results on each machine.
+                if at >= variant_builds() {
+                    out.extend(jobs.into_iter().map(|index| (index, Some(Answer { verdict: Verdict::NotChecked(semilla_verify::equiv::BUDGET_CAUSE.into()), inlined: Vec::new(), queries: 0, millis: 0, local: None }), false)));
+                    continue;
+                }
+                if std::time::Instant::now() >= safety {
+                    out.extend(jobs.into_iter().map(|index| (index, safety_answer(), false)));
                     continue;
                 }
                 let found = config.filter(|_| clean).and_then(|config| {
@@ -1876,31 +1888,48 @@ impl BodyOracle for NormalOracle {
                     self.records_with(&tree, "n0", config).ok()
                 });
                 match found {
-                    Some(records) => out.extend(run(&jobs, Some(&records), &None)),
-                    None => out.extend(jobs.into_iter().map(|index| (index, Some(Answer { verdict: Verdict::NotDecided("the variant with only this edit does not compile".into()), inlined: Vec::new(), queries: 0, millis: 0, local: None })))),
+                    Some(records) => out.extend(run(&with_positions(jobs), Some(&records), &None, &costs).into_iter().map(|(index, answer, late)| (index, answer, late))),
+                    None => out.extend(jobs.into_iter().map(|index| (index, Some(Answer { verdict: Verdict::NotDecided("the variant with only this edit does not compile".into()), inlined: Vec::new(), queries: 0, millis: 0, local: None }), false))),
                 }
             }
             crate::timing(&format!("the builds and the checks of {} variants of the equivalence check", keys.len()), started);
             out
         };
         // [R66.11-3] The builds of the variants do not wait for the solver: they run in a thread
-        // next to the walk and the body checks of the step, from the start of the budget. Before,
-        // they started after the body checks, so a body check that used its share of the budget
-        // (R66.9-2) took the time of each build, also in a step that used less time than 10o.
+        // next to the walk and the body checks of the step.
         let (plain_answers, variant_answers, walks) = std::thread::scope(|scope| {
             let builds = scope.spawn(variants);
             // The walk of each configuration (design 61.10): the bodies that each check must
-            // inline. It needs no build, so it runs first, in the budget.
-            let walks: Walks = self.reach_all(step, &renames.iter().cloned().collect(), budget.min(reach::MAX_TIME));
+            // inline. It needs no build, so it runs first, with its own budget (R77.2-2).
+            let walks: Walks = self.reach_all(step, &renames.iter().cloned().collect(), reach::WALK_STEPS.min(step_steps));
             crate::timing("the walk of the equivalence check", started);
-            let found = run(&plain, None, &walks);
+            let found = run(&with_positions(plain.clone()), None, &walks, &costs);
             crate::timing(&format!("the walk and {} body checks of the equivalence check", plain.len()), started);
             (found, builds.join().unwrap_or_default(), walks)
         });
-        for (index, answer) in plain_answers.into_iter().chain(variant_answers) {
+        // [R77.2-2] The prefix rule after each job ended: a job that ran with its own budget, but
+        // that the costs of the jobs before it put past a budget, gets the result past the budget
+        // (each cost is known now, so the result does not depend on the threads).
+        let costs = costs.into_inner().unwrap_or_else(|error| error.into_inner());
+        let mut answers: Vec<Option<Answer>> = vec![None; queries.len()];
+        for (index, answer, late) in plain_answers.into_iter().chain(variant_answers) {
+            let position = position_of.get(&index).copied();
+            let past = position.is_some_and(|position| over(&costs, position));
+            let answer = match (past, late, answer) {
+                // The result past the budget is the result of `check_pair` with a budget of 0: the
+                // proof by two equal MIR texts (the first test of `check_pair`), else "not checked".
+                (true, false, Some(answer)) if !matches!(&answer.verdict, Verdict::NotChecked(cause) if cause == semilla_smt::budget::SAFETY_CAUSE) => Some(if matches!(&answer.verdict, Verdict::Equivalent(method) if method == "equal MIR") {
+                    answer
+                } else {
+                    Answer { verdict: Verdict::NotChecked(semilla_verify::equiv::BUDGET_CAUSE.into()), inlined: Vec::new(), queries: 0, millis: 0, local: None }
+                }),
+                (_, _, answer) => answer,
+            };
             answers[index] = answer;
         }
-        crate::timing(&format!("the equivalence check ({} queries, a budget of {} s)", queries.len(), budget.as_secs()), started);
+        let total: u64 = costs.iter().flatten().map(|(steps, _)| *steps).sum();
+        let largest = costs.iter().flatten().map(|(steps, _)| *steps).max().unwrap_or(0);
+        crate::timing(&format!("the equivalence check ({} queries, {total} solver steps, the largest job {largest}; a budget of {step_steps} solver steps)", queries.len()), started);
         // [R74.1-1] A run of the real code for each sure difference of the step: the results of
         // the bodies, of the facts alone (in the tree of the variant), and of the walk.
         let variant_trees: Vec<Option<String>> = queries
@@ -1958,13 +1987,13 @@ impl BodyOracle for NormalOracle {
         answers
     }
 
-    fn equivalence_budget(&self, step: &Step) -> Option<u64> {
-        Some(self.equivalence_time(step).as_secs())
+    fn equivalence_budget(&self, _step: &Step) -> Option<String> {
+        Some(format!("{} solver steps, {} variant builds", equiv_steps(), variant_builds()))
     }
 
     fn reach(&self, step: &Step, renames: &BTreeMap<String, String>) -> Option<semilla_verify::equiv::ReachReport> {
         let renames: Vec<(String, String)> = renames.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
-        let limit = self.equivalence_time(step).min(reach::MAX_TIME);
+        let limit = reach::WALK_STEPS.min(equiv_steps());
         let mut walks = self.reach_all(step, &renames.into_iter().collect(), limit)?;
         // [R74.1-1] A walk with no run yet (a step with no other check): its runs.
         let open = walks.iter().any(|(_, walk)| walk.bodies.iter().any(|(_, _, _, verdict)| matches!(verdict, semilla_verify::equiv::Verdict::Different { run: semilla_verify::equiv::RunNote::Open(_), .. })));
@@ -2184,7 +2213,6 @@ impl NormalOracle {
         // part C). An added configuration is a configuration of the list as each other one.
         let (extra, hint) = {
             let mut state = self.added.lock().unwrap_or_else(|error| error.into_inner());
-            state.step_started.entry(key.clone()).or_insert_with(std::time::Instant::now);
             let extra = state.selections.get(&key).cloned().unwrap_or_default();
             if let Some((_, _, checked, log)) = state.memo.iter().find(|(step, list, _, _)| *step == key && *list == extra) {
                 if let Ok(mut all) = self.log.lock() {

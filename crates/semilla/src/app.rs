@@ -241,7 +241,7 @@ impl semilla_verify::BodyOracle for Guard<'_> {
         }
     }
 
-    fn equivalence_budget(&self, step: &Step) -> Option<u64> {
+    fn equivalence_budget(&self, step: &Step) -> Option<String> {
         if self.off(step) { None } else { self.inner.equivalence_budget(step) }
     }
 
@@ -367,6 +367,7 @@ fn later_claims(set: &ChangeSet, all: &[Step], bodies: &dyn semilla_verify::Body
                         options: Vec::new(),
                         reads: answer.reads,
                         stale: format!("this step changes {hit}"),
+                        explains: Vec::new(),
                     },
                 ));
             }
@@ -2760,6 +2761,7 @@ fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap
     let mut note = semilla_core::report::ConfigNote::default();
     let mut found = false;
     let mut conditions: BTreeSet<String> = BTreeSet::new();
+    let mut features_off: BTreeSet<String> = BTreeSet::new();
     // A configuration is in the checked list only if each compared step has it.
     let mut order: Vec<String> = Vec::new();
     let mut count: BTreeMap<String, usize> = BTreeMap::new();
@@ -2801,6 +2803,25 @@ fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap
         if let (Some(before), Some(after)) = (trees.get(&step.tree_before), trees.get(&step.tree_after)) {
             let cover = semilla_verify::cfgcond::Cover::new(&[(before, &configs.truth[0]), (after, &configs.truth[1])]);
             conditions.extend(cover.not_covered.iter().map(|text| semilla_verify::cfgcond::show(text)));
+            // [R77.3-8] The features of each built package that no checked configuration of the
+            // tree after the step enables (the true `feature` atoms of the compiler, by unit).
+            if configs.truth[1].iter().all(|truth| truth.known) {
+                let mut enabled: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+                for unit in configs.truth[1].iter().flat_map(|truth| &truth.units) {
+                    let on = enabled.entry(unit.package.as_str()).or_default();
+                    on.extend(unit.cfg.iter().filter_map(|atom| atom.strip_prefix("feature=").map(|name| name.trim_matches('"').to_string())));
+                }
+                for (package, on) in &enabled {
+                    let manifest = if package.is_empty() { "Cargo.toml".to_string() } else { format!("{package}/Cargo.toml") };
+                    let Some(table) = after.other_files.get(&manifest).and_then(|text| text.parse::<toml::Table>().ok()) else { continue };
+                    let name = table.get("package").and_then(|package| package.get("name")).and_then(|name| name.as_str()).unwrap_or(package).to_string();
+                    for feature in table.get("features").and_then(|features| features.as_table()).map(|features| features.keys().cloned().collect::<Vec<_>>()).unwrap_or_default() {
+                        if feature != "default" && !on.contains(&feature) {
+                            features_off.insert(format!("{name}/{feature}"));
+                        }
+                    }
+                }
+            }
         }
     }
     // Batch 5y, C4.4. A configuration of the default list that only some steps have: the
@@ -2815,6 +2836,7 @@ fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap
         added.steps.clear();
     }
     note.not_covered = conditions.into_iter().collect();
+    note.features_not_checked = features_off.into_iter().collect();
     found.then_some(note)
 }
 
@@ -2841,7 +2863,8 @@ pub(crate) fn short_text(report: &Report) -> String {
             let marked = step.facts.iter().filter(|fact| fact.compare == Compare::CodeEqual && fact.build_code.is_some()).count();
             format!(" · {}", semilla_core::report::FactCounts::of(step.facts.iter()).text(&report.marked_text(marked)))
         };
-        let claims = match step.claims.len() {
+        // [R77.3-1] The claims of the intent files count too.
+        let claims = match step.claims.len() + step.intent_claims.iter().filter(|claim| claim.kind != "intent" && !semilla_verify::intent::is_hint(&claim.kind)).count() {
             0 => String::new(),
             1 => " · 1 claim".to_string(),
             count => format!(" · {count} claims"),
@@ -3017,7 +3040,16 @@ pub(crate) fn summary_line(report: &Report) -> String {
             }
         }
     }
-    let order = ["verified", "partial", "pending", "refuted", "empty", "malformed", "not checked"];
+    // [R77.3-1] The claims of the intent files count too, by their result words (an `intent!`
+    // text is not a claim).
+    for claim in checked.iter().flat_map(|s| &s.intent_claims).filter(|claim| claim.kind != "intent" && !semilla_verify::intent::is_hint(&claim.kind)) {
+        let name = claim.result.word();
+        match results.iter_mut().find(|(known, _)| *known == name) {
+            Some((_, count)) => *count += 1,
+            None => results.push((name, 1)),
+        }
+    }
+    let order = ["verified", "proved", "partial", "pending", "refuted", "false", "empty", "malformed", "error", "claimed", "not checked"];
     results.sort_by_key(|(name, _)| order.iter().position(|known| known == name));
     let total: usize = results.iter().map(|(_, count)| count).sum();
     let claims = match total {

@@ -104,6 +104,7 @@ fn claim_line<'a>(text: &'a str, id: &str) -> &'a str {
 // rule+ R67.5-1
 // rule+ R67.4-1
 // rule+ R67.4-3
+// rule+ R77.4-1
 #[test]
 fn the_default_mode_shows_the_claims_and_checks_the_forms_of_same() {
     let (_dir, repo) = setup();
@@ -113,11 +114,12 @@ fn the_default_mode_shows_the_claims_and_checks_the_forms_of_same() {
     for id in ["i2", "i3", "i4", "i5", "i6", "i7", "i8"] {
         assert!(claim_line(&text, id).contains("claimed: the check needs `--compiled`"), "{id}: {text}");
     }
-    assert!(claim_line(&text, "i9").contains("proved: the check of `--same 'rename shop::sum shop::total'` holds"), "{text}");
+    // [R77.4-1] A form of `--same` is a hint: its check holds, and it is not a claim.
+    assert!(claim_line(&text, "i9").contains("hint: the check of `--same 'rename shop::sum shop::total'` holds") && claim_line(&text, "i9").contains("explains no body"), "{text}");
     // The change claim states its item: `shop::half` is not in the gap list.
     assert!(!text.contains("--change 'shop::half=TEXT'"), "{text}");
     let status = run(&repo, &["status", "--verbose"], 0);
-    assert!(status.contains("intent (8 claim(s)"), "{status}");
+    assert!(status.contains("intent (7 claim(s), 1 hint(s)"), "{status}");
     let json = run(&repo, &["verify", "--json"], 0);
     assert!(json.contains("\"intent_claims\"") && json.contains("\"result\": \"claimed\""), "{json}");
 }
@@ -157,10 +159,56 @@ fn the_compiled_step_checks_each_claim() {
     // An `except` name that the check does not know.
     assert!(claim_line(&text, "i8").contains("claimed"), "{text}");
     // Part E: the help for a body whose parameters change.
-    assert!(text.contains("intent help for `shop::parse`") && text.contains("#[same(shop::parse)] fn parse(x: u32) -> bool { after::shop::parse(/* x: u32, strict: bool */) == before::shop::parse(x) }"), "{text}");
+    assert!(text.contains("intent help for `shop::parse`") && text.contains("#[same(shop::parse)] fn parse(x: u32, strict: bool) -> bool { after::shop::parse(x, strict) == before::shop::parse(x) }"), "{text}");
+}
+
+/// The templates of the help notes of a step output (the text in backquotes after "if the
+/// behavior does not change: " and "if it changes: ").
+fn templates(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines().filter(|line| line.contains("intent help for ")) {
+        for mark in ["if the behavior does not change: `", "if it changes: `"] {
+            if let Some(at) = line.find(mark) {
+                let rest = &line[at + mark.len()..];
+                if let Some(end) = rest.rfind('`') {
+                    out.push(rest[..end].to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+// rule+ R77.3-4
+// rule- R77.3-4
+#[test]
+fn each_template_of_the_help_is_a_claim_that_intent_check_accepts() {
+    let (_dir, repo) = setup();
+    // A method whose parameters change (a type of the crate in the signature, a lifetime), a
+    // function whose return type changes, and a function with a `dyn` parameter (no template:
+    // the cause).
+    let old = "pub struct Cart { n: u32 }\nimpl Cart {\n    pub fn total<'a>(&'a self, k: u32) -> u32 { self.n + k }\n}\npub fn first(c: &Cart) -> u32 { c.n }\npub fn apply(f: &dyn Fn(u8) -> u8, x: u8) -> u8 { f(x) }\n";
+    let new = "pub struct Cart { n: u32 }\nimpl Cart {\n    pub fn total<'a>(&'a self, k: u32, extra: bool) -> u32 { if extra { self.n + k + 1 } else { self.n + k } }\n}\npub fn first(c: &Cart) -> Option<u32> { Some(c.n) }\npub fn apply(f: &dyn Fn(u8) -> u8, x: u8, twice: bool) -> u8 { if twice { f(f(x)) } else { f(x) } }\n";
+    write(&repo, "src/lib.rs", old);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "cart"]);
+    write(&repo, "src/lib.rs", new);
+    write(&repo, ".semilla/intent/step.rs", "intent!(\"Add an extra mode\");\n");
+    let text = run(&repo, &["step", "extra mode", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    let found = templates(&text);
+    assert!(found.iter().any(|template| template.starts_with("#[same(shop::Cart::total)] fn total(this: &before::shop::Cart, k: u32, extra: bool) -> bool")), "{text}");
+    assert!(found.iter().any(|template| template.contains("let old = before::shop::first(c); let new = after::shop::first(c); true")), "{text}");
+    assert!(text.contains("intent help for `shop::apply`: no template: the type `&dyn Fn(u8) -> u8` of the parameter `f` has no form in a claim (`dyn …`)"), "{text}");
+    // Each template, in place in the intent file, passes `semilla intent check`.
+    for template in &found {
+        write(&repo, ".semilla/intent/try.rs", &format!("{template}\n"));
+        let check = run(&repo, &["intent", "check", ".semilla/intent/try.rs"], 0);
+        assert!(check.contains(": 0 error(s)"), "{template}\n{check}");
+    }
 }
 
 // rule- R67.5-2
+// rule- R77.1-5
 // rule- R67.3-9
 // rule- R67.3-7
 // rule- R67.6-1
@@ -286,7 +334,7 @@ fn fact_again_checks_the_stored_claims_and_fact_intent_replaces_a_file() {
     let text = run(&repo, &["fact", "--intent", ".semilla/intent/step.rs"], 1);
     assert!(text.contains("rejected: nothing is added") && claim_line(&text, "i1").contains("error"), "{text}");
     let status = run(&repo, &["status", "--verbose"], 0);
-    assert!(status.contains("intent (8 claim(s)"), "{status}");
+    assert!(status.contains("intent (7 claim(s), 1 hint(s)"), "{status}");
 }
 
 // rule+ R67.5-5
@@ -315,6 +363,7 @@ fn a_stored_intent_file_keeps_its_text_until_fact_intent() {
 
 // rule- R67.4-1
 // rule- R67.4-3
+// rule- R77.4-1
 #[test]
 fn a_false_form_of_same_or_a_change_claim_with_no_edit_rejects_the_step() {
     let (_dir, repo) = setup();
@@ -372,4 +421,101 @@ fn the_help_of_two_different_signatures_names_the_two_signatures() {
     write(&repo, ".semilla/intent/step.rs", "intent!(\"strict parse\");\n");
     let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
     assert!(text.contains("`fn parse (x : u32) -> bool` → `fn parse (x : u32 , strict : bool) -> bool`") && !text.contains("the type of `self` changes"), "{text}");
+}
+
+/// The lines of the section "semantic changes" of a step output.
+fn semantic_section(text: &str) -> String {
+    let start = text.find("  semantic changes (").unwrap_or_else(|| panic!("no section \"semantic changes\":\n{text}"));
+    let rest = &text[start..];
+    let end = rest.lines().skip(1).position(|line| !line.starts_with("    ")).map(|at| rest.lines().take(at + 1).map(|line| line.len() + 1).sum()).unwrap_or(rest.len());
+    rest[..end].to_string()
+}
+
+// rule+ R77.1-2
+// rule+ R77.1-3
+// rule+ R77.1-5
+// rule- R77.1-4
+// rule+ R77.3-1
+// rule- R77.3-1
+#[test]
+fn a_proved_claim_explains_its_bodies_and_the_step_shows_the_coverage() {
+    let (_dir, repo) = setup();
+    let intent = INTENT.replace("#[same(shop::limit, except = [capacity])]\nfn limit_capacity() {}\n", "");
+    write(&repo, ".semilla/intent/step.rs", &intent);
+    // A step with a body that no claim explains passes (`shop::basket_n` is new).
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    let section = semantic_section(&text);
+    assert!(section.contains("    intent: \"Add a strict mode to `parse`\""), "{section}");
+    assert!(section.contains("✓ changes: i4 `#[change(shop::half)] fn half(x: i32)` (explains `shop::half`)"), "{section}");
+    assert!(section.contains("✓ stays the same: i3 `#[same(shop::parse)] fn parse(x: u32)` (explains `shop::parse`)"), "{section}");
+    assert!(section.contains("changed bodies: 4 explained by claims, 0 equivalent (Semilla), 1 not explained"), "{section}");
+    // [R77.4-1] The hint `#[rename]` is not in the section: it explains no body.
+    assert!(!section.contains("i9"), "{section}");
+    // A `same` claim that ignores the panic message does not contradict a difference of the
+    // message: it explains `shop::limit` (no disagreement), and the item leaves the gap list.
+    assert!(section.contains("explained by claim i7: `shop::limit`"), "{section}");
+    assert!(!section.contains("disagree"), "{section}");
+    assert!(!text.contains("--change 'shop::limit=TEXT'"), "{text}");
+    assert!(section.contains("not explained: `shop::basket_n` (src/lib.rs:12): an added body: no compare of two versions"), "{section}");
+    let status = run(&repo, &["status", "--verbose"], 0);
+    assert!(status.contains("changed bodies: 4 explained by claims, 0 equivalent (Semilla), 1 not explained"), "{status}");
+    let json = run(&repo, &["verify", "--json"], 0);
+    assert!(json.contains("\"coverage\"") && json.contains("\"explains\"") && json.contains("\"state\": \"not_explained\""), "{json}");
+    // [R77.3-1] The result line counts the claims of the intent files: 6 claims (the `intent!`
+    // text and the hint `#[rename]` are not claims).
+    let short = run(&repo, &["status"], 0);
+    assert!(short.contains("· 6 claims: 6 proved"), "{short}");
+}
+
+// rule+ R77.3-3
+#[test]
+fn status_shows_the_result_that_the_steps_stored_and_starts_no_worker() {
+    let (_dir, repo) = setup();
+    write(&repo, ".semilla/intent/step.rs", "#[same(shop::report)]\nfn report() {}\n");
+    run(&repo, &["step", "first part", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    // A second step: the change set has two steps, and the step stores the result of the set.
+    write(&repo, "src/lib.rs", &format!("{NEW}pub fn extra() -> u32 {{ 7 }}\n"));
+    let text = run(&repo, &["step", "second part", "--compiled"], 0);
+    assert!(text.starts_with("accepted:"), "{text}");
+    let status = run(&repo, &["status", "--verbose"], 0);
+    assert!(status.starts_with("session: ready\n"), "{status}");
+    assert!(status.contains("phase 2 (computed on this machine):") && status.contains("i1 `#[same(shop::report)] fn report()`") && status.contains("proved: equivalent by equal MIR"), "{status}");
+}
+
+// rule- R77.1-2
+// rule- R77.1-3
+#[test]
+fn a_claim_that_is_not_proved_explains_no_body() {
+    let (_dir, repo) = setup();
+    let intent = "intent!(\"Add a strict mode\");\n\n#[same(shop::limit, except = [capacity])]\nfn limit_capacity() {}\n";
+    write(&repo, ".semilla/intent/step.rs", intent);
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    let section = semantic_section(&text);
+    assert!(section.contains("changed bodies: 0 explained by claims, 1 equivalent (Semilla), 4 not explained"), "{section}");
+    assert!(section.contains("equivalent (Semilla): `shop::report`"), "{section}");
+    assert!(section.contains("not explained: `shop::limit` (src/lib.rs:9): different"), "{section}");
+    // A claimed claim explains nothing: the item stays in the gap list.
+    assert!(text.contains("--change 'shop::limit=TEXT'"), "{text}");
+    // The default mode has no compiler data: the coverage needs `--compiled`.
+    let (_dir2, repo2) = setup();
+    write(&repo2, ".semilla/intent/step.rs", intent);
+    let text = run(&repo2, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
+    assert!(text.contains("changed bodies: the coverage needs `--compiled`"), "{text}");
+    // A step with no intent file has no section.
+    let (_dir3, repo3) = setup();
+    let text = run(&repo3, &["step", "strict parse", "--compiled"], 0);
+    assert!(!text.contains("semantic changes"), "{text}");
+}
+
+// rule+ R77.1-4
+#[test]
+fn a_proved_claim_and_a_result_of_semilla_that_disagree_explain_nothing() {
+    let (_dir, repo) = setup();
+    let intent = "#[change(shop::report)]\nfn report_changes(x: u32) -> bool {\n    x == 4294967295 || after::shop::report(x) == before::shop::report(x)\n}\n";
+    write(&repo, ".semilla/intent/step.rs", intent);
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    assert!(claim_line(&text, "i1").contains("proved"), "{text}");
+    let section = semantic_section(&text);
+    assert!(section.contains("✗ the result of Semilla and claim i1 disagree: a defect of Semilla: `shop::report` (src/lib.rs:6): Semilla: equivalent"), "{section}");
+    assert!(section.contains("0 explained by claims, 0 equivalent (Semilla), 5 not explained, 1 with a disagreement"), "{section}");
 }

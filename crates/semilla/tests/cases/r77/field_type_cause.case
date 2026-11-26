@@ -1,0 +1,55 @@
+note: batch 13a, test case "a changed field type": the element `*x as u32` of `first` (no edit) changes because the element type of the field `items` changes; the facts of the changed definitions are its cause, so it needs no reason
+rule+: R77.3-5
+option: --compiled
+must_match: the cause: a changed definition that the body uses \(f1, f2\)
+must_not_match: --reason 'shop::Bits::first
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Bits { pub items: Vec<u8>, pub lo: u8 }
+
+impl Bits {
+    pub fn count(&self) -> usize { self.items.len() }
+    pub fn first(&self) -> Option<u32> { self.items.first().map(|x| *x as u32) }
+}
+=== new src/lib.rs
+pub struct Bits { pub items: Vec<u16>, pub lo: i8 }
+
+impl Bits {
+    pub fn count(&self) -> usize { self.items.len() }
+    pub fn first(&self) -> Option<u32> { self.items.first().map(|x| *x as u32) }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: type of `shop::Bits.items`: `Vec<u8>` → `Vec<u16>` (the public API can change: a different crate can use the item) [declaration · code different]
+      affected bodies: shop::Bits::count, shop::Bits::first
+      through: `shop::Bits` (2 bodies), `shop::Bits.items` (2 bodies)
+      ! public API: the compare does not cover the code of a different crate
+  ◆ f2 derived: type of `shop::Bits.lo`: `u8` → `i8` (the public API can change: a different crate can use the item) [declaration · code different]
+      affected bodies: shop::Bits::count, shop::Bits::first
+      through: `shop::Bits` (2 bodies)
+      ! public API: the compare does not cover the code of a different crate
+  other facts, filled in by Semilla:
+  ◆ f3 derived: the compiled code of `shop::Bits::first` changes with no edit at its place: `*x as u32` [indirect · code different]
+      affected bodies: shop::Bits::first
+      note: lines 5; the cause: a changed definition that the body uses (f1, f2); the step changes no other input of the body
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::Bits::count (src/lib.rs:4): same structure: 1 changed call target; no edit in the body; not decided (the parameters change)
+    shop::Bits::first (src/lib.rs:5): same structure: 3 changed call targets; no edit in the body; not decided (the parameters change)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: type of `shop::Bits.items`: `Vec<u8>` → `Vec<u16>` (the public API can change: a different crate can use the item) [declaration · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1
+◆ f2 derived: type of `shop::Bits.lo`: `u8` → `i8` (the public API can change: a different crate can use the item) [declaration · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1
+◆ f3 derived: the compiled code of `shop::Bits::first` changes with no edit at its place: `*x as u32` [indirect · code different]
+    no position

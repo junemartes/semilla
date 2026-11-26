@@ -20,8 +20,9 @@ pub const SOLVER_ENV: &str = "SEMILLA_Z3";
 /// The path of the solver binary under a project directory.
 pub const TOOLS_PATH: &str = ".semilla/tools/z3";
 
-/// The default time limit of one query.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
+/// The default safety time limit of one query ([R77.2-1]: the result of a query comes from its
+/// limit in solver steps, `crate::budget::QUERY_STEPS`; the time limit is only a safety stop).
+pub const DEFAULT_TIMEOUT: Duration = crate::budget::SAFETY_QUERY;
 
 /// The default random seed.
 pub const DEFAULT_SEED: u32 = 0;
@@ -32,8 +33,11 @@ pub struct Solver {
     path: PathBuf,
     version: String,
     timeout: Duration,
+    /// [R77.2-1] The most solver steps of one query (the resource limit of Z3).
+    steps: u64,
     seed: u32,
-    cache: Mutex<HashMap<String, Answer>>,
+    /// The answer and the solver steps of each query text.
+    cache: Mutex<HashMap<String, (Answer, u64)>>,
 }
 
 /// The answer to one `check-sat` query.
@@ -96,15 +100,27 @@ impl Solver {
             path,
             version,
             timeout: DEFAULT_TIMEOUT,
+            steps: crate::budget::QUERY_STEPS,
             seed: DEFAULT_SEED,
             cache: Mutex::new(HashMap::new()),
         })
     }
 
-    /// Sets the time limit of one query.
+    /// Sets the safety time limit of one query.
     pub fn with_timeout(mut self, timeout: Duration) -> Solver {
         self.timeout = timeout;
         self
+    }
+
+    /// [R77.2-1] Sets the most solver steps of one query.
+    pub fn with_steps(mut self, steps: u64) -> Solver {
+        self.steps = steps.max(1);
+        self
+    }
+
+    /// The most solver steps of one query.
+    pub fn steps(&self) -> u64 {
+        self.steps
     }
 
     /// Sets the random seed of the solver.
@@ -130,11 +146,13 @@ impl Solver {
         self.seed
     }
 
-    /// The header that each query starts with.
-    pub(crate) fn header(&self) -> String {
+    /// The header that each query starts with: the limit in solver steps (`rlimit`), the safety
+    /// time limit, and the fixed seeds.
+    pub(crate) fn header(&self, steps: u64) -> String {
         let millis = self.timeout.as_millis().max(1);
         format!(
             "(set-option :produce-models true)\n\
+             (set-option :rlimit {steps})\n\
              (set-option :timeout {millis})\n\
              (set-option :smt.random_seed {seed})\n\
              (set-option :sat.random_seed {seed})\n",
@@ -144,27 +162,60 @@ impl Solver {
 
     /// Runs one query. The query must have exactly one `check-sat`.
     /// `symbols` are the constants to read from the model when the answer is `sat`.
+    ///
+    /// [R77.2-1] The query has the smaller of the limit of one query and the rest of the budget of
+    /// the check of this thread (`crate::budget`). Its solver steps count in that budget, also for
+    /// an answer from the cache (so the count does not depend on the order of the threads). A
+    /// query that reaches the rest of the budget gives `Unknown(BUDGET_CAUSE)`; a query that
+    /// the safety time limit stops gives `Unknown(SAFETY_CAUSE)`.
     pub(crate) fn check(&self, body: &str, symbols: &[String]) -> Result<(String, Answer)> {
-        let mut query = self.header();
+        use crate::budget;
+        let rest = budget::rest();
+        if let Some(cause) = budget::stop() {
+            return Ok((String::new(), Answer::Unknown(cause.into())));
+        }
+        let steps = rest.map(|rest| rest.min(self.steps)).unwrap_or(self.steps).max(1);
+        let by_budget = steps < self.steps;
+        let mut query = self.header(steps);
         query.push_str(body);
-        query.push_str("(check-sat)\n(get-info :reason-unknown)\n");
+        query.push_str("(check-sat)\n(get-info :reason-unknown)\n(get-info :rlimit)\n");
         if !symbols.is_empty() {
             query.push_str(&format!("(get-value ({}))\n", symbols.join(" ")));
         }
-        if let Some(answer) = self.cache.lock().unwrap().get(&query) {
-            return Ok((query, answer.clone()));
-        }
-        let answer = self.run(&query)?;
-        if !matches!(answer, Answer::Unknown(_)) {
-            self.cache
-                .lock()
-                .unwrap()
-                .insert(query.clone(), answer.clone());
-        }
+        let cached = self.cache.lock().unwrap().get(&query).cloned();
+        let (answer, cost) = match cached {
+            Some(found) => found,
+            None => {
+                let started = Instant::now();
+                let (answer, cost) = self.run(&query)?;
+                // [R77.2-1] Z3 gives the reason "canceled" for each of its two stops, so the counts
+                // decide: a count at the limit is the step limit; a time at the time limit is the
+                // safety stop.
+                let answer = match answer {
+                    Answer::Unknown(reason) if reason != budget::SAFETY_CAUSE && cost >= steps => {
+                        let _ = reason;
+                        Answer::Unknown(budget::QUERY_LIMIT_CAUSE.into())
+                    }
+                    Answer::Unknown(reason) if reason == budget::QUERY_LIMIT_CAUSE || reason == "canceled" || reason == "timeout" => {
+                        if started.elapsed() >= self.timeout { Answer::Unknown(budget::SAFETY_CAUSE.into()) } else { Answer::Unknown(reason) }
+                    }
+                    other => other,
+                };
+                if !matches!(&answer, Answer::Unknown(reason) if reason == budget::SAFETY_CAUSE) {
+                    self.cache.lock().unwrap().insert(query.clone(), (answer.clone(), cost));
+                }
+                (answer, cost)
+            }
+        };
+        budget::charge(cost);
+        let answer = match answer {
+            Answer::Unknown(reason) if reason == budget::QUERY_LIMIT_CAUSE && by_budget => Answer::Unknown(budget::BUDGET_CAUSE.into()),
+            other => other,
+        };
         Ok((query, answer))
     }
 
-    fn run(&self, query: &str) -> Result<Answer> {
+    fn run(&self, query: &str) -> Result<(Answer, u64)> {
         let mut child = Command::new(&self.path)
             .args(["-in", "-smt2"])
             .stdin(Stdio::piped())
@@ -203,11 +254,14 @@ impl Solver {
             .join()
             .map_err(|_| anyhow!("the solver output thread failed"))?;
         if killed {
-            return Ok(Answer::Unknown(
-                "the solver did not stop at the time limit".into(),
-            ));
+            return Ok((Answer::Unknown(crate::budget::SAFETY_CAUSE.into()), 0));
         }
-        parse_output(&text, query)
+        let cost = rlimit_count(&text);
+        let answer = match parse_output(&text, query)? {
+            Answer::Unknown(reason) if reason.contains("resource limit") || reason.contains("rlimit") => Answer::Unknown(crate::budget::QUERY_LIMIT_CAUSE.into()),
+            other => other,
+        };
+        Ok((answer, cost))
     }
 }
 
@@ -252,6 +306,12 @@ fn is_executable(path: &Path) -> bool {
     std::fs::metadata(path)
         .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)
+}
+
+/// [R77.2-1] The solver steps of one query: the value of `(get-info :rlimit)` in the output.
+fn rlimit_count(text: &str) -> u64 {
+    let Some(at) = text.find("(:rlimit ") else { return 0 };
+    text[at + "(:rlimit ".len()..].chars().take_while(char::is_ascii_digit).collect::<String>().parse().unwrap_or(0)
 }
 
 /// Reads the output of one query.

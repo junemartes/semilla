@@ -1,0 +1,43 @@
+note: batch 13a: a variable two times in one side of a pattern; its first value `(a + b)` has parentheses and its second value `a + b` has none: they are one expression by the syntax tree, so the rewrite holds
+rule+: R77.3-6
+option: --compiled
+option: --same
+option: rewrite $x.min($x) => std::cmp::min($x, $x)
+must_match: ✓ a1 same: rewrite `\$x\.min\(\$x\)` => `std::cmp::min\(\$x, \$x\)` \(the form holds: 1 site
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn g(a: u32, b: u32) -> u32 {
+    (a + b).min(a + b)
+}
+=== new src/lib.rs
+pub fn g(a: u32, b: u32) -> u32 {
+    std::cmp::min(a + b, a + b)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `$x.min($x)` => `std::cmp::min($x, $x)` (the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
+      places: shop::g/tail
+    ◆ f1 stated: changed call: `(a + b).min(a + b)` → `std::cmp::min(a + b, a + b)` at `shop::g/tail` [semantics · code different]
+        affected bodies: shop::g
+        control flow: ~ call `impls::<impl Ord for u32>::min` → `min::<u32>` (src/lib.rs:-2, src/lib.rs:2)
+        control flow: + arrow entry (src/lib.rs:1) → check `overflow: a + b` (src/lib.rs:2)
+        control flow: + arrow check `overflow: a + b` (src/lib.rs:2) → check `overflow: a + b` (src/lib.rs:2) (ok)
+        control flow: … 4 more (semilla expand --step 0)
+        equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`, `std::cmp::min::<u32>`)
+  not stated: 0 item(s)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::g (src/lib.rs:1): graph changes: 1 changed call target, +3 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`, `std::cmp::min::<u32>`)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 stated: changed call: `(a + b).min(a + b)` → `std::cmp::min(a + b, a + b)` at `shop::g/tail` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

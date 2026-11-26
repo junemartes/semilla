@@ -476,7 +476,10 @@ fn solver_facts() {
     let s = solver();
     assert!(s.version().contains("Z3"), "{}", s.version());
     assert!(Solver::available());
-    assert_eq!(s.timeout(), Duration::from_secs(2));
+    // [R77.2-1] The time limit of a query is only a safety stop; the limit that decides is the
+    // count of solver steps.
+    assert_eq!(s.timeout(), semilla_smt::budget::SAFETY_QUERY);
+    assert_eq!(s.steps(), semilla_smt::budget::QUERY_STEPS);
 }
 
 #[test]

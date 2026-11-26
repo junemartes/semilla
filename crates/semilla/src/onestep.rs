@@ -623,7 +623,7 @@ impl App {
         outside.extend(result.report.build_code.as_ref().and_then(|note| note.step_line_with(index, semilla_normal::sandbox::missing().map(|missing| missing.state()).as_deref())).map(|line| format!("  {line}")));
         // A configuration of the default list with no check in this step (batch 5s, B1): one
         // line. A step with a check in each configuration has no line.
-        outside.extend(result.report.configs.iter().flat_map(|note| note.gap_lines(1)).map(|line| format!("  {line}")));
+        outside.extend(result.report.configs.iter().flat_map(|note| note.gap_lines(1).into_iter().chain(note.feature_line())).map(|line| format!("  {line}")));
         // A configuration that Semilla added for a joint state of this step (batch 5u, part C): one line.
         outside.extend(result.report.configs.iter().flat_map(|note| note.added_line()).map(|line| format!("  {line}")));
         // R76.1-1: a cut line names the command of the full text of the step.
@@ -849,11 +849,18 @@ impl App {
         // A failure here is not a failure of the step: the background check does the work.
         // A step with no compiled check (design 50) stores no result and starts no background
         // check: `semilla status` computes its result from the trees.
+        // [R77.3-3] A full compiled step stores the result of its change set also with more
+        // than one step: `semilla status --verbose` then shows the result of this check (the
+        // budgets in solver steps give the same result in each check, R77.2-1), and no
+        // background worker starts. Only a step that stores no result queues the check. A change
+        // set with a step of `--fast` keeps the background check (the earlier rule): the state of
+        // that step comes from the background result (D7).
         if compiled {
-            if full && !self.no_bodies && stored_set.steps.len() == 1 {
-                let _ = self.store_session_result(&stored_set);
+            let fast_steps = self.load_session().map(|session| !session.fast_steps.is_empty()).unwrap_or(true);
+            let stored = full && !self.no_bodies && (stored_set.steps.len() == 1 || !fast_steps) && self.store_session_result(&stored_set).is_ok();
+            if !stored {
+                self.queue_session(&stored_set)?;
             }
-            self.queue_session(&stored_set)?;
         }
         // B4: a commit between the steps makes `tag` fail. Say it now, with the fix.
         if index > 0 {
@@ -1090,9 +1097,10 @@ impl App {
             put_line(&mut text, "correct each false fact, then run the command again. A missing fact is not a reject: the gap list names the items.");
             return Ok((text, false));
         }
-        // The stored result of a step with the compiled check is for the old record: the
-        // background check makes the result of the new record.
-        if compiled {
+        // The stored result of a step with the compiled check is for the old record: this
+        // process stores the result of the new record (R77.3-3), else the background check
+        // makes it.
+        if compiled && (self.no_bodies || self.store_session_result(&session.changeset).is_err()) {
             self.queue_session(&session.changeset)?;
         }
         let new_tags = if tags.is_empty() { String::new() } else { format!(" and {tag_count} new tag(s)") };

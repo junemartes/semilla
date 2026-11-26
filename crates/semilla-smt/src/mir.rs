@@ -357,6 +357,8 @@ pub struct Checked {
     pub inlined: Vec<String>,
     pub queries: usize,
     pub millis: u128,
+    /// [R77.2-1] The solver steps of the check (each query and the steps of the machine).
+    pub steps: u64,
 }
 
 /// The longest term that a value keeps in place; a longer term gets a name (design 66.9).
@@ -1181,7 +1183,7 @@ impl<'a, 'b> Run<'a, 'b> {
         let mut work: Vec<State> = vec![state];
         while let Some(mut state) = work.pop() {
             if past_deadline() {
-                self.stops.insert(0, (t("true"), DEADLINE_CAUSE.into()));
+                self.stops.insert(0, (t("true"), stop_cause().into()));
                 return;
             }
             if self.outs.len() + self.stops.len() > MAX_PATHS {
@@ -1193,7 +1195,7 @@ impl<'a, 'b> Run<'a, 'b> {
                 Ok(Next::Done) => {}
                 Ok(Next::Continue) => work.push(state),
                 Err(Stop(cause)) => {
-                    if cause == DEADLINE_CAUSE {
+                    if crate::budget::is_stop(&cause) {
                         self.stops.insert(0, (t("true"), cause));
                         return;
                     }
@@ -1222,8 +1224,12 @@ impl<'a, 'b> Run<'a, 'b> {
             if self.steps > MAX_STEPS {
                 return Err(Stop(format!("more than {MAX_STEPS} steps")));
             }
-            if self.steps % 256 == 0 && past_deadline() {
-                return Err(Stop(DEADLINE_CAUSE.into()));
+            // [R77.2-1] The steps of the machine count in the budget, in groups of 256.
+            if self.steps % 256 == 0 {
+                crate::budget::charge(256 * crate::budget::MACHINE_STEP_COST);
+                if past_deadline() {
+                    return Err(Stop(stop_cause().into()));
+                }
             }
             let frame = state.frames.last().cloned().ok_or_else(|| Stop("no frame".into()))?;
             let block = frame.ir.b.get(frame.block).ok_or_else(|| Stop("a jump to a block that does not exist".into()))?;
@@ -1748,7 +1754,8 @@ impl<'a, 'b> Run<'a, 'b> {
         if changed {
             let name = callee.w.clone().unwrap_or_default();
             return Err(Stop(match workspace_form {
-                None => format!("the callee `{name}` changes in the step and has no form"),
+                // [R77.3-2] The cause names the reason: no MIR form of the body in this tree.
+                None => format!("the callee `{name}` changes in the step, and this tree has no MIR form of it (no record of the body in this unit, or a record with no form), so the check cannot inline it"),
                 Some(_) => format!("the callee `{name}` changes in the step and never returns"),
             }));
         }
@@ -3205,7 +3212,7 @@ fn check_loop(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all: 
     let mut unproved = "the states at the loop entry differ".to_string();
     for map in &maps {
         if past_deadline() {
-            return not_decided(DEADLINE_CAUSE.into(), inlined);
+            return not_decided(stop_cause().into(), inlined);
         }
         // (1) The states at the loop entry are equal.
         if pairs_differ(solver, &decls, &with_map(&a.outs, map, true), &with_map(&b.outs, map, false), queries) != Some(false) {
@@ -3248,7 +3255,7 @@ fn check_loop(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all: 
         }
     }
     if past_deadline() {
-        return not_decided(DEADLINE_CAUSE.into(), inlined);
+        return not_decided(stop_cause().into(), inlined);
     }
     not_decided(format!("{unproved}; a bounded run of at most {UNROLL} loop iterations finds no input"), inlined)
 }
@@ -3728,10 +3735,16 @@ fn terms_of(value: &V, out: &mut Vec<String>) {
     }
 }
 
-/// The cause of a check that its deadline stops (design 66.9): the text of the budget of the
-/// step (`semilla_verify::equiv::BUDGET_CAUSE`). The oracle gives such a check the result "not
-/// checked (the budget of the step)".
-pub const DEADLINE_CAUSE: &str = "the budget of the step";
+/// The cause of a check that its budget stops (design 66.9, R77.2-1): the text of the budget of
+/// the step (`semilla_verify::equiv::BUDGET_CAUSE`). The oracle gives such a check the result
+/// "not checked (the budget of the step)". The safety time limit has its own cause
+/// (`crate::budget::SAFETY_CAUSE`).
+pub const DEADLINE_CAUSE: &str = crate::budget::BUDGET_CAUSE;
+
+/// The cause that stops the check of this thread now: the safety time limit or the budget.
+fn stop_cause() -> &'static str {
+    crate::budget::stop().unwrap_or(DEADLINE_CAUSE)
+}
 
 thread_local! {
     /// [R74.2-1] The bodies whose calls get a free behavior in the check of a claim: the side
@@ -3772,14 +3785,10 @@ fn with_free<R>(old: bool, name: &str, f: impl FnOnce() -> R) -> R {
     found
 }
 
-thread_local! {
-    /// The deadline of the body check that runs in this thread (also for its nested checks).
-    static DEADLINE: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
-}
-
-/// True if the deadline of the body check of this thread is past.
+/// True if the budget of the body check of this thread (in solver steps, R77.2-1) is used, or
+/// its safety time limit is past.
 fn past_deadline() -> bool {
-    DEADLINE.with(|deadline| deadline.get()).is_some_and(|deadline| Instant::now() >= deadline)
+    crate::budget::stop().is_some()
 }
 
 /// Checks two versions of a body. The first try inlines only the callees that the step changes;
@@ -3788,20 +3797,14 @@ pub fn check_bodies(solver: &Solver, old: &Side, new: &Side, step: &Step) -> Che
     check_bodies_until(solver, old, new, step, None)
 }
 
-/// `check_bodies` with a deadline (design 66.9): the runs of the two sides and each solver query
-/// start only before it. A check that the deadline stops gives "not decided" with the cause
-/// `DEADLINE_CAUSE`, and no part of it is a result. No deadline: the same check as
-/// `check_bodies`.
-pub fn check_bodies_until(solver: &Solver, old: &Side, new: &Side, step: &Step, deadline: Option<Instant>) -> Checked {
-    let outer = DEADLINE.with(|cell| cell.get());
-    // A nested check keeps the deadline of its outer check.
-    let own = match (outer, deadline) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    };
-    DEADLINE.with(|cell| cell.set(own));
-    let checked = check_bodies_in(solver, old, new, step);
-    DEADLINE.with(|cell| cell.set(outer));
+/// `check_bodies` with a budget in solver steps (design 66.9, R77.2-1): the runs of the two sides
+/// and each solver query count in it, and they start only in it. A check that the budget stops
+/// gives "not decided" with the cause `DEADLINE_CAUSE` (or the cause of the safety time limit),
+/// and no part of it is a result. No budget: the same check as `check_bodies`. A nested check
+/// keeps the budget of its outer check.
+pub fn check_bodies_until(solver: &Solver, old: &Side, new: &Side, step: &Step, budget: Option<crate::budget::Budget>) -> Checked {
+    let (mut checked, steps) = crate::budget::with(budget, || check_bodies_in(solver, old, new, step));
+    checked.steps = steps;
     checked
 }
 
@@ -3840,7 +3843,7 @@ fn note_helper_stop(state: &State) {
 fn check_bodies_helpers(solver: &Solver, old: &Side, new: &Side, step: &Step) -> Checked {
     let started = Instant::now();
     let mut queries = 0;
-    let stopped = |verdict: &Verdict| matches!(verdict, Verdict::NotDecided { cause } if cause == DEADLINE_CAUSE);
+    let stopped = |verdict: &Verdict| matches!(verdict, Verdict::NotDecided { cause } if crate::budget::is_stop(cause));
     // [R66.10-4] The first try inlines the small helpers of the standard library (design 66,
     // part C). If the inlined body of a helper stops the run (an operation that the check does
     // not model, such as the `offset` of `<*mut T>::add`), the call of that helper is a value
@@ -3862,7 +3865,7 @@ fn check_bodies_helpers(solver: &Solver, old: &Side, new: &Side, step: &Step) ->
     SKIPPED_HELPERS.with(|cell| cell.borrow_mut().clear());
     HELPER_STOPS.with(|cell| cell.borrow_mut().clear());
     if stopped(&result.0) {
-        return Checked { verdict: result.0, inlined: Vec::new(), queries, millis: started.elapsed().as_millis() };
+        return Checked { verdict: result.0, inlined: Vec::new(), queries, millis: started.elapsed().as_millis(), steps: 0 };
     }
     let first_inlined = result.1.clone();
     let retry = match &result.0 {
@@ -3872,7 +3875,7 @@ fn check_bodies_helpers(solver: &Solver, old: &Side, new: &Side, step: &Step) ->
     if retry {
         let second = check_once(solver, old, new, step, true, &mut queries);
         if stopped(&second.0) {
-            return Checked { verdict: second.0, inlined: Vec::new(), queries, millis: started.elapsed().as_millis() };
+            return Checked { verdict: second.0, inlined: Vec::new(), queries, millis: started.elapsed().as_millis(), steps: 0 };
         }
         // The second try gives the result if it decides, or if it inlines more.
         let decides = !matches!(second.0, Verdict::NotDecided { .. });
@@ -3885,7 +3888,7 @@ fn check_bodies_helpers(solver: &Solver, old: &Side, new: &Side, step: &Step) ->
         }
     }
     let (verdict, inlined) = result;
-    Checked { verdict, inlined: inlined.into_iter().collect(), queries, millis: started.elapsed().as_millis() }
+    Checked { verdict, inlined: inlined.into_iter().collect(), queries, millis: started.elapsed().as_millis(), steps: 0 }
 }
 
 /// The method text of an equivalence.
@@ -3932,12 +3935,15 @@ fn check_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all: 
     }
     let start = decls.clone();
     let a = run_side(old, step, inline_all, &mut decls, &inputs, &slots, &types, &muts, true);
-    if a.stops.first().is_some_and(|(_, cause)| cause == DEADLINE_CAUSE) {
-        return not_decided(DEADLINE_CAUSE.into());
+    if let Some((_, cause)) = a.stops.first().filter(|(_, cause)| crate::budget::is_stop(cause)) {
+        return not_decided(cause.clone());
     }
     let b = run_side(new, step, inline_all, &mut decls, &inputs, &slots, &types, &muts, false);
-    if b.stops.first().is_some_and(|(_, cause)| cause == DEADLINE_CAUSE) || past_deadline() {
-        return not_decided(DEADLINE_CAUSE.into());
+    if let Some((_, cause)) = b.stops.first().filter(|(_, cause)| crate::budget::is_stop(cause)) {
+        return not_decided(cause.clone());
+    }
+    if past_deadline() {
+        return not_decided(stop_cause().into());
     }
     if let Some((_, cause)) = a.stops.first().or(b.stops.first()) {
         // A loop: the inductive check of the two loops (design 61.11, part B).
@@ -3955,7 +3961,7 @@ fn check_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all: 
     constant_links(&mut decls);
     let (changed, unknown) = changed_constants(&decls);
     if past_deadline() {
-        return not_decided(DEADLINE_CAUSE.into());
+        return not_decided(stop_cause().into());
     }
     let (verdict, inlined) = decide(solver, old, new, inline_all, queries, decls, a, b, &slots, &types, &muts);
     // A difference that depends on a constant whose definition changes: the cause names the
@@ -4208,6 +4214,8 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
             let method = if decls.links.is_empty() { method(&inlined) } else { format!("{} and equivalent closure bodies {}", method(&inlined), decls.links.join(", ")) };
             (Verdict::Equivalent { method }, inlined)
         }
+        // [R77.2-1] A query that the budget or the safety time limit stops stops the check.
+        Answer::Unknown(reason) if crate::budget::is_stop(&reason) => (Verdict::NotDecided { cause: reason }, inlined),
         Answer::Unknown(reason) => (Verdict::NotDecided { cause: format!("the solver gave no answer ({reason})") }, inlined),
         Answer::Sat(model) => {
             let mut model: BTreeMap<String, String> = model.into_iter().collect();
@@ -4261,7 +4269,7 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
                 // to read).
                 for list in &tries {
                     if past_deadline() {
-                        return (Verdict::NotDecided { cause: DEADLINE_CAUSE.into() }, inlined);
+                        return (Verdict::NotDecided { cause: stop_cause().into() }, inlined);
                     }
                     let narrow = format!("{body}(assert (and {}))\n", list.join(" "));
                     *queries += 1;
@@ -4333,7 +4341,7 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
             }
             let mut values = model.clone();
             if past_deadline() {
-                return (Verdict::NotDecided { cause: DEADLINE_CAUSE.into() }, inlined);
+                return (Verdict::NotDecided { cause: stop_cause().into() }, inlined);
             }
             if !wanted.is_empty() {
                 // A name for each term: the solver gives the value of a name.

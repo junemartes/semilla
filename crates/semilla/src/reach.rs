@@ -30,8 +30,10 @@ use super::{EquivSide, NormalOracle};
 pub const MAX_DEPTH: usize = 4;
 /// The most checked bodies of one configuration.
 pub const MAX_BODIES: usize = 64;
-/// The time budget of the walk of one step (each configuration).
-pub const MAX_TIME: std::time::Duration = std::time::Duration::from_secs(20);
+/// [R77.2-2] The budget of the walk of one step in solver steps (each configuration, in their
+/// order). The checks of one round run in parallel; the costs of the rounds before decide if a
+/// round starts, so the result does not depend on the threads.
+pub const WALK_STEPS: u64 = 60_000_000;
 /// The most bodies of the reverse closure (a guard for a very large workspace).
 const MAX_CLOSURE: usize = 20_000;
 
@@ -311,7 +313,7 @@ impl NormalOracle {
     /// The walk of one configuration (design 61.10, part A). The nodes of the walk are the
     /// source bodies (R61.16-1): a name with records in two files is a node for each file, so a
     /// change of one of them reaches only the callers of that one.
-    pub(super) fn reach_config(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], started: std::time::Instant, limit: std::time::Duration) -> ConfigReach {
+    pub(super) fn reach_config(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], spent: &mut u64, limit: u64, safety: std::time::Instant) -> ConfigReach {
         let rename = |text: &str| if renames.is_empty() { text.to_string() } else { semilla_normal::paths::rename(text, renames) };
         let sources = Sources::new([old, new], &rename);
         let start = start_nodes(&start_set(old, new, renames, &rename), old, new, renames, &rename, &sources);
@@ -362,7 +364,7 @@ impl NormalOracle {
         let mut proved: BTreeSet<String> = BTreeSet::new();
         // The checked nodes that are not equivalent.
         let mut open: BTreeSet<String> = BTreeSet::new();
-        let (mut deep, mut over_count, mut over_time) = (0usize, 0usize, 0usize);
+        let (mut deep, mut over_count, mut over_time, mut over_safety) = (0usize, 0usize, 0usize, 0usize);
         let mut checked = 0usize;
         while !pending.is_empty() {
             let mut ready: Vec<String> = pending.iter().filter(|name| graph.callees.get(*name).is_none_or(|callees| callees.iter().all(|callee| !pending.contains(callee) || callee == *name))).cloned().collect();
@@ -392,15 +394,23 @@ impl NormalOracle {
                     over_count += 1;
                     continue;
                 }
-                if started.elapsed() > limit {
-                    over_time += 1;
+                if *spent >= limit || std::time::Instant::now() >= safety {
+                    if std::time::Instant::now() >= safety {
+                        over_safety += 1;
+                    } else {
+                        over_time += 1;
+                    }
                     continue;
                 }
                 checked += 1;
                 jobs.push((name.clone(), through));
             }
-            let results = self.reach_checks(solver, old, new, renames, &snapshot, &jobs, &sources, started + limit, crate::oracle::check_share(limit));
-            for ((name, through), verdict) in jobs.into_iter().zip(results) {
+            let results = self.reach_checks(solver, old, new, renames, &snapshot, &jobs, &sources, crate::oracle::body_budget(limit, safety));
+            *spent = spent.saturating_add(results.iter().map(|(_, cost)| *cost).sum());
+            if std::env::var_os("SEMILLA_TIMING").is_some() {
+                eprintln!("[timing] a round of the walk: {} checks, {} solver steps in all", results.len(), spent);
+            }
+            for ((name, through), (verdict, _)) in jobs.into_iter().zip(results) {
                 if matches!(verdict, Verdict::Equivalent(_)) {
                     proved.insert(name.clone());
                     must.remove(&name);
@@ -428,7 +438,10 @@ impl NormalOracle {
             out.stops.push(format!("the walk stopped at {MAX_BODIES} checked bodies: {over_count} more caller(s) not checked"));
         }
         if over_time > 0 {
-            out.stops.push(format!("the walk stopped at the time budget ({} s): {over_time} more caller(s) not checked", limit.as_secs()));
+            out.stops.push(format!("the walk stopped at its budget ({limit} solver steps): {over_time} more caller(s) not checked"));
+        }
+        if over_safety > 0 {
+            out.stops.push(format!("the walk stopped at the safety time limit: {over_safety} more caller(s) not checked"));
         }
         // The bodies that each changed body reaches: a chain of reached bodies that are not
         // equivalent.
@@ -453,18 +466,19 @@ impl NormalOracle {
     /// The checks of one round of the walk, in up to 8 threads: each caller with each body of
     /// `must` inlined, and no proof by an equal MIR text.
     #[allow(clippy::too_many_arguments)]
-    fn reach_checks(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], must: &Arc<BTreeSet<String>>, jobs: &[(String, Vec<String>)], sources: &Sources, end: std::time::Instant, share: std::time::Duration) -> Vec<Verdict> {
+    fn reach_checks(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], must: &Arc<BTreeSet<String>>, jobs: &[(String, Vec<String>)], sources: &Sources, budget: semilla_smt::budget::Budget) -> Vec<(Verdict, u64)> {
         let next = std::sync::atomic::AtomicUsize::new(0);
-        let results: std::sync::Mutex<Vec<(usize, Verdict)>> = std::sync::Mutex::new(Vec::new());
+        let results: std::sync::Mutex<Vec<(usize, (Verdict, u64))>> = std::sync::Mutex::new(Vec::new());
         let threads = std::thread::available_parallelism().map(|count| count.get()).unwrap_or(4).clamp(1, 8).min(jobs.len().max(1));
         std::thread::scope(|scope| {
             for _ in 0..threads {
                 scope.spawn(|| loop {
                     let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let Some((name, _)) = jobs.get(at) else { break };
-                    let deadline = (std::time::Instant::now() + share).min(end);
-                    let verdict = self.reach_one(solver, old, new, renames, must, name, sources, deadline);
-                    results.lock().unwrap_or_else(|error| error.into_inner()).push((at, verdict));
+                    let before = semilla_smt::budget::used();
+                    let verdict = self.reach_one(solver, old, new, renames, must, name, sources, budget);
+                    let cost = semilla_smt::budget::used() - before;
+                    results.lock().unwrap_or_else(|error| error.into_inner()).push((at, (verdict, cost)));
                 });
             }
         });
@@ -477,7 +491,7 @@ impl NormalOracle {
     /// with a target of one kind and one name, R61.14-1) has a check for each: the name is
     /// equivalent only if each one is, and a difference of one is the result.
     #[allow(clippy::too_many_arguments)]
-    fn reach_one(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], must: &Arc<BTreeSet<String>>, node: &str, sources: &Sources, deadline: std::time::Instant) -> Verdict {
+    fn reach_one(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], must: &Arc<BTreeSet<String>>, node: &str, sources: &Sources, budget: semilla_smt::budget::Budget) -> Verdict {
         // A node of a source body (R61.16-1): only the records of its file.
         let name = name_of(node);
         let bodies: Vec<&semilla_normal::BodyRecord> = new.bodies(name).into_iter().filter(|record| node_file(node).is_none_or(|file| sources.file(record) == file)).collect();
@@ -488,7 +502,7 @@ impl NormalOracle {
         for b in bodies {
             let verdict = match old.find(&rename_back(name, renames), &b.target, &b.unit) {
                 None => Verdict::NotDecided("the old tree has no record of the body".into()),
-                Some(a) => match self.check_pair(solver, a, b, old, new, renames, true, must, false, Some(deadline)) {
+                Some(a) => match self.check_pair(solver, a, b, old, new, renames, true, must, false, Some(budget)) {
                     Some(answer) => answer.verdict,
                     None => Verdict::NotDecided("no check".into()),
                 },
