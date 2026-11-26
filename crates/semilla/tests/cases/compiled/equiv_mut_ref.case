@@ -29,10 +29,25 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `1` → `2` at `shop::bump/S0/rhs/args[0]` [semantics · code different]
       affected bodies: shop::bump
-      equivalence: different: for x = &0, n = 0: before returns () with `*x` = 1, after returns () with `*x` = 2 (confirmed by a run)
+      equivalence: different: for x = &0, n = 0: before returns () with `*x` = 1, after returns () with `*x` = 2 (suggested test `semilla_test_bump_206d9c`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::bump (src/lib.rs:1): same graph (the edit keeps the control flow); different (for x = &0, n = 0: before returns () with `*x` = 1, after returns () with `*x` = 2; confirmed by a run)
+    shop::bump (src/lib.rs:1): same graph (the edit keeps the control flow); different (for x = &0, n = 0: before returns () with `*x` = 1, after returns () with `*x` = 2; suggested test `semilla_test_bump_206d9c`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_bump_206d9c`: add it to `src/lib.rs`, in the module of `shop::bump` (line 1); run it: `cargo test -p shop semilla_test_bump_206d9c`; also: `cargo test -p shop --release semilla_test_bump_206d9c`
+      #[cfg(test)]
+      mod semilla_test_bump_206d9c {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns () with `*x` = 1; the new version returns () with `*x` = 2.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let mut x = 0;
+              let n = 0;
+              let _ = crate::bump(&mut x, n);
+              assert_eq!(x, 1);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

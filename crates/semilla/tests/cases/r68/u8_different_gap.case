@@ -31,10 +31,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `7` → `6` at `shop::price/tail/args[0]` [semantics · code different]
       affected bodies: shop::price
-      equivalence: different: for n = 1: before returns 7, after returns 6 (confirmed by a run)
+      equivalence: different: for n = 1: before returns 7, after returns 6 (suggested test `semilla_test_price_40fa3e`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:1): same graph (the edit keeps the control flow); different (for n = 1: before returns 7, after returns 6; confirmed by a run)
+    shop::price (src/lib.rs:1): same graph (the edit keeps the control flow); different (for n = 1: before returns 7, after returns 6; suggested test `semilla_test_price_40fa3e`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_price_40fa3e`: add it to `src/lib.rs`, in the module of `shop::price` (line 1); run it: `cargo test -p shop semilla_test_price_40fa3e`; also: `cargo test -p shop --release semilla_test_price_40fa3e`
+      #[cfg(test)]
+      mod semilla_test_price_40fa3e {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 7; the new version returns 6.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let n = 1;
+              let got = crate::price(n);
+              assert_eq!(got, 7);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

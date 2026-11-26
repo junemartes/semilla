@@ -276,10 +276,10 @@ pub struct FlowReport {
     /// equivalence check stopped after 60 s: 41 bodies not checked; semilla status --verbose`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equivalence_stop: Option<String>,
-    /// [R74.1-2] The count of the results whose run of the real code disagrees with the model
-    /// (design 74): each one is a defect of Semilla, and the step says so in one line.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub run_defects: usize,
+    /// [R75.1-1] The suggested test of each sure difference of the step section (design 75), by
+    /// the name of its module: each line of a result names its test.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tests: Vec<crate::run::SuggestedTest>,
     /// The `reaches:` line of each fact whose body is in the start set of the walk, by the id
     /// of the fact, and the reached public functions of the fact (name and place) for the
     /// Markdown review.
@@ -1607,13 +1607,32 @@ fn reach_lines(flow: &FlowReport, full: bool, step: usize) -> Vec<String> {
     out
 }
 
+/// [R75.1-1] The part `suggested tests:` after the control flow section (at its level): each
+/// test with its place, its command, and its text (design 75). Semilla does not run a test.
+pub fn test_lines(tests: &[crate::run::SuggestedTest]) -> Vec<String> {
+    if tests.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![format!("suggested tests: {} (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)", tests.len())];
+    for test in tests {
+        let also: String = test.also.iter().map(|command| format!("; also: `{command}`")).collect();
+        out.push(format!("  `{}`: add it to {}; run it: `{}`{also}", test.name, test.place, test.command));
+        out.extend(test.text.lines().map(|line| if line.is_empty() { String::new() } else { format!("    {line}") }));
+    }
+    out
+}
+
 impl StepReport {
     /// The control flow section of the step (design 60, C2): `control flow: N bodies`, and one
     /// line for each body. `full` adds the full diff of each body (C3). A step with no graph
     /// data, or with no body with a result, has no section.
     pub fn flow_lines(&self, full: bool) -> Vec<String> {
         // Decided by Claude: a step with no body with a result has no section.
-        let Some(flow) = self.flow.as_ref().filter(|flow| !flow.bodies.is_empty() || !flow.reached.is_empty()) else { return Vec::new() };
+        let Some(flow) = self.flow.as_ref().filter(|flow| !flow.bodies.is_empty() || !flow.reached.is_empty() || !flow.tests.is_empty()) else { return Vec::new() };
+        // [R75.1-3] A step with only the tests of false claims has only their part.
+        if flow.bodies.is_empty() && flow.reached.is_empty() {
+            return test_lines(&flow.tests);
+        }
         let count = flow.bodies.len();
         let mut out = vec![format!("control flow: {count} bod{}", if count == 1 { "y" } else { "ies" })];
         for body in &flow.bodies {
@@ -1623,10 +1642,8 @@ impl StepReport {
             }
         }
         out.extend(flow.equivalence_stop.iter().map(|line| format!("  {line}")));
-        if flow.run_defects > 0 {
-            out.push(format!("  ! {} in {} check(s): a defect of Semilla (design 74); {}", crate::run::DISAGREE, flow.run_defects, crate::budget::step_text_command(self.step)));
-        }
         out.extend(reach_lines(flow, full, self.step));
+        out.extend(test_lines(&flow.tests));
         out
     }
 

@@ -34,11 +34,77 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: 5 calls of `bump`: expansion changed: changed literal `1` → `5` at `expansion/rhs` [semantics]: `shop::a/tail`, `shop::b/tail`, `shop::c/tail`, and 2 more (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 5 bodies
-    shop::a (src/lib.rs:3): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:3 --step 0)
-    shop::b (src/lib.rs:4): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:4 --step 0)
-    shop::c (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:5 --step 0)
-    shop::d (src/lib.rs:6): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:6 --step 0)
-    shop::e (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for w = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(w * 2)` changes (semilla expand src/lib.rs:7 --step 0)
+    shop::a (src/lib.rs:3): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 5; suggested test `semilla_test_a_3a03f8`); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:3 --step 0)
+    shop::b (src/lib.rs:4): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 5; suggested test `semilla_test_b_1077c1`); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:4 --step 0)
+    shop::c (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 5; suggested test `semilla_test_c_76a912`); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:5 --step 0)
+    shop::d (src/lib.rs:6): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 5; suggested test `semilla_test_d_4ae553`); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:6 --step 0)
+    shop::e (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for w = 0: before returns 1, after returns 5; suggested test `semilla_test_e_f4364c`); the expansion of `bump!(w * 2)` changes (semilla expand src/lib.rs:7 --step 0)
+  suggested tests: 5 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_a_3a03f8`: add it to `src/lib.rs`, in the module of `shop::a` (line 3); run it: `cargo test -p shop semilla_test_a_3a03f8`; also: `cargo test -p shop --release semilla_test_a_3a03f8`
+      #[cfg(test)]
+      mod semilla_test_a_3a03f8 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let v = 0;
+              let got = crate::a(v);
+              assert_eq!(got, 1);
+          }
+      }
+    `semilla_test_b_1077c1`: add it to `src/lib.rs`, in the module of `shop::b` (line 4); run it: `cargo test -p shop semilla_test_b_1077c1`; also: `cargo test -p shop --release semilla_test_b_1077c1`
+      #[cfg(test)]
+      mod semilla_test_b_1077c1 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let v = 0;
+              let got = crate::b(v);
+              assert_eq!(got, 1);
+          }
+      }
+    `semilla_test_c_76a912`: add it to `src/lib.rs`, in the module of `shop::c` (line 5); run it: `cargo test -p shop semilla_test_c_76a912`; also: `cargo test -p shop --release semilla_test_c_76a912`
+      #[cfg(test)]
+      mod semilla_test_c_76a912 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let v = 0;
+              let got = crate::c(v);
+              assert_eq!(got, 1);
+          }
+      }
+    `semilla_test_d_4ae553`: add it to `src/lib.rs`, in the module of `shop::d` (line 6); run it: `cargo test -p shop semilla_test_d_4ae553`; also: `cargo test -p shop --release semilla_test_d_4ae553`
+      #[cfg(test)]
+      mod semilla_test_d_4ae553 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let v = 0;
+              let got = crate::d(v);
+              assert_eq!(got, 1);
+          }
+      }
+    `semilla_test_e_f4364c`: add it to `src/lib.rs`, in the module of `shop::e` (line 7); run it: `cargo test -p shop semilla_test_e_f4364c`; also: `cargo test -p shop --release semilla_test_e_f4364c`
+      #[cfg(test)]
+      mod semilla_test_e_f4364c {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let w = 0;
+              let got = crate::e(w);
+              assert_eq!(got, 1);
+          }
+      }
   expansions: 5 changed
     5 calls: expansion changed: `macro_rules! bump` (src/lib.rs:1): changed literal `1` → `5` at `expansion/rhs` [semantics]; from `macro_rules! bump` (src/lib.rs:1): `shop::a/tail`, `shop::b/tail`, `shop::c/tail`, and 2 more (semilla expand --step 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

@@ -1,5 +1,5 @@
-note: a run shows the value behind a `&mut` argument and a struct with a derived `Debug` (design 74)
-rule+: R74.1-2
+note: a suggested test asserts the value behind a `&mut` argument and the fields of a struct with a pattern (design 75)
+rule+: R75.1-1
 option: --compiled
 === both Cargo.toml
 [package]
@@ -41,10 +41,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `1` → `2` at `depot::bump/S0/rhs` [semantics · code different]
       affected bodies: depot::bump
       control flow: ~ check `overflow: p.x += 1` → `overflow: p.x += 2` (src/lib.rs:-8, src/lib.rs:8)
-      equivalence: different: for p = &Pt { 0, 0 }: before returns () with `*p` = Pt { 1, 0 }, after returns () with `*p` = Pt { 2, 0 } (confirmed by a run)
+      equivalence: different: for p = &Pt { 0, 0 }: before returns () with `*p` = Pt { 1, 0 }, after returns () with `*p` = Pt { 2, 0 } (suggested test `semilla_test_bump_f54cf7`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::bump (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for p = &Pt { 0, 0 }: before returns () with `*p` = Pt { 1, 0 }, after returns () with `*p` = Pt { 2, 0 }; confirmed by a run)
+    depot::bump (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for p = &Pt { 0, 0 }: before returns () with `*p` = Pt { 1, 0 }, after returns () with `*p` = Pt { 2, 0 }; suggested test `semilla_test_bump_f54cf7`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_bump_f54cf7`: add it to `src/lib.rs`, in the module of `depot::bump` (line 7); run it: `cargo test -p depot semilla_test_bump_f54cf7`; also: `cargo test -p depot --release semilla_test_bump_f54cf7`
+      #[cfg(test)]
+      mod semilla_test_bump_f54cf7 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns () with `*p` = Pt { 1, 0 }; the new version returns () with `*p` = Pt { 2, 0 }.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let mut p = crate::Pt { x: 0, y: 0 };
+              let _ = crate::bump(&mut p);
+              assert!(matches!(p, crate::Pt { x: 1, y: 0 }));
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -47,10 +47,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: ~ check `overflow: b + 1` → `overflow: b + wide::make()` (src/lib.rs:-9, src/lib.rs:9)
       control flow: + arrow entry (src/lib.rs:8) → call `make` (src/lib.rs:9)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: different: for b = 0: before returns 1, after returns 8 (confirmed by a run)
+      equivalence: different: for b = 0: before returns 1, after returns 8 (suggested test `semilla_test_width_ed989a`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::width (src/lib.rs:8): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for b = 0: before returns 1, after returns 8; confirmed by a run)
+    shop::width (src/lib.rs:8): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for b = 0: before returns 1, after returns 8; suggested test `semilla_test_width_ed989a`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_width_ed989a`: add it to `src/lib.rs`, in the module of `shop::width` (line 8); run it: `cargo test -p shop semilla_test_width_ed989a`; also: `cargo test -p shop --release semilla_test_width_ed989a`
+      #[cfg(test)]
+      mod semilla_test_width_ed989a {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 8.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let b = 0;
+              let got = crate::width(b);
+              assert_eq!(got, 1);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

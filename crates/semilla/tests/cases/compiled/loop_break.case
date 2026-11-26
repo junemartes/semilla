@@ -49,10 +49,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + branch `v[i] == 9` (src/lib.rs:7): false → check `overflow: i += 1`, true → return
       control flow: + panic `bounds` (src/lib.rs:7)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: different: for v = &[9] (a bounded run of at most 4 loop iterations): before panics (bounds), after returns 0 (confirmed by a run)
+      equivalence: different: for v = &[9] (a bounded run of at most 4 loop iterations): before panics (bounds), after returns 0 (suggested test `semilla_test_find_ff9f2a`)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    depot::find (src/lib.rs:1): graph changes: +1 branch, +1 check, +1 panic, +5 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for v = &[9] (a bounded run of at most 4 loop iterations): before panics (bounds), after returns 0; confirmed by a run)
+    depot::find (src/lib.rs:1): graph changes: +1 branch, +1 check, +1 panic, +5 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for v = &[9] (a bounded run of at most 4 loop iterations): before panics (bounds), after returns 0; suggested test `semilla_test_find_ff9f2a`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_find_ff9f2a`: add it to `src/lib.rs`, in the module of `depot::find` (line 1); run it: `cargo test -p depot semilla_test_find_ff9f2a`; also: `cargo test -p depot --release semilla_test_find_ff9f2a`
+      #[cfg(test)]
+      mod semilla_test_find_ff9f2a {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version panics (bounds); the new version returns 0.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          #[should_panic]
+          fn old_outcome() {
+              let v = [9];
+              let _ = crate::find(&v);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

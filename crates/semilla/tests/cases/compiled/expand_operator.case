@@ -35,7 +35,22 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: `calc!(add a, b)` at `shop::f/tail` (src/lib.rs:6): expansion changed: changed operator `a + b` → `a * b` at `expansion` [semantics]
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::f (src/lib.rs:6): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for a = 1, b = 0: before returns 1, after returns 0; confirmed by a run); the expansion of `calc!(add a, b)` changes (semilla expand src/lib.rs:6 --step 0)
+    shop::f (src/lib.rs:6): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for a = 1, b = 0: before returns 1, after returns 0; suggested test `semilla_test_f_39209a`); the expansion of `calc!(add a, b)` changes (semilla expand src/lib.rs:6 --step 0)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_f_39209a`: add it to `src/lib.rs`, in the module of `shop::f` (line 6); run it: `cargo test -p shop semilla_test_f_39209a`; also: `cargo test -p shop --release semilla_test_f_39209a`
+      #[cfg(test)]
+      mod semilla_test_f_39209a {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 0.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let a = 1;
+              let b = 0;
+              let got = crate::f(a, b);
+              assert_eq!(got, 1);
+          }
+      }
   expansions: 1 changed, 1 equal
     `calc!(add a, b)` at `shop::f/tail` (src/lib.rs:6): expansion changed: `macro_rules! calc` (src/lib.rs:1): changed operator `a + b` → `a * b` at `expansion` [semantics]; from `macro_rules! calc` (src/lib.rs:1)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

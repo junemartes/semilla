@@ -44,11 +44,25 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: − branch `w > 10` (src/lib.rs:-2): false → check `overflow: base + 1`, true → check `overflow: base + 1`
       control flow: + arrow entry (src/lib.rs:5) → call `ship` (src/lib.rs:6)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: different: for w = 16: before returns 16, after returns 6 (confirmed by a run)
+      equivalence: different: for w = 16: before returns 16, after returns 6 (suggested test `semilla_test_cost_c24a5a`)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::cost (src/lib.rs:5): graph changes: +1 call, −1 branch, +2 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for w = 16: before returns 16, after returns 6; confirmed by a run)
+    shop::cost (src/lib.rs:5): graph changes: +1 call, −1 branch, +2 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for w = 16: before returns 16, after returns 6; suggested test `semilla_test_cost_c24a5a`)
     shop::ship (src/lib.rs:1): graph added: 3 points, 3 arrows
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_cost_c24a5a`: add it to `src/lib.rs`, in the module of `shop::cost` (line 1); run it: `cargo test -p shop semilla_test_cost_c24a5a`; also: `cargo test -p shop --release semilla_test_cost_c24a5a`
+      #[cfg(test)]
+      mod semilla_test_cost_c24a5a {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 16; the new version returns 6.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let w = 16;
+              let got = crate::cost(w);
+              assert_eq!(got, 16);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

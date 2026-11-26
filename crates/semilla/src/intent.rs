@@ -84,6 +84,8 @@ struct One {
     depends: Vec<String>,
     /// The record names of the item in each version that has it.
     items: Vec<String>,
+    /// [R75.1-3] The suggested test of a false claim (design 75).
+    tests: Vec<semilla_core::run::SuggestedTest>,
 }
 
 impl NormalOracle {
@@ -151,7 +153,7 @@ impl NormalOracle {
                             continue;
                         }
                         Err(error) => {
-                            results.push((config.name(), One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![format!("{}: {error}", query.claim.place)], depends: Vec::new(), items: Vec::new() }));
+                            results.push((config.name(), One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![format!("{}: {error}", query.claim.place)], depends: Vec::new(), items: Vec::new(), tests: Vec::new() }));
                             continue;
                         }
                     }
@@ -197,7 +199,7 @@ impl NormalOracle {
         let item = match claim.targets.first() {
             Some(Target::Path(item)) => item.clone(),
             Some(Target::Text(text, place)) => semilla_intent::IPath { version: None, segments: vec![text.clone()], generics: Vec::new(), place: place.clone() },
-            None => return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![format!("{}: expected an item path", claim.place)], depends: Vec::new(), items: Vec::new() },
+            None => return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![format!("{}: expected an item path", claim.place)], depends: Vec::new(), items: Vec::new(), tests: Vec::new() },
         };
         let item = &item;
         let (old_item, new_item) = match item.version {
@@ -218,7 +220,7 @@ impl NormalOracle {
         };
         let (old_item, new_item) = match (loose(old, &old_names, old_item), loose(new, &new_names, new_item)) {
             (Ok(a), Ok(b)) => (a, b),
-            (Err(error), _) | (_, Err(error)) => return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![error], depends: Vec::new(), items: Vec::new() },
+            (Err(error), _) | (_, Err(error)) => return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![error], depends: Vec::new(), items: Vec::new(), tests: Vec::new() },
         };
         // [R78.1-3] The definition that rustc resolved for the scope path (also through a
         // re-export or a method of a type): its record name in each tree.
@@ -238,7 +240,7 @@ impl NormalOracle {
             all.extend(old_names.iter().cloned());
             let candidates = semilla_intent::candidates(&item.name(), &all, 6);
             let tail = if candidates.is_empty() { String::new() } else { format!("; candidates: {}", semilla_intent::quoted_list(&candidates)) };
-            return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![format!("{}: `{}`: no version has a body `{}`{tail}", item.place, item.text(), item.name())], depends: Vec::new(), items: Vec::new() };
+            return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![format!("{}: `{}`: no version has a body `{}`{tail}", item.place, item.text(), item.name())], depends: Vec::new(), items: Vec::new(), tests: Vec::new() };
         }
         let hash_of = |version: Version, name: &str| -> Option<String> {
             let side = if version == Version::Before { old } else { new };
@@ -249,11 +251,11 @@ impl NormalOracle {
         if claim.kind == ClaimKind::Same && claim.func.body.is_none() {
             let reads: Vec<String> = [hash_of(Version::Before, &old_item), hash_of(Version::After, &new_item)].into_iter().flatten().collect();
             if dry {
-                return One { result: IntentResult::Claimed, detail: semilla_smt::mir::claim::DRY_CAUSE.into(), reads, errors: Vec::new(), depends: Vec::new(), items };
+                return One { result: IntentResult::Claimed, detail: semilla_smt::mir::claim::DRY_CAUSE.into(), reads, errors: Vec::new(), depends: Vec::new(), items, tests: Vec::new() };
             }
             let (Some(a), Some(b)) = (old.find(&old_item, "", ""), new.find(&new_item, "", "")) else {
                 let only = if in_old { "the old version only" } else { "the new version only" };
-                return One { result: IntentResult::Claimed, detail: format!("the item has a body in {only}: no compare"), reads, errors: Vec::new(), depends: Vec::new(), items };
+                return One { result: IntentResult::Claimed, detail: format!("the item has a body in {only}: no compare"), reads, errors: Vec::new(), depends: Vec::new(), items, tests: Vec::new() };
             };
             let rename_text = |text: &str| semilla_normal::paths::rename(text, renames);
             let equal_proof = rename_text(&a.text) == b.text && !a.callees.iter().any(|callee| changed.contains(&rename_text(callee)) || changed.contains(callee));
@@ -261,15 +263,19 @@ impl NormalOracle {
             let check = || self.check_pair(solver, a, b, old, new, renames, true, &changed, equal_proof, budget);
             let answer = if claim.options.except.iter().any(|name| name == "panic_message") { semilla_smt::mir::claim::with_panic_messages_ignored(check) } else { check() };
             use semilla_verify::equiv::Verdict;
-            // [R74.1-1] A difference gets its run (design 74).
+            // [R75.1-3] A difference gets its suggested test (design 75).
             let mut verdict = answer.map(|answer| answer.verdict);
             if let Some(found) = verdict.as_mut() {
-                self.confirm(change, &mut [(config, change.tree_before.as_str(), change.tree_after.as_str(), found)]);
+                self.suggest(change, &mut [(config, change.tree_before.as_str(), change.tree_after.as_str(), found)]);
             }
+            let mut tests = Vec::new();
             let (result, detail) = match verdict {
                 Some(Verdict::Equivalent(method)) => (IntentResult::Proved, format!("equivalent by {method}")),
-                Some(Verdict::Different { input, before, after, run }) => {
-                    let note = run.text();
+                Some(Verdict::Different { input, before, after, test }) => {
+                    let note = test.text();
+                    if let semilla_core::run::TestNote::Test(found) = test {
+                        tests.push(found);
+                    }
                     (IntentResult::False, if note.is_empty() { format!("for {input}: before {before}, after {after}") } else { format!("for {input}: before {before}, after {after} ({note})") })
                 }
                 Some(Verdict::NotDecided(cause)) | Some(Verdict::NotChecked(cause)) => (IntentResult::Claimed, cause),
@@ -278,13 +284,15 @@ impl NormalOracle {
             // [R77.1-1] An empty `#[same]` claim is the equivalence check of its item: a proof
             // depends on the two versions of the item.
             let depends = if result == IntentResult::Proved { vec![format!("before::{old_item}"), format!("after::{new_item}")] } else { Vec::new() };
-            return One { result, detail, reads, errors: Vec::new(), depends, items };
+            return One { result, detail, reads, errors: Vec::new(), depends, items, tests };
         }
         // [R78.4-4] A property claim: the engine checks the claim MIR of rustc.
         let mir_one = mir.map(|(compiled, sources)| self.claim_mir(solver, query, compiled, sources, old, new, (&old_item, &new_item), &changed, &hash_of, &items));
-        // [R74.1-5] A false claim MIR has no run of its own yet: when the parser of 10r1 reads the
-        // claim, its model runs too, and a false result of that model (an exact input too) gives
-        // the line with its run. Each other result of the claim MIR stays.
+        // [R75.1-3] A false claim MIR names no call of a version: when the parser of 10r1 reads
+        // the claim, its model runs too, and a false result of that model (an exact input too)
+        // gives the line with the calls and their results, and the suggested test of the
+        // counterexample (Semilla runs no code of the user). Each other result of the claim MIR
+        // stays.
         let parsed = claim.func.body.as_ref().is_some_and(|body| !matches!(&body.kind, semilla_intent::ExprKind::Other(kind) if kind.starts_with("a body that rustc checks")));
         if let Some(one) = &mir_one
             && (one.result != IntentResult::False || !parsed)
@@ -312,33 +320,39 @@ impl NormalOracle {
         let reads: Vec<String> = checked.reads.iter().filter_map(|(version, name)| hash_of(*version, name)).collect();
         let errors: Vec<String> = checked.errors.iter().map(|error| error.to_string()).collect();
         use semilla_smt::mir::claim::ClaimVerdict;
+        let mut claim_tests = Vec::new();
         let (result, detail) = match checked.verdict {
             ClaimVerdict::Proved { method } => (IntentResult::Proved, format!("by {method}")),
             ClaimVerdict::False { input, detail, run } => {
-                // [R74.1-1] The run of the calls on the failed path (design 74): each call gets the
-                // target of its body (the library of a name first).
-                let mut verdict = semilla_verify::equiv::Verdict::Different { input: input.clone(), before: String::new(), after: String::new(), run: semilla_verify::equiv::RunNote::None };
-                if let Some(mut case) = run {
-                    for call in &mut case.calls {
-                        let side = if call.side == semilla_core::run::RunSide::Before { old } else { new };
-                        call.target = side.find(&call.name, "", "").map(|record| record.target.clone()).unwrap_or_default();
+                // [R75.1-3] The suggested test of the counterexample (design 75): each call gets the
+                // target and the place of its body (the library of a name first).
+                match run {
+                    Some(mut case) => {
+                        for call in &mut case.calls {
+                            let side = if call.side == semilla_core::run::RunSide::Before { old } else { new };
+                            if let Some(record) = side.find(&call.name, "", "") {
+                                call.target = record.target.clone();
+                                call.value = record.value;
+                                if let Some(span) = &record.span {
+                                    call.file = span.file.clone();
+                                    call.line = span.line_start;
+                                }
+                            }
+                        }
+                        let note = self.suggest_claim(change, config, &case, &format!("for {input}: {detail}"));
+                        let text = note.text();
+                        if let semilla_core::run::TestNote::Test(found) = note {
+                            claim_tests.push(found);
+                        }
+                        (IntentResult::False, format!("for {input}: {detail} ({text})"))
                     }
-                    verdict = semilla_verify::equiv::Verdict::Different { input: input.clone(), before: String::new(), after: String::new(), run: semilla_verify::equiv::RunNote::Open(case) };
-                    self.confirm(change, &mut [(config, change.tree_before.as_str(), change.tree_after.as_str(), &mut verdict)]);
-                }
-                match verdict {
-                    semilla_verify::equiv::Verdict::Different { run, .. } => {
-                        let note = run.text();
-                        (IntentResult::False, if note.is_empty() { format!("for {input}: {detail}") } else { format!("for {input}: {detail} ({note})") })
-                    }
-                    semilla_verify::equiv::Verdict::NotDecided(cause) => (IntentResult::Claimed, format!("for {input}: {cause}")),
-                    _ => (IntentResult::False, format!("for {input}: {detail}")),
+                    None => (IntentResult::False, format!("for {input}: {detail}")),
                 }
             }
             ClaimVerdict::Claimed { cause } => (IntentResult::Claimed, cause),
         };
         let depends = if result == IntentResult::Proved { checked.depends.iter().map(|(version, name)| format!("{}::{name}", version.prefix())).collect() } else { Vec::new() };
-        let found = One { result, detail, reads, errors, depends, items };
+        let found = One { result, detail, reads, errors, depends, items, tests: claim_tests };
         match mir_one {
             Some(mir) if found.result != IntentResult::False || !found.errors.is_empty() => mir,
             _ => found,
@@ -357,7 +371,7 @@ impl NormalOracle {
         let module = sources.iter().position(|source| source.path == query.file.path).and_then(|index| compiled.modules.get(index));
         let find = |name: &str| compiled.records.iter().find(|record| record.name == name && record.q.is_some()).and_then(record_form);
         let Some(ir) = module.and_then(|module| find(&format!("{}::{module}::{}", semilla_normal::intent::CLAIMS_CRATE, claim.func.name))) else {
-            return One { result: IntentResult::Claimed, detail: format!("the intent crate has no form of `fn {}`", claim.func.name), reads: Vec::new(), errors: Vec::new(), depends: Vec::new(), items: items.to_vec() };
+            return One { result: IntentResult::Claimed, detail: format!("the intent crate has no form of `fn {}`", claim.func.name), reads: Vec::new(), errors: Vec::new(), depends: Vec::new(), items: items.to_vec(), tests: Vec::new() };
         };
         // The bodies of each tree that the claim calls: their small callees of the standard
         // library and their instances.
@@ -398,12 +412,15 @@ impl NormalOracle {
         use semilla_smt::mir::claim::ClaimVerdict;
         let (result, detail) = match checked.verdict {
             ClaimVerdict::Proved { method } => (IntentResult::Proved, format!("by {method} (the claim MIR of rustc)")),
-            ClaimVerdict::False { input, detail, .. } => (IntentResult::False, format!("for {input}: {detail}")),
+            // [R75.1-3] The claim MIR gives the input of the claim, not the calls of a version on
+            // its failed path: no test of the code of the user (the model of 10r1 gives one when it
+            // reads the claim).
+            ClaimVerdict::False { input, detail, .. } => (IntentResult::False, format!("for {input}: {detail} (no suggested test: the claim MIR gives no call of a version on its failed path)")),
             ClaimVerdict::Claimed { cause } => (IntentResult::Claimed, cause),
         };
         // [R78.4-9] A proved claim MIR explains each body of its dependence set (R77.1-1).
         let depends = if result == IntentResult::Proved { checked.depends.clone() } else { Vec::new() };
-        One { result, detail, reads, errors: Vec::new(), depends, items: items.to_vec() }
+        One { result, detail, reads, errors: Vec::new(), depends, items: items.to_vec(), tests: Vec::new() }
     }
 }
 
@@ -419,7 +436,7 @@ fn join(results: Vec<(String, One)>, skipped: Vec<String>, query: &Query) -> Ans
             Some(cfg) => format!("no checked configuration matches `cfg = {cfg:?}` (checked: {})", if skipped.is_empty() { "none".to_string() } else { skipped.join("; ") }),
             None => "no checked configuration has the records of the two trees".into(),
         };
-        return Answer { result: Some(IntentResult::Claimed), detail, configs: Vec::new(), reads, errors, depends: Vec::new(), items: Vec::new() };
+        return Answer { result: Some(IntentResult::Claimed), detail, configs: Vec::new(), reads, errors, depends: Vec::new(), items: Vec::new(), tests: Vec::new() };
     }
     let rank = |result: IntentResult| match result {
         IntentResult::Error => 0,
@@ -447,5 +464,12 @@ fn join(results: Vec<(String, One)>, skipped: Vec<String>, query: &Query) -> Ans
     let mut items: Vec<String> = results.iter().flat_map(|(_, one)| one.items.iter().cloned()).collect();
     items.sort();
     items.dedup();
-    Answer { result: Some(result), detail, configs, reads, errors, depends, items }
+    // [R75.1-3] The suggested tests of the false results, once for each name.
+    let mut tests: Vec<semilla_core::run::SuggestedTest> = Vec::new();
+    for (_, one) in &results {
+        for test in &one.tests {
+            semilla_verify::equiv::merge_test(&mut tests, test);
+        }
+    }
+    Answer { result: Some(result), detail, configs, reads, errors, depends, items, tests }
 }

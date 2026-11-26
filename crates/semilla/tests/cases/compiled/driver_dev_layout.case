@@ -89,10 +89,25 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `1` → `2` at `store::DataContainer::next/tail/rhs` [semantics · code different]
       affected bodies: store::DataContainer::next
       control flow: ~ check `overflow: n + 1` → `overflow: n + 2` (src/lib.rs:-31, src/lib.rs:31)
-      equivalence: different: for n = 0: before returns 1, after returns 2 (not confirmed by a run: the compiler does not accept the call in the probe (E0425: cannot find type `Id` in this scope))
+      equivalence: different: for n = 0: before returns 1, after returns 2 (suggested test `semilla_test_next_100a23`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    store::DataContainer::<Id, D, S>::next (src/lib.rs:30): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for n = 0: before returns 1, after returns 2; not confirmed by a run: the compiler does not accept the call in the probe (E0425: cannot find type `Id` in this scope))
+    store::DataContainer::<Id, D, S>::next (src/lib.rs:30): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for n = 0: before returns 1, after returns 2; suggested test `semilla_test_next_100a23`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_next_100a23`: add it to `src/lib.rs`, in the module of `store::DataContainer::<Id, D, S>::next` (line 30); run it: `cargo test -p store semilla_test_next_100a23`; also: `cargo test -p store --release semilla_test_next_100a23`
+      #[cfg(test)]
+      mod semilla_test_next_100a23 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 2.
+          // This test passes on the old code and fails on the new code.
+          // The path of the function has generic arguments: write the types of the instance.
+          #[test]
+          fn old_outcome() {
+              let n = 0;
+              let got = crate::DataContainer::<Id, D, S>::next(n);
+              assert_eq!(got, 1);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

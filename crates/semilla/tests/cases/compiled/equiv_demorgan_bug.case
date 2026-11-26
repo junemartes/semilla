@@ -30,13 +30,28 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: deleted statement `!(a && b)` at `shop::closed/tail` [semantics · code different]
       affected bodies: shop::closed (with 1 other edit of this body)
-      equivalence: different: for a = true, b = false: before returns true, after returns false (confirmed by a run)
+      equivalence: different: for a = true, b = false: before returns true, after returns false (suggested test `semilla_test_closed_8bf23d`) (the same line for f2)
   ◆ f2 derived: added statement `!a && !b` at `shop::closed/tail` [semantics · code different]
       affected bodies: shop::closed (with 1 other edit of this body)
-      equivalence: different: for a = true, b = false: before returns true, after returns false (confirmed by a run)
+      equivalence: the same line as f1
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::closed (src/lib.rs:1): same graph (the edit keeps the control flow); different (for a = true, b = false: before returns true, after returns false; confirmed by a run)
+    shop::closed (src/lib.rs:1): same graph (the edit keeps the control flow); different (for a = true, b = false: before returns true, after returns false; suggested test `semilla_test_closed_8bf23d`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_closed_8bf23d`: add it to `src/lib.rs`, in the module of `shop::closed` (line 1); run it: `cargo test -p shop semilla_test_closed_8bf23d`; also: `cargo test -p shop --release semilla_test_closed_8bf23d`
+      #[cfg(test)]
+      mod semilla_test_closed_8bf23d {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns true; the new version returns false.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let a = true;
+              let b = false;
+              let got = crate::closed(a, b);
+              assert_eq!(got, true);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

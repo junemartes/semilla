@@ -16,8 +16,8 @@ pub(crate) mod reach;
 #[path = "intent.rs"]
 mod intent;
 
-#[path = "probe.rs"]
-pub(crate) mod probe;
+#[path = "suggest.rs"]
+pub(crate) mod suggest;
 
 /// Runs the MIR driver on the snapshots, and compares the bodies with the normal forms.
 ///
@@ -1604,21 +1604,26 @@ impl NormalOracle {
         }
         let verdict = match checked.verdict {
             semilla_smt::mir::Verdict::Equivalent { method } => Verdict::Equivalent(method),
-            // [R74.1-1] The calls of the run get the record names and the targets of the two
-            // bodies; the probe of the step runs them (design 74).
+            // [R75.1-1] The calls of the suggested test get the record names, the targets, and
+            // the places of the two bodies (design 75).
             semilla_smt::mir::Verdict::Different { input, before, after, run } => {
-                let run = match run {
+                let test = match run {
                     Some(mut case) => {
                         for call in &mut case.calls {
                             let record = if call.side == semilla_core::run::RunSide::Before { a } else { b };
                             call.name = record.name.clone();
                             call.target = record.target.clone();
+                            call.value = record.value;
+                            if let Some(span) = &record.span {
+                                call.file = span.file.clone();
+                                call.line = span.line_start;
+                            }
                         }
-                        semilla_verify::equiv::RunNote::Open(case)
+                        semilla_verify::equiv::TestNote::Open(case)
                     }
-                    None => semilla_verify::equiv::RunNote::None,
+                    None => semilla_verify::equiv::TestNote::None,
                 };
-                Verdict::Different { input, before, after, run }
+                Verdict::Different { input, before, after, test }
             }
             // A check that its budget stops (R66.9-2, R77.2-2): not checked, as a check that the
             // budget of the step does not start. The safety time limit has its own cause.
@@ -1936,8 +1941,8 @@ impl BodyOracle for NormalOracle {
         let total: u64 = costs.iter().flatten().map(|(steps, _)| *steps).sum();
         let largest = costs.iter().flatten().map(|(steps, _)| *steps).max().unwrap_or(0);
         crate::timing(&format!("the equivalence check ({} queries, {total} solver steps, the largest job {largest}; a budget of {step_steps} solver steps)", queries.len()), started);
-        // [R74.1-1] A run of the real code for each sure difference of the step: the results of
-        // the bodies, of the facts alone (in the tree of the variant), and of the walk.
+        // [R75.1-1] A suggested test for each sure difference of the step: the results of the
+        // bodies, of the facts alone (in the tree of the variant), and of the walk.
         let variant_trees: Vec<Option<String>> = queries
             .iter()
             .map(|query| {
@@ -1963,28 +1968,7 @@ impl BodyOracle for NormalOracle {
                     items.push((config.as_str(), step.tree_before.as_str(), step.tree_after.as_str(), verdict));
                 }
             }
-            self.confirm(step, &mut items);
-        }
-        // [R74.1-3] A body that the probe cannot call (an item that is not public): the result of
-        // a caller that the walk reaches through it, when a run confirms it.
-        if let Some(copy) = &walk_copy {
-            use semilla_verify::equiv::{RunNote, Verdict};
-            for (query, answer) in queries.iter().zip(answers.iter_mut()) {
-                let Some(answer) = answer else { continue };
-                let Verdict::Different { run: RunNote::NotConfirmed(cause), .. } = &mut answer.verdict else { continue };
-                if query.variant.is_some() {
-                    continue;
-                }
-                let caller = copy
-                    .iter()
-                    .filter(|(config, _)| *config == query.config)
-                    .flat_map(|(_, walk)| walk.bodies.iter())
-                    .find(|(_, through, _, verdict)| through.contains(&query.new.0) && matches!(verdict, Verdict::Different { run: RunNote::Confirmed, .. }))
-                    .map(|(name, ..)| name.clone());
-                if let Some(caller) = caller {
-                    *cause = format!("{cause}; a run confirms the difference of the caller `{caller}`, which reaches this body");
-                }
-            }
+            self.suggest(step, &mut items);
         }
         if let Some(copy) = walk_copy {
             let key = (step.tree_before.clone(), step.tree_after.clone());
@@ -2001,8 +1985,8 @@ impl BodyOracle for NormalOracle {
         let renames: Vec<(String, String)> = renames.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
         let limit = reach::WALK_STEPS.min(equiv_steps());
         let mut walks = self.reach_all(step, &renames.into_iter().collect(), limit)?;
-        // [R74.1-1] A walk with no run yet (a step with no other check): its runs.
-        let open = walks.iter().any(|(_, walk)| walk.bodies.iter().any(|(_, _, _, verdict)| matches!(verdict, semilla_verify::equiv::Verdict::Different { run: semilla_verify::equiv::RunNote::Open(_), .. })));
+        // [R75.1-1] A walk with no test yet (a step with no other check): its tests.
+        let open = walks.iter().any(|(_, walk)| walk.bodies.iter().any(|(_, _, _, verdict)| matches!(verdict, semilla_verify::equiv::Verdict::Different { test: semilla_verify::equiv::TestNote::Open(_), .. })));
         if open {
             let mut copy = walks.as_ref().clone();
             let mut items: Vec<(&str, &str, &str, &mut semilla_verify::equiv::Verdict)> = Vec::new();
@@ -2011,7 +1995,7 @@ impl BodyOracle for NormalOracle {
                     items.push((config.as_str(), step.tree_before.as_str(), step.tree_after.as_str(), verdict));
                 }
             }
-            self.confirm(step, &mut items);
+            self.suggest(step, &mut items);
             walks = std::sync::Arc::new(copy);
             let key = (step.tree_before.clone(), step.tree_after.clone());
             self.added.lock().unwrap_or_else(|error| error.into_inner()).reached.insert(key, walks.clone());

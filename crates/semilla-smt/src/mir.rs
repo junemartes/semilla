@@ -96,9 +96,6 @@ pub enum IrTy {
         /// The name of each field of each variant (design 67, part B).
         #[serde(default)]
         fs: Vec<Vec<String>>,
-        /// [R74.1-2] True if the `Debug` impl of the type is the impl of `#[derive(Debug)]`.
-        #[serde(default)]
-        g: bool,
     },
     Ref(bool, u32),
     Opaque {
@@ -241,7 +238,7 @@ pub struct IrTerm {
     /// optional check that the settings of the session remove, so each other check is active.
     #[serde(default)]
     pub o: bool,
-    /// [R74.1-2] The message of the panic of a check at run time, from the compiler.
+    /// [R75.1-1] The message of the panic of a check at run time, from the compiler.
     #[serde(default)]
     pub m: Option<String>,
 }
@@ -344,8 +341,8 @@ pub struct Step<'a> {
 pub enum Verdict {
     /// The method: `SMT`, `SMT after inlining …`.
     Equivalent { method: String },
-    /// One exact input and the two outcomes. `run`: the calls of a run that can confirm the
-    /// difference (design 74, R74.1-1).
+    /// One exact input and the two outcomes. `run`: the calls of the suggested test of the
+    /// difference (design 75, R75.1-1).
     Different { input: String, before: String, after: String, run: Option<Box<semilla_core::run::RunCase>> },
     NotDecided { cause: String },
 }
@@ -696,7 +693,7 @@ struct Decls {
     gconsts: Vec<(bool, String, Vec<(String, String)>, V)>,
     /// [R69.3-1] The symbol of each message of a panic, with the text of its literal pieces.
     messages: BTreeMap<String, String>,
-    /// [R74.1-2] The message at run time of each kind of a check that a run met (`overflow add`
+    /// [R75.1-1] The message at run time of each kind of a check that a run met (`overflow add`
     /// → "attempt to add with overflow"), from the compiler.
     kinds: BTreeMap<String, String>,
 }
@@ -1650,6 +1647,16 @@ impl<'a, 'b> Run<'a, 'b> {
         }
     }
 
+    /// A path that aborts at this point: no cleanup path runs.
+    fn abort(&mut self, state: &State) {
+        let pc = and(&state.pc);
+        if lit_bool(&pc) == Some(false) {
+            return;
+        }
+        let after: Vec<V> = self.muts.iter().map(|slot| state.slots[*slot].clone()).collect();
+        self.outs.push(PathOut { pc, effects: state.effects.clone(), calls: state.calls.clone(), exit: Exit::Abort, after, cut: None });
+    }
+
     fn panic(&mut self, state: &mut State, kind: String, args: Vec<V>, unwind: &IrUnwind) -> Result<(), Stop> {
         let pc = and(&state.pc);
         if lit_bool(&pc) == Some(false) {
@@ -2192,6 +2199,15 @@ impl<'a, 'b> Run<'a, 'b> {
                 };
                 let most = (i64::MAX as u128) / size;
                 checks.push((app("bvugt", &[&number(0)?, &bv_lit(most, 64)]), "capacity overflow".into(), Vec::new()));
+                // [R75.2-3] The model has no allocator, and an allocation of a size that a
+                // machine can lack can fail: the process aborts (`handle_alloc_error`). So a
+                // capacity of `ALLOCATION_LIMIT` bytes or more (up to the capacity overflow) has
+                // a path that aborts and that is never exact, and no path that returns.
+                let large = app("and", &[&app("bvuge", &[&number(0)?, &bv_lit(ALLOCATION_LIMIT.div_ceil(size), 64)]), &app("bvule", &[&number(0)?, &bv_lit(most, 64)])]);
+                let mut failed = state.clone();
+                failed.pc.push(tx(large.s.clone(), false));
+                self.abort(&failed);
+                state.pc.push(not(&large));
                 V::Seq(Sq::empty(e))
             }
             "vec_push" => {
@@ -2208,7 +2224,7 @@ impl<'a, 'b> Run<'a, 'b> {
                 option(&some, sq.at(&last))?
             }
             "vec_len" | "slice_len" => V::Bv(behind(self, state, 0)?.1.n, 64),
-            "vec_is_empty" | "slice_is_empty" => V::Bool(behind(self, state, 0)?.1.is_empty()),
+            "vec_is_empty" => V::Bool(behind(self, state, 0)?.1.is_empty()),
             "vec_clear" => {
                 let (loc, sq) = behind(self, state, 0)?;
                 write = Some((loc, V::Seq(Sq::empty(sq.e))));
@@ -2268,15 +2284,6 @@ impl<'a, 'b> Run<'a, 'b> {
                 let (loc, sq) = behind(self, state, 0)?;
                 let i = number(1)?;
                 option(&sq.has(&i), with_elem(&loc, i))?
-            }
-            "slice_first" => {
-                let (loc, sq) = behind(self, state, 0)?;
-                option(&not(&sq.is_empty()), with_elem(&loc, bv_lit(0, 64)))?
-            }
-            "slice_last" => {
-                let (loc, sq) = behind(self, state, 0)?;
-                let last = app("bvsub", &[&sq.n, &one]);
-                option(&not(&sq.is_empty()), with_elem(&loc, last))?
             }
             _ => return Err(Stop(format!("the sequence operation `{model}` that the check does not model"))),
         };
@@ -2884,6 +2891,10 @@ fn cast(value: V, target: Option<&IrTy>, from_signed: bool) -> Result<V, Stop> {
         _ => Err(Stop("a cast of a value that the check does not model".into())),
     }
 }
+
+/// [R75.2-3] The smallest size in bytes of an allocation that the model does not take as a
+/// success (2^32 bytes: a machine of a reviewer can lack it).
+const ALLOCATION_LIMIT: u128 = 1 << 32;
 
 /// An intrinsic that the check models. `Ok(None)`: the check does not model it, and the call is
 /// an effect.
@@ -3579,6 +3590,9 @@ fn run_state(side: &Side, step: &Step, inline_all: bool, decls: &mut Decls, stat
 /// The text of a value in a model.
 fn value_text(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> String {
     match value {
+        // [R75.2-2] A value that the model does not fix has no number in the text: the solver
+        // gives it any number.
+        V::Bv(term, _) | V::Bool(term) | V::Seq(Sq { s: term, .. }) if !term.x => "a value".into(),
         V::Bv(term, w) => {
             let raw = model.get(&term.s).cloned().or_else(|| lit_bv(term).map(|v| format!("(_ bv{v} {w})"))).unwrap_or_else(|| "?".into());
             let bits = parse_bv(&raw);
@@ -3649,12 +3663,17 @@ fn value_text(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> S
     }
 }
 
-/// [R74.1-2] The text of a value as `{:?}` of Rust writes it: an integer, a `bool`, a `char`,
-/// `()`, a tuple, a sequence, and a struct or an enum whose `Debug` impl the compiler derived
-/// (`Name { a: 1 }`, `Name(1)`, `Variant`). `None` if the model does not give a part of the value,
-/// or a type has its own `Debug` form.
+/// The text of a value as `{:?}` of Rust writes it: an integer, a `bool`, a `char`, `()`, a
+/// tuple, and a sequence (a literal of a pattern or of an input, R75.1-1). `None` if the model
+/// does not give a part of the value, or for another type.
 fn debug_text(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> Option<String> {
+    // [R75.2-2] A term with the mark of an inexact value (the result of a call that the check
+    // does not inline, an opaque value) is a value that the model does not fix: the solver
+    // gives it any value. It has no text, so a suggested test never asserts it.
     let bits = |term: &T, w: u32| -> Option<u128> {
+        if !term.x {
+            return None;
+        }
         let raw = model.get(&term.s).cloned().or_else(|| lit_bv(term).map(|v| format!("(_ bv{v} {w})")))?;
         parse_bv(&raw)
     };
@@ -3669,6 +3688,7 @@ fn debug_text(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> O
                 _ => return None,
             }
         }
+        V::Bool(term) if !term.x => return None,
         V::Bool(term) => match model.get(&term.s).map(String::as_str) {
             Some(text @ ("true" | "false")) => text.to_string(),
             _ => lit_bool(term)?.to_string(),
@@ -3679,22 +3699,13 @@ fn debug_text(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> O
                 let parts: Vec<String> = items.iter().zip(list).map(|(item, id)| debug_text(item, ty.map(|ty| ty.at(*id)).as_ref(), model)).collect::<Option<_>>()?;
                 if parts.len() == 1 { format!("({},)", parts[0]) } else { format!("({})", parts.join(", ")) }
             }
-            IrTy::Adt { n, v, fs, g: true, e: false, .. } => {
-                let types = v.first().cloned().unwrap_or_default();
-                let names = fs.first().cloned().unwrap_or_default();
-                let parts: Vec<String> = items.iter().zip(&types).map(|(item, id)| debug_text(item, ty.map(|ty| ty.at(*id)).as_ref(), model)).collect::<Option<_>>()?;
-                fields_text(&short_type(n), &names, &parts)
-            }
             _ => return None,
         },
-        V::Enum { d, w, ds, f } => {
-            let Some(IrTy::Adt { v, vn, fs, g: true, .. }) = ty_kind else { return None };
-            let index = ds.iter().position(|value| Some(*value) == bits(d, *w))?;
-            let types = v.get(index)?;
-            let parts: Vec<String> = f.get(index)?.iter().zip(types).map(|(item, id)| debug_text(item, ty.map(|ty| ty.at(*id)).as_ref(), model)).collect::<Option<_>>()?;
-            fields_text(vn.get(index)?, fs.get(index).map(Vec::as_slice).unwrap_or_default(), &parts)
-        }
+        V::Enum { .. } => return None,
         V::Seq(Sq { s: term, e, .. }) => {
+            if !term.x {
+                return None;
+            }
             let item = match ty_kind? {
                 IrTy::Seq { e, .. } => ty.map(|ty| ty.at(*e)),
                 _ => return None,
@@ -3714,20 +3725,56 @@ fn debug_text(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> O
     })
 }
 
-/// The `Debug` text of a struct or of a variant with its fields: `Name`, `Name(1, 2)`, or
-/// `Name { a: 1, b: 2 }` (a field of a tuple struct has its index as name).
-fn fields_text(name: &str, names: &[String], parts: &[String]) -> String {
-    if parts.is_empty() {
-        return name.to_string();
+/// [R75.1-1] The Rust pattern of a value of the model for a suggested test: each part that the
+/// model fixes (an exact term), and `_` for each other part (R75.2-2). A sequence is a slice
+/// pattern only at the top of the value (a field of the type `Vec` takes no slice pattern).
+fn pattern(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>, top: bool) -> semilla_core::run::Pat {
+    use semilla_core::run::Pat;
+    let kind = ty.and_then(|ty| ty.get());
+    let path = |n: &str| n.split('<').next().unwrap_or(n).to_string();
+    let parts = |items: &[V], ids: &[u32]| -> Vec<Pat> { items.iter().zip(ids).map(|(item, id)| pattern(item, ty.map(|ty| ty.at(*id)).as_ref(), model, false)).collect() };
+    match (value, kind) {
+        (V::Bv(..) | V::Bool(_), _) => debug_text(value, ty, model).map(Pat::Lit).unwrap_or(Pat::Any),
+        (V::Tup(items), Some(IrTy::Tuple(list))) => Pat::Tuple(parts(items, list)),
+        (V::Tup(items), Some(IrTy::Adt { n, v, fs, e: false, .. })) => {
+            let types = v.first().cloned().unwrap_or_default();
+            let names = fs.first().cloned().unwrap_or_default();
+            pattern_of(path(n), &names, parts(items, &types))
+        }
+        (V::Enum { d, w, ds, f }, Some(IrTy::Adt { n, v, vn, fs, .. })) => {
+            if !d.x {
+                return Pat::Any;
+            }
+            let Some(raw) = model.get(&d.s).cloned().or_else(|| lit_bv(d).map(|v| format!("(_ bv{v} {w})"))) else { return Pat::Any };
+            let Some(index) = ds.iter().position(|value| Some(*value) == parse_bv(&raw)) else { return Pat::Any };
+            let (Some(variant), Some(fields)) = (vn.get(index), f.get(index)) else { return Pat::Any };
+            let types = v.get(index).cloned().unwrap_or_default();
+            pattern_of(format!("{}::{variant}", path(n)), fs.get(index).map(Vec::as_slice).unwrap_or_default(), parts(fields, &types))
+        }
+        (V::Seq(_), _) if top => match debug_text(value, ty, model) {
+            Some(text) => {
+                let inner = text.trim_start_matches('[').trim_end_matches(']');
+                Pat::Slice(if inner.is_empty() { Vec::new() } else { inner.split(", ").map(|item| Pat::Lit(item.to_string())).collect() })
+            }
+            None => Pat::Any,
+        },
+        _ => Pat::Any,
     }
-    if names.iter().all(|field| field.bytes().all(|b| b.is_ascii_digit())) {
-        return format!("{name}({})", parts.join(", "));
-    }
-    let pairs: Vec<String> = names.iter().zip(parts).map(|(field, part)| format!("{field}: {part}")).collect();
-    format!("{name} {{ {} }}", pairs.join(", "))
 }
 
-/// [R74.1-3] A Rust expression of a value of the model (the argument of a call of the probe),
+/// The pattern of a struct or a variant with its fields.
+fn pattern_of(path: String, names: &[String], items: Vec<semilla_core::run::Pat>) -> semilla_core::run::Pat {
+    use semilla_core::run::Pat;
+    if items.is_empty() {
+        return Pat::Unit(path);
+    }
+    if names.iter().all(|field| field.bytes().all(|b| b.is_ascii_digit())) {
+        return Pat::TupleStruct { path, items };
+    }
+    Pat::Struct { path, fields: names.iter().cloned().zip(items).collect() }
+}
+
+/// [R75.1-1] A Rust expression of a value of the model (the argument of a suggested test),
 /// or the cause why there is none. An integer has no suffix: the parameter type of the call
 /// gives its type.
 fn rust_expr(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> Result<String, String> {
@@ -3784,9 +3831,8 @@ fn type_name(ty: Option<&Ty>) -> String {
     }
 }
 
-/// [R74.1-1] The calls of a run that can confirm a difference: one call of each version with
-/// the input of the model. The probe gives each `&mut` argument a value and shows the value
-/// after the call.
+/// [R75.1-1] The calls of a suggested test of a difference: one call of each version with the
+/// input of the model, and the pattern of each outcome (design 75).
 fn run_case(decls: &Decls, slots: &[V], types: &[Option<Ty>], muts: &[usize], before: (&PathOut, &Ty), after: (&PathOut, &Ty), model: &BTreeMap<String, String>) -> semilla_core::run::RunCase {
     use semilla_core::run::{ArgMode, RunArg, RunCall, RunCase, RunExit, RunOut, RunSide};
     let mut args = Vec::new();
@@ -3806,21 +3852,19 @@ fn run_case(decls: &Decls, slots: &[V], types: &[Option<Ty>], muts: &[usize], be
     }
     let outcome = |out: &PathOut, ret: &Ty| -> RunOut {
         let exit = match &out.exit {
-            Exit::Return(value) => RunExit::Returns(debug_text(value, Some(ret), model)),
+            Exit::Return(value) => RunExit::Returns(pattern(value, Some(ret), model, true)),
             Exit::Panic { kind, msg, .. } => RunExit::Panics(msg.clone().or_else(|| decls.kinds.get(kind).cloned())),
             Exit::Abort | Exit::Cut => RunExit::Aborts,
         };
-        let muts = muts.iter().enumerate().map(|(index, slot)| out.after.get(index).and_then(|value| debug_text(value, types.get(*slot).and_then(|ty| ty.as_ref()), model))).collect();
+        let muts = muts.iter().enumerate().map(|(index, slot)| out.after.get(index).map(|value| pattern(value, types.get(*slot).and_then(|ty| ty.as_ref()), model, true)).unwrap_or(semilla_core::run::Pat::Any)).collect();
         RunOut { exit, muts }
     };
     let (old, new) = (outcome(before.0, before.1), outcome(after.0, after.1));
-    // A `&mut` reference inside an input (not an argument of the call itself): the probe does
-    // not show its value.
-    let blind = if mut_slots != muts { Some("a `&mut` reference inside an input".to_string()) } else { semilla_core::run::blind_cause(&old, &new) };
-    let calls = vec![
-        RunCall { side: RunSide::Before, name: String::new(), target: String::new(), args: args.clone(), expect: old },
-        RunCall { side: RunSide::After, name: String::new(), target: String::new(), args, expect: new },
-    ];
+    // A `&mut` reference inside an input (not an argument of the call itself): a test does not
+    // see its value.
+    let blind = (mut_slots != muts).then(|| "a `&mut` reference inside an input".to_string());
+    let call = |side, expect| RunCall { side, name: String::new(), target: String::new(), args: args.clone(), expect, file: String::new(), line: 0, value: false };
+    let calls = vec![call(RunSide::Before, old), call(RunSide::After, new)];
     RunCase { calls, blind }
 }
 
@@ -4573,8 +4617,8 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
             let before = outcome_text(x, Some(&Ty { ir: old.ir.clone(), id: old.ir.l[0] }), &values, y, &mut_names);
             let after = outcome_text(y, Some(&ret_ty), &values, x, &mut_names);
             let (before, after) = if before == after { (format!("{before} (a different effect or value behind a reference)"), after) } else { (before, after) };
-            // [R74.1-1] The calls of a run that can confirm the difference: the input as Rust
-            // expressions, and the outcome of each version that the probe can see.
+            // [R75.1-1] The calls of the suggested test of the difference: the input as Rust
+            // expressions, and the pattern of the outcome of each version.
             let run = run_case(&decls, slots, types, muts, (x, &Ty { ir: old.ir.clone(), id: old.ir.l[0] }), (y, &ret_ty), &values);
             (Verdict::Different { input, before, after, run: Some(Box::new(run)) }, inlined)
         }

@@ -41,7 +41,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f2 derived: changed expression `0` → `n` at `shop::steps/S0/init` [semantics · code different]
       affected bodies: shop::steps (with 2 other edits of this body)
-      equivalence: different alone: for n = 1 (a bounded run of at most 4 loop iterations): before returns 2, after returns 0 (confirmed by a run); the body: not decided: the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input
+      equivalence: different alone: for n = 1 (a bounded run of at most 4 loop iterations): before returns 2, after returns 0 (suggested test `semilla_test_steps_7b00da`); the body: not decided: the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input
   ◆ f3 derived: change condition `i < n` → `left > 0` at `shop::steps/S2/cond` [semantics · code different]
       affected bodies: shop::steps (with 2 other edits of this body)
       control flow: ~ branch `i < n` → `left > 0` (src/lib.rs:-4, src/lib.rs:4)
@@ -55,6 +55,20 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body
     shop::steps (src/lib.rs:1): same structure: 1 changed condition, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_steps_7b00da`: add it to `src/lib.rs`, in the module of `shop::steps` (line 1); run it: `cargo test -p shop semilla_test_steps_7b00da`; also: `cargo test -p shop --release semilla_test_steps_7b00da`
+      #[cfg(test)]
+      mod semilla_test_steps_7b00da {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 2; the new version returns 0.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let n = 1;
+              let got = crate::steps(n);
+              assert_eq!(got, 2);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

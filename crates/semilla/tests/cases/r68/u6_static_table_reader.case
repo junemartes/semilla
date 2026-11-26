@@ -80,15 +80,28 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: value of `shop::TABLE` changed: [1, 2, 3, 4, 5, 6, 7, 8] → [1, 2, 9, 4, 5, 6, 7, 8] [semantics · code different]
       affected bodies: shop::TABLE, shop::look
       through: `shop::TABLE` (1 body)
-      equivalence: different: for each input: before and after return arrays that differ at [2] 3 → 9 (1 of 8 elements differ) (not confirmed by a run: the compiler does not accept the call in the probe (E0603: static `TABLE` is private))
+      equivalence: different: for each input: before and after return arrays that differ at [2] 3 → 9 (1 of 8 elements differ) (suggested test `semilla_test_table_a24d74`)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 4 bodies
     shop::COUNT (src/lib.rs:4): same graph (the edit keeps the control flow); not decided (a cast (Transmute))
-    shop::TABLE (src/lib.rs:2): same graph (the edit keeps the control flow); different (for each input: before and after return arrays that differ at [2] 3 → 9 (1 of 8 elements differ); not confirmed by a run: the compiler does not accept the call in the probe (E0603: static `TABLE` is private))
+    shop::TABLE (src/lib.rs:2): same graph (the edit keeps the control flow); different (for each input: before and after return arrays that differ at [2] 3 → 9 (1 of 8 elements differ); suggested test `semilla_test_table_a24d74`)
     shop::count (src/lib.rs:18): same graph; reads a static whose initial value changes: `shop::COUNT` (value #23e6e3619be4eff3 → value #be3f487516aedd8b) (the check reads the static from the world)
     shop::look (src/lib.rs:6): same graph; reads a changed constant: `shop::TABLE` ([2] 3 → 9 (1 of 8 elements differ)); not decided (a deref of a value that is not a reference (a `Box`, a raw pointer): TABLE[i & 7] (src/lib.rs:-7))
     reached bodies: 1
       shop::api (src/lib.rs:10): reached through shop::look, not decided (a deref of a value that is not a reference (a `Box`, a raw pointer): TABLE[i & 7] (src/lib.rs:-7))
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_table_a24d74`: add it to `src/lib.rs`, in the module of `shop::TABLE` (line 2); run it: `cargo test -p shop semilla_test_table_a24d74`; also: `cargo test -p shop --release semilla_test_table_a24d74`
+      #[cfg(test)]
+      mod semilla_test_table_a24d74 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns [1, 2, 3, 4, 5, 6, 7, 8]; the new version returns [1, 2, 9, 4, 5, 6, 7, 8].
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let got = &crate::TABLE;
+              assert!(matches!(got[..], [1, 2, 3, 4, 5, 6, 7, 8]));
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

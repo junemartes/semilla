@@ -47,15 +47,29 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + check `overflow: b * 2` (src/lib.rs:9): ok → check `overflow: n + 1`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:9)
       control flow: + arrow entry (src/lib.rs:8) → check `overflow: b * 2` (src/lib.rs:9)
-      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: different: for b = 1: before returns 2, after returns 3 (confirmed by a run)
+      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: different: for b = 1: before returns 2, after returns 3 (suggested test `semilla_test_width_d93846`)
   ◆ f2 derived: changed path `b` → `n` at `shop::width/tail/lhs` [semantics · code different]
       affected bodies: shop::width (with 1 other edit of this body)
       control flow: ~ check `overflow: b + 1` → `overflow: n + 1` (src/lib.rs:-9, src/lib.rs:10)
       control flow: − arrow entry (src/lib.rs:-8) → check `overflow: b + 1` (src/lib.rs:-9)
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: different: for b = 1: before returns 2, after returns 3 (confirmed by a run)
+      equivalence: not decided alone: the variant with only this edit does not compile; the body: different: for b = 1: before returns 2, after returns 3 (suggested test `semilla_test_width_d93846`)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    shop::width (src/lib.rs:8): graph changes: +1 check, +1 panic, 1 changed check, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for b = 1: before returns 2, after returns 3; confirmed by a run)
+    shop::width (src/lib.rs:8): graph changes: +1 check, +1 panic, 1 changed check, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for b = 1: before returns 2, after returns 3; suggested test `semilla_test_width_d93846`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_width_d93846`: add it to `src/lib.rs`, in the module of `shop::width` (line 8); run it: `cargo test -p shop semilla_test_width_d93846`; also: `cargo test -p shop --release semilla_test_width_d93846`
+      #[cfg(test)]
+      mod semilla_test_width_d93846 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 2; the new version returns 3.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let b = 1;
+              let got = crate::width(b);
+              assert_eq!(got, 2);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

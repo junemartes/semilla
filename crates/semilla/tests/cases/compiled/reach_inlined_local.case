@@ -46,17 +46,45 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f2 derived: changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different]
       affected bodies: shop::tier
-      equivalence: different: for k = 1: before returns 4, after returns 5 (confirmed by a run)
+      equivalence: different: for k = 1: before returns 4, after returns 5 (suggested test `semilla_test_tier_02cc84`)
       reaches: 1 public function: shop::cost (semilla expand --step 0)
   ◆ f1 derived: inlined variable `t` = `tier(k)` (1 use) at `shop::cost/S0` [move · code equal]
       control flow: ~ check `overflow: n * t` → `overflow: n * tier(k)` (src/lib.rs:-11, src/lib.rs:10)
-      equivalence: different: for k = 1, n = 1: before returns 4, after returns 5 (confirmed by a run)
+      equivalence: different: for k = 1, n = 1: before returns 4, after returns 5 (suggested test `semilla_test_cost_c448e3`)
   cover: each of the 5 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::cost (src/lib.rs:9): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for k = 1, n = 1: before returns 4, after returns 5; confirmed by a run)
-    shop::tier (src/lib.rs:1): same graph (the edit keeps the control flow); different (for k = 1: before returns 4, after returns 5; confirmed by a run)
+    shop::cost (src/lib.rs:9): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for k = 1, n = 1: before returns 4, after returns 5; suggested test `semilla_test_cost_c448e3`)
+    shop::tier (src/lib.rs:1): same graph (the edit keeps the control flow); different (for k = 1: before returns 4, after returns 5; suggested test `semilla_test_tier_02cc84`)
     reached bodies: 1
-      shop::cost (src/lib.rs:9): different through shop::tier: for k = 1, n = 1: before returns 4, after returns 5 (confirmed by a run)
+      shop::cost (src/lib.rs:9): different through shop::tier: for k = 1, n = 1: before returns 4, after returns 5 (suggested test `semilla_test_cost_c448e3`)
+  suggested tests: 2 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_cost_c448e3`: add it to `src/lib.rs`, in the module of `shop::cost` (line 9); run it: `cargo test -p shop semilla_test_cost_c448e3`; also: `cargo test -p shop --release semilla_test_cost_c448e3`
+      #[cfg(test)]
+      mod semilla_test_cost_c448e3 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 4; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let k = 1;
+              let n = 1;
+              let got = crate::cost(k, n);
+              assert_eq!(got, 4);
+          }
+      }
+    `semilla_test_tier_02cc84`: add it to `src/lib.rs`, in the module of `shop::tier` (line 1); run it: `cargo test -p shop semilla_test_tier_02cc84`; also: `cargo test -p shop --release semilla_test_tier_02cc84`
+      #[cfg(test)]
+      mod semilla_test_tier_02cc84 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 4; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let k = 1;
+              let got = crate::tier(k);
+              assert_eq!(got, 4);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

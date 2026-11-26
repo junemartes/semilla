@@ -231,16 +231,16 @@ fn an_exit_of_the_standard_library_is_an_end() {
     assert!(ends.get("ends").is_some_and(|list| list.iter().any(|end| end.contains("exit"))), "{ends:?}");
 }
 
-/// The outcome of each version that the run of a difference expects (design 74).
+/// The outcome of each version that the suggested test of a difference asserts (design 75).
 fn expected(found: &Verdict) -> (semilla_core::run::RunExit, semilla_core::run::RunExit) {
     let Verdict::Different { run: Some(case), .. } = found else { panic!("no run case: {found:?}") };
     (case.calls[0].expect.exit.clone(), case.calls[1].expect.exit.clone())
 }
 
-// rule+ R74.1-2
+// rule+ R75.1-1
 #[test]
-fn the_model_gives_the_message_of_a_check_and_the_debug_text_of_a_derived_type() {
-    use semilla_core::run::RunExit;
+fn the_model_gives_the_message_of_a_check_and_the_pattern_of_a_struct_with_no_debug() {
+    use semilla_core::run::{Pat, RunExit};
     if !solver_ok() {
         return;
     }
@@ -248,22 +248,13 @@ fn the_model_gives_the_message_of_a_check_and_the_debug_text_of_a_derived_type()
     // The message of the panic of an overflow check: from the panic function of the compiler.
     let (before, after) = expected(&verdict(&builds.dev.0, &builds.dev.1, "probe::next"));
     assert_eq!(before, RunExit::Panics(Some("attempt to add with overflow".into())));
-    assert_eq!(after, RunExit::Returns(Some("0".into())));
-    // A struct with `#[derive(Debug)]`: its `Debug` text with the names of the fields.
+    assert_eq!(after, RunExit::Returns(Pat::Lit("0".into())));
+    // A struct: a pattern with the names of the fields (no `Debug` and no `PartialEq` needed).
+    let field = |name: &str, value: &str| (name.to_string(), Pat::Lit(value.into()));
     let (before, after) = expected(&verdict(&builds.dev.0, &builds.dev.1, "probe::shown"));
-    assert_eq!((before, after), (RunExit::Returns(Some("Shown { a: 0 }".into())), RunExit::Returns(Some("Shown { a: 1 }".into()))));
-}
-
-// rule- R74.1-2
-#[test]
-fn a_type_with_no_derived_debug_has_no_debug_text_in_the_model() {
-    use semilla_core::run::RunExit;
-    if !solver_ok() {
-        return;
-    }
-    let builds = builds();
-    let found = verdict(&builds.dev.0, &builds.dev.1, "probe::pad");
-    assert_eq!(expected(&found), (RunExit::Returns(None), RunExit::Returns(None)));
-    let Verdict::Different { run: Some(case), .. } = &found else { panic!("{found:?}") };
-    assert!(case.blind.as_deref().is_some_and(|cause| cause.contains("does not see")), "{case:?}");
+    assert_eq!((before, after), (RunExit::Returns(Pat::Struct { path: "probe::Shown".into(), fields: vec![field("a", "0")] }), RunExit::Returns(Pat::Struct { path: "probe::Shown".into(), fields: vec![field("a", "1")] })));
+    let (before, after) = expected(&verdict(&builds.dev.0, &builds.dev.1, "probe::pad"));
+    let RunExit::Returns(Pat::Struct { fields: old, .. }) = before else { panic!("{before:?}") };
+    let RunExit::Returns(Pat::Struct { fields: new, .. }) = after else { panic!("{after:?}") };
+    assert_eq!((old[1].clone(), new[1].clone()), (field("b", "0"), field("b", "1")));
 }
