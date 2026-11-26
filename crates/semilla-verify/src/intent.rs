@@ -9,8 +9,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use semilla_core::{IntentClaim, IntentFile, IntentResult};
+use semilla_core::{BodyCover, CoverState, IntentClaim, IntentFile, IntentResult};
 use semilla_intent::{ClaimKind, Item};
+
+use crate::equiv::Verdict;
 
 use crate::{BodyOracle, StepInput, StepOutcome};
 
@@ -37,6 +39,12 @@ pub struct Answer {
     pub reads: Vec<String>,
     /// The reference errors and the type errors: `FILE:LINE:COLUMN: message`.
     pub errors: Vec<String>,
+    /// [R77.1-1] The dependence set of a proved claim: each body whose result the proof uses,
+    /// `before::NAME` or `after::NAME` (the record names). Empty for each other result.
+    pub depends: Vec<String>,
+    /// The record names of the item of the claim in each version that has it: `before::NAME`,
+    /// `after::NAME` (the first target, after the rename map and the loose path).
+    pub items: Vec<String>,
 }
 
 /// [R69.5-1] The result of a claim with no answer of the oracle. The oracle answered the other
@@ -160,6 +168,123 @@ pub fn queries(files: &[semilla_intent::File], dry: bool) -> Vec<Query> {
     out
 }
 
+/// [R77.1-1] The check of the claims of a step, before the gap list: the oracle answers each
+/// claim, and the coverage of the changed bodies gives the items that proved claims explain, so
+/// they leave the gap list (R77.1-3).
+pub(crate) fn check(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut StepOutcome) {
+    let files = &input.step.agent.intent;
+    if files.is_empty() {
+        return;
+    }
+    let Ok(parsed) = parse_files(files) else { return };
+    let renames: BTreeMap<String, String> = outcome.renames.items.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
+    let asked = queries(&parsed, false);
+    let answers = if asked.is_empty() { None } else { bodies.intent(input.step, &renames, &asked) };
+    let cover = coverage(input, outcome, &asked, answers.as_deref());
+    let index = crate::checks::BodyIndex::new(&outcome.bodies, input.after, input.before);
+    outcome.explained = cover.iter().filter(|body| body.state == CoverState::Claim).filter_map(|body| index.item_of_name(&body.name)).collect();
+    outcome.report.coverage = cover;
+    outcome.intent_answers = Some((asked, answers));
+}
+
+/// The final result of a claim from the answer of the oracle: an error of a reference or a type
+/// is an error, and an `except` name that the check does not know makes a proof or a false
+/// result "claimed" (R67.3-8).
+fn final_result(claim: &semilla_intent::Claim, answer: Option<&Answer>) -> Option<IntentResult> {
+    let answer = answer?;
+    if !answer.errors.is_empty() {
+        return Some(IntentResult::Error);
+    }
+    let result = answer.result.unwrap_or(IntentResult::Claimed);
+    let unknown = claim.options.except.iter().any(|name| !semilla_intent::prelude::EXCEPT.contains(&name.as_str()));
+    Some(if unknown && matches!(result, IntentResult::Proved | IntentResult::False) { IntentResult::Claimed } else { result })
+}
+
+/// The name of a body of the section "control flow" for a record name of a version
+/// (`before::NAME`, `after::NAME`): an old name goes through the rename map of the step.
+fn flow_name(text: &str, renames: &BTreeMap<String, String>, names: &std::collections::BTreeSet<&str>) -> String {
+    if let Some(name) = text.strip_prefix("after::") {
+        return name.to_string();
+    }
+    let name = text.strip_prefix("before::").unwrap_or(text);
+    if names.contains(name) && !renames.contains_key(name) {
+        return name.to_string();
+    }
+    renames.get(name).cloned().unwrap_or_else(|| name.to_string())
+}
+
+/// [R77.1-2] The coverage of the changed bodies of a step (design 77): the state of each body of
+/// the section "control flow". A body is explained only by a proved claim that depends on it
+/// (R77.1-1) or by an equivalence proof of Semilla; a disagreement explains nothing (R77.1-4).
+fn coverage(input: &StepInput, outcome: &StepOutcome, asked: &[Query], answers: Option<&[Answer]>) -> Vec<BodyCover> {
+    let Some(flow) = &outcome.report.flow else { return Vec::new() };
+    let renames: BTreeMap<String, String> = outcome.renames.items.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
+    let names: std::collections::BTreeSet<&str> = flow.bodies.iter().map(|body| body.name.as_str()).collect();
+    // The proved claims: the id, the kind, the bodies that each one explains, and its item.
+    struct Proved<'a> {
+        id: &'a str,
+        kind: ClaimKind,
+        explains: Vec<String>,
+        items: Vec<String>,
+        /// The claim ignores an observation (`except = […]`): it states less than an equal
+        /// behavior, so a difference of Semilla does not contradict it.
+        except: bool,
+    }
+    let mut proved: Vec<Proved> = Vec::new();
+    for (at, query) in asked.iter().enumerate() {
+        let answer = answers.and_then(|answers| answers.get(at));
+        if final_result(&query.claim, answer) != Some(IntentResult::Proved) {
+            continue;
+        }
+        let Some(answer) = answer else { continue };
+        let mut explains: Vec<String> = answer.depends.iter().map(|name| flow_name(name, &renames, &names)).filter(|name| names.contains(name.as_str())).collect();
+        explains.sort();
+        explains.dedup();
+        let items: Vec<String> = answer.items.iter().map(|name| flow_name(name, &renames, &names)).collect();
+        proved.push(Proved { id: &query.id, kind: query.claim.kind, explains, items, except: !query.claim.options.except.is_empty() });
+    }
+    let mut out = Vec::new();
+    for body in &flow.bodies {
+        let verdicts = outcome.verdicts.get(&body.name).cloned().unwrap_or_default();
+        let equivalent = !verdicts.is_empty() && verdicts.iter().all(|(_, verdict)| matches!(verdict, Verdict::Equivalent(_)));
+        let different = verdicts.iter().any(|(_, verdict)| matches!(verdict, Verdict::Different { .. }));
+        let semilla = if verdicts.is_empty() {
+            if body.line.starts_with("graph added") {
+                "an added body: no compare of two versions".to_string()
+            } else if body.line.starts_with("graph removed") {
+                "a removed body: no compare of two versions".to_string()
+            } else {
+                "no result of the equivalence check".to_string()
+            }
+        } else {
+            crate::equiv::joined(&verdicts, false, false)
+        };
+        let on_item = |kinds: &[ClaimKind]| -> Vec<&str> { proved.iter().filter(|claim| kinds.contains(&claim.kind) && claim.items.contains(&body.name) && !(claim.kind == ClaimKind::Same && claim.except)).map(|claim| claim.id).collect() };
+        // [R77.1-4] The two results cannot both be true: a proved claim that states a change of
+        // the body and an equivalence proof of Semilla, or a proved `same` claim on the body with
+        // no claim of a change and a difference of Semilla.
+        let mut disagree: Vec<&str> = Vec::new();
+        if equivalent {
+            disagree = on_item(&[ClaimKind::Change, ClaimKind::Different]);
+        } else if different && on_item(&[ClaimKind::Change]).is_empty() {
+            disagree = on_item(&[ClaimKind::Same]);
+        }
+        let explaining: Vec<String> = proved.iter().filter(|claim| claim.explains.contains(&body.name)).map(|claim| claim.id.to_string()).collect();
+        let (state, claims, detail) = if !disagree.is_empty() {
+            (CoverState::Disagree, disagree.iter().map(|id| id.to_string()).collect(), format!("Semilla: {semilla}; claim {}: proved", disagree.join(", ")))
+        } else if !explaining.is_empty() {
+            (CoverState::Claim, explaining, String::new())
+        } else if equivalent {
+            (CoverState::Equivalent, Vec::new(), String::new())
+        } else {
+            (CoverState::NotExplained, Vec::new(), semilla)
+        };
+        out.push(BodyCover { name: body.name.clone(), place: body.place.clone(), state, claims, detail });
+    }
+    let _ = input;
+    out
+}
+
 /// The claim lines of the step (design 67, part D).
 pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut StepOutcome) {
     let files = &input.step.agent.intent;
@@ -172,15 +297,21 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
             outcome.report.intent_claims = errors
                 .iter()
                 .enumerate()
-                .map(|(index, error)| IntentClaim { id: format!("e{}", index + 1), kind: "file".into(), text: error.place.file.clone(), place: format!("{}:{}", error.place.file, error.place.line), result: IntentResult::Error, detail: error.to_string(), configs: Vec::new(), options: Vec::new(), reads: Vec::new(), stale: String::new() })
+                .map(|(index, error)| IntentClaim { id: format!("e{}", index + 1), kind: "file".into(), text: error.place.file.clone(), place: format!("{}:{}", error.place.file, error.place.line), result: IntentResult::Error, detail: error.to_string(), configs: Vec::new(), options: Vec::new(), reads: Vec::new(), stale: String::new(), explains: Vec::new() })
                 .collect();
             return;
         }
     };
     let renames: BTreeMap<String, String> = outcome.renames.items.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
     help_notes(input, &renames, outcome);
-    let asked = queries(&parsed, false);
-    let answers = if asked.is_empty() { None } else { bodies.intent(input.step, &renames, &asked) };
+    let (asked, answers) = match outcome.intent_answers.take() {
+        Some(found) => found,
+        None => {
+            let asked = queries(&parsed, false);
+            let answers = if asked.is_empty() { None } else { bodies.intent(input.step, &renames, &asked) };
+            (asked, answers)
+        }
+    };
     // The stored reads of the last check: `ID before::PATH HASH`.
     let stored: BTreeMap<&str, Vec<&str>> = input.step.agent.intent_reads.iter().filter_map(|line| line.split_once(' ')).fold(BTreeMap::new(), |mut map, (id, read)| {
         map.entry(id).or_insert_with(Vec::new).push(read);
@@ -192,7 +323,7 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
         for (item, id) in file.items.iter().zip(ids) {
             let id = id.clone().unwrap_or_default();
             let mut line = |kind: &str, text: String, place: &semilla_intent::Place, result: IntentResult, detail: String, options: Vec<String>| {
-                claims.push(IntentClaim { id: id.clone(), kind: kind.into(), text, place: format!("{}:{}", place.file, place.line), result, detail, configs: Vec::new(), options, reads: Vec::new(), stale: String::new() });
+                claims.push(IntentClaim { id: id.clone(), kind: kind.into(), text, place: format!("{}:{}", place.file, place.line), result, detail, configs: Vec::new(), options, reads: Vec::new(), stale: String::new(), explains: Vec::new() });
             };
             match item {
                 Item::Intent(text, place) => line("intent", text.clone(), place, IntentResult::Shown, String::new(), Vec::new()),
@@ -203,8 +334,10 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
                         ClaimKind::Rename | ClaimKind::Moved | ClaimKind::Rewrite => {
                             let Some(text) = same_text(claim) else { continue };
                             let fact = outcome.report.agent_facts.iter().find(|fact| fact.kind == "same" && fact.options.iter().any(|option| *option == text));
+                            // [R77.4-1] A form of `--same` is a hint for the pairing: its check holds or
+                            // fails as before, and it explains no body.
                             let (result, detail) = match fact {
-                                Some(fact) if fact.holds => (IntentResult::Proved, format!("the check of `--same '{text}'` holds (fact {} of the agent: {})", fact.id, fact.result)),
+                                Some(fact) if fact.holds => (IntentResult::Hint, format!("the check of `--same '{text}'` holds (fact {} of the agent: {}); a hint pairs the old and the new code and explains no body: a claim states the behavior", fact.id, fact.result)),
                                 Some(fact) => (IntentResult::False, format!("the check of `--same '{text}'` fails (fact {} of the agent: {})", fact.id, fact.result)),
                                 None => (IntentResult::Claimed, format!("no result of `--same '{text}'`")),
                             };
@@ -220,6 +353,8 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
                             // [R67.3-8] An `except` name that the check does not know makes the
                             // claim "claimed": the check cannot ignore that observation.
                             let unknown: Vec<&String> = claim.options.except.iter().filter(|name| !semilla_intent::prelude::EXCEPT.contains(&name.as_str())).collect();
+                            // [R77.1-1] The changed bodies that the proof explains (the coverage).
+                            let explains: Vec<String> = outcome.report.coverage.iter().filter(|body| body.state == CoverState::Claim && body.claims.contains(&id)).map(|body| body.name.clone()).collect();
                             let (result, detail, configs, reads, errors) = match found {
                                 Some(answer) => (answer.result.unwrap_or(IntentResult::Claimed), answer.detail, answer.configs, answer.reads, answer.errors),
                                 None => {
@@ -261,6 +396,7 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
                                 options,
                                 reads,
                                 stale: if changed.is_empty() { String::new() } else { format!("the body of {} changed", changed.join(", ")) },
+                                explains,
                             });
                         }
                     }
@@ -278,31 +414,53 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
 /// intent file keeps its output.
 fn help_notes(input: &StepInput, renames: &BTreeMap<String, String>, outcome: &mut StepOutcome) {
     let Some(flow) = &outcome.report.flow else { return };
+    let index = crate::checks::BodyIndex::new(&outcome.bodies, input.after, input.before);
+    // [R77.3-4] The path of a type of the crate by its name, for the template: the one struct,
+    // enum, or type alias of the old version with that name.
+    let type_path = |name: &str| -> Option<String> {
+        let found: Vec<&String> = input.before.items.iter().filter(|(path, item)| matches!(item.kind, semilla_syntax::ItemKind::Struct | semilla_syntax::ItemKind::Enum | semilla_syntax::ItemKind::Type) && path.rsplit("::").next() == Some(name)).map(|(path, _)| path).collect();
+        (found.len() == 1).then(|| found[0].clone())
+    };
     let mut notes = Vec::new();
     for body in &flow.bodies {
         let line = &body.line;
-        let reverse = renames.iter().find(|(_, new)| **new == body.name).map(|(old, _)| old.clone()).unwrap_or_else(|| body.name.clone());
+        // [R77.3-4] The causes come from the results of the body (each configuration), not from
+        // the text of its line; the item comes from the name of the body (the compiler name).
+        let causes: Vec<String> = outcome.verdicts.get(&body.name).into_iter().flatten().filter_map(|(_, verdict)| match verdict {
+            Verdict::NotDecided(cause) => Some(cause.clone()),
+            _ => None,
+        }).collect();
+        let has = |text: &str| causes.iter().any(|cause| cause.starts_with(text)) || line.contains(&format!("not decided ({text})"));
+        let item = index.item_of_name(&body.name).unwrap_or_else(|| body.name.clone());
+        let reverse = renames.iter().find(|(_, new)| **new == item).map(|(old, _)| old.clone()).unwrap_or_else(|| item.clone());
         let signature = |workspace: &semilla_syntax::Workspace, path: &str| workspace.items.get(path).map(|item| item.signature.split_whitespace().collect::<Vec<_>>().join(" "));
-        if line.contains("not decided (the parameters change)") || line.contains("not decided (the return type changes)") {
-            let (Some(old), Some(new)) = (signature(input.before, &reverse), signature(input.after, &body.name)) else { continue };
-            let cause = if line.contains("the parameters change") { "the parameters change" } else { "the return type changes" };
+        if has("the parameters change") || has("the return type changes") {
+            let cause = if has("the parameters change") { "the parameters change" } else { "the return type changes" };
+            let (Some(old), Some(new)) = (signature(input.before, &reverse), signature(input.after, &item)) else {
+                notes.push(format!("intent help for `{}`: the equivalence check cannot compare the two versions ({cause}); Semilla has no signature of the item `{item}` in the two versions, so it gives no template", body.name));
+                continue;
+            };
             // [R69.5-3] The note names the part that changes. Two equal signature texts: a type
             // of the signature (or the type of `self`) changes its definition.
             let change = if old == new {
-                let types = changed_types(input, &reverse, &body.name, &new);
+                let types = changed_types(input, &reverse, &item, &new);
                 if types.is_empty() { format!("`{new}` (the same text; a type that it names changes)") } else { format!("`{new}`: {}", types.join("; ")) }
             } else {
                 format!("`{old}` → `{new}`")
             };
             notes.push(format!("intent help for `{}`: the equivalence check cannot compare the two versions ({cause}): {change}. A property claim relates them", body.name));
             // [R69.5-3] The result is "not decided", so the help is neutral: a template for each
-            // case, each on its own line.
-            if let Some(template) = semilla_intent::parse::same_template(&body.name, &old, &new) {
-                let change_form = template.replacen("#[same(", "#[change(", 1).replacen(")] fn", ", reason = \"…\")] fn", 1);
-                notes.push(format!("intent help for `{}`: if the behavior does not change: `{template}`", body.name));
-                notes.push(format!("intent help for `{}`: if it changes: `{change_form}` (a body with the new behavior)", body.name));
+            // case, each on its own line. [R77.3-4] Each template is a complete claim that
+            // `semilla intent check` accepts.
+            match semilla_intent::parse::same_template(&item, &old, &new, &type_path) {
+                Ok(template) => {
+                    let change_form = template.replacen("#[same(", "#[change(", 1).replacen(")] fn", ", reason = \"…\")] fn", 1);
+                    notes.push(format!("intent help for `{}`: if the behavior does not change: `{template}`", body.name));
+                    notes.push(format!("intent help for `{}`: if it changes: `{change_form}` (a body with the new behavior)", body.name));
+                }
+                Err(cause) => notes.push(format!("intent help for `{}`: no template: {cause}", body.name)),
             }
-        } else if line.contains("not decided (a loop") || line.contains("has no form") || line.contains("no form of this body") {
+        } else if has("a loop") || causes.iter().any(|cause| cause.contains("has no form") || cause.contains("no form of this body")) || line.contains("not decided (a loop") || line.contains("has no form") || line.contains("no form of this body") {
             notes.push(format!("intent help for `{}`: no claim of this batch can close this cause (a loop needs the loop relations of batch 10r2; a body with no MIR needs `#[assume]` of batch 10r3)", body.name));
         }
     }
@@ -361,7 +519,10 @@ pub fn lines(claims: &[IntentClaim]) -> Vec<String> {
     if claims.is_empty() {
         return Vec::new();
     }
-    let mut lines = vec![format!("  intent ({} claim(s); a claim is a proof only if it is proved):", claims.iter().filter(|claim| claim.kind != "intent").count())];
+    // [R77.4-1] A hint is not a claim: the count has the claims only.
+    let hints = claims.iter().filter(|claim| is_hint(&claim.kind)).count();
+    let hint_text = if hints == 0 { String::new() } else { format!(", {hints} hint(s)") };
+    let mut lines = vec![format!("  intent ({} claim(s){hint_text}; a claim is a proof only if it is proved):", claims.iter().filter(|claim| claim.kind != "intent" && !is_hint(&claim.kind)).count())];
     for claim in claims {
         lines.push(format!("  {} {}", claim.result.mark(), claim.line()));
         for config in &claim.configs {
@@ -372,6 +533,60 @@ pub fn lines(claims: &[IntentClaim]) -> Vec<String> {
         }
     }
     lines
+}
+
+/// [R77.1-2] The lines of the section "semantic changes" of a step with an intent file (design
+/// 77): the codified pull request. The `intent!` texts, each proved `change` and `different`
+/// claim (what changes), each proved `same` claim (what stays the same), each false claim with
+/// its input, and the coverage of the changed bodies. With `limit`, the body lines show the
+/// first lines (a disagreement first) and a count.
+pub fn semantic_lines(step: &semilla_core::StepReport, limit: Option<usize>) -> Vec<String> {
+    let claims = &step.intent_claims;
+    if claims.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec!["  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):".to_string()];
+    for claim in claims.iter().filter(|claim| claim.kind == "intent") {
+        lines.push(format!("    intent: {}", semilla_core::text::quoted(&claim.text)));
+    }
+    let explains = |claim: &IntentClaim| if claim.explains.is_empty() { " (explains no changed body)".to_string() } else { format!(" (explains {})", claim.explains.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ")) };
+    for claim in claims.iter().filter(|claim| claim.result == IntentResult::Proved && matches!(claim.kind.as_str(), "change" | "different")) {
+        lines.push(format!("    ✓ changes: {} `{}`{}", claim.id, claim.text, explains(claim)));
+    }
+    for claim in claims.iter().filter(|claim| claim.result == IntentResult::Proved && claim.kind == "same") {
+        lines.push(format!("    ✓ stays the same: {} `{}`{}", claim.id, claim.text, explains(claim)));
+    }
+    for claim in claims.iter().filter(|claim| claim.result == IntentResult::False) {
+        lines.push(format!("    ✗ false: {} `{}`: {}", claim.id, claim.text, claim.detail));
+    }
+    if step.coverage.is_empty() {
+        let cause = if step.flow.is_some() { "no changed body" } else { "the coverage needs `--compiled` (the default mode has no compiler data)" };
+        lines.push(format!("    changed bodies: {cause}"));
+        return lines;
+    }
+    lines.push(format!("    {}", semilla_core::report::coverage_line(&step.coverage)));
+    let rank = |state: CoverState| match state {
+        CoverState::Disagree => 0,
+        CoverState::NotExplained => 1,
+        CoverState::Claim => 2,
+        CoverState::Equivalent => 3,
+    };
+    let mut bodies: Vec<&BodyCover> = step.coverage.iter().collect();
+    bodies.sort_by_key(|body| rank(body.state));
+    let shown = limit.map(|most| most.max(bodies.iter().filter(|body| body.state == CoverState::Disagree).count())).unwrap_or(bodies.len());
+    for body in bodies.iter().take(shown) {
+        let mark = if body.state == CoverState::Disagree { "✗ " } else { "" };
+        lines.push(format!("      {mark}{}", body.line()));
+    }
+    if bodies.len() > shown {
+        lines.push(format!("      … {} more (semilla status --verbose)", bodies.len() - shown));
+    }
+    lines
+}
+
+/// [R77.4-1] True for the kind of a hint of an intent file (a form of `--same`).
+pub fn is_hint(kind: &str) -> bool {
+    [ClaimKind::Rename, ClaimKind::Moved, ClaimKind::Rewrite].iter().any(|hint| hint.name() == kind)
 }
 
 /// The help for a claim result that an agent can fix.

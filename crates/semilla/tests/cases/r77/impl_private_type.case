@@ -1,0 +1,42 @@
+note: batch 13a, test case "the public-API note on trait impls of a private type": a different crate can use a trait impl only if it can use the trait and the self type, so the impl for the private `Inner` has no note, and the impl for the public `Outer` keeps it
+rule+: R77.3-7
+rule-: R77.3-7
+must_match: trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` \[added\]
+must_match: trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` \(the public API can change: a different crate can use the item\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+struct Inner(u32);
+pub struct Outer(pub u32);
+pub fn make() -> u32 { Inner(1).0 + Outer(2).0 }
+=== new src/lib.rs
+struct Inner(u32);
+pub struct Outer(pub u32);
+pub fn make() -> u32 { Inner(1).0 + Outer(2).0 }
+impl std::fmt::Display for Inner {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) }
+}
+impl std::fmt::Display for Outer {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added]
+  ◆ f2 derived: trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added]
+  cover: each of the 6 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
+  names from the text: the build check did not run, so no build made the expansion records
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added]
+    lines: src/lib.rs:4-6
+◆ f2 derived: trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added]
+    lines: src/lib.rs:7-9

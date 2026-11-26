@@ -1,0 +1,69 @@
+note: batch 13a: a step with 5 single edits in one body has 10 variants (2 configurations); at most 8 build, in the order of R66.11-3 (each fact in the first configuration first), so 2 facts are not checked alone in `release`; a count of builds, the same in each run
+rule+: R77.2-2
+option: --compiled
+must_match: not checked alone in release \(the budget of the step\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn f(x: u32) -> u32 {
+    let a = x.wrapping_add(1);
+    let b = a.wrapping_mul(2);
+    let c = b.wrapping_add(3);
+    let d = c.wrapping_mul(4);
+    d.wrapping_add(5)
+}
+=== new src/lib.rs
+pub fn f(x: u32) -> u32 {
+    let a = x.wrapping_add(2);
+    let b = a.wrapping_mul(3);
+    let c = b.wrapping_add(4);
+    let d = c.wrapping_mul(5);
+    d.wrapping_add(6)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 5 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 5 places: 5 different edits (f1, f2, f3, f4, f5)
+      in: shop::f
+      lines: src/lib.rs:2-6, src/lib.rs:-2-6
+      to state it: --change 'shop::f=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::f=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `1` → `2` at `shop::f/S0/init/args[0]` [semantics · code different]
+      affected bodies: shop::f (with 4 other edits of this body)
+      equivalence: different alone: for x = 0: before returns 25, after returns 33 (confirmed by a run); the body: different: for x = 0: before returns 25, after returns 56 (confirmed by a run)
+  ◆ f2 derived: changed literal `2` → `3` at `shop::f/S1/init/args[0]` [semantics · code different]
+      affected bodies: shop::f (with 4 other edits of this body)
+      equivalence: different alone: for x = 0: before returns 25, after returns 29 (confirmed by a run); the body: different: for x = 0: before returns 25, after returns 56 (confirmed by a run) (the same line for f3)
+  ◆ f3 derived: changed literal `3` → `4` at `shop::f/S2/init/args[0]` [semantics · code different]
+      affected bodies: shop::f (with 4 other edits of this body)
+      equivalence: the same line as f2
+  ◆ f4 derived: changed literal `4` → `5` at `shop::f/S3/init/args[0]` [semantics · code different]
+      affected bodies: shop::f (with 4 other edits of this body)
+      equivalence: different alone in dev: for x = 0: before returns 25, after returns 30 (confirmed by a run); not checked alone in release (the budget of the step); the body: different: for x = 0: before returns 25, after returns 56 (confirmed by a run)
+  ◆ f5 derived: changed literal `5` → `6` at `shop::f/tail/args[0]` [semantics · code different]
+      affected bodies: shop::f (with 4 other edits of this body)
+      equivalence: different alone in dev: for x = 0: before returns 25, after returns 26 (confirmed by a run); not checked alone in release (the budget of the step); the body: different: for x = 0: before returns 25, after returns 56 (confirmed by a run)
+  cover: each of the 10 changed line(s) is in a fact
+  control flow: 1 body
+    shop::f (src/lib.rs:1): same graph (the edit keeps the control flow); different (for x = 0: before returns 25, after returns 56; confirmed by a run)
+    the equivalence check stopped at its budget (200000000 solver steps, 8 variant builds): 2 facts not checked alone; semilla expand --step 0
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `1` → `2` at `shop::f/S0/init/args[0]` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f2 derived: changed literal `2` → `3` at `shop::f/S1/init/args[0]` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-3
+◆ f3 derived: changed literal `3` → `4` at `shop::f/S2/init/args[0]` [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:-4
+◆ f4 derived: changed literal `4` → `5` at `shop::f/S3/init/args[0]` [semantics · code different]
+    lines: src/lib.rs:5, src/lib.rs:-5
+◆ f5 derived: changed literal `5` → `6` at `shop::f/tail/args[0]` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6

@@ -6584,6 +6584,8 @@ fn a_change_reaches_the_callers_of_its_body_in_each_view() {
 /// step gets its results and no line of the budget.
 // rule+ R61.14-5 R61.14-6
 // rule- R61.14-5 R61.14-6
+// rule+ R77.2-2
+// rule- R77.2-2
 #[test]
 fn the_budget_of_the_equivalence_check_stops_each_check_with_one_line_for_the_step() {
     let dir = setup();
@@ -6595,7 +6597,7 @@ fn the_budget_of_the_equivalence_check_stops_each_check_with_one_line_for_the_st
     let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_BUDGET", "0")]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("      equivalence: not checked (the budget of the step)\n"), "{out}");
-    assert!(out.contains("  the equivalence check stopped after 0 s: 2 bodies not checked; semilla expand --step 0\n"), "{out}");
+    assert!(out.contains("  the equivalence check stopped at its budget (0 solver steps, 8 variant builds): 2 bodies not checked; semilla expand --step 0\n"), "{out}");
     assert!(!out.contains("equivalence: different") && !out.contains("not decided (the budget"), "{out}");
     run(repo, &["undo"], 0);
     let out = run(repo, &["step", "probe"], 0);
@@ -6624,14 +6626,16 @@ fn a_check_by_equal_mir_keeps_its_proof_past_the_budget() {
     let line = |out: &str, name: &str| out.lines().find(|line| line.trim_start().starts_with(name) && line.contains("(crates/shop-core/src/lib.rs:")).unwrap_or_default().to_string();
     assert!(line(&out, "shop_core::total ").ends_with("equivalent (proved by equal MIR)"), "{out}");
     assert!(line(&out, "shop_core::tier ").ends_with("not checked (the budget of the step)"), "{out}");
-    assert!(out.contains("  the equivalence check stopped after 0 s: 1 body not checked; semilla expand --step 0\n"), "{out}");
+    assert!(out.contains("  the equivalence check stopped at its budget (0 solver steps, 8 variant builds): 1 body not checked; semilla expand --step 0\n"), "{out}");
     run(repo, &["undo"], 0);
     // One body with two edits: a rename of a local and a changed literal.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("let sum", "let all").replace("sum.wrapping", "all.wrapping").replace("wrapping_add(1)", "wrapping_add(2)"));
+    // R77.2-2: the jobs have one order, so past the query budget the body check of the second
+    // configuration is not checked in each run (before: a race of the threads decided it).
     let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_QUERIES", "0")]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("      equivalence: equivalent alone (proved by equal MIR); the body: different: for n = "), "{out}");
-    assert!(out.contains("      equivalence: not checked alone (the budget of the step); the body: different: for n = "), "{out}");
+    assert!(out.contains("      equivalence: equivalent alone (proved by equal MIR); the body: different in dev: for n = "), "{out}");
+    assert!(out.contains("      equivalence: not checked alone (the budget of the step); the body: different in dev: for n = "), "{out}");
 }
 
 /// E2 of batch 10nq-fix2: a body check that the solver cannot finish (the identity of a
@@ -6651,9 +6655,10 @@ fn a_slow_body_check_does_not_take_the_time_of_the_variant_builds() {
     commit_all(repo, "split");
     let edited = base.replace("(a / d).wrapping_mul(d).wrapping_add(a % d)", "a").replace("let sum", "let all").replace("sum.wrapping", "all.wrapping").replace("wrapping_add(1)", "wrapping_add(2)");
     write(repo, "crates/shop-core/src/lib.rs", &edited);
-    // A budget of 4 s: the check of `split` runs to its end (a query of 5 s), past the budget.
+    // The normal budget (R77.2-2): the check of `split` reaches the step limit of its queries and
+    // its budget in solver steps; the variant builds run next to it.
     let started = std::time::Instant::now();
-    let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_BUDGET", "4")]);
+    let (code, out) = run_env(repo, &["step", "probe"], &[]);
     assert_eq!(code, 0, "{out}");
     let split = out.lines().find(|line| line.trim_start().starts_with("shop_core::split (")).unwrap_or_default();
     assert!(split.contains("not decided") || split.contains("not checked"), "{out}");
@@ -6662,11 +6667,12 @@ fn a_slow_body_check_does_not_take_the_time_of_the_variant_builds() {
     assert!(out.contains("      equivalence: equivalent alone (proved by equal MIR); the body: different: for n = "), "{out}");
     assert!(started.elapsed() < std::time::Duration::from_secs(120), "{:?}", started.elapsed());
     run(repo, &["undo"], 0);
-    // The negative case: a budget of 0 s starts no build (R61.14-5): each single edit that needs
-    // a build is not checked.
+    // The negative case: a budget of 0 solver steps (R77.2-2: a build is not a solver step, so
+    // each variant builds): the proof by equal MIR of the rename alone stays (R66.10-5), and each
+    // single edit whose check needs the solver is not checked.
     let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_BUDGET", "0")]);
     assert_eq!(code, 0, "{out}");
-    assert!(!out.contains("equivalent alone (proved by equal MIR)") && out.contains("not checked alone (the budget of the step)"), "{out}");
+    assert!(out.contains("equivalent alone (proved by equal MIR)") && out.contains("not checked alone (the budget of the step)"), "{out}");
 }
 
 /// A proc macro of the crate `depot` (E1 of batch 10nq-fix2) whose output has an `if` with an

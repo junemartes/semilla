@@ -547,9 +547,32 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             note: None,
         });
     }
+    // [R77.3-5] A body with no edit whose only changed inputs are changed definitions that it
+    // names (the symbol links of design 44: a changed field type, a changed type definition), with
+    // no changed expansion at the body and no build input: the change of each element with no
+    // owner comes from those definitions (the dependence rule of R73.2-1), so the facts of the
+    // definitions are the cause, and the fact has no spotlight.
+    let expanded_at = |name: &str| {
+        let inside = |link: &crate::expand::Link| {
+            [input.before, input.after].iter().enumerate().any(|(side, ws)| ws.items.get(name.split("::{").next().unwrap_or(name)).is_some_and(|item| link.ranges.iter().any(|(at, file, start, end)| *at == side && *file == item.file && *start <= item.line_start && item.line_end <= *end)))
+        };
+        input.expansions.iter().any(|link| inside(link) || link.items.iter().any(|item| name == item || name.starts_with(&format!("{item}::"))))
+    };
     for (krate, bodies) in no_edit {
         if bodies.len() <= CRATE_BODIES {
             for (name, nodes) in &bodies {
+                let causes: Vec<String> = through_of.iter().filter(|(_, symbols)| symbols.values().any(|linked| linked.contains(name))).filter_map(|(fact, _)| report.facts.get(*fact).map(|fact| fact.id.clone())).collect();
+                if !causes.is_empty() && !outside && !expanded_at(name) {
+                    body_fact(input, report, name, nodes, false);
+                    let text = format!("the cause: a changed definition that the body uses ({}); the step changes no other input of the body", causes.join(", "));
+                    if let Some(fact) = report.facts.last_mut() {
+                        fact.note = Some(match fact.note.take() {
+                            Some(note) => format!("{note}; {text}"),
+                            None => text,
+                        });
+                    }
+                    continue;
+                }
                 body_fact(input, report, name, nodes, true);
             }
             continue;

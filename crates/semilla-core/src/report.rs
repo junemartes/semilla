@@ -192,6 +192,10 @@ pub struct StepReport {
     /// The claims of the intent files of the step with their results (design 67, part D).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub intent_claims: Vec<IntentClaim>,
+    /// [R77.1-2] The coverage of the changed bodies of a step with an intent file (design 77):
+    /// the state of each changed, added, and removed body. Empty for a step with no intent file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub coverage: Vec<BodyCover>,
     /// The gap list (design 54.4): the edits of existing code that can change the behavior and
     /// that no agent fact states. The list is never a cause of a reject.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -689,6 +693,10 @@ pub enum IntentResult {
     Error,
     /// The check runs in the background (phase 2).
     Pending,
+    /// [R77.4-1] A hint for the pairing of the old and the new code (`#[rename]`, `#[moved]`,
+    /// `#[rewrite]`): its check holds. A hint describes the text, not the behavior: it is not a
+    /// claim, and it explains no body.
+    Hint,
 }
 
 impl IntentResult {
@@ -700,6 +708,7 @@ impl IntentResult {
             IntentResult::Shown => "shown",
             IntentResult::Error => "error",
             IntentResult::Pending => "pending",
+            IntentResult::Hint => "hint",
         }
     }
 
@@ -708,7 +717,7 @@ impl IntentResult {
         match self {
             IntentResult::Proved => "✓",
             IntentResult::False | IntentResult::Error => "✗",
-            IntentResult::Shown => "·",
+            IntentResult::Shown | IntentResult::Hint => "·",
             IntentResult::Claimed | IntentResult::Pending => "?",
         }
     }
@@ -744,6 +753,65 @@ pub struct IntentClaim {
     /// check. The result is the result of the new check.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub stale: String,
+    /// [R77.1-1] The changed bodies that the proof of the claim explains: each changed body whose
+    /// result the proof uses (the names of the section "control flow").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub explains: Vec<String>,
+}
+
+/// [R77.1-2] The state of one changed body in the coverage of the claims (design 77).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverState {
+    /// A proved claim depends on the body.
+    Claim,
+    /// Semilla proves by itself that the behavior stays the same.
+    Equivalent,
+    /// No proved claim depends on the body, and Semilla does not prove it equivalent.
+    NotExplained,
+    /// [R77.1-4] A proved claim and the result of Semilla disagree: a defect of Semilla. Neither
+    /// result explains the body.
+    Disagree,
+}
+
+/// [R77.1-2] One changed body in the coverage of the claims of a step.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BodyCover {
+    /// The MIR name of the body (the name of the section "control flow").
+    pub name: String,
+    /// The place of the body: `FILE:LINE`.
+    pub place: String,
+    pub state: CoverState,
+    /// The claims that explain the body, or that disagree with the result of Semilla.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<String>,
+    /// The result and the cause of Semilla (a body that is not explained), or the two results
+    /// of a disagreement.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+}
+
+impl BodyCover {
+    /// The line of the body in the section "semantic changes".
+    pub fn line(&self) -> String {
+        let name = format!("`{}` ({})", self.name, self.place);
+        let detail = if self.detail.is_empty() { String::new() } else { format!(": {}", self.detail) };
+        match self.state {
+            CoverState::Claim => format!("explained by claim {}: {name}", self.claims.join(", ")),
+            CoverState::Equivalent => format!("equivalent (Semilla): {name}{detail}"),
+            CoverState::NotExplained => format!("not explained: {name}{detail}"),
+            CoverState::Disagree => format!("the result of Semilla and claim {} disagree: a defect of Semilla: {name}{detail}", self.claims.join(", ")),
+        }
+    }
+}
+
+/// [R77.1-2] The coverage line of a step: "changed bodies: N explained by claims, M equivalent
+/// (Semilla), K not explained" (and the count of the disagreements).
+pub fn coverage_line(bodies: &[BodyCover]) -> String {
+    let count = |state: CoverState| bodies.iter().filter(|body| body.state == state).count();
+    let disagree = count(CoverState::Disagree);
+    let tail = if disagree == 0 { String::new() } else { format!(", {disagree} with a disagreement of Semilla and a claim (a defect of Semilla)") };
+    format!("changed bodies: {} explained by claims, {} equivalent (Semilla), {} not explained{tail}", count(CoverState::Claim), count(CoverState::Equivalent), count(CoverState::NotExplained) + disagree)
 }
 
 impl IntentClaim {
@@ -2022,6 +2090,11 @@ pub struct ConfigNote {
     /// The `cfg` conditions of the source text that the checked configurations do not cover.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_covered: Vec<String>,
+    /// [R77.3-8] The features of the packages that no checked configuration enables
+    /// (`package/feature`): the results of the change set do not cover the code and the
+    /// dependencies that they enable (G6).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features_not_checked: Vec<String>,
     /// The checked configurations that Semilla added for a joint state (batch 5u, part C).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub added: Vec<ConfigAdded>,
@@ -2180,6 +2253,20 @@ impl ConfigNote {
         Some(format!("! {count} `cfg` conditions that Semilla did not check: `{first}`, and {} more (`semilla status --verbose` shows each one)", count - 1))
     }
 
+    /// [R77.3-8] The one line of the features that no checked configuration enables, if one
+    /// exists (G6: a result never claims more than Semilla checked).
+    pub fn feature_line(&self) -> Option<String> {
+        if self.features_not_checked.is_empty() {
+            return None;
+        }
+        let shown: Vec<String> = self.features_not_checked.iter().take(Self::MOST_CONDITIONS).map(|text| format!("`{text}`")).collect();
+        let more = match self.features_not_checked.len().saturating_sub(Self::MOST_CONDITIONS) {
+            0 => String::new(),
+            count => format!(", and {count} more"),
+        };
+        Some(format!("! features that no checked configuration enables: {}{more}; no result covers the code or the dependencies that they enable", shown.join(", ")))
+    }
+
     /// The line of the configurations that are not in the list, because a different
     /// configuration has the same feature state (batch 5y, C4.4), if one exists.
     /// `all_steps`: the number of steps of the change set.
@@ -2208,6 +2295,7 @@ impl ConfigNote {
         let mut lines = vec![self.checked_line()];
         lines.extend(self.same_line(all_steps));
         lines.extend(self.gap_lines(all_steps));
+        lines.extend(self.feature_line());
         lines.extend(self.condition_line());
         lines.push(CONFIG_SCOPE.to_string());
         lines
@@ -2218,6 +2306,7 @@ impl ConfigNote {
         let mut lines = vec![self.checked_line()];
         lines.extend(self.same_line(all_steps));
         lines.extend(self.gap_lines(all_steps));
+        lines.extend(self.feature_line());
         lines.extend(self.agent_condition_line(verbose));
         lines.push(CONFIG_SCOPE.to_string());
         lines

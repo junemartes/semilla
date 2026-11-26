@@ -1476,6 +1476,8 @@ pub fn agent_lines(step: &StepReport, limit: Option<usize>, below: &dyn Fn(usize
     }
     // Design 67, part D: the claims of the intent files.
     lines.extend(crate::intent::lines(&step.intent_claims));
+    // [R77.1-2] The section "semantic changes" (design 77).
+    lines.extend(crate::intent::semantic_lines(step, limit.map(|most| most * 2)));
     lines.extend(step.gap_lines(limit));
     if let Some(command) = step.gap_command(limit) {
         lines.push(format!("  {command}"));

@@ -612,6 +612,24 @@ fn cfg_expr(tokens: &[String], at: &mut usize, atoms: &std::collections::BTreeSe
     Ok(atoms.contains(&word))
 }
 
+/// [R77.3-2] The kind of a literal that the language has no value for, from the Rust syntax of
+/// its text: "a byte string", "a byte", "a C string", "a raw text", or "a float".
+pub fn literal_kind(text: &str) -> &'static str {
+    if text.starts_with("br") || text.starts_with("b\"") {
+        "a byte string"
+    } else if text.starts_with("b'") {
+        "a byte"
+    } else if text.starts_with("c\"") || text.starts_with("cr") {
+        "a C string"
+    } else if text.starts_with('r') {
+        "a raw text"
+    } else if text.starts_with(|c: char| c.is_ascii_digit()) {
+        "a float"
+    } else {
+        "a literal of another kind"
+    }
+}
+
 /// The calls of the versions in an expression: the version and the name.
 pub fn calls_of(e: &Expr, out: &mut Vec<(Version, String)>) {
     match &e.kind {
@@ -668,6 +686,19 @@ pub fn calls_of(e: &Expr, out: &mut Vec<(Version, String)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // rule+ R77.3-2
+    // rule- R77.3-2
+    #[test]
+    fn the_kind_of_a_literal_comes_from_its_syntax() {
+        assert_eq!(literal_kind("b\"ab\""), "a byte string");
+        assert_eq!(literal_kind("br#\"ab\"#"), "a byte string");
+        assert_eq!(literal_kind("b'a'"), "a byte");
+        assert_eq!(literal_kind("c\"ab\""), "a C string");
+        // The negative case: a float stays a float.
+        assert_eq!(literal_kind("1.5"), "a float");
+        assert_eq!(literal_kind("2e3"), "a float");
+    }
 
     #[test]
     fn a_cfg_predicate_reads_the_atoms_of_a_configuration() {

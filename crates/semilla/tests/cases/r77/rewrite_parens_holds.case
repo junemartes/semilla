@@ -1,0 +1,40 @@
+note: batch 13a, test case "a rewrite that finds 0 places": the variable `$x` has the value `(a + b)` in the old code and `a + b` in the new code; the parentheses are not a part of the form, so the rewrite holds
+rule+: R77.3-6
+option: --compiled
+option: --same
+option: rewrite $x.min($y) => std::cmp::min($x, $y)
+must_match: ✓ a1 same: rewrite `\$x\.min\(\$y\)` => `std::cmp::min\(\$x, \$y\)` \(the form holds: 1 site
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn f(a: u32, b: u32) -> u32 {
+    (a + b).min(7)
+}
+=== new src/lib.rs
+pub fn f(a: u32, b: u32) -> u32 {
+    std::cmp::min(a + b, 7)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `$x.min($y)` => `std::cmp::min($x, $y)` (the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
+      places: shop::f/tail
+    ◆ f1 stated: changed call: `(a + b).min(7)` → `std::cmp::min(a + b, 7)` at `shop::f/tail` [semantics · code different]
+        affected bodies: shop::f
+        control flow: ~ call `impls::<impl Ord for u32>::min` → `min::<u32>` (src/lib.rs:-2, src/lib.rs:2)
+        equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`, `std::cmp::min::<u32>`)
+  not stated: 0 item(s)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::f (src/lib.rs:1): same structure: 1 changed call target; equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`, `std::cmp::min::<u32>`)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 stated: changed call: `(a + b).min(7)` → `std::cmp::min(a + b, 7)` at `shop::f/tail` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

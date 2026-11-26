@@ -11,8 +11,17 @@ use semilla_verify::intent::{Answer, Query};
 
 use super::{EquivSide, NormalOracle, record_form, std_forms};
 
-/// The time budget of the check of one claim in one configuration.
-const CLAIM_TIME: std::time::Duration = std::time::Duration::from_secs(20);
+/// [R77.2-2] The budget of the check of one claim in one configuration in solver steps (with the
+/// runs of its dependence check, R77.1-1).
+const CLAIM_STEPS: u64 = 100_000_000;
+
+/// [R77.2-3] The safety time limit of the check of one claim in one configuration.
+const CLAIM_SAFETY: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// The budget of the check of one claim.
+fn claim_budget() -> semilla_smt::budget::Budget {
+    semilla_smt::budget::Budget::with_safety(CLAIM_STEPS, Some(std::time::Instant::now() + CLAIM_SAFETY))
+}
 
 /// The short hash of the text of a body.
 fn text_hash(text: &str) -> String {
@@ -71,6 +80,10 @@ struct One {
     detail: String,
     reads: Vec<String>,
     errors: Vec<String>,
+    /// [R77.1-1] The dependence set of a proof (`before::NAME`, `after::NAME`).
+    depends: Vec<String>,
+    /// The record names of the item in each version that has it.
+    items: Vec<String>,
 }
 
 impl NormalOracle {
@@ -85,7 +98,7 @@ impl NormalOracle {
         let dry = queries.iter().all(|query| query.dry);
         // The walk of the equivalence check (design 61.10): the bodies that each check must
         // inline. A dry check needs no walk.
-        let walks = if dry || queries.is_empty() { None } else { self.reach_all(step, renames, self.equivalence_time(step).min(super::reach::MAX_TIME)) };
+        let walks = if dry || queries.is_empty() { None } else { self.reach_all(step, renames, super::reach::WALK_STEPS.min(super::equiv_steps())) };
         let mut answers = Vec::new();
         for query in queries {
             let mut results: Vec<(String, One)> = Vec::new();
@@ -102,7 +115,7 @@ impl NormalOracle {
                             continue;
                         }
                         Err(error) => {
-                            results.push((config.name(), One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![format!("{}: {error}", query.claim.place)] }));
+                            results.push((config.name(), One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![format!("{}: {error}", query.claim.place)], depends: Vec::new(), items: Vec::new() }));
                             continue;
                         }
                     }
@@ -148,7 +161,7 @@ impl NormalOracle {
         let item = match claim.targets.first() {
             Some(Target::Path(item)) => item.clone(),
             Some(Target::Text(text, place)) => semilla_intent::IPath { version: None, segments: vec![text.clone()], generics: Vec::new(), place: place.clone() },
-            None => return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![format!("{}: expected an item path", claim.place)] },
+            None => return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![format!("{}: expected an item path", claim.place)], depends: Vec::new(), items: Vec::new() },
         };
         let item = &item;
         let (old_item, new_item) = match item.version {
@@ -169,16 +182,17 @@ impl NormalOracle {
         };
         let (old_item, new_item) = match (loose(old, &old_names, old_item), loose(new, &new_names, new_item)) {
             (Ok(a), Ok(b)) => (a, b),
-            (Err(error), _) | (_, Err(error)) => return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![error] },
+            (Err(error), _) | (_, Err(error)) => return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![error], depends: Vec::new(), items: Vec::new() },
         };
         let in_old = old.records.contains_key(old_item.as_str());
         let in_new = new.records.contains_key(new_item.as_str());
+        let items: Vec<String> = [(in_old, format!("before::{old_item}")), (in_new, format!("after::{new_item}"))].into_iter().filter(|(found, _)| *found).map(|(_, name)| name).collect();
         if !in_old && !in_new {
             let mut all = new_names.clone();
             all.extend(old_names.iter().cloned());
             let candidates = semilla_intent::candidates(&item.name(), &all, 6);
             let tail = if candidates.is_empty() { String::new() } else { format!("; candidates: {}", semilla_intent::quoted_list(&candidates)) };
-            return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![format!("{}: `{}`: no version has a body `{}`{tail}", item.place, item.text(), item.name())] };
+            return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![format!("{}: `{}`: no version has a body `{}`{tail}", item.place, item.text(), item.name())], depends: Vec::new(), items: Vec::new() };
         }
         let hash_of = |version: Version, name: &str| -> Option<String> {
             let side = if version == Version::Before { old } else { new };
@@ -189,16 +203,16 @@ impl NormalOracle {
         if claim.kind == ClaimKind::Same && claim.func.body.is_none() {
             let reads: Vec<String> = [hash_of(Version::Before, &old_item), hash_of(Version::After, &new_item)].into_iter().flatten().collect();
             if dry {
-                return One { result: IntentResult::Claimed, detail: semilla_smt::mir::claim::DRY_CAUSE.into(), reads, errors: Vec::new() };
+                return One { result: IntentResult::Claimed, detail: semilla_smt::mir::claim::DRY_CAUSE.into(), reads, errors: Vec::new(), depends: Vec::new(), items };
             }
             let (Some(a), Some(b)) = (old.find(&old_item, "", ""), new.find(&new_item, "", "")) else {
                 let only = if in_old { "the old version only" } else { "the new version only" };
-                return One { result: IntentResult::Claimed, detail: format!("the item has a body in {only}: no compare"), reads, errors: Vec::new() };
+                return One { result: IntentResult::Claimed, detail: format!("the item has a body in {only}: no compare"), reads, errors: Vec::new(), depends: Vec::new(), items };
             };
             let rename_text = |text: &str| semilla_normal::paths::rename(text, renames);
             let equal_proof = rename_text(&a.text) == b.text && !a.callees.iter().any(|callee| changed.contains(&rename_text(callee)) || changed.contains(callee));
-            let deadline = Some(std::time::Instant::now() + CLAIM_TIME);
-            let check = || self.check_pair(solver, a, b, old, new, renames, true, &changed, equal_proof, deadline);
+            let budget = Some(claim_budget());
+            let check = || self.check_pair(solver, a, b, old, new, renames, true, &changed, equal_proof, budget);
             let answer = if claim.options.except.iter().any(|name| name == "panic_message") { semilla_smt::mir::claim::with_panic_messages_ignored(check) } else { check() };
             use semilla_verify::equiv::Verdict;
             // [R74.1-1] A difference gets its run (design 74).
@@ -215,7 +229,10 @@ impl NormalOracle {
                 Some(Verdict::NotDecided(cause)) | Some(Verdict::NotChecked(cause)) => (IntentResult::Claimed, cause),
                 None => (IntentResult::Claimed, "no check of the item".into()),
             };
-            return One { result, detail, reads, errors: Vec::new() };
+            // [R77.1-1] An empty `#[same]` claim is the equivalence check of its item: a proof
+            // depends on the two versions of the item.
+            let depends = if result == IntentResult::Proved { vec![format!("before::{old_item}"), format!("after::{new_item}")] } else { Vec::new() };
+            return One { result, detail, reads, errors: Vec::new(), depends, items };
         }
         // A property claim (R67.3-1).
         let mut calls = Vec::new();
@@ -234,7 +251,7 @@ impl NormalOracle {
         let is_changed = |name: &str| changed.contains(name);
         let step = semilla_smt::mir::Step { changed: &is_changed, changed_names: &changed_names };
         let options = semilla_smt::mir::claim::ClaimOptions { except_panic_message: claim.options.except.iter().any(|name| name == "panic_message"), dry };
-        let checked = semilla_smt::mir::claim::check_claim(solver, &query.file, claim, &tree_a, &tree_b, &step, options, Some(std::time::Instant::now() + CLAIM_TIME));
+        let checked = semilla_smt::mir::claim::check_claim(solver, &query.file, claim, &tree_a, &tree_b, &step, options, Some(claim_budget()));
         let reads: Vec<String> = checked.reads.iter().filter_map(|(version, name)| hash_of(*version, name)).collect();
         let errors: Vec<String> = checked.errors.iter().map(|error| error.to_string()).collect();
         use semilla_smt::mir::claim::ClaimVerdict;
@@ -263,7 +280,8 @@ impl NormalOracle {
             }
             ClaimVerdict::Claimed { cause } => (IntentResult::Claimed, cause),
         };
-        One { result, detail, reads, errors }
+        let depends = if result == IntentResult::Proved { checked.depends.iter().map(|(version, name)| format!("{}::{name}", version.prefix())).collect() } else { Vec::new() };
+        One { result, detail, reads, errors, depends, items }
     }
 }
 
@@ -282,12 +300,12 @@ fn join(results: Vec<(String, One)>, skipped: Vec<String>, query: &Query) -> Ans
             Some(cfg) => format!("no checked configuration matches `cfg = {cfg:?}` (checked: {})", if skipped.is_empty() { "none".to_string() } else { skipped.join("; ") }),
             None => "no checked configuration has the records of the two trees".into(),
         };
-        return Answer { result: Some(IntentResult::Claimed), detail, configs: Vec::new(), reads, errors };
+        return Answer { result: Some(IntentResult::Claimed), detail, configs: Vec::new(), reads, errors, depends: Vec::new(), items: Vec::new() };
     }
     let rank = |result: IntentResult| match result {
         IntentResult::Error => 0,
         IntentResult::False => 1,
-        IntentResult::Claimed | IntentResult::Pending | IntentResult::Shown => 2,
+        IntentResult::Claimed | IntentResult::Pending | IntentResult::Shown | IntentResult::Hint => 2,
         IntentResult::Proved => 3,
     };
     let worst = results.iter().min_by_key(|(_, one)| rank(one.result)).map(|(_, one)| one.result).unwrap_or(IntentResult::Claimed);
@@ -303,5 +321,12 @@ fn join(results: Vec<(String, One)>, skipped: Vec<String>, query: &Query) -> Ans
     let detail = if agree { first.1 } else { format!("in {}: {}", first.0, first.1) };
     // A claimed or an error part of one configuration keeps a proof of another one out.
     let result = if worst == IntentResult::Shown || worst == IntentResult::Pending { IntentResult::Claimed } else { worst };
-    Answer { result: Some(result), detail, configs, reads, errors }
+    // [R77.1-1] A proof in each configuration explains each body that one of its proofs uses.
+    let mut depends: Vec<String> = if result == IntentResult::Proved { results.iter().flat_map(|(_, one)| one.depends.iter().cloned()).collect() } else { Vec::new() };
+    depends.sort();
+    depends.dedup();
+    let mut items: Vec<String> = results.iter().flat_map(|(_, one)| one.items.iter().cloned()).collect();
+    items.sort();
+    items.dedup();
+    Answer { result: Some(result), detail, configs, reads, errors, depends, items }
 }

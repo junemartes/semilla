@@ -1043,6 +1043,12 @@ fn flow_problems(text: &str) -> Vec<String> {
         if line.trim_start().starts_with("reached bodies: ") && !line.starts_with("     ") {
             break;
         }
+        // The one line of the budget of the step (R61.14-6, R77.2-3) is not a body line.
+        let stop = ["the equivalence check stopped", "the safety time limit stopped"].iter().any(|start| line.trim_start().starts_with(start));
+        if stop {
+            index += 1;
+            continue;
+        }
         if !line.starts_with("     ") {
             bodies += 1;
         } else if line.starts_with("        ") && !line.starts_with("         ") {

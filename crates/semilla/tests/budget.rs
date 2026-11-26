@@ -100,9 +100,9 @@ pub fn check<T: Copy + Into<u64>>(x: T, n: u32) -> bool {
 }
 "##;
 
-/// Checks the body `name` with a deadline. The changed bodies are the bodies with a different
-/// text.
-fn check(old: &[semilla_normal::BodyRecord], new: &[semilla_normal::BodyRecord], name: &str, deadline: Option<std::time::Instant>) -> semilla_smt::mir::Checked {
+/// Checks the body `name` with a budget in solver steps (R77.2-1). The changed bodies are the
+/// bodies with a different text.
+fn check(old: &[semilla_normal::BodyRecord], new: &[semilla_normal::BodyRecord], name: &str, budget: Option<semilla_smt::budget::Budget>) -> semilla_smt::mir::Checked {
     let solver = semilla_smt::Solver::find().expect("a Z3 solver");
     let find = |records: &[semilla_normal::BodyRecord], name: &str| records.iter().find(|record| record.name == name).cloned();
     let (a, b) = (find(old, name).unwrap_or_else(|| panic!("an old body {name}")), find(new, name).unwrap_or_else(|| panic!("a new body {name}")));
@@ -119,12 +119,15 @@ fn check(old: &[semilla_normal::BodyRecord], new: &[semilla_normal::BodyRecord],
     let step = Step { changed: &is_changed, changed_names: &names };
     let old_side = Side { ir: form(&a), workspace: &wa, std: &sa, rename: &same };
     let new_side = Side { ir: form(&b), workspace: &wb, std: &sb, rename: &same };
-    semilla_smt::mir::check_bodies_until(&solver, &old_side, &new_side, &step, deadline)
+    semilla_smt::mir::check_bodies_until(&solver, &old_side, &new_side, &step, budget)
 }
 
 // rule+ R66.9-1
 // rule+ R66.9-2
 // rule- R66.9-2
+// rule+ R77.2-2
+// rule+ R77.2-3
+// rule- R77.2-3
 #[test]
 fn a_body_check_of_many_deep_callees_is_fast_and_stops_at_its_deadline() {
     if !semilla_smt::Solver::available() {
@@ -145,19 +148,41 @@ fn a_body_check_of_many_deep_callees_is_fast_and_stops_at_its_deadline() {
     eprintln!("shop::check: {:?} in {seconds:.2} s ({} queries)", checked.verdict, checked.queries);
     assert!(seconds < 60.0, "the check took {seconds:.2} s");
     assert!(!matches!(&checked.verdict, Verdict::NotDecided { cause } if cause == semilla_smt::mir::DEADLINE_CAUSE), "{:?}", checked.verdict);
-    // R66.9-2: a check stops at its deadline, with the cause of the budget. A deadline in the
-    // past: no run and no solver query. A deadline during the check: the check stops at the next
-    // part (a run, or a query of the solver) and gives no result of a part.
-    let stopped = check(&old, &new, "shop::check", Some(std::time::Instant::now()));
+    // R66.9-2 and R77.2-1: a check stops at its budget in solver steps, with the cause of the
+    // budget. A budget of 0: no run and no solver query. A small budget: the check stops at the
+    // next part (a group of steps of a run, or a query of the solver) and gives no result of a
+    // part.
+    use semilla_smt::budget::Budget;
+    let stopped = check(&old, &new, "shop::check", Some(Budget::steps(0)));
     assert_eq!(stopped.verdict, Verdict::NotDecided { cause: semilla_smt::mir::DEADLINE_CAUSE.into() });
     assert_eq!(stopped.queries, 0);
-    let started = std::time::Instant::now();
-    let stopped = check(&old, &new, "shop::check", Some(std::time::Instant::now() + std::time::Duration::from_millis(50)));
-    let seconds = started.elapsed().as_secs_f64();
+    // A smaller body with solver queries for the runs below: the first one of the methods of
+    // `depot` whose check asks the solver.
+    let small_bodies = ["depot::Num::step", "depot::Num::lo", "depot::Num::root", "depot::Num::pow"];
+    let (name, pow) = small_bodies.iter().map(|name| (*name, check(&old, &new, name, None))).find(|(_, found)| found.queries > 0).expect("a body whose check asks the solver");
+    eprintln!("{name}: {:?}, {} queries, {} solver steps", pow.verdict, pow.queries, pow.steps);
+    let stopped = check(&old, &new, name, Some(Budget::steps(pow.steps / 4)));
     assert_eq!(stopped.verdict, Verdict::NotDecided { cause: semilla_smt::mir::DEADLINE_CAUSE.into() });
-    assert!(seconds < 10.0, "the stopped check took {seconds:.2} s");
-    // The negative case: a deadline that the check does not reach gives the normal result.
-    let small = check(&old, &new, "depot::Num::lo", Some(std::time::Instant::now() + std::time::Duration::from_secs(600)));
+    // The negative case: a budget that the check does not reach gives the normal result.
+    let small = check(&old, &new, "depot::Num::lo", Some(Budget::steps(1_000_000_000)));
     assert!(matches!(small.verdict, Verdict::Equivalent { .. }), "{:?}", small.verdict);
+    // [R77.2-1] The count of the solver steps of one check is the same in each run, also with a
+    // parallel load (four runs of the check at one time): the budget gives the same result on
+    // each machine and at each load.
+    let again: Vec<semilla_smt::mir::Checked> = std::thread::scope(|scope| {
+        let runs: Vec<_> = (0..4).map(|_| scope.spawn(|| check(&old, &new, name, None))).collect();
+        runs.into_iter().map(|run| run.join().unwrap()).collect()
+    });
+    for run in &again {
+        assert_eq!((run.steps, &run.verdict, run.queries), (pow.steps, &pow.verdict, pow.queries));
+    }
+    // A budget just below the count stops the check in each run, and the count itself does not.
+    let below = check(&old, &new, name, Some(Budget::steps(pow.steps - pow.steps / 50)));
+    assert!(matches!(&below.verdict, Verdict::NotDecided { cause } if cause == semilla_smt::mir::DEADLINE_CAUSE), "{:?}", below.verdict);
+    let at = check(&old, &new, name, Some(Budget::steps(pow.steps + 1)));
+    assert_eq!(at.verdict, pow.verdict);
+    // [R77.2-3] The safety time limit is a separate cause.
+    let late = check(&old, &new, name, Some(Budget::with_safety(1_000_000_000, Some(std::time::Instant::now()))));
+    assert_eq!(late.verdict, Verdict::NotDecided { cause: semilla_smt::budget::SAFETY_CAUSE.into() });
     let _ = std::fs::remove_dir_all(&scratch);
 }

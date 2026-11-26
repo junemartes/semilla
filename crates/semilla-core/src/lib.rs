@@ -22,4 +22,4 @@ pub mod view;
 pub use anchor::{Anchor, Segment};
 pub use claim::{AfterCommit, AgentFacts, BuildCheck, IntentFile, ChangeSet, FailedConfig, Claim, Group, GroupKind, PairRefusal, Role, Step, Subgroup};
 pub use ops::{Category, Compare, OpInfo, OpKind, OpLevel};
-pub use report::{AgentFact, IntentClaim, IntentResult, ClaimResult, CommentState, RelatedComment, Gap, ClaimStatus, Fact, LineCounts, PairWarning, Place, Position, Report, SiteGroup, StepReport, Tag, Uncovered, View};
+pub use report::{AgentFact, BodyCover, CoverState, IntentClaim, IntentResult, ClaimResult, CommentState, RelatedComment, Gap, ClaimStatus, Fact, LineCounts, PairWarning, Place, Position, Report, SiteGroup, StepReport, Tag, Uncovered, View};

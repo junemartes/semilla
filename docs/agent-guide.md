@@ -215,7 +215,7 @@ If a step has a gap, `semilla status`, `semilla tag`, and the review show one li
 
 ## The intent file
 
-An intent file gives the intent of a step and the claims that Semilla can check. It is a Rust file outside the production code, for example `.semilla/intent/step.rs` (never in a `src` folder). You do not change the code, the `Cargo.toml`, or the `cfg` of the project. Your editor and `rustfmt` can read the file. Semilla never compiles or runs it.
+An intent file is the semantic specification of a step (design 77): you state the behavior of the change with claims (what stays the same, what changes and how), and Semilla checks each claim and shows which changed bodies the proved claims explain. A claim states behavior: outputs, effects, and panics as a function of the inputs. It never states how the text changed (Semilla finds renames and moves itself). The file is a Rust file outside the production code, for example `.semilla/intent/step.rs` (never in a `src` folder). You do not change the code, the `Cargo.toml`, or the `cfg` of the project. Your editor and `rustfmt` can read the file. Semilla never compiles or runs it.
 
 Each claim is a function with an attribute. A body is a `bool` expression that must be true for each value of the parameters. `before::PATH` names an item of the old version, and `after::PATH` names an item of the new version. The names of the language (`panics`, `returns`, …) are in `semilla_intent::prelude` (`crates/semilla-intent/src/prelude.rs`).
 
@@ -257,7 +257,8 @@ fn cart_len(c: &after::shop::Cart) -> bool {
     after::shop::cart_len(c) == c.len && before::shop::cart_len(c) == c.len
 }
 
-// The forms of `--same`.
+// A hint for the pairing (the forms of `--same`): it describes the text, not the behavior.
+// It is not a claim, and it explains no body.
 #[rename(before::shop::sum, after::shop::total)]
 fn sum_to_total() {}
 
@@ -281,7 +282,28 @@ fn same_len(b: &before::shop::Cart, a: &after::shop::Cart) -> bool {
 - `claimed`: Semilla cannot check the claim; the line has the cause (a loop, a float, a part outside the model, a budget). The reviewer sees it as your claim, not as a proof.
 - `error`: a reference error or a type error, with the candidates. The step is rejected. An error comes only from a fact: a name that the version does not have, or a type that Rust does not accept. A coercion of Rust that the check does not model (`&&Vec<u32>` to `&[u32]`) gives `claimed`, not an error; `&Vec<T>` and `&[T; N]` to `&[T]` are in the model.
 - `shown`: the text of `intent!`.
+- `hint`: a hint for the pairing (`#[rename]`, `#[moved]`, `#[rewrite]`): its check holds. A hint is not a claim: it explains no body. A false hint rejects the step, as a false `--same` does.
 - `pending`: with `--fast`, the background check gives the result. A step whose compiled check ran never shows `pending`.
+
+**The semantic changes and the coverage** (design 77). Each step with an intent file has a section "semantic changes": the `intent!` texts, each proved `change` and `different` claim (what changes), each proved `same` claim (what stays the same), each false claim with its input, and the coverage of the changed bodies:
+
+```
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    intent: "Add a strict mode to `parse`"
+    ✓ changes: i4 `#[change(shop::half)] fn half(x: i32)` (explains `shop::half`)
+    ✓ stays the same: i3 `#[same(shop::parse)] fn parse(x: u32)` (explains `shop::parse`)
+    changed bodies: 2 explained by claims, 1 equivalent (Semilla), 1 not explained
+      not explained: `shop::basket_n` (src/lib.rs:12): an added body: no compare of two versions
+```
+
+- Each changed, added, or removed body has one state: `explained by claim iN` (a proved claim depends on the body: Semilla checks the claim again with a free result for the body, and the claim then fails), `equivalent (Semilla)` (Semilla proves by itself that the behavior stays the same: no claim needed), or `not explained` (with the result and the cause of Semilla).
+- A claimed, false, vacuous, or stale claim explains nothing, and a hint explains nothing.
+- An item whose changed bodies a proved claim explains leaves the gap list.
+- A step with a body that is not explained passes. Make the count small: claim the behavior of each changed body.
+- `✗ the result of Semilla and claim iN disagree: a defect of Semilla`: a proved claim that states a change (`change`, `different`) on a body that Semilla proves equivalent, or a proved `same` claim (with no `except` and no `change` claim on the body) on a body that Semilla finds different. Neither result explains the body then; the run of the real code (design 74) shows where the difference of Semilla is real. Report it.
+- The JSON (`coverage`, `explains` of a claim), `semilla status --verbose`, and the MCP tool `results` give the same data.
+
+**The budgets.** Each budget counts solver steps, not seconds: the same trees and the same intent files give the same results on each machine and at each load. `claimed: the budget of the step` (a claim) and `not checked (the budget of the step)` (a body) are the same in each run. Only the safety time limit is a time stop, with its own cause: `the safety time limit`.
 
 A claim with a property body needs `--compiled`: the default mode shows "claimed (the check needs `--compiled`)". `#[rename]`, `#[moved]`, and `#[rewrite]` have the checks of `--same` in each mode. A `#[change(ITEM)]` claim also states its item for the gap list, as `--change` does.
 
@@ -296,7 +318,7 @@ A claim with a property body needs `--compiled`: the default mode shows "claimed
 
 A later step that changes a body that a claim reads checks that claim again (`s0.i3 … stale before this check: this step changes …`). A false result rejects the later step.
 
-**The help.** In a step with an intent file, a body whose equivalence check cannot compare the two versions because the parameters or the return type change gets a note with the two signatures (or, if their texts are equal, the type that changes, with its changed fields: "the type of `self` changes: `shop::Pt`: `x: u32` → `x: u64`") and two templates: one `#[same]` claim if the behavior does not change, and one `#[change]` claim if it changes. Fill in the arguments of the new version.
+**The help.** In a step with an intent file, a body whose equivalence check cannot compare the two versions because the parameters or the return type change gets a note with the two signatures (or, if their texts are equal, the type that changes, with its changed fields: "the type of `self` changes: `shop::Pt`: `x: u32` → `x: u64`") and two templates: one `#[same]` claim if the behavior does not change, and one `#[change]` claim if it changes. Each template is a complete claim that `semilla intent check` accepts: the parameters of the old version and the new parameters, a type of the crate with its path (`before::shop::Cart`), and no lifetime. With another return type the body names the two results (`let old = …; let new = …; true`): write their relation in place of `true`. A parameter type that a claim cannot name (a generic parameter, `Self`, `impl …`, `dyn …`, `&mut`) gives "no template" with the type and the cause.
 
 **A panic message.** The literal text of a panic message is a part of the outcome: `assert!(x < 10, "too big")` → `assert!(x < 10, "x is too big")` is a difference ("panics (`std::rt::panic_fmt` with the message "too big")"). Use `except = [panic_message]` if only the kind of the panic matters. `panics_with(|| …, "TEXT")` compares the text of a literal message.
 

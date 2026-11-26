@@ -60,8 +60,13 @@ pub struct ClaimCheck {
     pub errors: Vec<Error>,
     /// The bodies that the claim reads: the version and the name.
     pub reads: Vec<(Version, String)>,
+    /// [R77.1-1] The dependence set of a proof: each body whose result the proof uses (the
+    /// version and the record name). Empty for a result that is not "proved".
+    pub depends: Vec<(Version, String)>,
     pub queries: usize,
     pub millis: u128,
+    /// [R77.2-1] The solver steps of the check.
+    pub steps: u64,
 }
 
 /// The options of one check.
@@ -84,21 +89,24 @@ const NO_EXACT: &str = "the claim can fail for an input that depends on the resu
 const MAX_CLAIM_PATHS: usize = 256;
 /// The deepest call of a relation.
 const MAX_RELATIONS: usize = 8;
+/// [R77.1-1] The most changed bodies that the dependence check of one proof tests (each one is
+/// one more run of the claim). A body past the limit is not in the dependence set.
+pub const MAX_DEPENDENCE: usize = 16;
 
 /// Checks one claim with a property body against the two trees.
-pub fn check_claim(solver: &Solver, file: &File, claim: &Claim, old: &Tree, new: &Tree, step: &Step, options: ClaimOptions, deadline: Option<Instant>) -> ClaimCheck {
+pub fn check_claim(solver: &Solver, file: &File, claim: &Claim, old: &Tree, new: &Tree, step: &Step, options: ClaimOptions, budget: Option<crate::budget::Budget>) -> ClaimCheck {
+    let (mut checked, steps) = crate::budget::with(budget, || check_claim_in(solver, file, claim, old, new, step, options));
+    checked.steps = steps;
+    checked
+}
+
+fn check_claim_in(solver: &Solver, file: &File, claim: &Claim, old: &Tree, new: &Tree, step: &Step, options: ClaimOptions) -> ClaimCheck {
     let started = Instant::now();
-    let outer = DEADLINE.with(|cell| cell.get());
-    let own = match (outer, deadline) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    };
-    DEADLINE.with(|cell| cell.set(own));
     let mut queries = 0;
     let mut first = attempt(solver, file, claim, old, new, step, options, false, &mut queries);
     let mut inline_all = false;
     // [R67.3-1] The second try inlines each callee with a form, as the equivalence check does.
-    if !options.dry && first.errors.is_empty() && matches!(&first.verdict, ClaimVerdict::Claimed { cause } if cause != DEADLINE_CAUSE) {
+    if !options.dry && first.errors.is_empty() && matches!(&first.verdict, ClaimVerdict::Claimed { cause } if !crate::budget::is_stop(cause)) {
         let second = attempt(solver, file, claim, old, new, step, options, true, &mut queries);
         if !matches!(second.verdict, ClaimVerdict::Claimed { .. }) {
             first = second;
@@ -160,8 +168,43 @@ pub fn check_claim(solver: &Solver, file: &File, claim: &Claim, old: &Tree, new:
             break;
         }
     }
-    DEADLINE.with(|cell| cell.set(outer));
-    ClaimCheck { verdict: first.verdict, errors: first.errors, reads: first.reads.into_iter().collect(), queries, millis: started.elapsed().as_millis() }
+    // [R77.1-1] The dependence set of a proof: the two versions of the item (R74.2-1 shows that
+    // the proof depends on each), and each other changed body that the proof reads or inlines
+    // and whose free result (the check of R74.2-1) makes the claim fail. A body whose check gives
+    // no answer is not in the set: the safe side, it stays "not explained".
+    let mut depends: Vec<(Version, String)> = Vec::new();
+    if matches!(first.verdict, ClaimVerdict::Proved { .. }) && !options.dry {
+        let ev = Eval::new(file, old, new, step, options, false);
+        let (old_name, new_name) = ev.item_versions(claim);
+        let item = claim.targets.first().map(Target::text).unwrap_or_default();
+        let item = item.trim_start_matches("before::").trim_start_matches("after::").to_string();
+        for (version, name) in [(Version::Before, old_name), (Version::After, new_name)] {
+            if let Some(name) = name {
+                depends.push((version, name));
+            }
+        }
+        let mut candidates: Vec<(Version, String)> = Vec::new();
+        let inlined = first.inlined.iter().flat_map(|name| [(Version::Before, name.clone()), (Version::After, name.clone())]);
+        for (version, name) in first.reads.iter().cloned().chain(inlined) {
+            let key = (version, name.clone());
+            if (step.changed)(&name) && (ev.tree(version).workspace)(&name).is_some() && !depends.contains(&key) && !candidates.contains(&key) {
+                candidates.push(key);
+            }
+        }
+        for (version, name) in candidates.into_iter().take(MAX_DEPENDENCE) {
+            let free = Some((version, name.clone(), item.clone()));
+            let found = with_free(version == Version::Before, &name, || attempt_with(solver, file, claim, old, new, step, options, inline_all, &mut queries, free));
+            let uses = match &found.verdict {
+                ClaimVerdict::False { .. } => true,
+                ClaimVerdict::Claimed { cause } => cause == NO_EXACT,
+                ClaimVerdict::Proved { .. } => false,
+            };
+            if uses {
+                depends.push((version, name));
+            }
+        }
+    }
+    ClaimCheck { verdict: first.verdict, errors: first.errors, reads: first.reads.into_iter().collect(), depends, queries, millis: started.elapsed().as_millis(), steps: 0 }
 }
 
 /// [R69.5-2] True for a coercion that the model encodes: a shared reference to a vector or an
@@ -187,6 +230,8 @@ struct Attempt {
     verdict: ClaimVerdict,
     errors: Vec<Error>,
     reads: BTreeSet<(Version, String)>,
+    /// The callees that the runs of the claim inlined.
+    inlined: BTreeSet<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -201,11 +246,11 @@ fn attempt_with(solver: &Solver, file: &File, claim: &Claim, old: &Tree, new: &T
     let verdict = match ev.claim(solver, claim, queries) {
         Ok(verdict) => verdict,
         Err(Fail::Error(error)) => {
-            return Attempt { verdict: ClaimVerdict::Claimed { cause: format!("an error of the claim: {}", error.message) }, errors: vec![error], reads: ev.reads };
+            return Attempt { verdict: ClaimVerdict::Claimed { cause: format!("an error of the claim: {}", error.message) }, errors: vec![error], reads: ev.reads, inlined: ev.inlined };
         }
         Err(Fail::Claimed(cause)) => ClaimVerdict::Claimed { cause },
     };
-    Attempt { verdict, errors: Vec::new(), reads: ev.reads }
+    Attempt { verdict, errors: Vec::new(), reads: ev.reads, inlined: ev.inlined }
 }
 
 /// A value of the claim: the value, its type, and the version of the names of its type (`None`
@@ -709,7 +754,7 @@ impl<'a, 'b> Eval<'a, 'b> {
             return Ok(ClaimVerdict::Claimed { cause: DRY_CAUSE.into() });
         }
         if past_deadline() {
-            return Err(Fail::Claimed(DEADLINE_CAUSE.into()));
+            return Err(Fail::Claimed(stop_cause().into()));
         }
         let mut text = String::new();
         for line in &self.decls.lines {
@@ -749,6 +794,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                 let method = method(&self.inlined);
                 return Ok(ClaimVerdict::Proved { method });
             }
+            Answer::Unknown(reason) if crate::budget::is_stop(&reason) => return Err(Fail::Claimed(reason)),
             Answer::Unknown(reason) => return Err(Fail::Claimed(format!("the solver gave no answer ({reason})"))),
             Answer::Sat(model) => model,
         };
@@ -984,7 +1030,7 @@ impl<'a, 'b> Eval<'a, 'b> {
 
     fn eval(&mut self, e: &Expr, world: World, want: Option<&Ty>) -> Result<Branches, Fail> {
         if past_deadline() {
-            return Err(Fail::Claimed(DEADLINE_CAUSE.into()));
+            return Err(Fail::Claimed(stop_cause().into()));
         }
         match &e.kind {
             ExprKind::Lit(lit) => {
@@ -1234,7 +1280,8 @@ impl<'a, 'b> Eval<'a, 'b> {
                 Ok(Val { v: V::Bv(bv_lit(bits, w), w), ty, ver: None })
             }
             Lit::Str(_) => Err(Fail::Claimed(format!("a text value (`{}`) outside `panics_with`", e.text))),
-            Lit::Other(text) => Err(Fail::Claimed(format!("the literal `{text}` is outside the model (a float)"))),
+            // [R77.3-2] The cause names the kind of the literal (a fact of the Rust syntax).
+            Lit::Other(text) => Err(Fail::Claimed(format!("the literal `{text}` is outside the model ({})", semilla_intent::literal_kind(text)))),
         }
     }
 
@@ -1664,7 +1711,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                 let methods: Vec<String> = tree.names.iter().filter(|known| known.starts_with(&format!("{base}::")) || known.starts_with(&format!("<{base} as "))).cloned().collect();
                 return Err(fail(&e.place, format!("`{}::{base}::{name}`: the {} `{base}` has no method `{name}`{}", version.prefix(), version.word(), candidate_text(&semilla_intent::candidates(&inherent, &methods, 6)))));
             };
-            let Some(form) = (tree.workspace)(&method) else { return Err(Fail::Claimed(format!("the method `{method}` has no form"))) };
+            let Some(form) = (tree.workspace)(&method) else { return Err(Fail::Claimed(format!("the method `{method}` has no MIR form in the {} version (no record of the body in this unit, or a record with no form), so the check cannot run it", version.word()))) };
             let first = form.l.get(1).map(|id| Ty { ir: form.clone(), id: *id });
             let mut world = world;
             let receiver_value = match first.as_ref().and_then(|ty| ty.get()) {
@@ -1862,8 +1909,8 @@ impl<'a, 'b> Eval<'a, 'b> {
         let paths = run_state(&side, self.step, self.inline_all, &mut self.decls, state, &[], version == Version::Before, LoopMode::Plain);
         self.inlined.extend(paths.inlined.iter().cloned());
         if let Some((_, cause)) = paths.stops.first() {
-            if cause == DEADLINE_CAUSE {
-                return Err(Fail::Claimed(DEADLINE_CAUSE.into()));
+            if crate::budget::is_stop(cause) {
+                return Err(Fail::Claimed(cause.clone()));
             }
             return Err(Fail::Claimed(format!("`{text}`: {cause}")));
         }

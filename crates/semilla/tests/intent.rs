@@ -73,6 +73,12 @@ impl Versions {
 
     /// Checks each claim of an intent text, in order.
     fn check(&self, intent: &str, dry: bool) -> Vec<(ClaimVerdict, Vec<String>)> {
+        self.check_all(intent, dry).into_iter().map(|(verdict, errors, _)| (verdict, errors)).collect()
+    }
+
+    /// Checks each claim of an intent text, in order: the verdict, the errors, and the dependence
+    /// set (`before::NAME`, `after::NAME`).
+    fn check_all(&self, intent: &str, dry: bool) -> Vec<(ClaimVerdict, Vec<String>, Vec<String>)> {
         let file = semilla_intent::parse_file("intent.rs", intent).unwrap_or_else(|errors| panic!("{errors:?}"));
         let solver = semilla_smt::Solver::find().expect("a Z3 solver");
         let texts = |records: &[semilla_normal::BodyRecord]| -> BTreeMap<String, String> { records.iter().map(|record| (record.name.clone(), record.text.clone())).collect() };
@@ -94,7 +100,8 @@ impl Versions {
             .map(|claim| {
                 let options = ClaimOptions { except_panic_message: claim.options.except.iter().any(|name| name == "panic_message"), dry };
                 let checked = check_claim(&solver, &file, claim, &old, &new, &step, options, None);
-                (checked.verdict, checked.errors.iter().map(|error| error.to_string()).collect())
+                let depends = checked.depends.iter().map(|(version, name)| format!("{}::{name}", version.prefix())).collect();
+                (checked.verdict, checked.errors.iter().map(|error| error.to_string()).collect(), depends)
             })
             .collect()
     }
@@ -548,3 +555,58 @@ fn a_scalar_of_another_type_is_a_type_error() {
     assert!(found.1.len() == 1 && found.1[0].contains("has the type `u64`; the parameter has the type `u32`"), "{found:?}");
 }
 
+
+const DEPENDS_OLD: &str = r##"
+pub fn step(x: u32) -> u32 { x + 1 }
+pub fn twice(x: u32) -> u32 { step(x) * 2 }
+pub fn noise(x: u32) -> u32 { x ^ 3 }
+"##;
+
+const DEPENDS_NEW: &str = r##"
+pub fn step(x: u32) -> u32 { if x < 7 { x + 1 } else { 1 + x } }
+pub fn twice(x: u32) -> u32 { step(x) * 2 }
+pub fn noise(x: u32) -> u32 { x ^ 5 }
+"##;
+
+const DEPENDS_CLAIMS: &str = r#"
+use semilla_intent::prelude::*;
+
+#[same(shop::twice)]
+fn twice_same(x: u32) -> bool {
+    x > 1000 || after::shop::twice(x) == before::shop::twice(x)
+}
+
+#[same(shop::twice)]
+fn twice_and_noise(x: u32) -> bool {
+    x > 1000 || (after::shop::twice(x) == before::shop::twice(x) && after::shop::noise(x) == after::shop::noise(x))
+}
+
+#[same(shop::noise)]
+fn noise_same(x: u32) -> bool {
+    after::shop::noise(x) == before::shop::noise(x)
+}
+
+#[same(shop::noise)]
+fn noise_float(x: f64) -> bool {
+    x == x
+}
+"#;
+
+// rule+ R77.1-1
+// rule- R77.1-1
+#[test]
+fn a_proof_depends_on_each_changed_body_whose_result_it_uses() {
+    let found = Versions::build("depends", DEPENDS_OLD, DEPENDS_NEW).check_all(DEPENDS_CLAIMS, false);
+    // `twice` is the same text in the two versions; its changed callee `step` is inlined, and the
+    // proof fails when `step` returns a free value: the proof depends on `step`.
+    assert!(matches!(found[0].0, ClaimVerdict::Proved { .. }), "{:?}", found[0]);
+    assert!(found[0].2.contains(&"before::shop::step".to_string()) && found[0].2.contains(&"after::shop::step".to_string()), "{:?}", found[0].2);
+    assert!(found[0].2.contains(&"after::shop::twice".to_string()), "{:?}", found[0].2);
+    // The negative cases: the claim reads the changed `noise`, but its truth does not depend on
+    // the result of `noise`; a false claim and a claimed claim explain nothing.
+    assert!(matches!(found[1].0, ClaimVerdict::Proved { .. }), "{:?}", found[1]);
+    assert!(!found[1].2.iter().any(|name| name.ends_with("::noise")), "{:?}", found[1].2);
+    assert!(found[1].2.contains(&"after::shop::step".to_string()), "{:?}", found[1].2);
+    assert!(matches!(found[2].0, ClaimVerdict::False { .. }) && found[2].2.is_empty(), "{:?}", found[2]);
+    assert!(matches!(found[3].0, ClaimVerdict::Claimed { .. }) && found[3].2.is_empty(), "{:?}", found[3]);
+}

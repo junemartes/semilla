@@ -1,0 +1,61 @@
+note: batch 13a, test case "a rewrite suggestion without parentheses": a variable in the place of a receiver gets parentheses when its value is a binary operation, so the suggested text is valid Rust; a variable with a plain value gets none (floats: the check does not decide, so the line has the `--same` form)
+rule+: R77.3-6
+rule-: R77.3-6
+option: --compiled
+must_match: --same 'rewrite \(\$a\)\.min\(7\.0\) => \(\$a\)\.max\(7\.0\)'
+must_match: --same 'rewrite \$a\.min\(9\.0\) => \$a\.max\(9\.0\)'
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn f(a: f64, b: f64) -> f64 {
+    (a + b).min(7.0)
+}
+
+pub fn g(a: f64) -> f64 {
+    a.min(9.0)
+}
+=== new src/lib.rs
+pub fn f(a: f64, b: f64) -> f64 {
+    (a + b).max(7.0)
+}
+
+pub fn g(a: f64) -> f64 {
+    a.max(9.0)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed method_call: `(a + b).min(7.0)` → `(a + b).max(7.0)` (f1)
+      in: shop::f
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::f=TEXT'; if it does not change, --same 'rewrite ($a).min(7.0) => ($a).max(7.0)'
+  ? 1 place: changed method_call: `a.min(9.0)` → `a.max(9.0)` (f2)
+      in: shop::g
+      lines: src/lib.rs:6, src/lib.rs:-6
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::g=TEXT'; if it does not change, --same 'rewrite $a.min(9.0) => $a.max(9.0)'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed method_call: `(a + b).min(7.0)` → `(a + b).max(7.0)` at `shop::f/tail` [semantics · code different]
+      affected bodies: shop::f
+      control flow: ~ call `f64::<impl f64>::min` → `f64::<impl f64>::max` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: not decided: the operation `add` on a value that the check does not model (a float, a pointer): (a + b) (src/lib.rs:-2)
+  ◆ f2 derived: changed method_call: `a.min(9.0)` → `a.max(9.0)` at `shop::g/tail` [semantics · code different]
+      affected bodies: shop::g
+      control flow: ~ call `f64::<impl f64>::min` → `f64::<impl f64>::max` (src/lib.rs:-6, src/lib.rs:6)
+      equivalence: not decided: the difference depends on the result of a call or on a value that the check does not model
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::f (src/lib.rs:1): same structure: 1 changed call target; not decided (the operation `add` on a value that the check does not model (a float, a pointer): (a + b) (src/lib.rs:-2))
+    shop::g (src/lib.rs:5): same structure: 1 changed call target; not decided (the difference depends on the result of a call or on a value that the check does not model)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed method_call: `(a + b).min(7.0)` → `(a + b).max(7.0)` at `shop::f/tail` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f2 derived: changed method_call: `a.min(9.0)` → `a.max(9.0)` at `shop::g/tail` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6
