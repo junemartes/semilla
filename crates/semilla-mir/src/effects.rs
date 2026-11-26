@@ -555,6 +555,18 @@ pub fn seq_model(func: &Operand, body: &Body) -> Option<String> {
         }
     }
     let trait_vec = |head: &str| name.starts_with(&format!("<std::vec::Vec<T, A> as {head}")) || name.starts_with(&format!("<alloc::vec::Vec<T, A> as {head}"));
+    // [R80.1-6] `==` and `!=` of two `Vec`s of one scalar type (`impl PartialEq<Vec<U, A2>> for
+    // Vec<T, A1>`): the equality of the two sequences. The arguments are `T`, `U`, `A1`, `A2`.
+    let eq_vec = |op: &str| name.contains("vec::partial_eq::<impl ") && name.contains("PartialEq<") && name.contains("vec::Vec<U, A2>> for ") && name.contains("vec::Vec<T, A1>>::") && name.ends_with(&format!(">::{op}"));
+    let eq_ok = || {
+        let global = |at: usize| types.get(at).is_some_and(|allocator| matches!(allocator.kind(), TyKind::RigidTy(RigidTy::Adt(def, _)) if def.name().ends_with("alloc::Global")));
+        matches!((types.first(), types.get(1)), (Some(a), Some(b)) if is_scalar(*a) && a == b) && global(2) && global(3)
+    };
+    for op in ["eq", "ne"] {
+        if eq_vec(op) && eq_ok() {
+            return Some(format!("vec_{op}"));
+        }
+    }
     if trait_vec("std::ops::Deref>::deref") || trait_vec("core::ops::Deref>::deref") {
         return vec_ok().then(|| "vec_deref".into());
     }

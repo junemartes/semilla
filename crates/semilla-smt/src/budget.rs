@@ -111,6 +111,24 @@ pub fn with<R>(budget: Option<Budget>, f: impl FnOnce() -> R) -> (R, u64) {
     (found, used() - start)
 }
 
+/// [R80.2-1] The budget of the congruence tries of one body check in solver steps (the budget of
+/// one body check, R77.2-2).
+pub const CONGRUENCE_STEPS: u64 = 60_000_000;
+
+/// [R80.2-1] Runs `f` with its own budget of `steps` solver steps, apart from the meter of the
+/// thread: the steps of `f` do not count in the budget of the outer check, so `f` never changes
+/// another result of that check. The safety time limit of the outer check stays.
+pub fn apart<R>(steps: u64, f: impl FnOnce() -> R) -> R {
+    let outer = END.with(Cell::get);
+    let start = used();
+    let safety = outer.and_then(|(_, safety)| safety);
+    END.with(|cell| cell.set(Some((start.saturating_add(steps), safety))));
+    let found = f();
+    END.with(|cell| cell.set(outer));
+    USED.with(|cell| cell.set(start));
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

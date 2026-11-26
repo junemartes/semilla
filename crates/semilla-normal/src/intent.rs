@@ -364,6 +364,23 @@ pub struct Link {
     pub resolved: Option<String>,
     #[serde(default)]
     pub near: Vec<String>,
+    /// [R80.3-1] The items of the definition for a scope (a type: its inherent methods; a module:
+    /// its `pub` functions and methods; a trait: the methods of its impls in the two trees).
+    #[serde(default)]
+    pub members: Vec<Member>,
+}
+
+/// [R80.3-1] One item of a scope: the record name with the facade, and for a method the type of
+/// its impl.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct Member {
+    pub name: String,
+    #[serde(default)]
+    pub owner: Option<String>,
+    /// The name with the visible paths of the other crates, when it is not `name` (a record of a
+    /// tree names a trait of another crate by its visible path).
+    #[serde(default)]
+    pub visible: Option<String>,
 }
 
 /// The result of the compile of an intent crate.

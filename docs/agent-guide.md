@@ -287,7 +287,56 @@ fn same_len(b: &before::shop::Cart, a: &after::shop::Cart) -> bool {
 }
 ```
 
-**The scope** of an attribute is a list of paths that the resolver of rustc resolves (a path with no definition is the error S0112 at the path, with the nearest names): an item (`shop::parse`, the two versions for `same`, `change`, `different`), an item of a re-export (`shop::len`), a method (`shop::Bag::new`, also `<shop::Bag>::new`), a trait method (`<shop::S as core::fmt::Debug>::fmt`), a path with a version (`after::shop::f`), or a text with the record name of a body. `impl shop::Cart`, `shop::fmt::*`, and `callers(shop::parse)` compile; their check comes in batch 13b.
+**The scope** of an attribute is a list of paths that the resolver of rustc resolves (a path with no definition is the error S0112 at the path, with the nearest names): an item (`shop::parse`, the two versions for `same`, `change`, `different`), an item of a re-export (`shop::len`), a method (`shop::Bag::new`, also `<shop::Bag>::new`), a trait method (`<shop::S as core::fmt::Debug>::fmt`), a path with a version (`after::shop::f`), or a text with the record name of a body. A scope can have more than one item (design 80, part C):
+
+- a list: `#[same(shop::parse, shop::format)]` gives one claim for each item (`i3`, `i4`);
+- `impl shop::Cart`: each method of the inherent impls of the type (not the methods of a trait impl);
+- `impl core::fmt::Display for *`: each method of each impl of the trait in the two trees; `impl core::fmt::Display for shop::Cart`: the methods of that impl only;
+- `shop::fmt::*`: each `pub` function of the module and each `pub` method of a type that the module defines (a re-export and a private item are not in the scope);
+- `callers(shop::parse)`: each body that calls the item (a closure gives the item that has it).
+
+A claim on such a scope is one line with the count of its items, and one line for each item (at most 64 items):
+
+```
+  ? i3 `#[same(impl shop::Cart)] fn cart_methods()` (.semilla/intent/pr.rs:8): claimed: 4 item(s) of the scope `impl shop::Cart`: 3 proved, 0 false, 1 claimed
+      `shop::Cart::new`: proved: related inputs give related outcomes, by SMT (the relations of the intent file)
+      `shop::Cart::len`: proved: related inputs give related outcomes, by SMT (the relations of the intent file)
+      `shop::Cart::is_empty`: proved: related inputs give related outcomes, by SMT (the relations of the intent file)
+      `shop::Cart::push`: claimed: `&mut` comes in 13c: the parameter `self` is a `&mut` reference to a type that changes, …
+```
+
+The result of the claim is the worst result of its items (an error, then `false`, then `claimed`). Each proved item explains its bodies, also when another item of the scope is only claimed. A false item rejects the step.
+
+**A relation of a type that changes** (design 80, part A). When a field changes its type, or a type gets a new field (for example a cached value), the old `self` and the new `self` are two types, and each method is "not decided (the parameters change)". Write how an old value and a new value correspond:
+
+```rust
+// The old cart: `struct Cart { items: Vec<u32> }`. The new cart caches the length:
+// `struct Cart { items: Vec<u32>, len: usize }` (a private field).
+#[relation(before::shop::Cart, after::shop::Cart)]
+fn cart(b: &before::shop::Cart, a: &after::shop::Cart) -> bool {
+    same(&b.items, &a.items) && a.len == b.items.len()
+}
+
+// Each method of the type: related inputs give related outcomes.
+#[same(impl shop::Cart)]
+fn cart_methods() {}
+
+// A property claim: the parameters of the two types are each pair that the relation holds for.
+#[same(shop::Cart::len)]
+fn len(b: before::shop::Cart, a: after::shop::Cart) -> bool {
+    before::shop::Cart::len(&b) == after::shop::Cart::len(&a)
+}
+```
+
+- A relation is a function with two parameters, `&before::T` and `&after::T` (or the two values), that returns `bool`. It can read the private fields of the two values, call another relation, and use `same(&x, &y)` for parts whose type is the same in the two versions. A relation has the model of a claim body: `v.len()`, `v.is_empty()`, and `a == b` (or `!=`) of two `Vec`s of integers, `bool`, or `char` are exact (for example `a.lines == b.lines && a.n == b.lines.len()`).
+- Semilla finds the relation of two values by their two types (the compiler types: the fields, their names and types), never by the name of the function. A relation is used only where the two types differ.
+- `same(&old, &new)` of two values whose types differ is their relation; for an `Option`, a `Result`, a tuple, or a struct or an enum of one definition, each part by this rule.
+- An empty `#[same]` claim on an item whose parameters or result change: for each pair of related inputs, the two versions give the same exit and the same kind of panic, the same effects, equal results of one type, and related results of two types. A `&mut` parameter of a type that changes gives `claimed: `&mut` comes in 13c`. The count of the parameters must stay the same (else write a property claim).
+- In a property claim, the k-th parameter of the old type and the k-th parameter of the new type are related.
+- A false result of a method gives a suggested `#[test]` of its counterexample (design 75), as each false claim does; Semilla does not run it.
+- **A relation is a hint, never an assumption.** Its line is `hint` (it is not a claim), and it explains no body alone. Each use is checked: a wrong relation gives `false` with an input (for example a relation that does not say `a.len == b.items.len()`), never `proved`. A relation that holds for no pair gives `claimed: vacuous: …`. A check that is true for any result of one version (for example with a relation that is always `true`) gives `claimed: the check is true for any result of …`.
+
+**Congruence** (design 80, part B). When the two versions call one function (the same definition, after the rename map) with equal arguments, the results are equal, also when the check has no model of the function or of its types (a type of the standard library, for example `std::cmp::Reverse(x)`). A call with an effect keeps its place in the order of the effects: another order gets no congruence.
 
 **The results** (one line for each claim in the section "intent" of the step):
 
@@ -296,7 +345,7 @@ fn same_len(b: &before::shop::Cart, a: &after::shop::Cart) -> bool {
 - `claimed`: Semilla cannot check the claim; the line has the cause (a loop, a float, a part outside the model, a budget). The reviewer sees it as your claim, not as a proof.
 - `error`: a reference error or a type error, with the candidates. The step is rejected. An error comes only from a fact: a name that the version does not have, or a type that Rust does not accept. A coercion of Rust that the check does not model (`&&Vec<u32>` to `&[u32]`) gives `claimed`, not an error; `&Vec<T>` and `&[T; N]` to `&[T]` are in the model.
 - `shown`: the text of `intent!`.
-- `hint`: a hint for the pairing (`#[rename]`, `#[moved]`, `#[rewrite]`): its check holds. A hint is not a claim: it explains no body. A false hint rejects the step, as a false `--same` does.
+- `hint`: a hint for the pairing (`#[rename]`, `#[moved]`, `#[rewrite]`): its check holds. A hint is not a claim: it explains no body. A false hint rejects the step, as a false `--same` does. A `#[relation]` is a hint too: the claims use it, and their results show if it is right.
 - `pending`: with `--fast`, the background check gives the result. A step whose compiled check ran never shows `pending`.
 
 **The semantic changes and the coverage** (design 77). Each step with an intent file has a section "semantic changes": the `intent!` texts, each proved `change` and `different` claim (what changes), each proved `same` claim (what stays the same), each false claim with its input, and the coverage of the changed bodies:

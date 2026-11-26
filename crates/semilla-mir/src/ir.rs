@@ -205,6 +205,9 @@ pub enum IrAgg {
     S(u32),
     /// A closure: its type (an `IrTy::Clo`), with the captures as operands (design 66, part A).
     C(u32),
+    /// [R80.2-1] A value of a type that the check does not model (an `IrTy::Opaque`): the type
+    /// and the variant. The engine makes a value that is a function of them and of the operands.
+    O(u32, usize),
 }
 
 /// A place in the source: the tokens and the outermost macro call (as in the graph).
@@ -833,6 +836,16 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     };
                     let ty = self.ty(ty, 0);
                     IrRvalue::Agg(IrAgg::A(ty, variant.to_index()), operands.iter().map(|operand| self.operand(operand)).collect())
+                }
+                // [R80.2-1] A struct or an enum of a type that the check does not model (a type
+                // of the standard library): the type, the variant, and the operands. A union keeps
+                // the mark: its value is the bytes of one field.
+                AggregateKind::Adt(def, variant, args, _, None) if def.kind() != AdtKind::Union => {
+                    let Some(ty) = crate::safe::def_ty_with_args(self.tcx, self.typing, def.def_id(), args) else {
+                        return IrRvalue::U("a value of a type that the compiler does not normalize here".into());
+                    };
+                    let ty = self.ty(ty, 0);
+                    IrRvalue::Agg(IrAgg::O(ty, variant.to_index()), operands.iter().map(|operand| self.operand(operand)).collect())
                 }
                 AggregateKind::Adt(..) => IrRvalue::U("a value of a type that the check does not model".into()),
                 // A closure is its captures and the identity of its body (design 66, part A).

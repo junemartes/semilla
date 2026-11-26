@@ -50,7 +50,7 @@ pub const KINDS: &[Kind] = &[
     Kind { name: "new", scope: Scope::Items, body: Body::Property, later: Some("13d") },
     Kind { name: "removed", scope: Scope::Items, body: Body::Property, later: Some("13d") },
     Kind { name: "invariant", scope: Scope::Items, body: Body::Property, later: Some("13d") },
-    Kind { name: "relation", scope: Scope::Two, body: Body::Property, later: Some("13b") },
+    Kind { name: "relation", scope: Scope::Two, body: Body::Property, later: None },
     Kind { name: "contract", scope: Scope::Items, body: Body::Property, later: Some("13d") },
     Kind { name: "lemma", scope: Scope::None, body: Body::Property, later: Some("13d") },
     Kind { name: "loop_relation", scope: Scope::None, body: Body::Property, later: Some("13d") },
@@ -425,10 +425,17 @@ pub fn record_text(scope: &str) -> String {
     text
 }
 
+/// [R80.3-1] True for a scope of more than one item: `impl TYPE`, `impl TRAIT for TYPE`, a glob
+/// `MODULE::*`, or `callers(ITEM)` (the forms of the language, not names).
+pub fn is_wide(scope: &str) -> bool {
+    let scope = scope.trim();
+    scope.starts_with("impl ") || scope.starts_with("callers(") || scope.ends_with("::*")
+}
+
 /// [R78.3-5] The claims of a file from the heads, for a file that the parser of batch 10r1 does
 /// not read (a form of the compiled language): rustc is the check of the body, so a body is a
-/// mark that the claim has one. A scope of batch 13b (`impl`, a glob, `callers`) is a claim of a
-/// later batch.
+/// mark that the claim has one. A scope of more than one item (R80.3-1) is one claim: the
+/// oracle checks each item of it.
 pub fn as_file(path: &str, text: &str) -> crate::File {
     let (heads, _) = check(path, text);
     let mut file = crate::File { path: path.to_string(), items: Vec::new() };
@@ -443,9 +450,7 @@ pub fn as_file(path: &str, text: &str) -> crate::File {
     }
     for head in heads {
         let place = crate::Place { file: path.to_string(), line: head.line, column: 1 };
-        let wide = head.scope.iter().any(|scope| scope.starts_with("impl ") || scope.starts_with("callers(") || scope.ends_with("::*"));
         let kind = match head.kind.as_str() {
-            _ if wide => crate::ClaimKind::Later,
             "same" => crate::ClaimKind::Same,
             "change" => crate::ClaimKind::Change,
             "different" => crate::ClaimKind::Different,
@@ -458,7 +463,7 @@ pub fn as_file(path: &str, text: &str) -> crate::File {
         let params = head.signature.iter().map(|(name, ty)| (name.clone(), crate::Type::Other(ty.clone()), place.clone())).collect();
         let func = crate::Func { name: head.function.clone(), params, ret: None, body, place: place.clone() };
         let options = crate::Options { cfg: head.cfg.clone(), reason: head.reason.clone(), except: head.except.clone() };
-        let attribute = if wide { format!("{} of a wide scope", head.kind) } else { head.kind.clone() };
+        let attribute = head.kind.clone();
         let targets: Vec<crate::Target> = head.scope.iter().map(|scope| crate::Target::Text(record_text(scope), place.clone())).collect();
         if matches!(kind, crate::ClaimKind::Rename | crate::ClaimKind::Moved | crate::ClaimKind::Rewrite) || kind == crate::ClaimKind::Later {
             file.items.push(crate::Item::Claim(crate::Claim { kind, attribute, targets, options, func, place }));
@@ -481,7 +486,7 @@ mod file_tests {
         let text = "use semilla_intent::prelude::*;\nintent!(\"x\");\n#[same(<shop::Counter>::get, <shop::S as before::shop::T>::m)]\nfn f(x: u32) -> bool { <before::shop::S as before::shop::T>::m(x) }\n#[same(impl shop::Cart)]\nfn g() {}\n";
         let file = as_file("f.rs", text);
         let claims: Vec<(crate::ClaimKind, String)> = file.claims().map(|claim| (claim.kind, claim.targets[0].text())).collect();
-        assert_eq!(claims, [(crate::ClaimKind::Same, "shop::Counter::get".into()), (crate::ClaimKind::Same, "<shop::S as shop::T>::m".into()), (crate::ClaimKind::Later, "impl shop::Cart".into())]);
+        assert_eq!(claims, [(crate::ClaimKind::Same, "shop::Counter::get".into()), (crate::ClaimKind::Same, "<shop::S as shop::T>::m".into()), (crate::ClaimKind::Same, "impl shop::Cart".into())]);
         assert!(matches!(file.items[0], crate::Item::Intent(ref text, _) if text == "x"));
     }
 }
