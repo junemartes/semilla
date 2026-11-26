@@ -60,14 +60,41 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different]
       affected bodies: shop::<Food as Tax>::rate
-      equivalence: different: for self = &Food: before returns 5, after returns 6 (confirmed by a run)
+      equivalence: different: for self = &Food: before returns 5, after returns 6 (suggested test `semilla_test_rate_0465e5`)
       reaches: 2 public functions: shop::charge, shop::food_bill (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    <shop::Food as shop::Tax>::rate (src/lib.rs:8): same graph (the edit keeps the control flow); different (for self = &Food: before returns 5, after returns 6; confirmed by a run)
+    <shop::Food as shop::Tax>::rate (src/lib.rs:8): same graph (the edit keeps the control flow); different (for self = &Food: before returns 5, after returns 6; suggested test `semilla_test_rate_0465e5`)
     reached bodies: 2
       shop::charge (src/lib.rs:13): reached through <shop::Food as shop::Tax>::rate, not decided (the impl `<shop::Food as shop::Tax>::rate` of the trait method changes in the step: t.rate() (src/lib.rs:-14))
-      shop::food_bill (src/lib.rs:17): different through shop::charge: for n = 1: before returns 5, after returns 6 (confirmed by a run)
+      shop::food_bill (src/lib.rs:17): different through shop::charge: for n = 1: before returns 5, after returns 6 (suggested test `semilla_test_food_bill_3f08e7`)
+  suggested tests: 2 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_rate_0465e5`: add it to `src/lib.rs`, in the module of `<shop::Food as shop::Tax>::rate` (line 8); run it: `cargo test -p shop semilla_test_rate_0465e5`; also: `cargo test -p shop --release semilla_test_rate_0465e5`
+      #[cfg(test)]
+      mod semilla_test_rate_0465e5 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 5; the new version returns 6.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let arg1 = crate::Food;
+              let got = <crate::Food as crate::Tax>::rate(&arg1);
+              assert_eq!(got, 5);
+          }
+      }
+    `semilla_test_food_bill_3f08e7`: add it to `src/lib.rs`, in the module of `shop::food_bill` (line 17); run it: `cargo test -p shop semilla_test_food_bill_3f08e7`; also: `cargo test -p shop --release semilla_test_food_bill_3f08e7`
+      #[cfg(test)]
+      mod semilla_test_food_bill_3f08e7 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 5; the new version returns 6.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let n = 1;
+              let got = crate::food_bill(n);
+              assert_eq!(got, 5);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

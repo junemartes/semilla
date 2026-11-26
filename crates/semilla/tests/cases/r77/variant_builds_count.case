@@ -37,23 +37,89 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `1` → `2` at `shop::f/S0/init/args[0]` [semantics · code different]
       affected bodies: shop::f (with 4 other edits of this body)
-      equivalence: different alone: for x = 0: before returns 25, after returns 33 (confirmed by a run); the body: different: for x = 0: before returns 25, after returns 56 (confirmed by a run)
+      equivalence: different alone: for x = 0: before returns 25, after returns 33 (suggested test `semilla_test_f_46cdde`); the body: different: for x = 0: before returns 25, after returns 56 (suggested test `semilla_test_f_42b11f`)
   ◆ f2 derived: changed literal `2` → `3` at `shop::f/S1/init/args[0]` [semantics · code different]
       affected bodies: shop::f (with 4 other edits of this body)
-      equivalence: different alone: for x = 0: before returns 25, after returns 29 (confirmed by a run); the body: different: for x = 0: before returns 25, after returns 56 (confirmed by a run) (the same line for f3)
+      equivalence: different alone: for x = 0: before returns 25, after returns 29 (suggested test `semilla_test_f_e31899`); the body: different: for x = 0: before returns 25, after returns 56 (suggested test `semilla_test_f_42b11f`) (the same line for f3)
   ◆ f3 derived: changed literal `3` → `4` at `shop::f/S2/init/args[0]` [semantics · code different]
       affected bodies: shop::f (with 4 other edits of this body)
       equivalence: the same line as f2
   ◆ f4 derived: changed literal `4` → `5` at `shop::f/S3/init/args[0]` [semantics · code different]
       affected bodies: shop::f (with 4 other edits of this body)
-      equivalence: different alone in dev: for x = 0: before returns 25, after returns 30 (confirmed by a run); not checked alone in release (the budget of the step); the body: different: for x = 0: before returns 25, after returns 56 (confirmed by a run)
+      equivalence: different alone in dev: for x = 0: before returns 25, after returns 30 (suggested test `semilla_test_f_151eeb`); not checked alone in release (the budget of the step); the body: different: for x = 0: before returns 25, after returns 56 (suggested test `semilla_test_f_42b11f`)
   ◆ f5 derived: changed literal `5` → `6` at `shop::f/tail/args[0]` [semantics · code different]
       affected bodies: shop::f (with 4 other edits of this body)
-      equivalence: different alone in dev: for x = 0: before returns 25, after returns 26 (confirmed by a run); not checked alone in release (the budget of the step); the body: different: for x = 0: before returns 25, after returns 56 (confirmed by a run)
+      equivalence: different alone in dev: for x = 0: before returns 25, after returns 26 (suggested test `semilla_test_f_3b165c`); not checked alone in release (the budget of the step); the body: different: for x = 0: before returns 25, after returns 56 (suggested test `semilla_test_f_42b11f`)
   cover: each of the 10 changed line(s) is in a fact
   control flow: 1 body
-    shop::f (src/lib.rs:1): same graph (the edit keeps the control flow); different (for x = 0: before returns 25, after returns 56; confirmed by a run)
+    shop::f (src/lib.rs:1): same graph (the edit keeps the control flow); different (for x = 0: before returns 25, after returns 56; suggested test `semilla_test_f_42b11f`)
     the equivalence check stopped at its budget (200000000 solver steps, 8 variant builds): 2 facts not checked alone; semilla expand --step 0
+  suggested tests: 5 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_f_42b11f`: add it to `src/lib.rs`, in the module of `shop::f` (line 1); run it: `cargo test -p shop semilla_test_f_42b11f`; also: `cargo test -p shop --release semilla_test_f_42b11f`
+      #[cfg(test)]
+      mod semilla_test_f_42b11f {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 25; the new version returns 56.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let x = 0;
+              let got = crate::f(x);
+              assert_eq!(got, 25);
+          }
+      }
+    `semilla_test_f_46cdde`: add it to `src/lib.rs`, in the module of `shop::f` (line 1); run it: `cargo test -p shop semilla_test_f_46cdde`; also: `cargo test -p shop --release semilla_test_f_46cdde`
+      #[cfg(test)]
+      mod semilla_test_f_46cdde {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 25; the new version returns 33.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let x = 0;
+              let got = crate::f(x);
+              assert_eq!(got, 25);
+          }
+      }
+    `semilla_test_f_e31899`: add it to `src/lib.rs`, in the module of `shop::f` (line 1); run it: `cargo test -p shop semilla_test_f_e31899`; also: `cargo test -p shop --release semilla_test_f_e31899`
+      #[cfg(test)]
+      mod semilla_test_f_e31899 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 25; the new version returns 29.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let x = 0;
+              let got = crate::f(x);
+              assert_eq!(got, 25);
+          }
+      }
+    `semilla_test_f_151eeb`: add it to `src/lib.rs`, in the module of `shop::f` (line 1); run it: `cargo test -p shop semilla_test_f_151eeb`
+      #[cfg(test)]
+      mod semilla_test_f_151eeb {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 25; the new version returns 30.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let x = 0;
+              let got = crate::f(x);
+              assert_eq!(got, 25);
+          }
+      }
+    `semilla_test_f_3b165c`: add it to `src/lib.rs`, in the module of `shop::f` (line 1); run it: `cargo test -p shop semilla_test_f_3b165c`
+      #[cfg(test)]
+      mod semilla_test_f_3b165c {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 25; the new version returns 26.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let x = 0;
+              let got = crate::f(x);
+              assert_eq!(got, 25);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

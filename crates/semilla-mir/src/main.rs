@@ -165,6 +165,10 @@ fn inherited_checks(args: &[String]) -> Vec<String> {
 struct BodyRecord {
     /// The full def path, with the crate name first.
     name: String,
+    /// [R75.1-1] True for the body of a constant or a static (the kind of the item from the
+    /// compiler): a suggested test reads its value, it does not call it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    value: bool,
     level: &'static str,
     /// The canonical MIR text.
     text: String,
@@ -1040,6 +1044,7 @@ pub(crate) fn guarded<T>(f: impl FnOnce() -> T) -> Option<T> {
 fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
     BodyRecord {
         name,
+        value: false,
         level: level.name(),
         text: print::unique("failed_body"),
         shape: print::unique("failed_body"),
@@ -1179,8 +1184,10 @@ fn record(
             range: if level == Level::N0 { spans::body_range(body.span) } else { None },
         }
     });
+    let value = item.is_some_and(|def| matches!(CrateItem(def).kind(), rustc_public::ItemKind::Const | rustc_public::ItemKind::Static));
     BodyRecord {
         name,
+        value,
         level: level.name(),
         text: printed.text,
         shape: normalize::shape(&canonical),

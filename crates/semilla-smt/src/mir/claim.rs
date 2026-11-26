@@ -46,7 +46,7 @@ pub enum ClaimVerdict {
     /// The body holds for each input: the method (`SMT`, `SMT after inlining …`).
     Proved { method: String },
     /// An exact input for which the body is false or panics, and the part that fails. `run`:
-    /// the calls of a run that can confirm it (design 74, R74.1-1).
+    /// the calls of the suggested test of the counterexample (design 75, R75.1-3).
     False { input: String, detail: String, run: Option<Box<semilla_core::run::RunCase>> },
     /// Semilla cannot check the claim: the cause.
     Claimed { cause: String },
@@ -274,12 +274,12 @@ struct World {
     env: Vec<(String, Val)>,
     /// Each call of a version on this path and its outcome, for the text of a false claim.
     shown: Vec<(String, Shown)>,
-    /// [R74.1-1] Each call of a version on this path with its arguments and its exit, for the
-    /// run that confirms a false claim (design 74).
+    /// [R75.1-3] Each call of a version on this path with its arguments and its exit, for the
+    /// suggested test of a false claim (design 75).
     runs: Vec<CallRun>,
 }
 
-/// [R74.1-1] One call of a version on a path of a claim.
+/// [R75.1-3] One call of a version on a path of a claim.
 #[derive(Clone)]
 struct CallRun {
     version: Version,
@@ -486,10 +486,10 @@ impl<'a, 'b> Eval<'a, 'b> {
         self.imported.insert(key, id);
         let copied = match ty.get().cloned() {
             Some(IrTy::Tuple(items)) => IrTy::Tuple(items.iter().map(|item| self.import(&ty.at(*item))).collect()),
-            Some(IrTy::Adt { n, v, vn, d, dt, e, fs, g }) => {
+            Some(IrTy::Adt { n, v, vn, d, dt, e, fs }) => {
                 let v = v.iter().map(|list| list.iter().map(|item| self.import(&ty.at(*item))).collect()).collect();
                 let dt = dt.map(|dt| self.import(&ty.at(dt)));
-                IrTy::Adt { n, v, vn, d, dt, e, fs, g }
+                IrTy::Adt { n, v, vn, d, dt, e, fs }
             }
             Some(IrTy::Ref(m, inner)) => IrTy::Ref(m, self.import(&ty.at(inner))),
             Some(IrTy::Seq { e, n, k }) => IrTy::Seq { e: self.import(&ty.at(e)), n, k },
@@ -648,7 +648,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                         None => {
                             let item = self.import(item);
                             let dt = self.add(IrTy::Int(64, true)).id;
-                            self.add(IrTy::Adt { n: text, v: vec![Vec::new(), vec![item]], vn: vec!["None".into(), "Some".into()], d: vec!["0".into(), "1".into()], dt: Some(dt), e: true, fs: vec![Vec::new(), vec!["0".into()]], g: true })
+                            self.add(IrTy::Adt { n: text, v: vec![Vec::new(), vec![item]], vn: vec!["None".into(), "Some".into()], d: vec!["0".into(), "1".into()], dt: Some(dt), e: true, fs: vec![Vec::new(), vec!["0".into()]] })
                         }
                     };
                     return Ok((found, ver));
@@ -660,7 +660,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                         None => {
                             let (ok, err) = (self.import(ok), self.import(err));
                             let dt = self.add(IrTy::Int(64, true)).id;
-                            self.add(IrTy::Adt { n: text, v: vec![vec![ok], vec![err]], vn: vec!["Ok".into(), "Err".into()], d: vec!["0".into(), "1".into()], dt: Some(dt), e: true, fs: vec![vec!["0".into()], vec!["0".into()]], g: true })
+                            self.add(IrTy::Adt { n: text, v: vec![vec![ok], vec![err]], vn: vec!["Ok".into(), "Err".into()], d: vec!["0".into(), "1".into()], dt: Some(dt), e: true, fs: vec![vec!["0".into()], vec!["0".into()]] })
                         }
                     };
                     return Ok((found, ver));
@@ -866,7 +866,7 @@ impl<'a, 'b> Eval<'a, 'b> {
         }
         let (_, world, out) = &fails[index];
         // The values of the calls on the failed path, with the inputs of the model; and the
-        // values of their arguments for the run (R74.1-1).
+        // values of their arguments for the suggested test (R75.1-3).
         let mut wanted: Vec<(String, String)> = Vec::new();
         let mut parts: Vec<V> = Vec::new();
         for (_, shown) in &world.shown {
@@ -951,9 +951,9 @@ impl<'a, 'b> Eval<'a, 'b> {
         Ok(ClaimVerdict::False { input, detail, run })
     }
 
-    /// [R74.1-1] The calls of a run that can confirm a false claim: each call of a version on
-    /// the failed path with its arguments of the model and the outcome of the model. No call:
-    /// no run (the claim is false by its own operations).
+    /// [R75.1-3] The calls of the suggested test of a false claim: each call of a version on the
+    /// failed path with its arguments of the model and the outcome of the model. No call: no
+    /// test (the claim is false by its own operations).
     fn run_case(&self, world: &World, values: &BTreeMap<String, String>) -> Option<Box<semilla_core::run::RunCase>> {
         use semilla_core::run::{ArgMode, RunArg, RunCall, RunCase, RunExit, RunOut, RunSide};
         if world.runs.is_empty() {
@@ -977,12 +977,12 @@ impl<'a, 'b> Eval<'a, 'b> {
                 })
                 .collect();
             let exit = match &call.exit {
-                Exit::Return(value) => RunExit::Returns(debug_text(value, Some(&call.ret), values)),
+                Exit::Return(value) => RunExit::Returns(pattern(value, Some(&call.ret), values, true)),
                 Exit::Panic { kind, msg, .. } => RunExit::Panics(msg.clone().or_else(|| self.decls.kinds.get(kind).cloned())),
                 Exit::Abort | Exit::Cut => RunExit::Aborts,
             };
             let side = if call.version == Version::Before { RunSide::Before } else { RunSide::After };
-            let found = RunCall { side, name: call.name.clone(), target: String::new(), args, expect: RunOut { exit, muts: Vec::new() } };
+            let found = RunCall { side, name: call.name.clone(), target: String::new(), args, expect: RunOut { exit, muts: Vec::new() }, file: String::new(), line: 0, value: false };
             if !calls.contains(&found) {
                 calls.push(found);
             }
@@ -2013,7 +2013,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                     let text = format!("std::option::Option<{}>", ty_text(&value.ty));
                     let item = ev.import(&value.ty);
                     let dt = ev.add(IrTy::Int(64, true)).id;
-                    ev.add(IrTy::Adt { n: text, v: vec![Vec::new(), vec![item]], vn: vec!["None".into(), "Some".into()], d: vec!["0".into(), "1".into()], dt: Some(dt), e: true, fs: vec![Vec::new(), vec!["0".into()]], g: true })
+                    ev.add(IrTy::Adt { n: text, v: vec![Vec::new(), vec![item]], vn: vec!["None".into(), "Some".into()], d: vec!["0".into(), "1".into()], dt: Some(dt), e: true, fs: vec![Vec::new(), vec!["0".into()]] })
                 }
                 None => return Err(Fail::Claimed(format!("`{name}(…)` with no known type (`{}`): compare it with a value of a known type", e.text))),
             };

@@ -45,10 +45,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:9): return → call `charge::<Food>`
       control flow: + arrow entry (src/lib.rs:9) → call `num::<impl u32>::wrapping_add` (src/lib.rs:9)
       control flow: − arrow entry (src/lib.rs:-9) → call `charge::<Food>` (src/lib.rs:-9)
-      equivalence: different: for n = 0: before returns 0, after returns 5 (confirmed by a run)
+      equivalence: different: for n = 0: before returns 0, after returns 5 (suggested test `semilla_test_bill_c51dee`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::bill (src/lib.rs:9): graph changes: +1 call, +2 arrows, −1 arrow; different (for n = 0: before returns 0, after returns 5; confirmed by a run)
+    shop::bill (src/lib.rs:9): graph changes: +1 call, +2 arrows, −1 arrow; different (for n = 0: before returns 0, after returns 5; suggested test `semilla_test_bill_c51dee`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_bill_c51dee`: add it to `src/lib.rs`, in the module of `shop::bill` (line 9); run it: `cargo test -p shop semilla_test_bill_c51dee`; also: `cargo test -p shop --release semilla_test_bill_c51dee`
+      #[cfg(test)]
+      mod semilla_test_bill_c51dee {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 0; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let n = 0;
+              let got = crate::bill(n);
+              assert_eq!(got, 0);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

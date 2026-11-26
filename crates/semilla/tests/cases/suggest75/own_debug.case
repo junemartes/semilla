@@ -1,5 +1,5 @@
-note: a type with its own `Debug` impl has no `Debug` text in the model: the run cannot confirm the value (design 74)
-rule-: R74.1-2
+note: a type with its own `Debug` impl: a suggested test matches its fields with a pattern, so it needs no `Debug` (design 75)
+rule+: R75.1-1
 option: --compiled
 === both Cargo.toml
 [package]
@@ -44,10 +44,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed operator `x / 2` → `x >> 2` at `depot::walk/tail/args[0]` [semantics · code different]
       affected bodies: depot::walk
-      equivalence: different: for x = 8: before returns Meters { 4 }, after returns Meters { 2 } (not confirmed by a run: the difference is in a part of the outcome that the probe does not see (an effect, or a value that the model does not give))
+      equivalence: different: for x = 8: before returns Meters { 4 }, after returns Meters { 2 } (suggested test `semilla_test_walk_10a69b`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::walk (src/lib.rs:9): same graph (the edit keeps the control flow); different (for x = 8: before returns Meters { 4 }, after returns Meters { 2 }; not confirmed by a run: the difference is in a part of the outcome that the probe does not see (an effect, or a value that the model does not give))
+    depot::walk (src/lib.rs:9): same graph (the edit keeps the control flow); different (for x = 8: before returns Meters { 4 }, after returns Meters { 2 }; suggested test `semilla_test_walk_10a69b`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_walk_10a69b`: add it to `src/lib.rs`, in the module of `depot::walk` (line 9); run it: `cargo test -p depot semilla_test_walk_10a69b`; also: `cargo test -p depot --release semilla_test_walk_10a69b`
+      #[cfg(test)]
+      mod semilla_test_walk_10a69b {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns Meters { 4 }; the new version returns Meters { 2 }.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let x = 8;
+              let got = crate::walk(x);
+              assert!(matches!(got, crate::Meters(4)));
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

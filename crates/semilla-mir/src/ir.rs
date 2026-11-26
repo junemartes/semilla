@@ -79,11 +79,6 @@ pub enum IrTy {
         /// its name, also a private field). A field of a tuple struct has its index as name.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         fs: Vec<Vec<String>>,
-        /// [R74.1-2] True if the `Debug` impl of the type is the impl of `#[derive(Debug)]` (the
-        /// compiler marks it `#[automatically_derived]`): the probe of design 74 then knows the
-        /// `Debug` text of a value from its fields.
-        #[serde(skip_serializing_if = "std::ops::Not::not")]
-        g: bool,
     },
     /// A reference: true for `&mut`, the type of the target.
     Ref(bool, u32),
@@ -241,9 +236,9 @@ pub struct IrTerm {
     /// of that crate, so the check does not know if the code generation keeps the check.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub o: bool,
-    /// [R74.1-2] The message of the panic of a check, as the compiler gives it
-    /// (`AssertKind::description`: "attempt to add with overflow"). The probe of design 74
-    /// compares it with the message of a run.
+    /// [R75.1-1] The message of the panic of a check, as the compiler gives it
+    /// (`AssertKind::description`: "attempt to add with overflow"). A suggested test expects it
+    /// (`#[should_panic(expected = "…")]`, design 75).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub m: Option<String>,
 }
@@ -262,9 +257,9 @@ pub struct Gen {
 impl Gen {
     /// The settings of the session of the compiler.
     pub fn of_session(tcx: rustc_middle::ty::TyCtxt<'_>) -> Gen {
-        // [R74.1-2] A switch for the test of a model defect (design 74): with the variable
+        // [R75.2-1] A switch for the test of a model defect (design 75): with the variable
         // `SEMILLA_TEST_RULE_OFF=R69.1-1`, the driver keeps each optional overflow check, as the
-        // driver before batch 11a did. Only the test of the probe sets it.
+        // driver before batch 11a did. Only the run check of the test suite sets it.
         if std::env::var("SEMILLA_TEST_RULE_OFF").is_ok_and(|rule| rule == "R69.1-1") {
             return Gen { overflow_checks: true, abort: !tcx.sess.panic_strategy().unwinds() };
         }
@@ -306,7 +301,7 @@ fn optional_overflow_check(msg: &AssertMessage) -> bool {
     internal_kind(msg).is_some_and(|kind| kind.is_optional_overflow_check())
 }
 
-/// [R74.1-2] The message of the panic of a check at run time: the text that the panic function
+/// [R75.1-1] The message of the panic of a check at run time: the text that the panic function
 /// of the kind (the lang item of `AssertKind::panic_function`) gives to `panic_fmt`, from the MIR
 /// of that function. `None` for a message with the values of the check (an index out of bounds),
 /// for a kind with data of another type, and for a panic function with no such text.
@@ -346,33 +341,6 @@ fn panic_text(tcx: rustc_middle::ty::TyCtxt<'_>, item: rustc_attr_ir::LangItem) 
         }
     }
     (texts.len() == 1).then(|| texts.remove(0))
-}
-
-/// [R74.1-2] True if the `Debug` impl of an ADT is an impl that `#[derive(Debug)]` makes: each
-/// impl of `Debug` for the type has the mark `#[automatically_derived]` of the compiler.
-fn debug_derived(tcx: rustc_middle::ty::TyCtxt<'_>, did: rustc_span::def_id::DefId) -> bool {
-    thread_local! {
-        static KNOWN: std::cell::RefCell<HashMap<rustc_span::def_id::DefId, bool>> = std::cell::RefCell::new(HashMap::new());
-    }
-    if let Some(known) = KNOWN.with(|known| known.borrow().get(&did).copied()) {
-        return known;
-    }
-    let found = debug_derived_now(tcx, did);
-    KNOWN.with(|known| known.borrow_mut().insert(did, found));
-    found
-}
-
-fn debug_derived_now(tcx: rustc_middle::ty::TyCtxt<'_>, did: rustc_span::def_id::DefId) -> bool {
-    let Some(debug) = tcx.get_diagnostic_item(rustc_span::sym::Debug) else { return false };
-    let self_ty = tcx.type_of(did).instantiate_identity().skip_norm_wip();
-    // The impls for the type itself: a blanket impl (`impl<F: FnPtr> Debug for F`) is not one.
-    let mut impls = Vec::new();
-    tcx.for_each_relevant_impl(debug, self_ty, |imp| {
-        if tcx.type_of(imp).instantiate_identity().skip_norm_wip().ty_adt_def().is_some_and(|adt| adt.did() == did) {
-            impls.push(imp);
-        }
-    });
-    !impls.is_empty() && impls.into_iter().all(|imp| tcx.is_automatically_derived(imp))
 }
 
 /// [R69.1-1] The value of a runtime check operand in a session: the function of the compiler.
@@ -599,8 +567,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     }
                 }
                 let dt = discr_ty.map(|ty| self.ty(ty, depth + 1));
-                let g = crate::guarded(|| debug_derived(self.tcx, rustc_public::rustc_internal::internal(self.tcx, def.def_id()))).unwrap_or(false);
-                IrTy::Adt { n: format!("{}", rustc_public::rustc_internal::internal(self.tcx, ty)), v: variants, vn: names, d: discriminants, dt, e: enum_like, fs: field_names, g }
+                IrTy::Adt { n: format!("{}", rustc_public::rustc_internal::internal(self.tcx, ty)), v: variants, vn: names, d: discriminants, dt, e: enum_like, fs: field_names }
             }
             _ => self.opaque(ty),
         }

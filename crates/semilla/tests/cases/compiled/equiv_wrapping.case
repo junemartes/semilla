@@ -32,10 +32,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + panic `overflow` (src/lib.rs:2)
       control flow: − call `num::<impl u32>::wrapping_add` (src/lib.rs:-2): return → return
       control flow: … 2 more (semilla expand --step 0)
-      equivalence: different in dev: for x = 4294967295: before returns 0, after panics (overflow add) (confirmed by a run); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
+      equivalence: different in dev: for x = 4294967295: before returns 0, after panics (overflow add) (suggested test `semilla_test_next_52a653`); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::next (src/lib.rs:1): graph changes: +1 check, +1 panic, −1 call, +3 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different in dev (for x = 4294967295: before returns 0, after panics (overflow add); confirmed by a run); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
+    shop::next (src/lib.rs:1): graph changes: +1 check, +1 panic, −1 call, +3 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different in dev (for x = 4294967295: before returns 0, after panics (overflow add); suggested test `semilla_test_next_52a653`); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_next_52a653`: add it to `src/lib.rs`, in the module of `shop::next` (line 1); run it: `cargo test -p shop semilla_test_next_52a653`
+      #[cfg(test)]
+      mod semilla_test_next_52a653 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 0; the new version panics (overflow add).
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let x = 4294967295;
+              let got = crate::next(x);
+              assert_eq!(got, 0);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

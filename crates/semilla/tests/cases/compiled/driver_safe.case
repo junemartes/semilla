@@ -178,7 +178,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: `shop::bits`: not decided: the difference depends on the result of a call or on a value that the check does not model
       equivalence: `shop::copy_one`: not decided: a raw pointer
-      equivalence: `shop::first`: different: for it = a value: before returns (a value, 1), after returns (a value, 2) (not confirmed by a run: the difference is in a part of the outcome that the probe does not see (an effect, or a value that the model does not give))
+      equivalence: `shop::first`: different: for it = a value: before returns (a value, 1), after returns (a value, 2) (no suggested test: the input `it` has no Rust form: an input of the type `I` has no value in the model)
       equivalence: `shop::later`: not decided: a coroutine value: { x + 1 } (src/lib.rs:-69)
       equivalence: `shop::later::{closure#0} { x + 2 }`: not decided: a coroutine body
       equivalence: `shop::run_later`: not decided: a coroutine value: { x + 1 } (src/lib.rs:-69)
@@ -189,7 +189,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   control flow: 8 bodies
     shop::bits (src/lib.rs:46): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (the difference depends on the result of a call or on a value that the check does not model)
     shop::copy_one (src/lib.rs:50): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a raw pointer)
-    shop::first (src/lib.rs:55): same graph (the edit keeps the control flow); different (for it = a value: before returns (a value, 1), after returns (a value, 2); not confirmed by a run: the difference is in a part of the outcome that the probe does not see (an effect, or a value that the model does not give))
+    shop::first (src/lib.rs:55): same graph (the edit keeps the control flow); different (for it = a value: before returns (a value, 1), after returns (a value, 2); no suggested test: the input `it` has no Rust form: an input of the type `I` has no value in the model)
     shop::later (src/lib.rs:69): same graph; not decided (a coroutine value: { x + 1 } (src/lib.rs:-69))
     shop::later::{closure#0} { x + 2 } (src/lib.rs:69): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a coroutine body)
     shop::run_later (src/lib.rs:73): same graph (the edit keeps the control flow); not decided (a coroutine value: { x + 1 } (src/lib.rs:-69))

@@ -69,6 +69,9 @@ pub struct DropCall {
 pub struct BodyRecord {
     /// The full def path, with the crate name first (for example `mycrate::cart::Cart::total`).
     pub name: String,
+    /// [R75.1-1] True for the body of a constant or a static: a suggested test reads its value.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub value: bool,
     /// `n0`, `n2`, or `n3`.
     pub level: String,
     /// The canonical MIR text.

@@ -90,16 +90,71 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different]
       affected bodies: shop::tier
-      equivalence: different: for k = 1: before returns 4, after returns 5 (confirmed by a run)
+      equivalence: different: for k = 1: before returns 4, after returns 5 (suggested test `semilla_test_tier_02cc84`)
       reaches: 3 public functions: shop::cost, shop::quote, shop::bill (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::tier (src/lib.rs:1): same graph (the edit keeps the control flow); different (for k = 1: before returns 4, after returns 5; confirmed by a run)
+    shop::tier (src/lib.rs:1): same graph (the edit keeps the control flow); different (for k = 1: before returns 4, after returns 5; suggested test `semilla_test_tier_02cc84`)
     reached bodies: 4
       shop::base (src/lib.rs:21): equivalent (proved after inlining shop::tier)
-      shop::cost (src/lib.rs:9): different through shop::tier: for k = 1, n = 1: before returns 4, after returns 5 (confirmed by a run)
-      shop::quote (src/lib.rs:13): different through shop::cost: for k = 1, n = 1: before returns 5, after returns 6 (confirmed by a run)
-      shop::bill (src/lib.rs:17): different through shop::quote: for n = 1: before returns 5, after returns 6 (confirmed by a run)
+      shop::cost (src/lib.rs:9): different through shop::tier: for k = 1, n = 1: before returns 4, after returns 5 (suggested test `semilla_test_cost_c448e3`)
+      shop::quote (src/lib.rs:13): different through shop::cost: for k = 1, n = 1: before returns 5, after returns 6 (suggested test `semilla_test_quote_d39fcf`)
+      shop::bill (src/lib.rs:17): different through shop::quote: for n = 1: before returns 5, after returns 6 (suggested test `semilla_test_bill_ab52c4`)
+  suggested tests: 4 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_tier_02cc84`: add it to `src/lib.rs`, in the module of `shop::tier` (line 1); run it: `cargo test -p shop semilla_test_tier_02cc84`; also: `cargo test -p shop --release semilla_test_tier_02cc84`
+      #[cfg(test)]
+      mod semilla_test_tier_02cc84 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 4; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let k = 1;
+              let got = crate::tier(k);
+              assert_eq!(got, 4);
+          }
+      }
+    `semilla_test_cost_c448e3`: add it to `src/lib.rs`, in the module of `shop::cost` (line 9); run it: `cargo test -p shop semilla_test_cost_c448e3`; also: `cargo test -p shop --release semilla_test_cost_c448e3`
+      #[cfg(test)]
+      mod semilla_test_cost_c448e3 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 4; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let k = 1;
+              let n = 1;
+              let got = crate::cost(k, n);
+              assert_eq!(got, 4);
+          }
+      }
+    `semilla_test_quote_d39fcf`: add it to `src/lib.rs`, in the module of `shop::quote` (line 13); run it: `cargo test -p shop semilla_test_quote_d39fcf`; also: `cargo test -p shop --release semilla_test_quote_d39fcf`
+      #[cfg(test)]
+      mod semilla_test_quote_d39fcf {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 5; the new version returns 6.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let k = 1;
+              let n = 1;
+              let got = crate::quote(k, n);
+              assert_eq!(got, 5);
+          }
+      }
+    `semilla_test_bill_ab52c4`: add it to `src/lib.rs`, in the module of `shop::bill` (line 17); run it: `cargo test -p shop semilla_test_bill_ab52c4`; also: `cargo test -p shop --release semilla_test_bill_ab52c4`
+      #[cfg(test)]
+      mod semilla_test_bill_ab52c4 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 5; the new version returns 6.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let n = 1;
+              let got = crate::bill(n);
+              assert_eq!(got, 5);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

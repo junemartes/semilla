@@ -30,13 +30,27 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `5` → `6` at `shop::mask/tail/lhs/rhs` [semantics · code different]
       affected bodies: shop::mask (with 1 other edit of this body)
-      equivalence: different alone: for x = 0: before returns 6, after returns 5 (confirmed by a run); the body: equivalent (proved by SMT) (the same line for f2)
+      equivalence: different alone: for x = 0: before returns 6, after returns 5 (suggested test `semilla_test_mask_5cb777`); the body: equivalent (proved by SMT) (the same line for f2)
   ◆ f2 derived: changed literal `3` → `0` at `shop::mask/tail/rhs` [semantics · code different]
       affected bodies: shop::mask (with 1 other edit of this body)
       equivalence: the same line as f1
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     shop::mask (src/lib.rs:1): same graph (the edit keeps the control flow); equivalent (proved by SMT)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_mask_5cb777`: add it to `src/lib.rs`, in the module of `shop::mask` (line 1); run it: `cargo test -p shop semilla_test_mask_5cb777`; also: `cargo test -p shop --release semilla_test_mask_5cb777`
+      #[cfg(test)]
+      mod semilla_test_mask_5cb777 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 6; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let x = 0;
+              let got = crate::mask(x);
+              assert_eq!(got, 6);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

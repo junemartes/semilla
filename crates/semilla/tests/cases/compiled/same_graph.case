@@ -28,10 +28,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `1` → `2` at `depot::mask/tail/rhs` [semantics · code different]
       affected bodies: depot::mask
-      equivalence: different: for v = 0: before returns 1, after returns 2 (confirmed by a run)
+      equivalence: different: for v = 0: before returns 1, after returns 2 (suggested test `semilla_test_mask_75dac8`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::mask (src/lib.rs:1): same graph (the edit keeps the control flow); different (for v = 0: before returns 1, after returns 2; confirmed by a run)
+    depot::mask (src/lib.rs:1): same graph (the edit keeps the control flow); different (for v = 0: before returns 1, after returns 2; suggested test `semilla_test_mask_75dac8`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_mask_75dac8`: add it to `src/lib.rs`, in the module of `depot::mask` (line 1); run it: `cargo test -p depot semilla_test_mask_75dac8`; also: `cargo test -p depot --release semilla_test_mask_75dac8`
+      #[cfg(test)]
+      mod semilla_test_mask_75dac8 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 2.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let v = 0;
+              let got = crate::mask(v);
+              assert_eq!(got, 1);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -45,6 +45,8 @@ pub struct Answer {
     /// The record names of the item of the claim in each version that has it: `before::NAME`,
     /// `after::NAME` (the first target, after the rename map and the loose path).
     pub items: Vec<String>,
+    /// [R75.1-3] The suggested test of a false claim (design 75).
+    pub tests: Vec<semilla_core::run::SuggestedTest>,
 }
 
 /// [R69.5-1] The result of a claim with no answer of the oracle. The oracle answered the other
@@ -371,7 +373,14 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
                             // [R77.1-1] The changed bodies that the proof explains (the coverage).
                             let explains: Vec<String> = outcome.report.coverage.iter().filter(|body| body.state == CoverState::Claim && body.claims.contains(&id)).map(|body| body.name.clone()).collect();
                             let (result, detail, configs, reads, errors) = match found {
-                                Some(answer) => (answer.result.unwrap_or(IntentResult::Claimed), answer.detail, answer.configs, answer.reads, answer.errors),
+                                Some(answer) => {
+                                    // [R75.1-3] The test of a false claim goes to the list of the step.
+                                    for test in &answer.tests {
+                                        let flow = outcome.report.flow.get_or_insert_with(Default::default);
+                                        crate::equiv::merge_test(&mut flow.tests, test);
+                                    }
+                                    (answer.result.unwrap_or(IntentResult::Claimed), answer.detail, answer.configs, answer.reads, answer.errors)
+                                }
                                 None => {
                                     let (result, detail) = no_answer(answers.is_some(), input.step.compiled);
                                     (result, detail.into(), Vec::new(), Vec::new(), Vec::new())

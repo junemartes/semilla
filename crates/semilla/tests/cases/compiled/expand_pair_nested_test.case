@@ -93,28 +93,68 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: deleted statement `v` at `shop::keep/tail` [semantics · code different]
       affected bodies: shop::keep (with 1 other edit of this body)
       control flow: − arrow entry (src/lib.rs:-4) → return (src/lib.rs:-4)
-      equivalence: different: for v = 0: before returns 0, after returns 2 (confirmed by a run)
+      equivalence: different: for v = 0: before returns 0, after returns 2 (suggested test `semilla_test_keep_f66573`)
   ◆ f3 derived: added macro statement `bump!(v)` at `shop::keep/tail` [semantics · code different]
       affected bodies: shop::keep (with 1 other edit of this body)
       control flow: + check `overflow: v + 2` (src/lib.rs:4): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:4)
       control flow: + arrow entry (src/lib.rs:4) → check `overflow: v + 2` (src/lib.rs:4)
-      equivalence: different: for v = 0: before returns 0, after returns 2 (confirmed by a run)
+      equivalence: different: for v = 0: before returns 0, after returns 2 (suggested test `semilla_test_keep_f66573`)
   ◆ f4 derived: deleted statement `bump!(v)` at `shop::pick/tail` [semantics · code different]
       affected bodies: shop::pick (with 1 other edit of this body)
       control flow: − check `overflow: v + 1` (src/lib.rs:-3): ok → return, fail → panic `overflow`
       control flow: − panic `overflow` (src/lib.rs:-3)
       control flow: − arrow entry (src/lib.rs:-3) → check `overflow: v + 1` (src/lib.rs:-3)
-      equivalence: different: for v = 0: before returns 1, after returns 0 (confirmed by a run)
+      equivalence: different: for v = 0: before returns 1, after returns 0 (suggested test `semilla_test_pick_7334d7`)
   ◆ f5 derived: added statement `v` at `shop::pick/tail` [semantics · code different]
       affected bodies: shop::pick (with 1 other edit of this body)
       control flow: + arrow entry (src/lib.rs:3) → return (src/lib.rs:3)
-      equivalence: different: for v = 0: before returns 1, after returns 0 (confirmed by a run)
+      equivalence: different: for v = 0: before returns 1, after returns 0 (suggested test `semilla_test_pick_7334d7`)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::base (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 2; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:5 --step 0)
-    shop::keep (src/lib.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for v = 0: before returns 0, after returns 2; confirmed by a run)
-    shop::pick (src/lib.rs:3): graph changes: −1 check, −1 panic, +1 arrow, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for v = 0: before returns 1, after returns 0; confirmed by a run)
+    shop::base (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 2; suggested test `semilla_test_base_013c65`); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:5 --step 0)
+    shop::keep (src/lib.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for v = 0: before returns 0, after returns 2; suggested test `semilla_test_keep_f66573`)
+    shop::pick (src/lib.rs:3): graph changes: −1 check, −1 panic, +1 arrow, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for v = 0: before returns 1, after returns 0; suggested test `semilla_test_pick_7334d7`)
+  suggested tests: 3 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_base_013c65`: add it to `src/lib.rs`, in the module of `shop::base` (line 5); run it: `cargo test -p shop semilla_test_base_013c65`; also: `cargo test -p shop --release semilla_test_base_013c65`
+      #[cfg(test)]
+      mod semilla_test_base_013c65 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 2.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let v = 0;
+              let got = crate::base(v);
+              assert_eq!(got, 1);
+          }
+      }
+    `semilla_test_keep_f66573`: add it to `src/lib.rs`, in the module of `shop::keep` (line 4); run it: `cargo test -p shop semilla_test_keep_f66573`; also: `cargo test -p shop --release semilla_test_keep_f66573`
+      #[cfg(test)]
+      mod semilla_test_keep_f66573 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 0; the new version returns 2.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let v = 0;
+              let got = crate::keep(v);
+              assert_eq!(got, 0);
+          }
+      }
+    `semilla_test_pick_7334d7`: add it to `src/lib.rs`, in the module of `shop::pick` (line 3); run it: `cargo test -p shop semilla_test_pick_7334d7`; also: `cargo test -p shop --release semilla_test_pick_7334d7`
+      #[cfg(test)]
+      mod semilla_test_pick_7334d7 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 0.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let v = 0;
+              let got = crate::pick(v);
+              assert_eq!(got, 1);
+          }
+      }
   expansions: 1 changed, 1 added, 1 removed, 25 equal
     `bump!(v)` at `shop::keep/tail` (src/lib.rs:4): expansion added: `macro_rules! bump` (src/lib.rs:1): 1 line(s) of code; the step adds the call or its input
     `bump!(v)` at `shop::base/tail` (src/lib.rs:5): expansion changed: `macro_rules! bump` (src/lib.rs:1): changed literal `1` → `2` at `expansion/rhs` [semantics]; from `macro_rules! bump` (src/lib.rs:1)

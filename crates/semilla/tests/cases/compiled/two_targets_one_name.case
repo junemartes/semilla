@@ -79,12 +79,26 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: shop (bench "probe")::hash
       control flow: + branch `x == 0` (benches/probe.rs:2): false → call `num::<impl u64>::wrapping_mul`, true → return
       control flow: + arrow entry (benches/probe.rs:1) → branch `x == 0` (benches/probe.rs:2)
-      equivalence: different: for x = 0: before returns 7, after returns 1 (not confirmed by a run: the body is in a target of the kind `test`, which another crate cannot use)
+      equivalence: different: for x = 0: before returns 7, after returns 1 (suggested test `semilla_test_hash_4dce71`)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    probe::hash (benches/probe.rs:1): graph changes: +1 branch, +3 arrows, −1 arrow; different (for x = 0: before returns 7, after returns 1; not confirmed by a run: the body is in a target of the kind `test`, which another crate cannot use)
+    probe::hash (benches/probe.rs:1): graph changes: +1 branch, +3 arrows, −1 arrow; different (for x = 0: before returns 7, after returns 1; suggested test `semilla_test_hash_4dce71`)
     reached bodies: 1
       probe::bench_hash::{closure#0} (benches/probe.rs:8): reached through probe::bench_hash, not decided (a value of a type that the check does not model: fn bench_hash() { assert!(hash(1) > 0); } (benches/probe.rs:-6))
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_hash_4dce71`: add it to `benches/probe.rs`, in the module of `probe::hash` (line 1); run it: `cargo test -p shop --all-features semilla_test_hash_4dce71`; also: `cargo test -p shop --release --all-features semilla_test_hash_4dce71`
+      #[cfg(test)]
+      mod semilla_test_hash_4dce71 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 7; the new version returns 1.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let x = 0;
+              let got = crate::hash(x);
+              assert_eq!(got, 7);
+          }
+      }
   expansions: 1 changed, 3 equal
     `#[test]` at `shop (bench "probe")::bench_hash` (benches/probe.rs:8): expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

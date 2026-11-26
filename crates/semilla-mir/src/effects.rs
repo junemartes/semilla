@@ -575,8 +575,10 @@ pub fn seq_model(func: &Operand, body: &Body) -> Option<String> {
     if let Some(rest) = name.strip_prefix("core::slice::<impl [T]>::") {
         let op = rest.split("::<").next().unwrap_or(rest);
         let ok = slice_ok() && usize_index(1);
+        // [R75.2-4] `is_empty`, `first`, and `last` of a slice have no entry: the first try
+        // inlines their MIR (`self.len() == 0`, a slice pattern), and the check models it.
         return match op {
-            "len" | "is_empty" | "swap" | "first" | "last" | "get" if ok => Some(format!("slice_{op}")),
+            "len" | "swap" | "get" if ok => Some(format!("slice_{op}")),
             _ => None,
         };
     }
