@@ -85,6 +85,11 @@ pub fn parse_file(path: &str, text: &str) -> Result<File, Vec<Error>> {
     if errors.is_empty() { Ok(file) } else { Err(errors) }
 }
 
+/// True if the Rust parser reads the text with no error.
+pub fn rust_parses(text: &str) -> bool {
+    ast::SourceFile::parse(text, Edition::Edition2024).errors().is_empty()
+}
+
 /// The message of the Rust parser, as "expected …" when it has that form.
 fn rust_message(message: &str) -> String {
     match message.strip_prefix("expected ") {
@@ -637,15 +642,43 @@ pub fn same_template(path: &str, old_signature: &str, new_signature: &str, type_
     };
     let old = read(old_signature)?;
     let new = read(new_signature)?;
-    let mut declared: Vec<String> = old.params.iter().map(|(name, ty)| format!("{name}: {ty}")).collect();
-    for (name, ty) in &new.params {
-        if !old.params.iter().any(|(known, _)| known == name) {
+    // [R78.1-5] Rustc checks a template: an old function takes old values and a new function
+    // takes new values, so a parameter of a type of the workspace (also the receiver) is one
+    // parameter of each version, and `same` relates the two.
+    let mut declared: Vec<String> = Vec::new();
+    let mut guards: Vec<String> = Vec::new();
+    let mut old_args: Vec<String> = Vec::new();
+    for (name, ty) in &old.params {
+        if ty.contains("before::") {
+            declared.push(format!("{name}_before: {ty}"));
+            declared.push(format!("{name}_after: {}", ty.replace("before::", "after::")));
+            let (b, a) = if ty.starts_with('&') { (format!("{name}_before"), format!("{name}_after")) } else { (format!("&{name}_before"), format!("&{name}_after")) };
+            guards.push(format!("same({b}, {a})"));
+            old_args.push(format!("{name}_before"));
+        } else {
             declared.push(format!("{name}: {ty}"));
+            old_args.push(name.clone());
         }
     }
-    let names = |sig: &Sig| sig.params.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>().join(", ");
-    let (old_call, new_call) = (format!("before::{path}({})", names(&old)), format!("after::{path}({})", names(&new)));
-    let body = if old.ret == new.ret { format!("{new_call} == {old_call}") } else { format!("let old = {old_call}; let new = {new_call}; true") };
+    let mut new_args: Vec<String> = Vec::new();
+    for (name, ty) in &new.params {
+        match old.params.iter().find(|(known, _)| known == name) {
+            Some((_, old_ty)) if old_ty.contains("before::") => new_args.push(format!("{name}_after")),
+            Some(_) => new_args.push(name.clone()),
+            None => {
+                declared.push(format!("{name}: {}", ty.replace("before::", "after::")));
+                new_args.push(name.clone());
+            }
+        }
+    }
+    let (old_call, new_call) = (format!("before::{path}({})", old_args.join(", ")), format!("after::{path}({})", new_args.join(", ")));
+    let same_type = old.ret == new.ret && !old.ret.contains("before::");
+    let body = match (guards.is_empty(), same_type) {
+        (true, true) => format!("{new_call} == {old_call}"),
+        (true, false) => format!("let old = {old_call}; let new = {new_call}; true"),
+        (false, true) => format!("!({}) || {new_call} == {old_call}", guards.join(" && ")),
+        (false, false) => format!("!({}) || {{ let old = {old_call}; let new = {new_call}; true }}", guards.join(" && ")),
+    };
     Ok(format!("#[same({path})] fn {}({}) -> bool {{ {body} }}", old.name, declared.join(", ")))
 }
 
@@ -812,6 +845,7 @@ fn two() {}
 
     // rule+ R77.3-4
     // rule- R77.3-4
+    // rule- R78.1-5
     #[test]
     fn a_template_is_a_complete_claim_or_names_the_type_that_a_claim_cannot_name() {
         let types = |name: &str| (name == "Date").then(|| "cal::naive::Date".to_string());
@@ -820,7 +854,8 @@ fn two() {}
         assert_eq!(found, "#[same(cal::first)] fn first(v: &Vec<u32>) -> bool { let old = before::cal::first(v); let new = after::cal::first(v); true }");
         // A lifetime goes away; a type of the crate gets its path with the version prefix.
         let found = same_template("cal::show", "fn show<'a>(d: &'a Date) -> u8", "fn show<'a>(d: &'a Date, wide: bool) -> u8", &types).unwrap();
-        assert_eq!(found, "#[same(cal::show)] fn show(d: &before::cal::naive::Date, wide: bool) -> bool { after::cal::show(d, wide) == before::cal::show(d) }");
+        // [R78.1-5] A value of a type of the workspace is one parameter of each version.
+        assert_eq!(found, "#[same(cal::show)] fn show(d_before: &before::cal::naive::Date, d_after: &after::cal::naive::Date, wide: bool) -> bool { !(same(d_before, d_after)) || after::cal::show(d_after, wide) == before::cal::show(d_before) }");
         // The negative cases: a type that a claim cannot name gives the cause, never a template.
         let error = same_template("cal::sum", "fn sum<I: IntoIterator>(it: I) -> u8", "fn sum<I: IntoIterator>(it: I, k: u8) -> u8", &types).unwrap_err();
         assert_eq!(error, "the type `I` of the parameter `it` has no form in a claim (a generic parameter)");

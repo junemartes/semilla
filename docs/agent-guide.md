@@ -217,7 +217,13 @@ If a step has a gap, `semilla status`, `semilla tag`, and the review show one li
 
 An intent file is the semantic specification of a step (design 77): you state the behavior of the change with claims (what stays the same, what changes and how), and Semilla checks each claim and shows which changed bodies the proved claims explain. A claim states behavior: outputs, effects, and panics as a function of the inputs. It never states how the text changed (Semilla finds renames and moves itself). The file is a Rust file outside the production code, for example `.semilla/intent/step.rs` (never in a `src` folder). You do not change the code, the `Cargo.toml`, or the `cfg` of the project. Your editor and `rustfmt` can read the file. Semilla never compiles or runs it.
 
-Each claim is a function with an attribute. A body is a `bool` expression that must be true for each value of the parameters. `before::PATH` names an item of the old version, and `after::PATH` names an item of the new version. The names of the language (`panics`, `returns`, …) are in `semilla_intent::prelude` (`crates/semilla-intent/src/prelude.rs`).
+An intent file gives the intent of a step and the claims that Semilla checks. It is Rust that rustc compiles against the two versions of the code (design 78), outside the production code, for example `.semilla/intent/step.rs` (never in a `src` folder). You do not change the code, the `Cargo.toml`, or the `cfg` of the user.
+
+- `before::shop` is the crate `shop` of the old tree, and `after::shop` is the crate `shop` of the new tree: real Rust paths. Rustc checks each name, type, generic, lifetime, re-export, `std`/`core` path, trait method, and coercion.
+- Private items are open: a claim can call a private function or method and read a private field of each version (only the compile of the intent crate opens them; the code compiles as normal).
+- `before::T` and `after::T` are two types. An old function takes old values, a new function takes new values. Rust has no `==` between the two: write `same(&old, &new)` (each part equal).
+- Each file has the prelude (the attributes and the prelude functions): Semilla adds `use semilla_intent::prelude::*;`. You can write the line yourself; it changes nothing. A message of rustc gives the line and the column of your file.
+- A help template of a function with a parameter of a type of the workspace (also `self`) has two parameters for it, one of each version, and the guard `!(same(&x_before, &x_after)) || …`.
 
 ```rust
 use semilla_intent::prelude::*;
@@ -235,26 +241,32 @@ fn parse(x: u32) -> bool {
     after::shop::parse(x, false) == before::shop::parse(x)
 }
 
-// An intended change with its condition. `if` splits the cases.
-#[change(shop::first, reason = "an empty list is not a panic now")]
-fn first(v: Vec<u32>) -> bool {
-    if v.is_empty() {
-        panics(|| before::shop::first(&v)) && after::shop::first(&v).is_none()
-    } else {
-        after::shop::first(&v) == Some(before::shop::first(&v))
-    }
+// An intended change with its condition. `if` and `match` split the cases.
+#[change(shop::half)]
+fn half_rounds_down(x: i32) -> bool {
+    x >= 0 || x % 2 == 0 || after::shop::half(x) == before::shop::half(x) - 1
 }
 
 // A sure difference: no parameter, so one input.
 #[different(shop::half)]
-fn half_rounds_down() -> bool {
+fn half_of_minus_one() -> bool {
     before::shop::half(-1) != after::shop::half(-1)
 }
 
-// A private field is a valid reference. A proof calls the two versions of its item.
+// Two versions of a type: one parameter of each, and a private field of each.
 #[same(shop::cart_len)]
-fn cart_len(c: &after::shop::Cart) -> bool {
-    after::shop::cart_len(c) == c.len && before::shop::cart_len(c) == c.len
+fn cart_len(b: &before::shop::Cart, a: &after::shop::Cart) -> bool {
+    b.len != a.len || before::shop::cart_len(b) == after::shop::cart_len(a)
+}
+
+// A method in a scope is a qualified path; so is a method of a trait impl.
+#[same(<shop::Counter>::get, <shop::Money as core::fmt::Display>::fmt)]
+fn methods() {}
+
+// An old and a new value: `same` compares them part by part.
+#[same(shop::pair)]
+fn pair(x: u32) -> bool {
+    same(&before::shop::pair(x), &after::shop::pair(x))
 }
 
 // A hint for the pairing (the forms of `--same`): it describes the text, not the behavior.
@@ -274,6 +286,8 @@ fn same_len(b: &before::shop::Cart, a: &after::shop::Cart) -> bool {
     b.len == a.len
 }
 ```
+
+**The scope** of an attribute is a list of paths that the resolver of rustc resolves (a path with no definition is the error S0112 at the path, with the nearest names): an item (`shop::parse`, the two versions for `same`, `change`, `different`), an item of a re-export (`shop::len`), a method (`shop::Bag::new`, also `<shop::Bag>::new`), a trait method (`<shop::S as core::fmt::Debug>::fmt`), a path with a version (`after::shop::f`), or a text with the record name of a body. `impl shop::Cart`, `shop::fmt::*`, and `callers(shop::parse)` compile; their check comes in batch 13b.
 
 **The results** (one line for each claim in the section "intent" of the step):
 
@@ -312,7 +326,7 @@ A claim with a property body needs `--compiled`: the default mode shows "claimed
 **The loop.**
 
 1. Write the file (one file for each step is easy to read).
-2. Run `semilla intent check FILE` (or with no file: each `.rs` file of `.semilla/intent/`). It builds the compiled records of `HEAD` and of the working tree, and gives each parse, reference, and type error with its place and the candidates. It does not check a claim.
+2. Run `semilla intent check FILE` (or with no file: each `.rs` file of `.semilla/intent/`). It builds the two trees only if the cache has no build of them, then rustc compiles the file: each error of rustc with its code, the caret, and the help, at the place of your file; then the errors of Semilla for the meaning of the attributes (`S0101` to `S0111`). A help that rustc can put in place (for example `.into()`) passes the check. `semilla intent explain CODE` gives the long text of a code (`S0107` or `E0308`). `--json` gives the same data. A warm check takes well under one second.
 3. Run `semilla step "<intent>" --intent FILE --compiled`. Read the section "intent".
 4. Fix a false claim (or the code), an error, or a claim that the model cannot check (write it with fewer parts). For a stored step, `semilla fact --step N --intent FILE` replaces the file with the same path, and `semilla fact --again` checks the stored claims again.
 
@@ -321,6 +335,18 @@ A later step that changes a body that a claim reads checks that claim again (`s0
 **The help.** In a step with an intent file, a body whose equivalence check cannot compare the two versions because the parameters or the return type change gets a note with the two signatures (or, if their texts are equal, the type that changes, with its changed fields: "the type of `self` changes: `shop::Pt`: `x: u32` → `x: u64`") and two templates: one `#[same]` claim if the behavior does not change, and one `#[change]` claim if it changes. Each template is a complete claim that `semilla intent check` accepts: the parameters of the old version and the new parameters, a type of the crate with its path (`before::shop::Cart`), and no lifetime. With another return type the body names the two results (`let old = …; let new = …; true`): write their relation in place of `true`. A parameter type that a claim cannot name (a generic parameter, `Self`, `impl …`, `dyn …`, `&mut`) gives "no template" with the type and the cause.
 
 **A panic message.** The literal text of a panic message is a part of the outcome: `assert!(x < 10, "too big")` → `assert!(x < 10, "x is too big")` is a difference ("panics (`std::rt::panic_fmt` with the message "too big")"). Use `except = [panic_message]` if only the kind of the panic matters. `panics_with(|| …, "TEXT")` compares the text of a literal message.
+
+**The results of a property claim** (the claim MIR, design 78):
+
+- `proved`: Semilla checked the MIR of the claim function for each input in each checked configuration: no input makes it return `false`, panic, or abort. A claim on `ITEM` is a proof only if it calls `before::ITEM` and `after::ITEM`, and only if it is not true for any result of one version.
+- `false`: an exact input where the claim returns `false` or panics. The step is rejected.
+- `claimed`: Semilla cannot check the claim; the line has the cause (a loop, a float, a part outside the model, a budget, a kind of a later batch). `panics(|| …)`, `returns(|| …)`, `panics_with(|| …, "…")`, and `same_outcome(|| …, || …)` run their closures; `panics_with` is never exact on a path that panics (the model has no text of a message).
+- `error`: an error of rustc or of Semilla (`semilla intent check` gives it with its place). The step is rejected. Rustc checks the whole file: a claim with no error of its own shows the place of the first error.
+- `shown`: the text of `intent!`.
+
+**The rules of a body.** A call of a version runs the body of that version. Each call starts with the same world: a call does not see the effects of another call. A panic of a call outside a prelude function makes the claim false for that input. A claim with a property body needs `--compiled`. The help of the step for a body whose signature changes shows the two signatures.
+
+The editor: rust-analyzer does not read the intent crate yet (no `semilla intent setup` in this version); `semilla intent check` is the check.
 
 ## The tags of a step
 

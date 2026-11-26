@@ -51,6 +51,7 @@ use serde::Deserialize;
 use crate::solver::{Answer, Solver};
 
 pub mod claim;
+pub mod property;
 
 // ---------------------------------------------------------------------------------------------
 // The form of the driver.
@@ -798,6 +799,39 @@ struct Frame {
     /// True for a small helper of the standard library that the first try inlines (design 66,
     /// part C). A stop in it gives the helper back to the call rule (R66.10-4).
     helper: bool,
+    /// [R78.4-6] The frame of the closure of a prelude function (`panics`, `returns`,
+    /// `panics_with`, `same_outcome`): its outcome goes to the prelude function.
+    catch: Option<Arc<Catch>>,
+}
+
+/// [R78.4-6] What a prelude function does with the outcome of its closure.
+#[derive(Clone, Debug)]
+struct Catch {
+    /// The destination of the prelude call and its target block in the caller.
+    dest: Loc,
+    target: usize,
+    /// The count of the effects of the path when the closure starts.
+    effects: usize,
+    kind: CatchKind,
+}
+
+#[derive(Clone, Debug)]
+enum CatchKind {
+    Panics,
+    Returns,
+    PanicsWith,
+    /// The first closure of `same_outcome`: the value and the type of the second.
+    First { value: V, ty: Option<Ty> },
+    /// The second closure of `same_outcome`: the outcome and the effects of the first.
+    Second { first: Outcome, effects: Vec<Effect> },
+}
+
+/// The outcome of one closure of a prelude function.
+#[derive(Clone, Debug)]
+enum Outcome {
+    Value(V),
+    /// A panic: the kind and the arguments of the panic call (its message, R69.3-1).
+    Panic { kind: String, args: Vec<V> },
 }
 
 #[derive(Clone)]
@@ -1417,7 +1451,17 @@ impl<'a, 'b> Run<'a, 'b> {
                     }
                 }
             }
-            IrRvalue::Ref(_, place) => Ok(V::Ptr(self.loc(state, place)?)),
+            IrRvalue::Ref(_, place) => {
+                // [R78.4-6] In a claim run: a reborrow `&*x` of an opaque value (a `&str`
+                // constant, the message of `panics_with`) is the same opaque value.
+                if CLAIM_RUN.with(|cell| cell.get())
+                    && matches!(place.p.as_slice(), [IrProj::D])
+                    && let Ok(V::Opq(term)) = self.loc(state, &IrPlace { l: place.l, p: Vec::new() }).and_then(|loc| self.read(state, &loc))
+                {
+                    return Ok(V::Opq(term));
+                }
+                Ok(V::Ptr(self.loc(state, place)?))
+            }
             IrRvalue::Disc(place) => {
                 let loc = self.loc(state, place)?;
                 match self.read(state, &loc)? {
@@ -1499,6 +1543,10 @@ impl<'a, 'b> Run<'a, 'b> {
                         let after = self.muts.iter().map(|slot| state.slots[*slot].clone()).collect();
                         self.outs.push(PathOut { pc: and(&state.pc), effects: state.effects.clone(), calls: state.calls.clone(), exit: Exit::Return(value), after, cut: None });
                         Ok(Next::Done)
+                    }
+                    Some(_) if frame.catch.is_some() => {
+                        let catch = frame.catch.clone().expect("a catch");
+                        self.caught(state, &catch, Outcome::Value(value))
                     }
                     Some((dest, target, _)) => {
                         self.write(state, &dest, value)?;
@@ -1607,6 +1655,21 @@ impl<'a, 'b> Run<'a, 'b> {
         if lit_bool(&pc) == Some(false) {
             return Ok(());
         }
+        // [R78.4-6] A panic inside the closure of a prelude function is its outcome: the path
+        // goes on in the caller of the prelude function (the cleanup path of the closure has no
+        // part in the outcome).
+        if let Some(at) = state.frames.iter().rposition(|frame| frame.catch.is_some()) {
+            let catch = state.frames[at].catch.clone().expect("a catch");
+            let mut resumed = state.clone();
+            resumed.frames.truncate(at);
+            match self.caught(&mut resumed, &catch, Outcome::Panic { kind, args: args.clone() }) {
+                Ok(Next::Continue) => self.run(resumed),
+                Ok(Next::Fork(states)) => states.into_iter().for_each(|next| self.run(next)),
+                Ok(Next::Done) => {}
+                Err(Stop(cause)) => self.stops.push((and(&resumed.pc), cause)),
+            }
+            return Ok(());
+        }
         let mut after: Vec<V> = self.muts.iter().map(|slot| state.slots[*slot].clone()).collect();
         let drops = match self.unwind_values(state, unwind) {
             Ok(drops) => drops,
@@ -1624,6 +1687,99 @@ impl<'a, 'b> Run<'a, 'b> {
         after.extend(drops);
         self.outs.push(PathOut { pc, effects: state.effects.clone(), calls: state.calls.clone(), exit, after, cut: None });
         Ok(())
+    }
+
+    /// [R78.4-2] [R78.4-3] [R78.4-6] The meaning of a function of the prelude (design 78.4).
+    /// `same(&a, &b)`: the structural equality of the two values behind the references (the
+    /// same shape, each part equal). `panics`, `returns`, `panics_with`, `same_outcome`: the
+    /// engine runs the body of each closure (its captures and the identity of its body, design
+    /// 66) and gives its outcome. Each other function of the prelude is outside the model.
+    #[allow(clippy::too_many_arguments)]
+    fn prelude_call(&mut self, state: &mut State, name: &str, args: &[IrOp], values: Vec<V>, dest: Loc, target: usize) -> Result<Next, Stop> {
+        let short = name.rsplit("::").next().unwrap_or(name);
+        let ty_of = |this: &Self, state: &State, at: usize| match args.get(at) {
+            Some(IrOp::C(place) | IrOp::M(place)) => this.place_ty(state, place),
+            _ => None,
+        };
+        let first = values.first().cloned().unwrap_or(V::Undef);
+        let catch = |kind| Catch { dest: dest.clone(), target, effects: state.effects.len(), kind };
+        match short {
+            "same" => {
+                let [V::Ptr(a), V::Ptr(b)] = values.as_slice() else { return Err(Stop("the prelude function `same` takes two references".into())) };
+                let (a, b) = (self.read(state, a)?, self.read(state, b)?);
+                let shape = |value: &V| flatten(value).into_iter().map(|(sort, _)| sort).collect::<Vec<_>>();
+                if shape(&a) != shape(&b) {
+                    return Err(Stop("the two values of `same` have other shapes: a `#[relation]` gives their correspondence (batch 13b)".into()));
+                }
+                self.write(state, &dest, V::Bool(not(&differ(&a, &b))))?;
+                self.jump(state, target)?;
+                Ok(Next::Continue)
+            }
+            "panics" | "returns" | "panics_with" => {
+                let kind = match short {
+                    "panics" => CatchKind::Panics,
+                    "returns" => CatchKind::Returns,
+                    _ => CatchKind::PanicsWith,
+                };
+                let catch = catch(kind);
+                let ty = ty_of(self, state, 0);
+                self.start_closure(state, first, ty, catch)
+            }
+            "same_outcome" => {
+                let second = CatchKind::First { value: values.get(1).cloned().unwrap_or(V::Undef), ty: ty_of(self, state, 1) };
+                let catch = catch(second);
+                let ty = ty_of(self, state, 0);
+                self.start_closure(state, first, ty, catch)
+            }
+            _ => Err(Stop(format!("the prelude function `{short}` is outside the model of the check of a claim MIR in this batch (`effects`: 13c; `old`: 13d)"))),
+        }
+    }
+
+    /// [R78.4-6] Runs the body of the closure of a prelude function in a frame with its catch.
+    fn start_closure(&mut self, state: &mut State, value: V, ty: Option<Ty>, catch: Catch) -> Result<Next, Stop> {
+        let Some(IrTy::Clo { n, .. }) = ty.as_ref().and_then(|ty| ty.get()) else { return Err(Stop("the argument of a prelude function is not a closure that the check knows".into())) };
+        let name = n.clone();
+        let Some(form) = (self.side.workspace)(&name) else { return Err(Stop(format!("a closure of the claim with no form: `{name}`"))) };
+        // The body takes its captures by reference (`Fn`) or by value (`FnOnce`).
+        let by_ref = form.l.get(1).is_some_and(|id| matches!(form.t.get(*id as usize), Some(IrTy::Ref(..))));
+        let mode = if by_ref { 2 } else { 1 };
+        let callee = IrCallee { p: name.clone(), w: Some(name), k: None, m: None, g: false, e: None, s: None, c: Some(mode), q: Vec::new(), f: None, a: false };
+        // The value of the closure goes to a slot of its own: the catch gives the result.
+        state.slots.push(V::Undef);
+        state.types.push(None);
+        let scratch = Loc { slot: state.slots.len() - 1, path: Vec::new() };
+        let target = catch.target;
+        let next = self.closure_call(state, &callee, mode, vec![value, V::Unit], ty, scratch, Some(target), &IrUnwind::Drops(Vec::new()))?;
+        if let Some(frame) = state.frames.last_mut() {
+            frame.catch = Some(Arc::new(catch));
+        }
+        Ok(next)
+    }
+
+    /// [R78.4-6] The outcome of the closure of a prelude function: the result of the prelude
+    /// function in its destination, or the run of the second closure of `same_outcome`.
+    fn caught(&mut self, state: &mut State, catch: &Catch, outcome: Outcome) -> Result<Next, Stop> {
+        let effects: Vec<Effect> = state.effects.get(catch.effects..).map(<[Effect]>::to_vec).unwrap_or_default();
+        let panicked = matches!(outcome, Outcome::Panic { .. });
+        let value = match &catch.kind {
+            CatchKind::Panics => V::Bool(t(if panicked { "true" } else { "false" })),
+            CatchKind::Returns => V::Bool(t(if panicked { "false" } else { "true" })),
+            // [R67.3-6] The model has no text of a panic message: on a path that panics,
+            // `panics_with` is not exact.
+            CatchKind::PanicsWith if panicked => {
+                let fresh = format!("panics_with {}", self.decls.names.len());
+                V::Bool(self.flag(&fresh))
+            }
+            CatchKind::PanicsWith => V::Bool(t("false")),
+            CatchKind::First { value, ty } => {
+                let second = Catch { dest: catch.dest.clone(), target: catch.target, effects: state.effects.len(), kind: CatchKind::Second { first: outcome, effects } };
+                return self.start_closure(state, value.clone(), ty.clone(), second);
+            }
+            CatchKind::Second { first, effects: before } => V::Bool(not(&outcomes_differ(first, before, &outcome, &effects))),
+        };
+        self.write(state, &catch.dest, value)?;
+        self.jump(state, catch.target)?;
+        Ok(Next::Continue)
     }
 
     fn call(&mut self, state: &mut State, callee: &IrCallee, args: &[IrOp], dest: &IrPlace, target: Option<usize>, unwind: &IrUnwind) -> Result<Next, Stop> {
@@ -1669,6 +1825,14 @@ impl<'a, 'b> Run<'a, 'b> {
                 }
                 None => Err(Stop("an intrinsic that never returns".into())),
             };
+        }
+        // [R78.4-2] A function of the prelude of the intent language: its meaning comes from
+        // its definition in the prelude crate (the mark `prelude` of the driver), never from a
+        // name of another crate.
+        if callee.m.as_deref() == Some("prelude") {
+            let name = callee.w.clone().unwrap_or_else(|| callee.p.clone());
+            let Some(target) = target else { return Err(Stop(format!("the prelude function `{name}` never returns"))) };
+            return self.prelude_call(state, &name, args, values, dest_loc, target);
         }
         // An operation of the sequence model (design 64, part C).
         if let Some(model) = &callee.s {
@@ -1747,7 +1911,7 @@ impl<'a, 'b> Run<'a, 'b> {
                 state.serial += 1;
                 state.visits.push((state.serial, 0));
                 let helper = !changed && !self.inline_all;
-                state.frames.push(Frame { ir: form, base, block: 0, stmt: 0, ret: Some((dest_loc, target, unwind.clone())), name, id: state.serial, helper });
+                state.frames.push(Frame { ir: form, base, block: 0, stmt: 0, ret: Some((dest_loc, target, unwind.clone())), name, id: state.serial, helper, catch: None });
                 return Ok(Next::Continue);
             }
         }
@@ -1968,7 +2132,7 @@ impl<'a, 'b> Run<'a, 'b> {
         }
         state.serial += 1;
         state.visits.push((state.serial, 0));
-        state.frames.push(Frame { ir: form, base, block: 0, stmt: 0, ret: Some((dest_loc, target, unwind.clone())), name, id: state.serial, helper: false });
+        state.frames.push(Frame { ir: form, base, block: 0, stmt: 0, ret: Some((dest_loc, target, unwind.clone())), name, id: state.serial, helper: false, catch: None });
         Ok(Next::Continue)
     }
 
@@ -3181,7 +3345,7 @@ fn fresh_state(side: &Side, cut: &CutState, head: usize, base: usize, map: &[(us
     types.truncate(slots.len());
     // The locals of the top frame follow the input slots (`base`).
     let mut state = State { slots, types, frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), calls: Vec::new(), visits: vec![(0, head)], serial: 1_000_000 };
-    state.frames.push(Frame { ir: side.ir.clone(), base, block: head, stmt: 0, ret: None, name: String::new(), id: 0, helper: false });
+    state.frames.push(Frame { ir: side.ir.clone(), base, block: head, stmt: 0, ret: None, name: String::new(), id: 0, helper: false, catch: None });
     Ok(state)
 }
 
@@ -3297,6 +3461,27 @@ fn differ(a: &V, b: &V) -> T {
     }
 }
 
+/// [R78.4-6] The condition that the two closures of `same_outcome` have different outcomes: the
+/// rule of `outcome_differs` (the effects, the value, a panic of another kind, and the arguments
+/// of a panic unless `except = [panic_message]`).
+fn outcomes_differ(a: &Outcome, a_effects: &[Effect], b: &Outcome, b_effects: &[Effect]) -> T {
+    let exit = |outcome: &Outcome| match outcome {
+        Outcome::Value(value) => Exit::Return(value.clone()),
+        Outcome::Panic { kind, args } => Exit::Panic { kind: kind.clone(), args: args.clone(), msg: None },
+    };
+    // A panic and a value that the check does not give exactly (the result of a call that it
+    // does not inline, which can panic too): not an exact difference.
+    let exact = |outcome: &Outcome| match outcome {
+        Outcome::Value(value) => flatten(value).iter().all(|(_, term)| term.x),
+        Outcome::Panic { .. } => true,
+    };
+    if matches!((a, b), (Outcome::Value(_), Outcome::Panic { .. }) | (Outcome::Panic { .. }, Outcome::Value(_))) && !(exact(a) && exact(b)) {
+        return tx("true", false);
+    }
+    let path = |outcome: &Outcome, effects: &[Effect]| PathOut { pc: t("true"), effects: effects.to_vec(), calls: Vec::new(), exit: exit(outcome), after: Vec::new(), cut: None };
+    outcome_differs(&path(a, a_effects), &path(b, b_effects))
+}
+
 /// The condition that two paths have different outcomes. A different list of calls is not an
 /// exact difference: a call can have no effect that a caller sees (a call of a pure function).
 fn outcome_differs(a: &PathOut, b: &PathOut) -> T {
@@ -3372,7 +3557,7 @@ fn start_state(side: &Side, inputs: &[V], slots: &[V], types: &[Option<Ty>]) -> 
     for (index, value) in inputs.iter().enumerate() {
         state.slots[base + 1 + index] = value.clone();
     }
-    state.frames.push(Frame { ir: ir.clone(), base, block: 0, stmt: 0, ret: None, name: String::new(), id: 0, helper: false });
+    state.frames.push(Frame { ir: ir.clone(), base, block: 0, stmt: 0, ret: None, name: String::new(), id: 0, helper: false, catch: None });
     state.visits.push((0, 0));
     state
 }
@@ -3783,6 +3968,11 @@ fn with_free<R>(old: bool, name: &str, f: impl FnOnce() -> R) -> R {
     let found = f();
     FREE.with(|cell| cell.replace(outer));
     found
+}
+
+thread_local! {
+    /// [R78.4-6] True while the engine runs a claim MIR (`property.rs`).
+    pub(crate) static CLAIM_RUN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// True if the budget of the body check of this thread (in solver steps, R77.2-1) is used, or

@@ -36,6 +36,7 @@ extern crate rustc_hir;
 extern crate rustc_index;
 extern crate rustc_infer;
 extern crate rustc_interface;
+extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_public;
 extern crate rustc_public_bridge;
@@ -55,6 +56,7 @@ mod ir;
 mod made;
 mod names;
 mod normalize;
+mod open;
 mod pretty;
 mod print;
 mod reach;
@@ -395,7 +397,9 @@ fn command_mode(args: &[String]) -> ExitCode {
         eprintln!("usage: semilla-mir-driver --level <n0|n2|n3|ex> -- <rustc arguments>");
         return ExitCode::from(2);
     };
-    run_compiler(level, rustc_args, Output::Stdout)
+    // [R78.2-1] Only a command of Semilla for the intent crate sets the open folders. The
+    // wrapper mode (the compile of a tree) never reads the variable.
+    run_compiler(level, rustc_args, Output::Stdout, open::folders_from_env())
 }
 
 fn wrapper_mode(args: &[String]) -> ExitCode {
@@ -405,12 +409,25 @@ fn wrapper_mode(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     let rustc_args = &args[2..];
+    // [R78.1-2] The second check build of the old tree for the intent crate: each member whose
+    // crate hash differs from the new tree gets one more `-C metadata` value, so rustc gives it
+    // a new crate identity. Each other crate compiles as normal.
+    if let Ok(metadata) = std::env::var("SEMILLA_INTENT_METADATA") {
+        let names = std::env::var("SEMILLA_INTENT_RENAME").unwrap_or_default();
+        let crate_name = rustc_args.iter().position(|arg| arg == "--crate-name").and_then(|at| rustc_args.get(at + 1)).cloned().unwrap_or_default();
+        let mut args = rustc_args.to_vec();
+        if !is_probe(rustc_args) && names.split(',').any(|name| !name.is_empty() && name == crate_name) {
+            args.push("-C".into());
+            args.push(format!("metadata={metadata}"));
+        }
+        return pass_through(real_rustc, &args);
+    }
     let level = std::env::var("SEMILLA_MIR_LEVEL").ok().and_then(|text| Level::parse(&text));
     let out = std::env::var_os("SEMILLA_MIR_OUT").map(PathBuf::from);
     match (level, out) {
         (Some(level), Some(out)) if !is_probe(rustc_args) && !is_build_script(rustc_args) => {
             let file = out.join(output_file_name(rustc_args));
-            run_compiler(level, rustc_args, Output::File(file))
+            run_compiler(level, rustc_args, Output::File(file), None)
         }
         _ => pass_through(real_rustc, rustc_args),
     }
@@ -489,7 +506,7 @@ fn output_file_name(args: &[String]) -> String {
     format!("{crate_name}.{kind}.{metadata}.jsonl")
 }
 
-fn run_compiler(level: Level, rustc_args: &[String], output: Output) -> ExitCode {
+fn run_compiler(level: Level, rustc_args: &[String], output: Output, open: Option<Vec<PathBuf>>) -> ExitCode {
     let mut full_args = vec!["rustc".to_string()];
     full_args.extend(rustc_args.iter().cloned());
     full_args.extend(level.rustc_flags().iter().map(|flag| flag.to_string()));
@@ -500,7 +517,7 @@ fn run_compiler(level: Level, rustc_args: &[String], output: Output) -> ExitCode
         full_args.extend(inherited_checks(rustc_args));
     }
 
-    let mut callbacks = Callbacks { level, output, error: None, made: None, expansions: None };
+    let mut callbacks = Callbacks { level, output, open, error: None, made: None, expansions: None };
     let result = rustc_driver::catch_fatal_errors(|| {
         rustc_driver::compiler_entrypoint(&full_args, &mut callbacks)
     });
@@ -517,6 +534,8 @@ fn run_compiler(level: Level, rustc_args: &[String], output: Output) -> ExitCode
 struct Callbacks {
     level: Level,
     output: Output,
+    /// The open folders of the intent compile (design 78.2). `None`: each other compile.
+    open: Option<Vec<PathBuf>>,
     error: Option<String>,
     /// The items after the macro expansion (batch 6b, part 2). `None`: the driver cannot list
     /// them.
@@ -537,6 +556,9 @@ impl rustc_driver::Callbacks for Callbacks {
         } else {
             config::install(config);
         }
+        if let Some(folders) = self.open.take() {
+            open::install(config, folders);
+        }
         let tracked: Vec<(String, Option<String>)> =
             TRACKED_ENV.iter().map(|name| (name.to_string(), std::env::var(name).ok())).collect();
         config.track_state = Some(Box::new(move |sess| {
@@ -555,6 +577,10 @@ impl rustc_driver::Callbacks for Callbacks {
         _compiler: &interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
+        // [R78.2-1] The intent compile: the open ADT data comes first.
+        open::open_adts(tcx);
+        // [R78.1-3] The definitions of the scope paths, also when the type check finds errors.
+        open::print_links(tcx);
         // The list is large, and Semilla reads it only from the N0 records and from the records
         // of the level `ex` (the build check of the default mode, R65.8-1).
         if self.level == Level::N0 {
@@ -648,6 +674,9 @@ struct UnitRecord {
     root: String,
     /// The target triple.
     triple: String,
+    /// [R78.1-2] The identity of the crate (`StableCrateId`, 16 hex digits).
+    identity: String,
+
     /// Each item of the expanded code, with the place of the macro call that makes it (batch
     /// 6b, part 2). `None`: the driver cannot list the items.
     made: Option<Vec<made::MadeItem>>,
@@ -721,6 +750,7 @@ fn unit_record(tcx: TyCtxt<'_>, target: &str) -> UnitRecord {
         files: files.into_iter().collect(),
         root,
         triple: tcx.sess.opts.target_triple.to_string(),
+        identity: format!("{:016x}", tcx.stable_crate_id(rustc_span::def_id::LOCAL_CRATE).as_u64()),
         made: None,
         expansions: None,
         defs: None,

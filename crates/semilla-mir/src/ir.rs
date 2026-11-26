@@ -1043,7 +1043,13 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     let name = instance.def.name();
                     let krate = instance.def.krate().name;
                     if !crate::stdlib::is_std_name(krate.as_str()) {
-                        callee.w = Some(name);
+                        // [R78.4-1] [R78.4-2] The intent compile: the record name of the tree,
+                        // or the mark of the prelude.
+                        let def_id = rustc_public::rustc_internal::internal(self.tcx, instance.def.def_id());
+                        if crate::open::is_prelude(self.tcx, def_id.krate) {
+                            callee.m = Some("prelude".into());
+                        }
+                        callee.w = Some(crate::open::callee_name(self.tcx, def_id).unwrap_or(name));
                         callee.g = !instance.args().0.is_empty();
                     }
                 }

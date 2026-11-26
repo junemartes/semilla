@@ -276,7 +276,7 @@ pub fn sysroot_lib() -> Result<PathBuf> {
 /// - `CARGO_HOME`: [`cargo_home`]. The path is part of [`settings_key`].
 /// - `LD_LIBRARY_PATH`: the `lib` folder of the toolchain (the driver needs it).
 /// - `HOME` and `TMPDIR`: `scratch`, a folder that the build can write.
-fn build_environment(command: &mut Command, root: &Path, scratch: Option<&Path>) {
+pub fn build_environment(command: &mut Command, root: &Path, scratch: Option<&Path>) {
     command.env_clear();
     command.env("PATH", crate::sandbox::build_path(&root.join("bin")));
     command.env("LD_LIBRARY_PATH", root.join("lib"));
@@ -557,6 +557,59 @@ pub struct Built {
     /// The names of the files that are not a record of a unit of this build or of an earlier
     /// build of the same folder. No build of Semilla makes such a file. The files are removed.
     pub other: Vec<String>,
+    /// [R78.1-2] The library files of the units of this build, from the messages of cargo: the
+    /// intent crate (design 78) compiles against them.
+    pub libraries: Vec<Library>,
+}
+
+/// [R78.1-2] One library file of a unit of a build (a `.rmeta` file of a library, or the file
+/// of a proc-macro crate), from the messages of cargo.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Library {
+    /// The crate name of the target (`-` becomes `_`).
+    pub name: String,
+    /// The file of the unit.
+    pub file: PathBuf,
+    /// True for a unit of a package of the workspace (the manifest is in the build folder).
+    pub member: bool,
+    /// True for a proc-macro crate.
+    pub proc_macro: bool,
+    /// The identity of the crate (`StableCrateId`) from its unit record: members only.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub identity: String,
+    /// The features of the unit (a package can have two library units with two feature sets).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+}
+
+/// [R78.1-2] The library files of each unit of the messages of a build. A build script, a
+/// binary, and a test unit have no library file.
+pub fn unit_libraries(stdout: &str, workspace: &Path) -> Vec<Library> {
+    let mut found = Vec::new();
+    for line in stdout.lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if message.get("reason").and_then(|r| r.as_str()) != Some("compiler-artifact") || message["profile"]["test"].as_bool() == Some(true) {
+            continue;
+        }
+        let target = &message["target"];
+        let kinds: Vec<&str> = target["kind"].as_array().into_iter().flatten().filter_map(|kind| kind.as_str()).collect();
+        let proc_macro = kinds.contains(&"proc-macro");
+        if !proc_macro && !kinds.iter().any(|kind| matches!(*kind, "lib" | "rlib")) {
+            continue;
+        }
+        let member = message["manifest_path"].as_str().is_some_and(|path| Path::new(path).starts_with(workspace));
+        let name = target["name"].as_str().unwrap_or("").replace('-', "_");
+        let features: Vec<String> = message["features"].as_array().into_iter().flatten().filter_map(|feature| feature.as_str().map(str::to_string)).collect();
+        for file in message.get("filenames").and_then(|f| f.as_array()).into_iter().flatten().filter_map(|file| file.as_str()) {
+            let wanted = if proc_macro { !file.ends_with(".rmeta") } else { file.ends_with(".rmeta") };
+            if wanted {
+                found.push(Library { name: name.clone(), file: PathBuf::from(file), member, proc_macro, identity: String::new(), features: features.clone() });
+            }
+        }
+    }
+    found.sort_by(|a, b| a.file.cmp(&b.file));
+    found.dedup();
+    found
 }
 
 /// The file with the names of the record files that Semilla knows from the builds of a records
@@ -614,7 +667,7 @@ pub fn run_cargo_check_delta_config(
         stdout = check(&mut known)?;
     }
     let units = unit_files(&stdout);
-    let mut built = Built::default();
+    let mut built = Built { libraries: unit_libraries(&stdout, &std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf())), ..Built::default() };
     for entry in std::fs::read_dir(out)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -644,6 +697,41 @@ pub fn run_cargo_check_delta_config(
     known.extend(units);
     save(&known)?;
     Ok(built)
+}
+
+/// [R78.1-2] The second check build of the old tree for the intent crate (option B of the user,
+/// 2026-11-26): `cargo check --workspace` of the tree in its own target folder, in the sandbox
+/// of a check build, with the driver as the wrapper of the members: each member in `names` gets
+/// the `-C metadata` value `semilla-intent-before`, so rustc gives it a new crate identity (also
+/// in its definition hashes and in the symbol of a proc-macro crate). No file is patched, and
+/// the builds of the step stay as they are. The result is the messages of cargo.
+pub fn intent_second_build(workspace: &Path, target_dir: &Path, names: &[String]) -> Result<String> {
+    let driver = find_driver()?;
+    let root = toolchain_root()?;
+    std::fs::create_dir_all(target_dir)?;
+    let target_dir = std::fs::canonicalize(target_dir)?;
+    let temporary = target_dir.join("tmp");
+    std::fs::create_dir_all(&temporary)?;
+    let mut command = Command::new(root.join("bin/cargo"));
+    command.args(["check", "--workspace", "--quiet", "--offline", "--message-format=json"]);
+    command.arg("--target-dir").arg(&target_dir).current_dir(workspace);
+    build_environment(&mut command, &root, Some(&temporary));
+    command.env("RUSTC_WORKSPACE_WRAPPER", &driver).env("SEMILLA_INTENT_METADATA", "semilla-intent-before").env("SEMILLA_INTENT_RENAME", names.join(",")).env("RUSTC_ICE", "0");
+    let workspace_real = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    let mut read = read_list(&workspace_real, &root);
+    read.push(driver.clone());
+    let mut sandbox = crate::sandbox::Sandbox { folders: vec![target_dir.clone()], files: Vec::new(), read };
+    let lock = workspace.join("Cargo.lock");
+    if !lock.exists() && std::fs::write(&lock, "").is_ok() {
+        sandbox.files.push(lock);
+    }
+    sandbox.apply(&mut command).map_err(|cause| anyhow::anyhow!("cannot start the sandbox for the second build: {cause}"))?;
+    let output = crate::sandbox::run_and_stop(&mut command).context("cannot run cargo")?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !output.status.success() {
+        bail!("the second check build of the old tree failed in {}:\n{}", workspace.display(), error_text(&stdout, &String::from_utf8_lossy(&output.stderr)));
+    }
+    Ok(stdout)
 }
 
 /// [R74.1-1] The build of a probe crate (design 74).

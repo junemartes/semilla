@@ -522,6 +522,12 @@ pub fn is_workspace_crate(tcx: TyCtxt<'_>, krate: rustc_span::def_id::CrateNum) 
     if krate == rustc_span::def_id::LOCAL_CRATE {
         return true;
     }
+    // [R78.4-1] In the intent compile, a crate of the workspace of a tree is open: its types and
+    // bodies are the types and bodies of the tree (the copy has no list of free constants, so
+    // each of its constants stays opaque).
+    if crate::open::is_open(tcx, krate) {
+        return true;
+    }
     // The lookup of the list is the test for a workspace crate.
     let _ = foreign_is_free(tcx, krate.as_def_id());
     FOREIGN_FREE.with(|lists| lists.borrow().get(&krate).is_some_and(|list| list.is_some()))

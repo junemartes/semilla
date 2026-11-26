@@ -1,0 +1,10 @@
+[package]
+name = "semilla-intent-prelude"
+description = "The prelude of the intent language (design 78): Semilla compiles it as the crate `semilla_intent` for each intent crate."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+semilla-intent-macros = { path = "../semilla-intent-macros" }
