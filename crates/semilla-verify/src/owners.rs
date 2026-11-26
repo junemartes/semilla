@@ -424,7 +424,8 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             // Design 37.14: the text shows at most `CAUSE_LIMIT` causes and a cut mark with the
             // count of the others. The fact keeps the full list in `causes`.
             let limit = semilla_core::report::CAUSE_LIMIT;
-            let short = if list.len() > limit { format!("{}, and {} more (`semilla status --verbose` shows each cause)", list[..limit].join(", "), list.len() - limit) } else { list.join(", ") };
+            // R76.1-1: the full text of the step has the line `each cause` of the fact.
+            let short = if list.len() > limit { format!("{}, and {} more (`{}` shows each cause)", list[..limit].join(", "), list.len() - limit, semilla_core::budget::step_text_command(report.step)) } else { list.join(", ") };
             if shared == count {
                 why.push_str(&format!(". The bodies have one of these causes: {short}"));
             } else {

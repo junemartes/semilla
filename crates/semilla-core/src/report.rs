@@ -1507,7 +1507,7 @@ pub fn comments_shown<'a>(facts: &[&'a Fact]) -> Vec<Vec<&'a RelatedComment>> {
 /// folds the bodies with an equal result key: one line for each key, with the first
 /// [`REACH_FOLD_NAMES`] names; a key of one body has its full line. `full` gives each body
 /// with its chain.
-fn reach_lines(flow: &FlowReport, full: bool) -> Vec<String> {
+fn reach_lines(flow: &FlowReport, full: bool, step: usize) -> Vec<String> {
     if flow.reached.is_empty() && flow.reach_stops.is_empty() {
         return Vec::new();
     }
@@ -1532,7 +1532,7 @@ fn reach_lines(flow: &FlowReport, full: bool) -> Vec<String> {
             }
             let names: Vec<&str> = list.iter().take(REACH_FOLD_NAMES).map(|body| body.name.as_str()).collect();
             let more = if list.len() > REACH_FOLD_NAMES { format!(", and {} more", list.len() - REACH_FOLD_NAMES) } else { String::new() };
-            out.push(format!("    {} bodies: {key}: {}{more} (semilla status --verbose)", list.len(), names.join(", ")));
+            out.push(format!("    {} bodies: {key}: {}{more} ({})", list.len(), names.join(", "), crate::budget::step_text_command(step)));
         }
     }
     out.extend(flow.reach_stops.iter().map(|stop| format!("    {stop}")));
@@ -1556,9 +1556,9 @@ impl StepReport {
         }
         out.extend(flow.equivalence_stop.iter().map(|line| format!("  {line}")));
         if flow.run_defects > 0 {
-            out.push(format!("  ! {} in {} check(s): a defect of Semilla (design 74); semilla status --verbose", crate::run::DISAGREE, flow.run_defects));
+            out.push(format!("  ! {} in {} check(s): a defect of Semilla (design 74); {}", crate::run::DISAGREE, flow.run_defects, crate::budget::step_text_command(self.step)));
         }
-        out.extend(reach_lines(flow, full));
+        out.extend(reach_lines(flow, full, self.step));
         out
     }
 
@@ -1621,7 +1621,7 @@ impl StepReport {
             }
             let names: Vec<String> = list.iter().take(REACH_FOLD_NAMES).map(|site| format!("`{}`", site.at)).collect();
             let more = if list.len() > REACH_FOLD_NAMES { format!(", and {} more", list.len() - REACH_FOLD_NAMES) } else { String::new() };
-            out.push(format!("  {} calls: {key}: {}{more} (semilla status --verbose)", list.len(), names.join(", ")));
+            out.push(format!("  {} calls: {key}: {}{more} ({})", list.len(), names.join(", "), crate::budget::step_text_command(self.step)));
         }
         out
     }
@@ -1711,7 +1711,7 @@ impl StepReport {
             };
             return vec![format!("hunks: `{LINE_DIFF_COMMAND} {trees}`")];
         }
-        let mut lines = vec![format!("hunks: git gave no line diff of this step; the {} hunk(s) are the hunks of the line diff of Semilla{}", self.hunks.len(), if full { ":" } else { " (`semilla status --verbose` prints them)" })];
+        let mut lines = vec![format!("hunks: git gave no line diff of this step; the {} hunk(s) are the hunks of the line diff of Semilla{}", self.hunks.len(), if full { ":".to_string() } else { format!(" (`{}` prints them)", crate::budget::step_text_command(self.step)) })];
         if full {
             lines.extend(self.hunks.iter().map(|hunk| format!("  {} {}", hunk.file, hunk.header())));
         }
@@ -1882,7 +1882,7 @@ impl StepReport {
             lines.push(format!("      to state it: {}", gap.suggestion()));
         }
         if shown < self.gaps.len() {
-            lines.push(format!("  and {} more line(s) with {} place(s): `semilla status --verbose` shows each line", self.gaps.len() - shown, self.gaps[shown..].iter().map(|gap| gap.places.len()).sum::<usize>()));
+            lines.push(format!("  and {} more line(s) with {} place(s): `{}` shows each line", self.gaps.len() - shown, self.gaps[shown..].iter().map(|gap| gap.places.len()).sum::<usize>(), crate::budget::step_text_command(self.step)));
         }
         lines
     }

@@ -6566,7 +6566,7 @@ fn a_change_reaches_the_callers_of_its_body_in_each_view() {
     commit_all(repo, "tier");
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("1 => 4", "1 => 5"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("      reaches: 2 public functions: shop_core::cost, shop_core::quote (semilla status --verbose)\n"), "{out}");
+    assert!(out.contains("      reaches: 2 public functions: shop_core::cost, shop_core::quote (semilla expand --step 0)\n"), "{out}");
     assert!(out.contains("    reached bodies: 2\n      shop_core::cost (crates/shop-core/src/lib.rs:11): different through shop_core::tier: for k = 1, n = 1: before returns 4, after returns 5 (confirmed by a run)\n"), "{out}");
     assert!(out.contains("      shop_core::quote (crates/shop-core/src/lib.rs:15): different through shop_core::cost: for k = 1, n = 1: before returns 5, after returns 6 (confirmed by a run)\n"), "{out}");
     let verbose = run(repo, &["status", "--verbose", "--wait", "600"], 0);
@@ -6595,7 +6595,7 @@ fn the_budget_of_the_equivalence_check_stops_each_check_with_one_line_for_the_st
     let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_BUDGET", "0")]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("      equivalence: not checked (the budget of the step)\n"), "{out}");
-    assert!(out.contains("  the equivalence check stopped after 0 s: 2 bodies not checked; semilla status --verbose\n"), "{out}");
+    assert!(out.contains("  the equivalence check stopped after 0 s: 2 bodies not checked; semilla expand --step 0\n"), "{out}");
     assert!(!out.contains("equivalence: different") && !out.contains("not decided (the budget"), "{out}");
     run(repo, &["undo"], 0);
     let out = run(repo, &["step", "probe"], 0);
@@ -6624,7 +6624,7 @@ fn a_check_by_equal_mir_keeps_its_proof_past_the_budget() {
     let line = |out: &str, name: &str| out.lines().find(|line| line.trim_start().starts_with(name) && line.contains("(crates/shop-core/src/lib.rs:")).unwrap_or_default().to_string();
     assert!(line(&out, "shop_core::total ").ends_with("equivalent (proved by equal MIR)"), "{out}");
     assert!(line(&out, "shop_core::tier ").ends_with("not checked (the budget of the step)"), "{out}");
-    assert!(out.contains("  the equivalence check stopped after 0 s: 1 body not checked; semilla status --verbose\n"), "{out}");
+    assert!(out.contains("  the equivalence check stopped after 0 s: 1 body not checked; semilla expand --step 0\n"), "{out}");
     run(repo, &["undo"], 0);
     // One body with two edits: a rename of a local and a changed literal.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("let sum", "let all").replace("sum.wrapping", "all.wrapping").replace("wrapping_add(1)", "wrapping_add(2)"));
@@ -8599,7 +8599,7 @@ fn the_step_output_names_the_command_that_gives_the_hunks_of_a_tag() {
     };
     let out = own(&["step", "use the method"]);
     assert!(!out.contains("git diff -U0") && out.contains("\n  hunks: git gave no line diff of this step; the "), "{out}");
-    assert!(out.contains(" hunk(s) are the hunks of the line diff of Semilla (`semilla status --verbose` prints them)\n"), "{out}");
+    assert!(out.contains(" hunk(s) are the hunks of the line diff of Semilla (`semilla expand --step "), "{out}");
     assert!(out.contains("\n  cover: each of the 18 changed line(s) is in a fact\n"), "{out}");
     let verbose = own(&["status", "--verbose"]);
     assert!(verbose.contains(" hunk(s) are the hunks of the line diff of Semilla:\n    crates/shop-core/src/facts.rs @@ -"), "{verbose}");
@@ -8831,4 +8831,139 @@ fn a_text_over_the_budget_names_a_command_that_prints_the_full_text() {
     let (code, missing) = run_env(repo, &["expand", "f9", "--step", "0"], &[]);
     assert_ne!(code, 0, "{missing}");
     assert!(missing.contains("step 0 has no fact f9; its facts: f1"), "{missing}");
+}
+
+/// The full-text commands of an output (R76.1-1): each `semilla expand …`, to the end of the
+/// command.
+fn full_text_commands(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let mut rest = line;
+        while let Some(at) = rest.find("semilla expand ") {
+            let tail = &rest[at..];
+            let end = tail.find(['`', ')', ';']).unwrap_or(tail.len());
+            let command = tail[..end].trim().to_string();
+            if !found.contains(&command) {
+                found.push(command);
+            }
+            rest = &tail[end..];
+        }
+    }
+    found
+}
+
+/// The source of a crate with 40 calls of one macro: a change of the macro changes each call.
+fn forty_calls(plus: u32) -> String {
+    format!("pub mod cart;\nmacro_rules! make {{\n    ($n:ident, $v:expr) => {{ pub fn $n() -> u32 {{ $v + {plus} }} }};\n}}\n{}", (0..40).map(|i| format!("make!(item_with_a_long_name_{i}, {i});\n")).collect::<String>())
+}
+
+/// R76.1-1: each line that cuts a text names one command that prints the full text, and the
+/// command works in the state after the output: after a rejected step, after a stored step,
+/// after `semilla tag`, after a tag after the commit (the command names the commit), and after
+/// a step of `--fast`. Before, the lines of a rejected step named `semilla status --verbose`,
+/// which says "no open change set" after a rejected step.
+// rule+ R76.1-1
+#[test]
+fn each_full_text_command_works_in_each_state_after_its_output() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let lib = "crates/shop-core/src/lib.rs";
+    write(repo, lib, &forty_calls(1));
+    commit_all(repo, "calls");
+    write(repo, lib, &forty_calls(2));
+    // The default mode with the build check: the build writes the expansion records.
+    let default = [("SEMILLA_COMPILED", "0"), ("SEMILLA_NO_CHECK", "0")];
+    let works = |output: &str, state: &str, env: &[(&str, &str)], want: &str| {
+        let commands = full_text_commands(output);
+        assert!(!commands.is_empty(), "{state}: the output names no full-text command:\n{output}");
+        for command in commands {
+            let args: Vec<&str> = command.split_whitespace().skip(1).collect();
+            let (code, text) = run_env(repo, &args, env);
+            assert_eq!(code, 0, "{state}: `{command}`:\n{text}");
+            assert!(!text.contains("no open change set") && !text.trim().is_empty(), "{state}: `{command}`:\n{text}");
+            // The full text has each hidden line: the last call of the macro, or the far value.
+            if command.split_whitespace().nth(2).is_some_and(|place| place == "--step" || place.starts_with('f')) {
+                assert!(text.contains(want), "{state}: `{command}` has no `{want}`:\n{text}");
+            }
+        }
+    };
+    let last_call = "make!(item_with_a_long_name_39, 39)";
+    // A rejected step (a false fact of the agent).
+    let (code, rejected) = run_env(repo, &["step", "plus two", "--same", "rename shop_core::item_with_a_long_name_0 => shop_core::zzz"], &default);
+    assert_eq!(code, 1, "{rejected}");
+    assert!(rejected.contains("      expansion: … 37 more (semilla expand --step 0)"), "{rejected}");
+    works(&rejected, "after a rejected step", &default, last_call);
+    let (_, status) = run_env(repo, &["status", "--verbose"], &default);
+    assert!(status.contains("no open change set"), "{status}");
+    // A stored step.
+    let (code, stored) = run_env(repo, &["step", "plus two"], &default);
+    assert_eq!(code, 0, "{stored}");
+    works(&stored, "after a stored step", &default, last_call);
+    // `semilla tag`: the commands of the stored step and of the tag.
+    commit_all(repo, "plus two");
+    let (code, tag) = run_env(repo, &["tag"], &default);
+    assert_eq!(code, 0, "{tag}");
+    works(&format!("{stored}\n{tag}"), "after `semilla tag`", &default, last_call);
+    // A tag after the commit: each command names the commit.
+    write(repo, lib, &forty_calls(3));
+    commit_all(repo, "plus three");
+    let (code, after) = run_env(repo, &["tag"], &default);
+    assert_eq!(code, 0, "{after}");
+    assert!(after.contains("(semilla expand --step 0 --commit "), "{after}");
+    works(&after, "after a tag after the commit", &default, last_call);
+    // A step of `--fast` (the compiled mode, phase 1): a fact text over the budget.
+    let table = |changed: &str| format!("pub mod cart;\nmacro_rules! table {{\n    ($($x:expr),* $(,)?) => {{\n        pub const TABLE: &[u32] = &[$($x),*];\n    }};\n}}\ntable!(\n{}\n);\n", (0..800).map(|n| if n == 400 { changed.to_string() } else { (n * 3).to_string() }).collect::<Vec<_>>().join(", "));
+    write(repo, lib, &table("1200"));
+    commit_all(repo, "table");
+    write(repo, lib, &table("77777"));
+    let compiled = [("SEMILLA_COMPILED", "1"), ("SEMILLA_NO_CHECK", "1")];
+    let (code, fast) = run_env(repo, &["step", "a new value", "--fast", "--reason", "shop_core::table!#0=a table of the test"], &compiled);
+    assert_eq!(code, 0, "{fast}");
+    assert!(fast.contains("accepted (phase 1;") && fast.contains("the full text: semilla expand f1 --step 0)") && !fast.contains("2394, 2397"), "{fast}");
+    works(&fast, "after a step of `--fast`", &compiled, "2394, 2397");
+    // A rejected step of the compiled mode: the full text of the step has the lines of the
+    // compiled check that the step printed (the record of the printed text).
+    write(repo, "crates/shop-core/src/cart.rs", &CART_V0.replace("if *x < max", "if *x <= max"));
+    let (code, rejected) = run_env(repo, &["step", "an edge", "--same", "rename shop_core::cart::Cart::total => shop_core::cart::Cart::sum"], &compiled);
+    assert_eq!(code, 1, "{rejected}");
+    assert!(rejected.contains("      equivalence: "), "{rejected}");
+    let (code, full) = run_env(repo, &["expand", "--step", "1"], &compiled);
+    assert_eq!(code, 0, "{full}");
+    assert!(full.contains("      equivalence: ") && full.contains("✗ a1 same: rename") && !full.contains("has no record"), "{full}");
+}
+
+/// R76.1-1, the negative case: a full-text command names only a step that the state has. A
+/// step number that the session does not have is an error, not the text of a different step.
+/// After the next `semilla step`, the record of a rejected step is gone, and the number names
+/// the step of the new state. An output with no cut names no command.
+// rule- R76.1-1
+#[test]
+fn a_full_text_command_names_only_a_step_of_the_state() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let lib = "crates/shop-core/src/lib.rs";
+    write(repo, lib, "pub mod cart;\npub fn one() -> u32 {\n    1\n}\n");
+    commit_all(repo, "one");
+    write(repo, lib, "pub mod cart;\npub fn one() -> u32 {\n    2\n}\n");
+    let env = [("SEMILLA_COMPILED", "0")];
+    let (code, out) = run_env(repo, &["step", "two"], &env);
+    assert_eq!(code, 0, "{out}");
+    assert!(full_text_commands(&out).is_empty(), "a short output names no command:\n{out}");
+    let (code, missing) = run_env(repo, &["expand", "--step", "3"], &env);
+    assert_ne!(code, 0, "{missing}");
+    assert!(missing.contains("the session has no step 3"), "{missing}");
+    // The full text of the stored step.
+    let (code, full) = run_env(repo, &["expand", "--step", "0"], &env);
+    assert_eq!(code, 0, "{full}");
+    assert!(full.starts_with("step 0  \"two\"\n") && full.contains("changed literal `1` → `2`"), "{full}");
+    // A rejected step keeps its record until the next step.
+    write(repo, lib, "pub mod cart;\npub fn one() -> u32 {\n    3\n}\n");
+    let (code, rejected) = run_env(repo, &["step", "three", "--same", "rename shop_core::one => shop_core::zzz"], &env);
+    assert_eq!(code, 1, "{rejected}");
+    let (_, text) = run_env(repo, &["expand", "--step", "1"], &env);
+    assert!(text.contains("✗ a1 same: rename shop_core::one => shop_core::zzz"), "{text}");
+    let (code, stored) = run_env(repo, &["step", "three"], &env);
+    assert_eq!(code, 0, "{stored}");
+    let (_, text) = run_env(repo, &["expand", "--step", "1"], &env);
+    assert!(text.starts_with("step 1  \"three\"\n") && !text.contains("✗ a1"), "{text}");
 }

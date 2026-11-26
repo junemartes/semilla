@@ -87,7 +87,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f5 derived: comment in `shop/src/lib.rs`: added `// The line of the call is in its value.` [docs · no code]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    depot::here (depot/src/lib.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); not decided (a cleanup path with a call: Span::call_site() (depot/src/lib.rs:-5))
+    depot::here (depot/src/lib.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a cleanup path with a call: Span::call_site() (depot/src/lib.rs:-5))
   expansions: 1 changed
     `depot::here!(1)` at `shop::one/tail` (shop/src/lib.rs:4): expansion changed: `proc macro depot::here` (depot/src/lib.rs:4): changed literal `2u32` → `5u32` at `expansion/elems[1]` [semantics]; from `proc macro depot::here` (depot/src/lib.rs:4)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

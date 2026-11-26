@@ -48,8 +48,9 @@ pub struct Graph {
     pub f: Vec<String>,
     /// The counts of the parts that are not in the graph.
     pub n: Counts,
-    /// True for the body of a coroutine (an `async` body): the MIR is the state machine after
-    /// the coroutine transform, not the source. The graph has no point then.
+    /// True for the body of a coroutine (an `async` body) whose MIR before the coroutine
+    /// transform the driver does not have (R76.2-1): the MIR of the driver is then the state
+    /// machine after the transform, not the source, and the graph has only its entry.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub co: bool,
 }
@@ -135,28 +136,100 @@ enum Target {
 
 type Range = (i64, i64, i64);
 
+/// The kind of the point of a suspension of a coroutine that is not in a construct (a `yield`
+/// expression), and the label of its arrow to the code after the resume (R76.2-1).
+const YIELD: &str = "yield";
+const RESUME: &str = "resume";
+
 /// Builds the graph of a body. `item` is the def of the body, for the HIR of its constructs.
+///
+/// [R76.2-1] A coroutine body (an `async fn`, an `async` block, a closure that the compiler
+/// makes a coroutine, a `yield` body) has the graph of its MIR before the coroutine transform
+/// (`config::source_body`), with the rules of each other body: an `.await` is one construct
+/// point `await`, and a suspension that is in no construct is a point `yield` with the arrow
+/// `resume`. Only with no such MIR, the record has the entry and the mark `co` (the MIR of the
+/// driver is the state machine after the transform).
 pub fn build(body: &Body, item: Option<rustc_public::DefId>) -> Graph {
-    rustc_middle::ty::tls::with(|tcx| build_with(tcx, body, item))
+    rustc_middle::ty::tls::with(|tcx| {
+        let local = item.and_then(|item| rustc_public::rustc_internal::internal(tcx, item).as_local());
+        match local.filter(|local| tcx.coroutine_kind(local.to_def_id()).is_some()) {
+            Some(local) => match crate::config::source_body(tcx, local).and_then(|source| crate::guarded(|| source_form(source))) {
+                Some((source, yields)) => build_with(tcx, &source, item, &yields),
+                None => coroutine_entry(tcx, body),
+            },
+            None => build_with(tcx, body, item, &BTreeMap::new()),
+        }
+    })
 }
 
-fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc_public::DefId>) -> Graph {
+/// The graph of a coroutine body with no MIR before the coroutine transform: only the entry,
+/// for its place (a nested body pairs through the node of its place, R60.3-9), and the mark
+/// `co`.
+fn coroutine_entry(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body) -> Graph {
+    let mut graph = Graph { co: true, ..Graph::default() };
+    let mut entry = Point { k: "entry".into(), t: String::new(), m: None, r: None, c: None, x: Vec::new(), v: None, s: None };
+    if let Some((tokens, call)) = crate::guarded(|| body_place(tcx, body, &mut graph.f)) {
+        entry.r = tokens;
+        entry.c = call;
+    }
+    graph.p.push(entry);
+    graph
+}
+
+/// The public form of the MIR of a coroutine body before the coroutine transform (R76.2-1),
+/// and the block of each suspension with its resume block. The public form of the MIR has no
+/// `Yield`, `FalseEdge`, `FalseUnwind`, or `CoroutineDrop`. A `FalseEdge` and a `FalseUnwind`
+/// go to their real target (as the pass `CleanupPostBorrowck` does). A `Yield` goes to its
+/// resume block, and the map keeps it. The path of the drop of a suspended coroutine starts at
+/// the drop target of a `Yield`, which is no normal arrow, and ends in a `CoroutineDrop`: no
+/// walk from the entry reaches it, and it is not in the graph (as a cleanup block).
+fn source_form(source: &rustc_middle::mir::Body<'_>) -> (Body, BTreeMap<usize, usize>) {
+    use rustc_middle::mir::TerminatorKind as Kind;
+    let mut copy = source.clone();
+    let mut yields = BTreeMap::new();
+    for (index, block) in copy.basic_blocks_mut().iter_enumerated_mut() {
+        let Some(terminator) = block.terminator.as_mut() else { continue };
+        let kind = match &terminator.kind {
+            Kind::FalseEdge { real_target, .. } | Kind::FalseUnwind { real_target, .. } => Kind::goto(*real_target),
+            Kind::Yield { resume, .. } => {
+                yields.insert(index.as_usize(), resume.as_usize());
+                Kind::goto(*resume)
+            }
+            Kind::CoroutineDrop => Kind::Unreachable,
+            _ => continue,
+        };
+        terminator.kind = kind;
+    }
+    // A block with no statement and a `Goto` (most come from a `FalseEdge` or a `FalseUnwind`)
+    // is no part of the graph: an edge to it goes to the end of its chain, as the pass
+    // `SimplifyCfg` does before the MIR of each other body. So the head of a loop is the first
+    // block with code, as in each other body. A suspension keeps its block: it is a point.
+    let next: Vec<Option<rustc_middle::mir::BasicBlock>> = copy
+        .basic_blocks
+        .iter_enumerated()
+        .map(|(index, block)| match &block.terminator().kind {
+            Kind::Goto { target, .. } if block.statements.is_empty() && !yields.contains_key(&index.as_usize()) => Some(*target),
+            _ => None,
+        })
+        .collect();
+    let end = |mut block: rustc_middle::mir::BasicBlock| {
+        for _ in 0..next.len() {
+            match next[block.as_usize()] {
+                Some(target) => block = target,
+                None => break,
+            }
+        }
+        block
+    };
+    for block in copy.basic_blocks_mut().iter_mut() {
+        block.terminator_mut().successors_mut(|target| *target = end(*target));
+    }
+    (rustc_public::rustc_internal::stable(&copy), yields)
+}
+
+fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc_public::DefId>, yields: &BTreeMap<usize, usize>) -> Graph {
     let mut graph = Graph::default();
     let local = item.and_then(|item| rustc_public::rustc_internal::internal(tcx, item).as_local());
-    if let Some(local) = local
-        && tcx.coroutine_kind(local.to_def_id()).is_some()
-    {
-        graph.co = true;
-        // Only the entry, for its place: a nested body pairs through the node of its place
-        // (R60.3-9).
-        let mut entry = Point { k: "entry".into(), t: String::new(), m: None, r: None, c: None, x: Vec::new(), v: None, s: None };
-        if let Some((tokens, call)) = crate::guarded(|| body_place(tcx, body, &mut graph.f)) {
-            entry.r = tokens;
-            entry.c = call;
-        }
-        graph.p.push(entry);
-        return graph;
-    }
     let hir = local.map(|local| arm_roles(tcx, local)).unwrap_or_default();
     let typing = local.map(|local| rustc_middle::ty::TypingEnv::post_analysis(tcx, local.to_def_id()));
     let roles = &hir.roles;
@@ -166,11 +239,32 @@ fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc
     // The raw form of each block, and the desugaring expansion of each raw point.
     let mut raws: Vec<Raw> = Vec::with_capacity(blocks);
     let mut groups: Vec<Option<(rustc_span::ExpnId, Span, rustc_span::DesugaringKind)>> = Vec::with_capacity(blocks);
-    for block in &body.blocks {
+    // R76.2-2: the expansions with a raw point of each group, and the call site that holds the
+    // call site of each one.
+    let mut parts: HashMap<rustc_span::ExpnId, (Vec<rustc_span::ExpnId>, Span)> = HashMap::new();
+    for (index, block) in body.blocks.iter().enumerate() {
         let span = rustc_public::rustc_internal::internal(tcx, block.terminator.source_info.span);
-        let raw = raw_block(tcx, typing, body, &block.terminator.kind, span, &discriminants, &hir.lets, &consts, &mut graph);
+        // R76.2-1: a suspension of a coroutine is a point: the code goes out and back.
+        let raw = match yields.get(&index) {
+            Some(resume) => {
+                let (tokens, call) = place(tcx, span, &mut graph.f);
+                Raw::Point(Point { k: YIELD.into(), t: source_text(tcx, span), m: None, r: tokens.map(array), c: call.map(array), x: Vec::new(), v: None, s: Some(span) }, vec![(RESUME.to_string(), Target::Block(*resume))])
+            }
+            None => raw_block(tcx, typing, body, &block.terminator.kind, span, &discriminants, &hir.lets, &consts, &mut graph),
+        };
+        // R76.2-2: the expansions of one desugared construct are one group (`Hir::parts`).
         let group = match (&raw, span.desugaring_kind()) {
-            (Raw::Point(..), Some(kind)) => Some((span.ctxt().outer_expn(), span.ctxt().outer_expn_data().call_site, kind)),
+            (Raw::Point(..), Some(kind)) => {
+                let expn = span.ctxt().outer_expn();
+                let call_site = span.ctxt().outer_expn_data().call_site;
+                let group = hir.parts.get(&expn).copied().unwrap_or(expn);
+                let entry = parts.entry(group).or_insert_with(|| (Vec::new(), call_site));
+                if !entry.0.contains(&expn) {
+                    entry.0.push(expn);
+                    entry.1 = if entry.1.contains(call_site) { entry.1 } else if call_site.contains(entry.1) { call_site } else { entry.1.to(call_site) };
+                }
+                Some((group, call_site, kind))
+            }
             _ => None,
         };
         raws.push(raw);
@@ -227,8 +321,16 @@ fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc
         match groups[index] {
             Some((expn, call_site, kind)) => {
                 let id = *group_point.entry(expn).or_insert_with(|| {
+                    // R76.2-2: a construct with parts in more than one expansion (an `.await`:
+                    // the expression and the keyword) has the place and the text of the call
+                    // site that holds each part. A construct of one expansion keeps the text of
+                    // its head (R60.2-2).
+                    let (call_site, head) = match parts.get(&expn).filter(|(members, _)| members.len() > 1) {
+                        Some((_, site)) => (*site, *site),
+                        None => (call_site, head_span(tcx, &body.blocks, &groups, expn)),
+                    };
                     let (tokens, call) = place(tcx, call_site, &mut graph.f);
-                    let text = point_text(tcx, call_site, &head_span(tcx, &body.blocks, &groups, expn));
+                    let text = point_text(tcx, call_site, &head);
                     points.push(Point { k: construct_name(kind).to_string(), t: text, m: None, r: tokens.map(array), c: call.map(array), x: Vec::new(), v: None, s: Some(call_site) });
                     group_of_point.insert(points.len() - 1, (expn, false));
                     points.len() - 1
@@ -415,7 +517,10 @@ fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc
             for (label, target) in edges {
                 // A switch of the construct gives the label to the walk after it.
                 let own = if raw.k == "branch" { role(label) } else { label.clone() };
-                let next_carried = carried.clone().or_else(|| (raw.k == "branch").then(|| own.clone()));
+                // R76.2-2: a suspension ends the label: after the resume, the walk is a new pass
+                // through the construct (the poll loop of an `.await` gives no arrow of the arm
+                // before the suspension).
+                let next_carried = if raw.k == YIELD { None } else { carried.clone().or_else(|| (raw.k == "branch").then(|| own.clone())) };
                 let label = carried.clone().unwrap_or(own);
                 match target {
                     Target::Fail => {
@@ -1011,6 +1116,59 @@ fn arm_roles(tcx: rustc_middle::ty::TyCtxt<'_>, local: rustc_span::def_id::Local
         typeck: &'tcx rustc_middle::ty::TypeckResults<'tcx>,
         out: HashMap<(rustc_span::ExpnId, String), &'static str>,
         lets: HashMap<Span, String>,
+        parts: HashMap<rustc_span::ExpnId, rustc_span::ExpnId>,
+    }
+    /// R76.2-2: the expansions of the parts of one desugared construct. The walk goes through
+    /// each node with a span of the desugaring kind of the construct, and stops at each other
+    /// node: the code of the user (the operand of an `.await`, the body of a `for`), so that a
+    /// construct in that code is a construct of its own.
+    struct Parts {
+        kind: rustc_span::DesugaringKind,
+        found: Vec<rustc_span::ExpnId>,
+    }
+    impl Parts {
+        fn take(&mut self, span: Span) -> bool {
+            if span.desugaring_kind() != Some(self.kind) {
+                return false;
+            }
+            let expn = span.ctxt().outer_expn();
+            if !self.found.contains(&expn) {
+                self.found.push(expn);
+            }
+            true
+        }
+    }
+    impl<'tcx> rustc_hir::intravisit::Visitor<'tcx> for Parts {
+        fn visit_expr(&mut self, expr: &'tcx rustc_hir::Expr<'tcx>) {
+            if self.take(expr.span) {
+                rustc_hir::intravisit::walk_expr(self, expr);
+            }
+        }
+        fn visit_pat(&mut self, pat: &'tcx rustc_hir::Pat<'tcx>) {
+            if self.take(pat.span) {
+                rustc_hir::intravisit::walk_pat(self, pat);
+            }
+        }
+        fn visit_stmt(&mut self, statement: &'tcx rustc_hir::Stmt<'tcx>) {
+            if self.take(statement.span) {
+                rustc_hir::intravisit::walk_stmt(self, statement);
+            }
+        }
+        fn visit_block(&mut self, block: &'tcx rustc_hir::Block<'tcx>) {
+            if self.take(block.span) {
+                rustc_hir::intravisit::walk_block(self, block);
+            }
+        }
+        fn visit_local(&mut self, local: &'tcx rustc_hir::LetStmt<'tcx>) {
+            if self.take(local.span) {
+                rustc_hir::intravisit::walk_local(self, local);
+            }
+        }
+        fn visit_arm(&mut self, arm: &'tcx rustc_hir::Arm<'tcx>) {
+            if self.take(arm.span) {
+                rustc_hir::intravisit::walk_arm(self, arm);
+            }
+        }
     }
     impl<'tcx> Arms<'tcx> {
         fn variant(&self, pat: &rustc_hir::Pat<'_>) -> Option<String> {
@@ -1041,9 +1199,18 @@ fn arm_roles(tcx: rustc_middle::ty::TyCtxt<'_>, local: rustc_span::def_id::Local
             // `?` has the span of the source expression.
             if let rustc_hir::ExprKind::Match(scrutinee, arms, source) = &expr.kind
                 && *source != rustc_hir::MatchSource::Normal
-                && scrutinee.span.desugaring_kind().is_some()
+                && let Some(kind) = scrutinee.span.desugaring_kind()
             {
                 let expn = scrutinee.span.ctxt().outer_expn();
+                // R76.2-2: the first desugared `match` of a construct names its parts: each
+                // expansion of the desugaring kind below it, to the code of the user.
+                if !self.parts.contains_key(&expn) {
+                    let mut parts = Parts { kind, found: Vec::new() };
+                    rustc_hir::intravisit::walk_expr(&mut parts, expr);
+                    for part in parts.found {
+                        self.parts.entry(part).or_insert(expn);
+                    }
+                }
                 for arm in arms.iter() {
                     let role = match &arm.body.kind {
                         rustc_hir::ExprKind::Ret(_) => "exit",
@@ -1076,9 +1243,11 @@ fn arm_roles(tcx: rustc_middle::ty::TyCtxt<'_>, local: rustc_span::def_id::Local
     if !tcx.has_typeck_results(local) {
         return Hir::default();
     }
-    let mut arms = Arms { tcx, typeck: tcx.typeck(local), out: HashMap::new(), lets: HashMap::new() };
+    let mut arms = Arms { tcx, typeck: tcx.typeck(local), out: HashMap::new(), lets: HashMap::new(), parts: HashMap::new() };
     rustc_hir::intravisit::Visitor::visit_body(&mut arms, body);
-    Hir { roles: arms.out, lets: arms.lets }
+    // The role of an arm has the key of the group of its construct.
+    let roles = arms.out.into_iter().map(|((expn, name), role)| ((arms.parts.get(&expn).copied().unwrap_or(expn), name), role)).collect();
+    Hir { roles, lets: arms.lets, parts: arms.parts }
 }
 
 /// The data of the HIR of a body for its graph.
@@ -1088,4 +1257,7 @@ struct Hir {
     roles: HashMap<(rustc_span::ExpnId, String), &'static str>,
     /// The text of each `let` condition, by the span of its pattern.
     lets: HashMap<Span, String>,
+    /// R76.2-2: the group of each expansion of a part of a desugared construct: the expansion
+    /// of the scrutinee of its first desugared `match`.
+    parts: HashMap<rustc_span::ExpnId, rustc_span::ExpnId>,
 }

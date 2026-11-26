@@ -519,7 +519,7 @@ pub(crate) fn apply(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, ou
         if alone > 0 {
             parts.push(format!("{alone} fact{} not checked alone", if alone == 1 { "" } else { "s" }));
         }
-        flow.equivalence_stop = Some(format!("the equivalence check stopped{seconds}: {}; semilla status --verbose", parts.join(", ")));
+        flow.equivalence_stop = Some(format!("the equivalence check stopped{seconds}: {}; {}", parts.join(", "), semilla_core::budget::step_text_command(outcome.report.step)));
     }
     // [R74.1-2] One line for the step when a run of the real code disagrees with the model.
     let defect = |verdict: &Verdict| matches!(verdict, Verdict::NotDecided(cause) if cause.starts_with(semilla_core::run::DISAGREE));
@@ -558,17 +558,19 @@ fn reach_lines(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcome
         flow.reached.push(semilla_core::report::ReachedBody { name: body.name.clone(), place: place_of(&body.name), text, chain: body.chain.join(" → "), key });
     }
     flow.reach_stops = report.stops.clone();
+    // R76.1-1: the part `reached bodies` of the full text of the step has each body.
+    let full_step = semilla_core::budget::step_text_command(outcome.report.step);
     for (check, facts) in checks.iter().zip(facts_of) {
         let Some(list) = report.from.get(&check.name) else { continue };
         let shown: Vec<&String> = list.iter().filter(|name| public(name)).collect();
         let line = if shown.is_empty() {
             let names: Vec<&str> = list.iter().take(REACH_NAMES).map(String::as_str).collect();
             let more = if list.len() > REACH_NAMES { format!(", and {} more", list.len() - REACH_NAMES) } else { String::new() };
-            format!("{} bod{}, no public function: {}{more} (semilla status --verbose)", list.len(), if list.len() == 1 { "y" } else { "ies" }, names.join(", "))
+            format!("{} bod{}, no public function: {}{more} ({full_step})", list.len(), if list.len() == 1 { "y" } else { "ies" }, names.join(", "))
         } else {
             let names: Vec<&str> = shown.iter().take(REACH_NAMES).map(|name| name.as_str()).collect();
             let more = if shown.len() > REACH_NAMES { format!(", and {} more", shown.len() - REACH_NAMES) } else { String::new() };
-            format!("{} public function{}: {}{more} (semilla status --verbose)", shown.len(), if shown.len() == 1 { "" } else { "s" }, names.join(", "))
+            format!("{} public function{}: {}{more} ({full_step})", shown.len(), if shown.len() == 1 { "" } else { "s" }, names.join(", "))
         };
         let links: Vec<(String, String)> = shown.iter().map(|name| ((*name).clone(), place_of(name))).collect();
         for fact in facts {

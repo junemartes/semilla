@@ -47,7 +47,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ✗ spotlight: a build setting (profile, patch, features, lints, or a target table); it needs a reason: --reason 'Cargo.toml:features.nightly=…'
   cover: each of the 7 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for n = 0: before returns 2, after returns 1; confirmed by a run)
+    shop::price (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for n = 0: before returns 2, after returns 1; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: shop
   ! spotlight: features: Cargo.toml (the key of the reason: `Cargo.toml:features.nightly`)

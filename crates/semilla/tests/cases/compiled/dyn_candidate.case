@@ -46,7 +46,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + call `talk` (src/lib.rs:11): return → call `num::<impl u32>::wrapping_add`
       control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:11): return → return
       control flow: + arrow call `talk` (src/lib.rs:11) → call `talk` (src/lib.rs:11) (return)
-      control flow: … 1 more (semilla status --verbose)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: not decided: a cast (PointerCoercion(Unsize)): &Dog (src/lib.rs:-11)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies

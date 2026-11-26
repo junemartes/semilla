@@ -57,7 +57,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: added comment `// a comment` [docs]
   cover: each of the 4 changed line(s) is in a fact
   expansions: 3 changed, 1 equal
-    2 calls: expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes: `shop::tests::one`, `shop::tests::two` (semilla status --verbose)
+    2 calls: expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes: `shop::tests::one`, `shop::tests::two` (semilla expand --step 0)
     `assert_eq!(super::add(x), 3)` at `shop::tests::two/S1` (src/lib.rs:16): expansion changed: `macro assert_eq` (crate core): changed expression `2` → `x` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/args[0]` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

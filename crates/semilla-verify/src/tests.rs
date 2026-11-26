@@ -2870,15 +2870,59 @@ fn a_changed_body_with_unsafe_code_has_the_unsafe_line() {
     assert!(!crate::views::text_report_with(std::slice::from_ref(&report), false).contains("! unsafe code"));
 }
 
+// R76.1-1: a cut list of a fact names the command of the fact, also in a line of equal facts.
+// Two facts whose lines differ only in the number of the command fold into one line (design
+// 38.1), and the line names the first fact. The negative case: two facts with different
+// lists do not fold, and each one names its own command.
+// rule+ R76.1-1
+// rule- R76.1-1
+#[test]
+fn equal_facts_fold_and_the_command_of_the_line_names_the_first_fact() {
+    let bodies: Vec<String> = (0..21).map(|index| format!("demo::body_{index:02}")).collect();
+    let fact = |id: &str, at: &str, affected: &[String]| semilla_core::Fact { id: id.into(), part: "edit".into(), description: "changed literal `1` → `2`".into(), status: "derived".into(), category: Category::Semantics, compare: Compare::CodeDifferent, affected: affected.to_vec(), at: Some(semilla_core::Anchor::item(at)), ..Default::default() };
+    let report = StepReport { step: 3, facts: vec![fact("f1", "demo::a", &bodies), fact("f2", "demo::b", &bodies)], ..Default::default() };
+    let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert!(text.contains("◆ f1 derived: changed literal `1` → `2` [semantics · code different] × 2 (also f2)"), "{text}");
+    assert!(text.contains("      affected bodies: 21 bodies of the crate `demo` (`semilla expand f1 --step 3` shows the names)\n") && !text.contains("f2 --step 3"), "{text}");
+    let mut other = bodies.clone();
+    other[20] = "demo::body_99".into();
+    let report = StepReport { step: 3, facts: vec![fact("f1", "demo::a", &bodies), fact("f2", "demo::b", &other)], ..Default::default() };
+    let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert!(!text.contains("(also f2)") && text.contains("`semilla expand f1 --step 3` shows the names") && text.contains("`semilla expand f2 --step 3` shows the names"), "{text}");
+}
+
+// R76.1-1 with R71.1-2: a long line that two facts have shows one time, also when the numbers
+// of the two facts have a different length: the compare reads the line before its cut (the
+// command of each fact has its own length, so the cut is at another place). The negative case:
+// two different long lines stay apart.
+// rule+ R76.1-1
+// rule- R76.1-1
+#[test]
+fn a_cut_line_of_two_facts_shows_one_time_for_numbers_of_each_length() {
+    let names: Vec<String> = (0..80).map(|n| format!("`shop::item_{n}`")).collect();
+    let fact = |id: &str, text: &str| semilla_core::Fact { id: id.into(), part: "edit".into(), description: text.into(), status: "derived".into(), category: Category::Semantics, compare: Compare::CodeDifferent, at: Some(semilla_core::Anchor::item(format!("shop::{id}"))), ..Default::default() };
+    let report = |second: &str| {
+        let mut flow = semilla_core::report::FlowReport::default();
+        flow.facts.insert("f9".into(), vec![format!("~ call of {}", names.join(", "))]);
+        flow.facts.insert("f10".into(), vec![format!("~ call of {}", second)]);
+        StepReport { facts: vec![fact("f9", "changed literal `1` → `2`"), fact("f10", "changed literal `3` → `4`")], flow: Some(flow), ..Default::default() }
+    };
+    let text = crate::views::text_report_with(&[report(&names.join(", "))], false);
+    assert!(text.contains("; `semilla expand f9 --step 0` shows the full line)") && text.contains(" (the same line for f10)\n") && text.contains("      control flow: the same line as f9\n"), "{text}");
+    assert!(text.lines().all(|line| line.chars().count() <= crate::views::LINE_MAX + 30), "{text}");
+    let text = crate::views::text_report_with(&[report(&names[1..].join(", "))], false);
+    assert!(!text.contains("the same line") && text.contains("`semilla expand f10 --step 0` shows the full line"), "{text}");
+}
+
 #[test]
 fn the_text_output_shows_the_scope_of_a_long_list() {
     // Batch 5x, part E (before: brief 5h, C6): the `step` output shows a list of more than 8
-    // bodies as a count and the scope. `semilla status --verbose` shows each name.
+    // bodies as a count and the scope. `semilla expand f1 --step 0` shows each name (R76.1-1).
     let bodies: Vec<String> = (0..21).map(|index| format!("demo::body_{index:02}")).collect();
     let fact = semilla_core::Fact { id: "f1".into(), part: "type".into(), description: "type of `demo::Cart::total` changed: u32 → u64".into(), status: "derived".into(), category: Category::Declaration, compare: Compare::CodeDifferent, affected: bodies.clone(), equal_sites: bodies[..8].to_vec(), ..Default::default() };
     let mut report = StepReport { facts: vec![fact], ..Default::default() };
     let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
-    assert!(text.contains("      affected bodies: 21 bodies of the crate `demo` (`semilla status --verbose` shows the names)\n"), "{text}");
+    assert!(text.contains("      affected bodies: 21 bodies of the crate `demo` (`semilla expand f1 --step 0` shows the names)\n"), "{text}");
     // A list of 8 bodies shows each name.
     assert!(text.contains(&format!("      bodies with a changed call site and equal compiled code: {}\n", bodies[..8].join(", "))), "{text}");
     assert!(!text.contains("demo::body_08"), "{text}");
@@ -3025,7 +3069,7 @@ fn a_build_input_spotlight_shows_five_causes_and_the_verbose_output_shows_each_c
     let report = run_derived_files(&[("Cargo.toml", &old), ("src/lib.rs", lib)], &[("Cargo.toml", &new), ("src/lib.rs", lib)], &[("demo::one", different(false))]);
     let fact = report.facts.iter().find(|fact| fact.spotlight_why.as_ref().is_some_and(|why| why.contains("a build input"))).unwrap_or_else(|| panic!("{report:#?}"));
     let why = fact.spotlight_why.as_ref().unwrap();
-    assert!(why.ends_with(", and 3 more (`semilla status --verbose` shows each cause)"), "{why}");
+    assert!(why.ends_with(", and 3 more (`semilla expand --step 0` shows each cause)"), "{why}");
     assert_eq!(why.split("have one of these causes: ").nth(1).unwrap().matches("`Cargo.toml: ").count(), 5, "{why}");
     assert_eq!(fact.causes.len(), 8, "{fact:#?}");
     let short = crate::views::text_report_with(std::slice::from_ref(&report), false);
@@ -6949,15 +6993,15 @@ fn a_local_macro_with_a_standard_name_says_what_it_replaces() {
 fn a_long_line_is_cut_and_says_so() {
     let list: Vec<String> = (0..80).map(|n| format!("demo::item_{n}")).collect();
     let line = format!("      note: this body uses {}, which Semilla did not check", list.join(", "));
-    let cut = views::fit_line(&line);
+    let cut = views::fit_line(&line, "semilla expand --step 0");
     assert!(cut.chars().count() <= views::LINE_MAX, "{cut}");
-    assert!(cut.starts_with("      note: this body uses demo::item_0, demo::item_1,") && cut.contains("items more; `semilla status --verbose` shows the full line)") && cut.ends_with("demo::item_79, which Semilla did not check"), "{cut}");
+    assert!(cut.starts_with("      note: this body uses demo::item_0, demo::item_1,") && cut.contains("items more; `semilla expand --step 0` shows the full line)") && cut.ends_with("demo::item_79, which Semilla did not check"), "{cut}");
     let hidden: usize = cut.split(" (").nth(1).and_then(|rest| rest.split(' ').next()).and_then(|n| n.parse().ok()).unwrap();
     assert_eq!(hidden + cut.matches("demo::item_").count(), 80, "{cut}");
     let text = "x".repeat(900);
-    let cut = views::fit_line(&text);
-    assert!(cut.chars().count() <= views::LINE_MAX && cut.contains("(500 characters more; `semilla status --verbose` shows the full line)"), "{cut}");
-    assert_eq!(views::fit_line("short"), "short");
+    let cut = views::fit_line(&text, "semilla expand --step 0");
+    assert!(cut.chars().count() <= views::LINE_MAX && cut.contains("(500 characters more; `semilla expand --step 0` shows the full line)"), "{cut}");
+    assert_eq!(views::fit_line("short", "semilla expand --step 0"), "short");
 }
 
 // R66.10-6: a cut keeps each result word and its configurations; it cuts the list of the
@@ -6971,25 +7015,25 @@ fn a_cut_keeps_each_result_word_and_cuts_the_list_of_code_names_first() {
     let start = format!("    shop::scan (src/lib.rs:12): graph changes: +2 branches, +6 arrows, −3 arrows; {}", "no edit in the body; ".repeat(10));
     let line = format!("{start}equivalent in dev, no default features, all features, test (proved by SMT after inlining {})", callees.join(", "));
     assert!(line.chars().count() > views::LINE_MAX);
-    let cut = views::fit_line(&line);
+    let cut = views::fit_line(&line, "semilla expand --step 0");
     assert!(cut.chars().count() <= views::LINE_MAX, "{cut}");
     assert!(cut.contains("equivalent in dev, no default features, all features, test (proved by SMT after inlining `shop::h0`"), "{cut}");
-    assert!(cut.contains("items more; `semilla status --verbose` shows the full line) …, `shop::h29`)"), "{cut}");
+    assert!(cut.contains("items more; `semilla expand --step 0` shows the full line) …, `shop::h29`)"), "{cut}");
     assert!(cut.starts_with(&start), "{cut}");
     // The same line with no backquotes: the cut hides items of the list with no result.
     let plain = line.replace('`', "");
-    let cut = views::fit_line(&plain);
+    let cut = views::fit_line(&plain, "semilla expand --step 0");
     assert!(cut.chars().count() <= views::LINE_MAX && cut.contains("equivalent in dev, no default features, all features, test (proved by SMT after inlining shop::h0"), "{cut}");
     // A result with a long list of configurations and a long cause: the cut hides characters of
     // the text with no result, and each configuration stays.
     let configs = "dev, dev, no default features (libraries and binaries only), dev, all features, release, release, no default features (libraries and binaries only), release, all features";
     let line = format!("      shop::table::Table::<T, A>::into_iter_from (src/table.rs:1435): reached through {}, not decided in {configs} (a cleanup path with a call: {} (src/table.rs:-1455))", "shop::table::Table::<T, A>::into_allocation".repeat(4), "self.into_allocation_of_the_table()".repeat(6));
-    let cut = views::fit_line(&line);
+    let cut = views::fit_line(&line, "semilla expand --step 0");
     assert!(cut.chars().count() <= views::LINE_MAX && cut.contains(&format!("not decided in {configs} (a clean")) && cut.contains("characters more;"), "{cut}");
     // A list of code names only: the cut of its first and its last items, as before.
     let names: Vec<String> = (0..80).map(|n| format!("`demo::item_{n}`")).collect();
     let line = format!("      through: {}", names.join(", "));
-    let cut = views::fit_line(&line);
+    let cut = views::fit_line(&line, "semilla expand --step 0");
     assert!(cut.starts_with("      through: `demo::item_0`, `demo::item_1`,") && cut.ends_with("`demo::item_78`, `demo::item_79`"), "{cut}");
     let shown = cut.matches("`demo::item_").count();
     assert!(shown > 10 && cut.contains(&format!("({} items more;", 80 - shown)), "{cut}");
@@ -9237,7 +9281,7 @@ fn a_long_gap_list_shows_its_first_lines_and_a_count() {
     assert_eq!(report.gaps.len(), 9, "{:#?}", report.gaps);
     let short = views::agent_lines(&report, Some(semilla_core::report::GAP_LIMIT), &|_| Vec::new());
     assert_eq!(short.iter().filter(|line| line.starts_with("  ? ")).count(), 5, "{short:#?}");
-    assert_eq!(short[short.len() - 2], "  and 4 more line(s) with 4 place(s): `semilla status --verbose` shows each line");
+    assert_eq!(short[short.len() - 2], "  and 4 more line(s) with 4 place(s): `semilla expand --step 0` shows each line");
     // The full list has each line.
     assert_eq!(views::agent_lines(&report, None, &|_| Vec::new()).iter().filter(|line| line.starts_with("  ? ")).count(), 9);
     // The list is never a reject.

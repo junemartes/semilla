@@ -94,7 +94,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: different: for x = 0: before returns 1, after returns 2 (confirmed by a run)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:16): same structure: 1 changed check (in dev, dev, all features; 1 more result(s) in other configurations: semilla status --verbose); different (for x = 0: before returns 1, after returns 2; confirmed by a run)
+    shop::price (src/lib.rs:16): same structure: 1 changed check (in dev, dev, all features; 1 more result(s) in other configurations: semilla expand --step 0); different (for x = 0: before returns 1, after returns 2; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -145,7 +145,9 @@ pub struct FlowGraph {
     pub cleanup: usize,
     pub drops: usize,
     pub unreachable: usize,
-    /// True for a coroutine body: the driver shows no graph.
+    /// True for a coroutine body whose MIR before the coroutine transform the driver does not
+    /// have (R76.2-1): the record shows no graph. A coroutine body with that MIR has its full
+    /// graph and no mark.
     pub coroutine: bool,
     /// The name and the target of the record (for the equivalence check, design 61).
     pub key: Option<(String, String)>,
@@ -815,7 +817,8 @@ fn whole_chart(graph: &FlowGraph, side: usize, lines: &mut Lines) -> Option<semi
 }
 
 /// True if two graphs have the same points (kind, text, mark, callees) in the same order and
-/// the same arrows (R60.3-7). A coroutine graph has no points, so it never has the same shape.
+/// the same arrows (R60.3-7). A coroutine graph with the mark (no MIR before the coroutine
+/// transform, R76.2-1) has no points, so it never has the same shape.
 pub fn same_shape(old: &FlowGraph, new: &FlowGraph) -> bool {
     !old.coroutine && !new.coroutine && old.arrows == new.arrows && old.points.len() == new.points.len() && old.points.iter().zip(&new.points).all(|(a, b)| a.kind == b.kind && a.same_text(b))
 }
@@ -1281,6 +1284,9 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
     }
     unit_moves(&mut results);
     let mut report = FlowReport::default();
+    // R76.1-1: a count of lines or of results names the command of the step: the control flow
+    // section of its full text has each line.
+    let full_step = semilla_core::budget::step_text_command(outcome.report.step);
     let all_configs: BTreeSet<&String> = results.iter().flat_map(|result| result.outcomes.iter().flat_map(|known| known.configs.iter())).collect();
     // The bodies that do not keep their graph. A closure or a coroutine body `f::{closure#0}`
     // is a part of the item of `f`, so an edit in it is an edit of `f` too.
@@ -1295,7 +1301,7 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
             format!("{}: {}", first.word, first.summary)
         };
         if result.outcomes.len() > 1 {
-            line.push_str(&format!(" (in {}; {} more result(s) in other configurations: semilla status --verbose)", first.configs.join(", "), result.outcomes.len() - 1));
+            line.push_str(&format!(" (in {}; {} more result(s) in other configurations: {full_step})", first.configs.join(", "), result.outcomes.len() - 1));
         }
         if !result.edit && first.rank != FlowResult::Same {
             line.push_str("; no edit in the body");
@@ -1367,7 +1373,7 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
             if known.word.starts_with("graph added") || known.word.starts_with("graph removed") {
                 if known.elements.iter().any(&mut held) {
                     let sign = if known.word.starts_with("graph added") { "+" } else { "−" };
-                    found.push(format!("{sign} graph of `{}`: {} (semilla status --verbose)", result.shown, known.summary));
+                    found.push(format!("{sign} graph of `{}`: {} ({full_step})", result.shown, known.summary));
                 }
                 continue;
             }
@@ -1383,7 +1389,7 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
         let more = found.len().saturating_sub(FACT_LINES);
         found.truncate(FACT_LINES);
         if more > 0 {
-            found.push(format!("… {more} more (semilla status --verbose)"));
+            found.push(format!("… {more} more ({full_step})"));
         }
         report.facts.insert(fact.id.clone(), found);
     }

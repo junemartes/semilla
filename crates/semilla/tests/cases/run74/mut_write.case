@@ -44,7 +44,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: different: for p = &Pt { 0, 0 }: before returns () with `*p` = Pt { 1, 0 }, after returns () with `*p` = Pt { 2, 0 } (confirmed by a run)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::bump (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for p = &Pt { 0, 0 }: before returns () with `*p` = Pt { 1, 0 }, after returns () with `*p` = Pt { 2, 0 }; confirmed by a run)
+    depot::bump (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for p = &Pt { 0, 0 }: before returns () with `*p` = Pt { 1, 0 }, after returns () with `*p` = Pt { 2, 0 }; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -51,7 +51,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: the same line as f1
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    shop::quote (src/lib.rs:1): same structure: 1 changed condition, 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for n = 10, p = 10: before returns 100, after returns 95; confirmed by a run)
+    shop::quote (src/lib.rs:1): same structure: 1 changed condition, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for n = 10, p = 10: before returns 100, after returns 95; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -338,19 +338,26 @@ enum Command {
     /// Print the expansion of each macro call at a place, before and after the step, with a
     /// line diff (design 63): `semilla expand src/lib.rs:4`, `semilla expand shop::price`,
     /// `semilla expand base!` (each call of the macro, also through a different macro).
-    /// `semilla expand f3 --step 0` prints each text of the fact `f3` in full (R71.1-1): a
-    /// line over the size budget names this command.
+    /// `semilla expand f3 --step 0` prints each text of the fact `f3` in full (R71.1-1), and
+    /// `semilla expand --step 0` prints the full text of the step (R76.1-1): a line with a cut
+    /// names one of these commands.
     ///
-    /// The default step is the working tree against `HEAD` (for a fact: the working tree
-    /// against the last stored step). The command builds the compiled records only if the
-    /// cache has no record of the two trees.
+    /// The default step is the working tree against `HEAD` (for a fact and for a step: the
+    /// working tree against the last stored step). A step is a stored step of the session, the
+    /// step that the last `semilla step` printed and did not store, or with `--commit` a step of
+    /// the note of a commit. The command builds the compiled records only if the cache has no
+    /// record of the two trees.
     Expand {
         /// `FILE:LINE` (`FILE:-LINE` for a line of the old tree), an item path, a macro name
-        /// with `!`, or a fact number (`f3`).
-        place: String,
-        /// A stored step of the session.
+        /// with `!`, or a fact number (`f3`). With no place: the full text of the step.
+        place: Option<String>,
+        /// A step of the session (a stored step, or the step that the last `semilla step`
+        /// printed and did not store), or with `--commit` a step of the note of the commit.
         #[arg(long)]
         step: Option<usize>,
+        /// A commit with a note of Semilla: the step is a step of its note.
+        #[arg(long)]
+        commit: Option<String>,
         /// Print each line (no cut).
         #[arg(long)]
         full: bool,
@@ -779,12 +786,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     }
                 }
             };
+            // R76.1-1: in the review of a commit, each full-text command names the commit.
+            let scoped = |text: String| if key == "session" { text } else { semilla_core::budget::with_commit(&text, &key[..key.len().min(12)]) };
             if let Some(file) = &md {
-                std::fs::write(file, semilla_ui::export::render_markdown(&data, full))?;
+                std::fs::write(file, scoped(semilla_ui::export::render_markdown(&data, full)))?;
                 println!("wrote {}", file.display());
             }
             if let Some(file) = &html {
-                std::fs::write(file, semilla_ui::export::render_html(&data))?;
+                std::fs::write(file, scoped(semilla_ui::export::render_html(&data)))?;
                 println!("wrote {}", file.display());
             }
             // The build code line of the result (design 28), also on the terminal.
@@ -870,9 +879,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 return Ok(ExitCode::from(1));
             }
         }
-        Command::Expand { place, step, full, before, after } => {
+        Command::Expand { place, step, commit, full, before, after } => {
             let sides = if before { semilla_verify::expand::Sides::Before } else if after { semilla_verify::expand::Sides::After } else { semilla_verify::expand::Sides::Both };
-            print!("{}", app.expand(&place, step, full, sides)?);
+            print!("{}", app.expand(place.as_deref(), step, commit.as_deref(), full, sides)?);
         }
         Command::Cache { clean: false } => println!("Run `semilla cache --clean`: it removes each entry of the build code cache that no stored step uses, and the folder of the build check."),
         Command::Cache { clean: true } => {

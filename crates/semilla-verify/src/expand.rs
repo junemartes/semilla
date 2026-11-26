@@ -760,7 +760,7 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
                 } else if old.text.len().max(new.text.len()) > LARGE_EXPANSION {
                     // A large text gets no compare: the line gives the changed lines, the sizes,
                     // and the command that prints the full text (R71.1-1).
-                    ("expansion changed", vec![large_text(old, new)])
+                    ("expansion changed", vec![large_text(old, new, outcome.report.step)])
                 } else {
                     let found = cache.entry((old.text.clone(), new.text.clone())).or_insert_with(|| compare(old, new, &site.crate_name, exprs));
                     let facts: Vec<String> = match found {
@@ -874,7 +874,7 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         let summary = facts.join("; ");
         let key = format!("{result}: {}: {summary}{}", definition_text(any), if cause.is_empty() { String::new() } else { format!("; {cause}") });
         let shown_text = |e: Option<&Expansion>| e.map(|e| semilla_core::text::without_unique(&e.text)).unwrap_or_default();
-        let diff = cut_diff(&line_diff(&shown_text(site.old), &shown_text(site.new)), DIFF_LIMIT, &format!("semilla expand {place}"));
+        let diff = cut_diff(&line_diff(&shown_text(site.old), &shown_text(site.new)), DIFF_LIMIT, &semilla_core::budget::expansion_command(&place, outcome.report.step));
         let owner_ids: Vec<String> = owners.iter().map(|index| outcome.report.facts[*index].id.clone()).collect();
         // R63.9-7: the line goes under one fact, the first owner (a changed definition of the
         // chain, else an edit of the input, else a changed file that the code reads). The line
@@ -906,7 +906,7 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         let bodies: Vec<String> = flow.bodies.iter().filter(|body| at_call(body)).map(|body| format!("{} ({}): {}", body.name, body.place, body.line)).collect();
         // A body line with no edit names the changed expansion at its place (R63.3-9).
         if result == "expansion changed" || result == NOT_KNOWN_RESULT {
-            let mark = format!("; the expansion of {shown_call} changes (semilla expand {place})");
+            let mark = format!("; the expansion of {shown_call} changes ({})", semilla_core::budget::expansion_command(&place, outcome.report.step));
             for body in flow.bodies.iter_mut().filter(|body| at_call(body) && body.line.contains("no edit in the body") && !body.line.contains("; the expansion of ")) {
                 body.line.push_str(&mark);
             }
@@ -914,7 +914,9 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         flow.expansions.push(ExpansionSite { call: shown_call, at, place, definition: definition_text(any), result: result.to_string(), configs, facts, cause, owners: owner_ids, diff, key, bodies });
     }
     // The lines of each fact (R63.3-3): equal changes of one macro fold into one line with the
-    // count (R63.3-4).
+    // count (R63.3-4). R76.1-1: a count names the command of the step: the expansion section of
+    // its full text has each call.
+    let full_step = semilla_core::budget::step_text_command(outcome.report.step);
     for (id, lines) in by_fact {
         let mut folded: Vec<(String, Vec<(String, String)>)> = Vec::new();
         for (fold, line, at) in lines {
@@ -933,13 +935,13 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
                 let (name, result, summary) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
                 let places: Vec<String> = list.iter().take(semilla_core::report::REACH_FOLD_NAMES).map(|(_, at)| format!("`{at}`")).collect();
                 let more = if list.len() > semilla_core::report::REACH_FOLD_NAMES { format!(", and {} more", list.len() - semilla_core::report::REACH_FOLD_NAMES) } else { String::new() };
-                format!("{} calls of `{name}`: {result}: {summary}: {}{more} (semilla status --verbose)", list.len(), places.join(", "))
+                format!("{} calls of `{name}`: {result}: {summary}: {}{more} ({full_step})", list.len(), places.join(", "))
             })
             .collect();
         let more = out.len().saturating_sub(crate::flow::FACT_LINES);
         out.truncate(crate::flow::FACT_LINES);
         if more > 0 {
-            out.push(format!("… {more} more (semilla status --verbose)"));
+            out.push(format!("… {more} more ({full_step})"));
         }
         flow.expansion_lines.insert(id, out);
     }
@@ -1037,9 +1039,10 @@ pub const LARGE_EXPANSION: usize = 50_000;
 /// the line gives each changed line with its line number in the text (a long run shows its
 /// changed tokens), the sizes, and the command that prints the full text. The words are not a
 /// compare result (R50.1-1: the line is in the default mode too).
-fn large_text(old: &Expansion, new: &Expansion) -> String {
+fn large_text(old: &Expansion, new: &Expansion, step: usize) -> String {
     let place = if new.file.is_empty() { NO_PLACE.to_string() } else { format!("{}:{}", new.file, new.line) };
-    format!("the text is too large for the fact rules (over {} kB): {}", LARGE_EXPANSION / 1000, semilla_core::budget::inline_pair(&old.text, &new.text, Some(&format!("semilla expand {place}")), false))
+    // R76.1-1: the command names the step, so that it works in each state after the step.
+    format!("the text is too large for the fact rules (over {} kB): {}", LARGE_EXPANSION / 1000, semilla_core::budget::inline_pair(&old.text, &new.text, Some(&semilla_core::budget::expansion_command(&place, step)), false))
 }
 
 /// R65.10-1: the identity of each package of `Cargo.lock` with a source (a registry or a
@@ -1106,7 +1109,7 @@ pub const EXPAND_LIMIT: usize = 200;
 /// expansion before the step and after it and a line diff. The place is `FILE:LINE` (a line
 /// `-N` is in the old tree), an item path, or a macro name with `!` (each call of the macro, also
 /// each call whose expansion uses it).
-pub fn view(place: &str, units: [&[ExpansionUnit]; 2], trees: [&Workspace; 2], full: bool, sides: Sides) -> Result<String, String> {
+pub fn view(place: &str, units: [&[ExpansionUnit]; 2], trees: [&Workspace; 2], full: bool, sides: Sides, again: &str) -> Result<String, String> {
     let same = |path: &str| path.to_string();
     let (changed, equal) = pair_sites(units, trees, &same, true);
     let line_place = place.rsplit_once(':').and_then(|(file, line)| {
@@ -1175,7 +1178,8 @@ pub fn view(place: &str, units: [&[ExpansionUnit]; 2], trees: [&Workspace; 2], f
             out.push_str(&format!("  {line}\n"));
         }
         if !full && total > EXPAND_LIMIT {
-            out.push_str(&format!("  … {} more lines: semilla expand {place} --full\n", total - EXPAND_LIMIT));
+            // R76.1-1: the command of this output with `--full` (its step and its commit).
+            out.push_str(&format!("  … {} more lines: {again} --full\n", total - EXPAND_LIMIT));
         }
     }
     Ok(out)
@@ -1716,7 +1720,7 @@ mod tests {
         let site = sites.iter().find(|site| site.result == "expansion changed").expect("a changed expansion");
         // R71.1-1 (before batch 11c, R65.10-3 gave only the count of the lines that differ):
         // the changed line, its line number, the sizes, and the command.
-        assert_eq!(site.facts, vec![format!("the text is too large for the fact rules (over 50 kB): `let v7 = 1;` → `let v7 = 2;` (line 8) (a large text: 3000 → 3000 lines, {:.1} kB → {:.1} kB; 1 changed part; the full text: semilla expand src/lib.rs:2)", old.len() as f64 / 1000.0, new.len() as f64 / 1000.0)]);
+        assert_eq!(site.facts, vec![format!("the text is too large for the fact rules (over 50 kB): `let v7 = 1;` → `let v7 = 2;` (line 8) (a large text: 3000 → 3000 lines, {:.1} kB → {:.1} kB; 1 changed part; the full text: semilla expand src/lib.rs:2 --step 0)", old.len() as f64 / 1000.0, new.len() as f64 / 1000.0)]);
         // The negative case: a small text has the facts of the compare.
         let (_, sites) = dependency_outcome(("1.0.0", "1", "depot::m!(1)", "let v7 = 1;"), ("1.0.0", "1", "depot::m!(1)", "let v7 = 2;"));
         let site = sites.iter().find(|site| site.result == "expansion changed").expect("a changed expansion");

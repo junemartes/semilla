@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The names of the checks. A line `known_failure: NAME: CAUSE` of a case names one of them.
-const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit", "default_mode"];
+const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit", "default_mode", "full_text"];
 
 /// A spotlight line of `semilla step` with no reason, in the form of a tag after the commit
 /// (design 62): `✗ spotlight…: TEXT; it needs a reason: --reason '…'` gives
@@ -928,6 +928,68 @@ fn default_mode_problems(text: &str) -> Vec<String> {
     problems
 }
 
+/// The full-text commands of an output (R76.1-1): each `semilla expand …`, to the end of the
+/// command (a backquote, a parenthesis, a semicolon, or the end of the line), and each
+/// `semilla status … --verbose` (a pointer of the form before batch 12b, also in a line of a
+/// cut).
+fn full_text_commands(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for line in text.lines() {
+        for head in ["semilla expand ", "semilla status "] {
+            let mut rest = line;
+            while let Some(at) = rest.find(head) {
+                let tail = &rest[at..];
+                let end = tail.find(['`', ')', ';']).unwrap_or(tail.len());
+                let command = tail[..end].trim().to_string();
+                if !found.contains(&command) && (head == "semilla expand " || command.ends_with(" --verbose")) {
+                    found.push(command);
+                }
+                rest = &tail[end..];
+            }
+        }
+    }
+    found
+}
+
+/// The last characters of a text, and the first characters of a text (on a character border).
+fn tail_chars(text: &str, count: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    chars[chars.len().saturating_sub(count)..].iter().collect()
+}
+
+fn head_chars(text: &str, count: usize) -> String {
+    text.chars().take(count).collect()
+}
+
+/// Property 14 (R76.1-1): each full-text command of an output works in the state after the
+/// output (`folder`): it exits with 0, it prints a text, and it does not say "no open change
+/// set". Each line with a cut of design 38.5 that names the command has its full line in the
+/// text of the command: one line with the text before the cut and the text after it, and no
+/// cut. A command of the size form of a fact (R71.1-1) prints no size form that names itself.
+fn full_text_problems(work: &mut Work, folder: &Path, output: &str, state: &str) -> Result<Vec<String>, String> {
+    let mut problems = Vec::new();
+    for command in full_text_commands(output) {
+        let args: Vec<String> = command.split_whitespace().skip(1).map(str::to_string).collect();
+        let run = work.semilla(folder, &args)?;
+        let text = run.all();
+        if run.code != 0 || text.contains("no open change set") || run.stdout.trim().is_empty() {
+            problems.push(format!("{state}: `{command}` does not print the full text (exit {}):\n{}", run.code, text.lines().take(6).collect::<Vec<_>>().join("\n")));
+            continue;
+        }
+        for line in output.lines().filter(|line| line.contains(&format!("`{command}` shows the full line"))) {
+            let (Some(first), Some(last)) = (line.find("… ("), line.rfind(") …")) else { continue };
+            let (before, after) = (tail_chars(line[..first].trim_end_matches(", "), 30), head_chars(line[last + ") …".len()..].trim_start_matches(", "), 30));
+            if !text.lines().any(|full| full.contains(before.trim()) && full.contains(after.trim()) && !full.contains("shows the full line")) {
+                problems.push(format!("{state}: the text of `{command}` has no full line for the cut line `{}`", line.trim()));
+            }
+        }
+        if text.contains(&format!("the full text: {command})")) {
+            problems.push(format!("{state}: the text of `{command}` has a text over the budget that names the same command"));
+        }
+    }
+    Ok(problems)
+}
+
 /// The problems of the control flow section of `status --verbose` (design 60, R60.4-6): the
 /// count of the bodies, and for each result of a body, the counts of its summary and the lines
 /// of its points and arrows (`+ KIND …`, `− KIND …`, `~ KIND …`, `+ arrow …`, `− arrow …`).
@@ -1221,6 +1283,15 @@ fn check(case: &Case) -> Result<Outcome, String> {
         }
     }
 
+    // Property 14 (R76.1-1): each full-text command of the step works after the step (a stored
+    // step, or a rejected step).
+    if step.code != 2 {
+        let state = if step.code == 0 { "after the stored step" } else { "after the rejected step" };
+        for problem in full_text_problems(&mut work, &first, &output, state)? {
+            work.fail("full_text", problem);
+        }
+    }
+
     // Property 3: a second run in a new copy gives the same result.
     let second = work.copy("b")?;
     let again = work.step(&second, &case.options)?;
@@ -1262,6 +1333,13 @@ fn check(case: &Case) -> Result<Outcome, String> {
         git(&repo, &["add", "-A"])?;
         git(&repo, &["commit", "-q", "--allow-empty", "-m", "the change"])?;
         let tagged = work.semilla(&folder, &["tag".to_string()])?;
+        // Property 14 (R76.1-1): each full-text command of the tag after the commit works after
+        // the tag.
+        if tagged.code != 2 {
+            for problem in full_text_problems(&mut work, &folder, &tagged.all(), "after the tag after the commit")? {
+                work.fail("full_text", problem);
+            }
+        }
         // Property 13 (R50.1-1) for the output of the tag of the default mode.
         if !case.options.iter().any(|option| option == "--compiled") {
             for problem in default_mode_problems(&tagged.all()) {
@@ -1271,7 +1349,15 @@ fn check(case: &Case) -> Result<Outcome, String> {
         let base = plain.as_ref().unwrap_or(&step);
         // The one text that differs on purpose (R62.3-1): a spotlight with no reason is an open
         // item in the tag, not a cause to run the step again.
-        let open_set = |run: &Run| -> BTreeSet<(String, Vec<String>)> { fact_set(run).into_iter().map(|(text, subs)| (text, subs.iter().map(|sub| open_spotlight(sub)).collect())).collect() };
+        // R76.1-1: a full-text command of the tag names the commit (`--commit SHORT`).
+        let no_commit = |line: &str| {
+            let mut out = line.to_string();
+            while let Some(at) = out.find(" --commit ") {
+                out = format!("{}{}", &out[..at], out[at + " --commit ".len()..].trim_start_matches(|c: char| c.is_ascii_hexdigit()));
+            }
+            out
+        };
+        let open_set = |run: &Run| -> BTreeSet<(String, Vec<String>)> { fact_set(run).into_iter().map(|(text, subs)| (no_commit(&text), subs.iter().map(|sub| no_commit(&open_spotlight(sub))).collect())).collect() };
         if base.code != 2 && tagged.code == 2 {
             work.fail("after_commit", format!("the tag after the commit gives no result:\n{}", tagged.all()));
         } else if base.code != 2 && open_set(&tagged) != open_set(base) {
@@ -1519,6 +1605,20 @@ fn check(case: &Case) -> Result<Outcome, String> {
             let lines = std::iter::once(&comment.head).chain(comment.text.iter().flatten());
             for line in lines.filter(|line| !markdown.contains(no_escape(line).trim())) {
                 work.fail("reader", format!("the Markdown review does not have the line `{line}` of the comment: {}", comment.head));
+            }
+        }
+    }
+    // Property 14 (R76.1-1): after `semilla tag` of the stored step, each full-text command of
+    // the step and of the tag still works. The tag closes the change set, so this check is the
+    // last use of the folder of the step.
+    if step.code == 0 && !full_text_commands(&output).is_empty() {
+        let repo = first.join("repo");
+        git(&repo, &["add", "-A"])?;
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "the change"])?;
+        let tag = work.semilla(&first, &["tag".to_string()])?;
+        if tag.code == 0 {
+            for problem in full_text_problems(&mut work, &first, &format!("{output}\n{}", tag.all()), "after `semilla tag`")? {
+                work.fail("full_text", problem);
             }
         }
     }

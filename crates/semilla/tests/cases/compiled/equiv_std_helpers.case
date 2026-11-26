@@ -113,7 +113,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: shop::lo
       lines: src/lib.rs:2, src/lib.rs:-2
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::lo=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  and 5 more line(s) with 8 place(s): `semilla status --verbose` shows each line
+  and 5 more line(s) with 8 place(s): `semilla expand --step 0` shows each line
   other facts, filled in by Semilla:
   ◆ f1 derived: deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different]
       affected bodies: shop::chk (with 2 other edits of this body)
@@ -138,7 +138,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + branch `a > b` (src/lib.rs:27): false → check `overflow: b - a`, true → check `overflow: a - b`
       control flow: + check `overflow: b - a` (src/lib.rs:27): ok → return, fail → panic `overflow`
       control flow: + check `overflow: a - b` (src/lib.rs:27): ok → return, fail → panic `overflow`
-      control flow: … 2 more (semilla status --verbose)
+      control flow: … 2 more (semilla expand --step 0)
       equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::abs_diff`)
   ◆ f6 derived: deleted statement `a.clamp(10, 20)` at `shop::fit/tail` [semantics · code different]
       affected bodies: shop::fit (with 1 other edit of this body)
@@ -205,26 +205,26 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + branch `a > b` (src/lib.rs:14): false → return, true → check `overflow: a - b`
       control flow: + check `overflow: a - b` (src/lib.rs:14): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:14)
-      control flow: … 1 more (semilla status --verbose)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::saturating_sub`)
   ◆ f19 derived: changed method_call: `a.wrapping_sub(b)` → `a.wrapping_add(b.wrapping_neg())` at `shop::wrap/tail` [semantics · code different]
       affected bodies: shop::wrap
       control flow: + call `num::<impl u32>::wrapping_neg` (src/lib.rs:23): return → call `num::<impl u32>::wrapping_add`
       control flow: ~ call `num::<impl u32>::wrapping_sub` → `num::<impl u32>::wrapping_add` (src/lib.rs:-22, src/lib.rs:23)
       control flow: + arrow entry (src/lib.rs:22) → call `num::<impl u32>::wrapping_neg` (src/lib.rs:23)
-      control flow: … 1 more (semilla status --verbose)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`, `core::num::<impl u32>::wrapping_neg`, `core::num::<impl u32>::wrapping_sub`)
   cover: each of the 21 changed line(s) is in a fact
   control flow: 10 bodies
     shop::chk (src/lib.rs:17): graph changes: +1 branch, 1 changed call target, +3 arrows, −1 arrow; equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::overflowing_add`)
-    shop::diff (src/lib.rs:26): graph changes: +1 branch, +2 checks, +2 panics, −1 call, +7 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by SMT after inlining `core::num::<impl u32>::abs_diff`)
+    shop::diff (src/lib.rs:26): graph changes: +1 branch, +2 checks, +2 panics, −1 call, +7 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `core::num::<impl u32>::abs_diff`)
     shop::fit (src/lib.rs:30): graph changes: +2 branches, −1 call, +5 arrows, −2 arrows; equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::clamp`)
     shop::has (src/lib.rs:34): same structure: 1 changed call target; equivalent (proved by SMT after inlining `std::option::Option::<u32>::is_none`, `std::option::Option::<u32>::is_some`)
     shop::hi (src/lib.rs:5): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::max`)
     shop::lo (src/lib.rs:1): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`)
     shop::or_zero (src/lib.rs:38): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; equivalent (proved by SMT after inlining `std::option::Option::<u32>::unwrap_or`)
     shop::sat (src/lib.rs:9): graph changes: +1 branch, 1 changed call target, +3 arrows, −1 arrow; equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::saturating_add`)
-    shop::sat_sub (src/lib.rs:13): graph changes: +1 branch, +1 check, +1 panic, −1 call, +5 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by SMT after inlining `core::num::<impl u32>::saturating_sub`)
+    shop::sat_sub (src/lib.rs:13): graph changes: +1 branch, +1 check, +1 panic, −1 call, +5 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `core::num::<impl u32>::saturating_sub`)
     shop::wrap (src/lib.rs:22): graph changes: +1 call, 1 changed call target, +2 arrows, −1 arrow; equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`, `core::num::<impl u32>::wrapping_neg`, `core::num::<impl u32>::wrapping_sub`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

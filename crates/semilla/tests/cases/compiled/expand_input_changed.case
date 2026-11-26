@@ -55,8 +55,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: different: for v = 0: before returns 1, after returns 0 (confirmed by a run)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::f (src/lib.rs:4): same structure: 2 changed checks (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for v = 0: before returns 3, after returns 6; confirmed by a run)
-    shop::g (src/lib.rs:5): graph changes: −1 check, −1 panic, +1 arrow, −3 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for v = 0: before returns 1, after returns 0; confirmed by a run)
+    shop::f (src/lib.rs:4): same structure: 2 changed checks (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for v = 0: before returns 3, after returns 6; confirmed by a run)
+    shop::g (src/lib.rs:5): graph changes: −1 check, −1 panic, +1 arrow, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for v = 0: before returns 1, after returns 0; confirmed by a run)
   expansions: 1 changed, 1 removed
     `scale!(v + 2)` at `shop::f/tail` (src/lib.rs:4): expansion changed: `macro_rules! scale` (src/lib.rs:1): changed literal `1` → `2` at `expansion/lhs/rhs` [semantics]; the input of the call changes
     `other!(v)` at `shop::g/tail` (src/lib.rs:-5): expansion removed: `macro_rules! other` (src/lib.rs:2): 1 line(s) of code; the step removes the call or its input

@@ -1,0 +1,57 @@
+note: batch 12b, G4: an `async fn` whose body changes a value: the coroutine body has the graph of its MIR before the coroutine transform, so the step shows the changed check and its result, and not "graph not shown"
+rule+: R76.2-1
+option: --compiled
+must_match: shop::total::\{closure#0\} .*: same structure: 1 changed check
+must_match: control flow: ~ check `overflow: v \* 2` → `overflow: v \* 3`
+must_not_match: graph not shown
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub async fn get(x: u32) -> u32 {
+    x + 1
+}
+
+pub async fn total(a: u32) -> u32 {
+    let v = get(a).await;
+    if v > 3 { v * 2 } else { v }
+}
+=== new src/lib.rs
+pub async fn get(x: u32) -> u32 {
+    x + 1
+}
+
+pub async fn total(a: u32) -> u32 {
+    let v = get(a).await;
+    if v > 3 { v * 3 } else { v }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `2` → `3` (f1)
+      in: shop::total
+      lines: src/lib.rs:7, src/lib.rs:-7
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, --same 'rewrite 2 => 3'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `2` → `3` at `shop::total/S1/then/tail/rhs` [semantics · code different]
+      affected bodies: shop::total
+      control flow: ~ check `overflow: v * 2` → `overflow: v * 3` (src/lib.rs:-7, src/lib.rs:7)
+      equivalence: `shop::total`: not decided: a coroutine value: { let v = get(a).await; if v > 3 { v * 2 } else … (src/lib.rs:-5)
+      equivalence: `shop::total::{closure#0} { let v = get(a).await; if v > 3 { v * …`: not decided: a coroutine body
+      reaches: 1 public function: shop::total (semilla expand --step 0)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::total (src/lib.rs:5): same graph; not decided (a coroutine value: { let v = get(a).await; if v > 3 { v * 2 } else … (src/lib.rs:-5))
+    shop::total::{closure#0} { let v = get(a).await; if v > 3 { v * … (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a coroutine body)
+    reached bodies: 1
+      shop::total (src/lib.rs:5): reached through shop::total::{closure#0}, not decided (a coroutine value: { let v = get(a).await; if v > 3 { v * 2 } else … (src/lib.rs:-5))
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `2` → `3` at `shop::total/S1/then/tail/rhs` [semantics · code different]
+    lines: src/lib.rs:7, src/lib.rs:-7

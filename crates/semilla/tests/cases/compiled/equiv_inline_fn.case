@@ -38,11 +38,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: − call `half` (src/lib.rs:-6): return → check `overflow: half(x) + 3`
       control flow: ~ check `overflow: half(x) + 3` → `overflow: x / 2 + 3` (src/lib.rs:-6, src/lib.rs:6)
       control flow: + arrow entry (src/lib.rs:5) → check `overflow: x / 2 + 3` (src/lib.rs:6)
-      control flow: … 1 more (semilla status --verbose)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: equivalent (proved by SMT after inlining `shop::half`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:5): graph changes: −1 call, 1 changed check, +1 arrow, −2 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by SMT after inlining `shop::half`)
+    shop::price (src/lib.rs:5): graph changes: −1 call, 1 changed check, +1 arrow, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `shop::half`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

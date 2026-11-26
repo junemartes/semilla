@@ -135,6 +135,11 @@ pub fn install(config: &mut rustc_interface::interface::Config) {
 
 fn opaque_mir<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId) -> &'tcx Steal<Body<'tcx>> {
     let default = DEFAULT_MIR.get().expect("the default provider is stored");
+    // R76.2-1: the default provider takes the body of `mir_promoted` and runs the coroutine
+    // transform on it. A copy keeps the body of a coroutine before the transform, for its graph.
+    if tcx.is_coroutine(def.to_def_id()) {
+        let _ = keep_source(tcx, def);
+    }
     let steal = default(tcx, def);
     // The body of a constant or a static runs only at compile time. Its value is the input of
     // `const_is_free`, so it stays as it is.
@@ -153,6 +158,41 @@ fn opaque_mir<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId) -> &'tcx Steal<Body<'tcx
     let _reader = Reader::set(Some(def));
     make_opaque(tcx, def, &mut body);
     tcx.alloc_steal_mir(body)
+}
+
+thread_local! {
+    /// The MIR of each coroutine body before the coroutine transform (R76.2-1): the address of a
+    /// copy of the body of `mir_promoted` in the arena of the compiler.
+    static SOURCES: RefCell<HashMap<LocalDefId, usize>> = RefCell::new(HashMap::new());
+}
+
+/// The MIR of a coroutine body before the coroutine transform (R76.2-1): a copy of the body of
+/// `mir_promoted`, the MIR after the borrow check data and before the passes of
+/// `mir_drops_elaborated_and_const_checked` (one of them is the state transform). The query
+/// override makes the copy before the default provider takes the body. A body that the
+/// compiler takes from its incremental data does not run the override: then the query
+/// `mir_promoted` still has the body. `None` if the body is gone (a body that the override did
+/// not copy, and whose query result is taken).
+pub fn source_body<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId) -> Option<&'tcx Body<'tcx>> {
+    if let Some(address) = SOURCES.with(|map| map.borrow().get(&def).copied()) {
+        // SAFETY: the address is the address of a body in the arena of the type context
+        // (`keep_source`). The arena lives as long as the type context, and the driver has one
+        // type context: each read of the map has the same `'tcx`.
+        return Some(unsafe { &*(address as *const Body<'tcx>) });
+    }
+    keep_source(tcx, def)
+}
+
+/// Copies the body of `mir_promoted` of a coroutine into the arena, and keeps its address for
+/// `source_body`. `None` if the body is taken.
+fn keep_source<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId) -> Option<&'tcx Body<'tcx>> {
+    let (promoted, _) = tcx.mir_promoted(def);
+    if promoted.is_stolen() {
+        return None;
+    }
+    let copy: &'tcx Body<'tcx> = tcx.arena.alloc(promoted.borrow().clone());
+    SOURCES.with(|map| map.borrow_mut().insert(def, copy as *const Body<'tcx> as usize));
+    Some(copy)
 }
 
 /// True for the intrinsic `core::intrinsics::black_box`.

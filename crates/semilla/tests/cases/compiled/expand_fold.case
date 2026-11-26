@@ -31,16 +31,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   declarations, filled in by Semilla:
   ◆ f1 derived: changed macro `bump`: `macro_rules! bump { ($v:expr) => { $v + 1 } }` → `macro_rules! bump { ($v:expr) => { $v + 5 } }` [declaration · code different]
       affected bodies: shop::a, shop::b, shop::c, shop::d, shop::e
-      expansion: 5 calls of `bump`: expansion changed: changed literal `1` → `5` at `expansion/rhs` [semantics]: `shop::a/tail`, `shop::b/tail`, `shop::c/tail`, and 2 more (semilla status --verbose)
+      expansion: 5 calls of `bump`: expansion changed: changed literal `1` → `5` at `expansion/rhs` [semantics]: `shop::a/tail`, `shop::b/tail`, `shop::c/tail`, and 2 more (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 5 bodies
-    shop::a (src/lib.rs:3): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); no edit in the body; different (for v = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:3)
-    shop::b (src/lib.rs:4): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); no edit in the body; different (for v = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:4)
-    shop::c (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); no edit in the body; different (for v = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:5)
-    shop::d (src/lib.rs:6): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); no edit in the body; different (for v = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:6)
-    shop::e (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); no edit in the body; different (for w = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(w * 2)` changes (semilla expand src/lib.rs:7)
+    shop::a (src/lib.rs:3): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:3 --step 0)
+    shop::b (src/lib.rs:4): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:4 --step 0)
+    shop::c (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:5 --step 0)
+    shop::d (src/lib.rs:6): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:6 --step 0)
+    shop::e (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for w = 0: before returns 1, after returns 5; confirmed by a run); the expansion of `bump!(w * 2)` changes (semilla expand src/lib.rs:7 --step 0)
   expansions: 5 changed
-    5 calls: expansion changed: `macro_rules! bump` (src/lib.rs:1): changed literal `1` → `5` at `expansion/rhs` [semantics]; from `macro_rules! bump` (src/lib.rs:1): `shop::a/tail`, `shop::b/tail`, `shop::c/tail`, and 2 more (semilla status --verbose)
+    5 calls: expansion changed: `macro_rules! bump` (src/lib.rs:1): changed literal `1` → `5` at `expansion/rhs` [semantics]; from `macro_rules! bump` (src/lib.rs:1): `shop::a/tail`, `shop::b/tail`, `shop::c/tail`, and 2 more (semilla expand --step 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

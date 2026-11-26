@@ -1,6 +1,6 @@
-note: an edit in an `async` body: the coroutine has no graph, so the step says `graph not shown: coroutine` and never `same graph`; an `async` body with no edit and an equal MIR text has no line
-rule+: R60.2-5
-rule-: R60.2-5
+note: an edit in an `async` body: the coroutine has the graph of its MIR before the coroutine transform (R76.2-1, before batch 12b R60.2-5: `graph not shown: coroutine`), so the step shows the added branch; an `async` body with no edit and an equal MIR text has no line
+rule+: R76.2-1
+rule-: R76.2-1
 option: --compiled
 === both Cargo.toml
 [package]
@@ -39,14 +39,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: added early exit `if n == 0 { return 0; }` at `depot::fetch/S0` [semantics · code different]
       affected bodies: depot::fetch
-      equivalence: not decided: a coroutine value: { n + 1 } (src/lib.rs:-1)
+      control flow: + branch `n == 0` (src/lib.rs:2): false → check `overflow: n + 1`, true → return
+      control flow: + arrow entry (src/lib.rs:1) → branch `n == 0` (src/lib.rs:2)
+      equivalence: `depot::fetch`: not decided: a coroutine value: { n + 1 } (src/lib.rs:-1)
+      equivalence: `depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 }`: not decided: a coroutine body
+      reaches: 1 public function: depot::fetch (semilla expand --step 0)
   ◆ f2 derived: the compiled code of `depot::fetch` changes with no edit at its place: `{ n + 1 }` (before the step) [indirect · code different]
       affected bodies: depot::fetch
       note: lines before the step 1; the cause: the edit of this body at src/lib.rs:2 (the step changes no other input of the body)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies
     depot::fetch (src/lib.rs:1): same graph; not decided (a coroutine value: { n + 1 } (src/lib.rs:-1))
-    depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 } (src/lib.rs:1): graph not shown: coroutine: the MIR of the driver is the state machine of the coroutine, not the source
+    depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 } (src/lib.rs:1): graph changes: +1 branch, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a coroutine body)
     reached bodies: 1
       depot::fetch (src/lib.rs:1): reached through depot::fetch::{closure#0}, not decided (a coroutine value: { n + 1 } (src/lib.rs:-1))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
