@@ -60,12 +60,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: 2 site(s): changed literal `5` → `6` [semantics · code different]
       in: shop::acc_a, shop::acc_b
       affected bodies: shop::acc_a, shop::acc_b
-      equivalence: `shop::acc_a`: different: for n = 1, c = false (a bounded run of at most 4 loop iterations): before returns 5, after returns 6
-      equivalence: `shop::acc_b`: different: for n = 1, c = true (a bounded run of at most 4 loop iterations): before returns 5, after returns 6
+      equivalence: `shop::acc_a`: different: for n = 1, c = false (a bounded run of at most 4 loop iterations): before returns 5, after returns 6 (confirmed by a run)
+      equivalence: `shop::acc_b`: different: for n = 1, c = true (a bounded run of at most 4 loop iterations): before returns 5, after returns 6 (confirmed by a run)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::acc_a (src/lib.rs:1): same graph (the edit keeps the control flow); different (for n = 1, c = false (a bounded run of at most 4 loop iterations): before returns 5, after returns 6)
-    shop::acc_b (src/lib.rs:11): same graph (the edit keeps the control flow); different (for n = 1, c = true (a bounded run of at most 4 loop iterations): before returns 5, after returns 6)
+    shop::acc_a (src/lib.rs:1): same graph (the edit keeps the control flow); different (for n = 1, c = false (a bounded run of at most 4 loop iterations): before returns 5, after returns 6; confirmed by a run)
+    shop::acc_b (src/lib.rs:11): same graph (the edit keeps the control flow); different (for n = 1, c = true (a bounded run of at most 4 loop iterations): before returns 5, after returns 6; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

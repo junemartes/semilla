@@ -95,6 +95,9 @@ pub enum IrTy {
         /// The name of each field of each variant (design 67, part B).
         #[serde(default)]
         fs: Vec<Vec<String>>,
+        /// [R74.1-2] True if the `Debug` impl of the type is the impl of `#[derive(Debug)]`.
+        #[serde(default)]
+        g: bool,
     },
     Ref(bool, u32),
     Opaque {
@@ -237,6 +240,9 @@ pub struct IrTerm {
     /// optional check that the settings of the session remove, so each other check is active.
     #[serde(default)]
     pub o: bool,
+    /// [R74.1-2] The message of the panic of a check at run time, from the compiler.
+    #[serde(default)]
+    pub m: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -337,8 +343,9 @@ pub struct Step<'a> {
 pub enum Verdict {
     /// The method: `SMT`, `SMT after inlining …`.
     Equivalent { method: String },
-    /// One exact input and the two outcomes.
-    Different { input: String, before: String, after: String },
+    /// One exact input and the two outcomes. `run`: the calls of a run that can confirm the
+    /// difference (design 74, R74.1-1).
+    Different { input: String, before: String, after: String, run: Option<Box<semilla_core::run::RunCase>> },
     NotDecided { cause: String },
 }
 
@@ -686,6 +693,9 @@ struct Decls {
     gconsts: Vec<(bool, String, Vec<(String, String)>, V)>,
     /// [R69.3-1] The symbol of each message of a panic, with the text of its literal pieces.
     messages: BTreeMap<String, String>,
+    /// [R74.1-2] The message at run time of each kind of a check that a run met (`overflow add`
+    /// → "attempt to add with overflow"), from the compiler.
+    kinds: BTreeMap<String, String>,
 }
 
 /// A closure body that a run met (design 66, part A): the side, the key, the name of the body,
@@ -1228,6 +1238,9 @@ impl<'a, 'b> Run<'a, 'b> {
             let term = block.t.k.clone();
             let range = block.t.r;
             let optional = block.t.o;
+            if let (IrTermKind::Assert(_, _, kind, _, _), Some(message)) = (&term, &block.t.m) {
+                self.decls.kinds.insert(kind.clone(), message.clone());
+            }
             return self.terminator(state, &term, optional).map_err(|Stop(cause)| Stop(self.placed(cause, &frame.ir, range)));
         }
     }
@@ -1674,14 +1687,23 @@ impl<'a, 'b> Run<'a, 'b> {
             }
             return next;
         }
+        // [R74.2-1] A call of a version of the item of a claim that the check gives a free
+        // behavior: never inlined; its result, its stop, and its effect are free functions of its
+        // inputs, other functions for each version.
+        let free = callee.w.as_ref().is_some_and(|name| free_callee(name, self.old));
         // The inline step.
         let depth = state.frames.len();
         // A generic callee has the form of its instance (in `std`, by the callee text): the
         // generic form does not know the type arguments.
         let instance_form = if callee.g { self.side.std.get(&callee.p).cloned() } else { None };
         let workspace_form = if callee.g { instance_form } else { callee.w.as_ref().and_then(|name| (self.side.workspace)(name)) };
-        let changed = callee.w.as_ref().is_some_and(|name| (self.step.changed)(name));
+        let changed = !free && callee.w.as_ref().is_some_and(|name| (self.step.changed)(name));
         let std_form = if callee.w.is_none() && callee.k.is_none() && callee.m.is_none() { self.side.std.get(&callee.p).cloned() } else { None };
+        if free
+            && let Some(name) = &callee.w
+        {
+            return self.free_call(state, name, &values, &dest_loc, dest_ty.as_ref(), target, unwind);
+        }
         let form = if changed {
             workspace_form.clone()
         } else if self.inline_all {
@@ -2119,101 +2141,130 @@ impl<'a, 'b> Run<'a, 'b> {
         }
     }
 
+    /// [R74.2-1] A call of a version of the item of a claim with a free result (in a callee of
+    /// the claim): it returns the value of [`free_parts`] and has its effect.
+    #[allow(clippy::too_many_arguments)]
+    fn free_call(&mut self, state: &mut State, name: &str, values: &[V], dest: &Loc, dest_ty: Option<&Ty>, target: Option<usize>, unwind: &IrUnwind) -> Result<Next, Stop> {
+        // A free write through a `&mut` argument is not in the model of this rule.
+        if values.iter().any(contains_mut_ref_inside) {
+            return Err(Stop("a `&mut` argument of a call with a free behavior".into()));
+        }
+        let mut deep: Vec<V> = values.to_vec();
+        for value in values {
+            self.behind(state, value, &mut deep, 0)?;
+        }
+        let ty = dest_ty.ok_or_else(|| Stop("a call result with no type".into()))?;
+        let shown = (self.side.rename)(name);
+        let parts = free_parts(self.decls, self.old, name, &shown, &deep, ty)?;
+        state.effects.push(parts.effect);
+        let _ = unwind;
+        let Some(target) = target else { return Err(Stop("a call with a free result that never returns".into())) };
+        self.write(state, dest, parts.value)?;
+        self.jump(state, target)?;
+        Ok(Next::Continue)
+    }
+
     /// A value of a type that is a function of the call (its name and its arguments).
     fn result_value(&mut self, ty: &Ty, name: &str, args: &[T], sorts: &[String], depth: usize) -> Result<V, Stop> {
-        if depth > 6 {
-            return Err(Stop("a call result of a deep type".into()));
-        }
-        let apply = |decls: &mut Decls, sort: String| -> T {
-            let symbol = format!("{name}_{}", sort.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>());
-            let signature = sorts.join(" ");
-            decls.declare(&format!("{symbol}|{signature}"), format!("(declare-fun |{symbol}|{} ({signature}) {sort})", ""));
-            if args.is_empty() { tx(format!("|{symbol}|"), false) } else { tx(format!("(|{symbol}| {})", args.iter().map(|arg| arg.s.as_str()).collect::<Vec<_>>().join(" ")), false) }
-        };
-        Ok(match ty.get().cloned() {
-            Some(IrTy::Bool) => V::Bool(apply(self.decls, "Bool".into())),
-            Some(IrTy::Int(w, _)) => V::Bv(apply(self.decls, sort_of_bv(w)), w),
-            Some(IrTy::Char) => V::Bv(apply(self.decls, sort_of_bv(32)), 32),
-            Some(IrTy::Unit) => V::Unit,
-            Some(IrTy::Never) => V::Undef,
-            Some(IrTy::Tuple(items)) => {
-                let mut values = Vec::new();
-                for (index, item) in items.iter().enumerate() {
-                    values.push(self.result_value(&ty.at(*item), &format!("{name}f{index}"), args, sorts, depth + 1)?);
-                }
-                V::Tup(values)
-            }
-            Some(IrTy::Adt { e: false, v, .. }) => {
-                let mut values = Vec::new();
-                for (index, item) in v.first().cloned().unwrap_or_default().iter().enumerate() {
-                    values.push(self.result_value(&ty.at(*item), &format!("{name}f{index}"), args, sorts, depth + 1)?);
-                }
-                V::Tup(values)
-            }
-            Some(IrTy::Adt { e: true, v, d, dt, .. }) => {
-                let (w, ds) = discriminants(&ty.ir, &d, dt);
-                let discr = apply(self.decls, sort_of_bv(w));
-                let valid: Vec<String> = ds.iter().map(|value| format!("(= {} {})", discr.s, bv_lit(*value, w).s)).collect();
-                if !valid.is_empty() {
-                    self.decls.assume.push(format!("(or {} false)", valid.join(" ")));
-                }
-                let mut fields = Vec::new();
-                for (vi, variant) in v.iter().enumerate() {
-                    let mut values = Vec::new();
-                    for (index, item) in variant.iter().enumerate() {
-                        values.push(self.result_value(&ty.at(*item), &format!("{name}v{vi}f{index}"), args, sorts, depth + 1)?);
-                    }
-                    fields.push(values);
-                }
-                V::Enum { d: discr, w, ds, f: fields }
-            }
-            Some(IrTy::Ref(_, inner)) => {
-                // A reference that a call returns: a new place whose value is a function of the
-                // call.
-                let value = self.result_value(&ty.at(inner), &format!("{name}t"), args, sorts, depth + 1)?;
-                // The true part (design 61.10, C2): a result of a call, or a value that a call
-                // writes through a `&mut` argument.
-                let what = if name.starts_with('w') { "a call that can write a reference through its `&mut` argument" } else { "a call that returns a reference" };
-                return Err(Stop(format!("{what} ({})", match value { V::Opq(_) => "to an opaque value", _ => "to a value" })));
-            }
-            Some(IrTy::Opaque { .. }) => {
-                self.decls.declare("Opq", "(declare-sort Opq 0)".into());
-                V::Opq(apply(self.decls, "Opq".into()))
-            }
-            // A closure that a call gives (design 66, part A): each capture and the identity of
-            // the body are functions of the call.
-            Some(IrTy::Clo { v, .. }) => {
-                let mut values = Vec::new();
-                for (index, item) in v.iter().enumerate() {
-                    values.push(self.result_value(&ty.at(*item), &format!("{name}f{index}"), args, sorts, depth + 1)?);
-                }
-                self.decls.declare("Opq", "(declare-sort Opq 0)".into());
-                let name = format!("{name}b");
-                let symbol = format!("{name}_Opq");
-                let signature = sorts.join(" ");
-                self.decls.declare(&format!("{symbol}|{signature}"), format!("(declare-fun |{symbol}| ({signature}) Opq)"));
-                values.push(V::Opq(if args.is_empty() { tx(format!("|{symbol}|"), false) } else { tx(format!("(|{symbol}| {})", args.iter().map(|arg| arg.s.as_str()).collect::<Vec<_>>().join(" ")), false) }));
-                V::Tup(values)
-            }
-            Some(IrTy::Seq { e, n: fixed, .. }) => {
-                let e = SeqE::of(&ty.at(e)).ok_or_else(|| Stop("a call result of a sequence that the check does not model".into()))?;
-                let seq = apply(self.decls, e.sort());
-                let n = match fixed {
-                    Some(fixed) => bv_lit(u128::from(fixed), 64),
-                    None => {
-                        let name = format!("{name}n");
-                        let symbol = format!("{name}_{}", "BitVec64");
-                        let signature = sorts.join(" ");
-                        self.decls.declare(&format!("{symbol}|{signature}"), format!("(declare-fun |{symbol}| ({signature}) (_ BitVec 64))"));
-                        if args.is_empty() { tx(format!("|{symbol}|"), false) } else { tx(format!("(|{symbol}| {})", args.iter().map(|arg| arg.s.as_str()).collect::<Vec<_>>().join(" ")), false) }
-                    }
-                };
-                self.decls.assume.push(format!("(and (= (seq.len {}) (bv2nat {})) (bvule {} {}))", seq.s, n.s, n.s, bv_lit(i64::MAX as u128, 64).s));
-                V::Seq(Sq { s: seq, e, n })
-            }
-            None => return Err(Stop("a call result with no type".into())),
-        })
+        call_value(self.decls, ty, name, args, sorts, depth)
     }
+}
+
+/// A value of a type that is a function of the call (its name and its arguments). [R74.2-1]: also
+/// the free value of a call of a version of the item of a claim.
+fn call_value(decls: &mut Decls, ty: &Ty, name: &str, args: &[T], sorts: &[String], depth: usize) -> Result<V, Stop> {
+    if depth > 6 {
+        return Err(Stop("a call result of a deep type".into()));
+    }
+    let apply = |decls: &mut Decls, sort: String| -> T {
+        let symbol = format!("{name}_{}", sort.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>());
+        let signature = sorts.join(" ");
+        decls.declare(&format!("{symbol}|{signature}"), format!("(declare-fun |{symbol}|{} ({signature}) {sort})", ""));
+        if args.is_empty() { tx(format!("|{symbol}|"), false) } else { tx(format!("(|{symbol}| {})", args.iter().map(|arg| arg.s.as_str()).collect::<Vec<_>>().join(" ")), false) }
+    };
+    Ok(match ty.get().cloned() {
+        Some(IrTy::Bool) => V::Bool(apply(decls, "Bool".into())),
+        Some(IrTy::Int(w, _)) => V::Bv(apply(decls, sort_of_bv(w)), w),
+        Some(IrTy::Char) => V::Bv(apply(decls, sort_of_bv(32)), 32),
+        Some(IrTy::Unit) => V::Unit,
+        Some(IrTy::Never) => V::Undef,
+        Some(IrTy::Tuple(items)) => {
+            let mut values = Vec::new();
+            for (index, item) in items.iter().enumerate() {
+                values.push(call_value(decls, &ty.at(*item), &format!("{name}f{index}"), args, sorts, depth + 1)?);
+            }
+            V::Tup(values)
+        }
+        Some(IrTy::Adt { e: false, v, .. }) => {
+            let mut values = Vec::new();
+            for (index, item) in v.first().cloned().unwrap_or_default().iter().enumerate() {
+                values.push(call_value(decls, &ty.at(*item), &format!("{name}f{index}"), args, sorts, depth + 1)?);
+            }
+            V::Tup(values)
+        }
+        Some(IrTy::Adt { e: true, v, d, dt, .. }) => {
+            let (w, ds) = discriminants(&ty.ir, &d, dt);
+            let discr = apply(decls, sort_of_bv(w));
+            let valid: Vec<String> = ds.iter().map(|value| format!("(= {} {})", discr.s, bv_lit(*value, w).s)).collect();
+            if !valid.is_empty() {
+                decls.assume.push(format!("(or {} false)", valid.join(" ")));
+            }
+            let mut fields = Vec::new();
+            for (vi, variant) in v.iter().enumerate() {
+                let mut values = Vec::new();
+                for (index, item) in variant.iter().enumerate() {
+                    values.push(call_value(decls, &ty.at(*item), &format!("{name}v{vi}f{index}"), args, sorts, depth + 1)?);
+                }
+                fields.push(values);
+            }
+            V::Enum { d: discr, w, ds, f: fields }
+        }
+        Some(IrTy::Ref(_, inner)) => {
+            // A reference that a call returns: a new place whose value is a function of the
+            // call.
+            let value = call_value(decls, &ty.at(inner), &format!("{name}t"), args, sorts, depth + 1)?;
+            // The true part (design 61.10, C2): a result of a call, or a value that a call
+            // writes through a `&mut` argument.
+            let what = if name.starts_with('w') { "a call that can write a reference through its `&mut` argument" } else { "a call that returns a reference" };
+            return Err(Stop(format!("{what} ({})", match value { V::Opq(_) => "to an opaque value", _ => "to a value" })));
+        }
+        Some(IrTy::Opaque { .. }) => {
+            decls.declare("Opq", "(declare-sort Opq 0)".into());
+            V::Opq(apply(decls, "Opq".into()))
+        }
+        // A closure that a call gives (design 66, part A): each capture and the identity of
+        // the body are functions of the call.
+        Some(IrTy::Clo { v, .. }) => {
+            let mut values = Vec::new();
+            for (index, item) in v.iter().enumerate() {
+                values.push(call_value(decls, &ty.at(*item), &format!("{name}f{index}"), args, sorts, depth + 1)?);
+            }
+            decls.declare("Opq", "(declare-sort Opq 0)".into());
+            let name = format!("{name}b");
+            let symbol = format!("{name}_Opq");
+            let signature = sorts.join(" ");
+            decls.declare(&format!("{symbol}|{signature}"), format!("(declare-fun |{symbol}| ({signature}) Opq)"));
+            values.push(V::Opq(if args.is_empty() { tx(format!("|{symbol}|"), false) } else { tx(format!("(|{symbol}| {})", args.iter().map(|arg| arg.s.as_str()).collect::<Vec<_>>().join(" ")), false) }));
+            V::Tup(values)
+        }
+        Some(IrTy::Seq { e, n: fixed, .. }) => {
+            let e = SeqE::of(&ty.at(e)).ok_or_else(|| Stop("a call result of a sequence that the check does not model".into()))?;
+            let seq = apply(decls, e.sort());
+            let n = match fixed {
+                Some(fixed) => bv_lit(u128::from(fixed), 64),
+                None => {
+                    let name = format!("{name}n");
+                    let symbol = format!("{name}_{}", "BitVec64");
+                    let signature = sorts.join(" ");
+                    decls.declare(&format!("{symbol}|{signature}"), format!("(declare-fun |{symbol}| ({signature}) (_ BitVec 64))"));
+                    if args.is_empty() { tx(format!("|{symbol}|"), false) } else { tx(format!("(|{symbol}| {})", args.iter().map(|arg| arg.s.as_str()).collect::<Vec<_>>().join(" ")), false) }
+                }
+            };
+            decls.assume.push(format!("(and (= (seq.len {}) (bv2nat {})) (bvule {} {}))", seq.s, n.s, n.s, bv_lit(i64::MAX as u128, 64).s));
+            V::Seq(Sq { s: seq, e, n })
+        }
+        None => return Err(Stop("a call result with no type".into())),
+    })
 }
 
 enum Next {
@@ -3192,8 +3243,8 @@ fn check_loop(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all: 
     if a.stops.is_empty() && b.stops.is_empty() && !a.outs.is_empty() && !b.outs.is_empty() {
         let (verdict, more) = decide(solver, old, new, inline_all, queries, decls, a, b, slots, types, muts);
         inlined.extend(more);
-        if let Verdict::Different { input, before, after } = verdict {
-            return Some((Verdict::Different { input: format!("{input} (a bounded run of at most {UNROLL} loop iterations)"), before, after }, inlined));
+        if let Verdict::Different { input, before, after, run } = verdict {
+            return Some((Verdict::Different { input: format!("{input} (a bounded run of at most {UNROLL} loop iterations)"), before, after, run }, inlined));
         }
     }
     if past_deadline() {
@@ -3406,6 +3457,181 @@ fn value_text(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> S
     }
 }
 
+/// [R74.1-2] The text of a value as `{:?}` of Rust writes it: an integer, a `bool`, a `char`,
+/// `()`, a tuple, a sequence, and a struct or an enum whose `Debug` impl the compiler derived
+/// (`Name { a: 1 }`, `Name(1)`, `Variant`). `None` if the model does not give a part of the value,
+/// or a type has its own `Debug` form.
+fn debug_text(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> Option<String> {
+    let bits = |term: &T, w: u32| -> Option<u128> {
+        let raw = model.get(&term.s).cloned().or_else(|| lit_bv(term).map(|v| format!("(_ bv{v} {w})")))?;
+        parse_bv(&raw)
+    };
+    let ty_kind = ty.and_then(|ty| ty.get());
+    Some(match value {
+        V::Bv(term, w) => {
+            let v = bits(term, *w)?;
+            match ty_kind? {
+                IrTy::Int(w, true) => signed_lit(v, *w).to_string(),
+                IrTy::Int(..) => v.to_string(),
+                IrTy::Char => format!("{:?}", char::from_u32(v as u32)?),
+                _ => return None,
+            }
+        }
+        V::Bool(term) => match model.get(&term.s).map(String::as_str) {
+            Some(text @ ("true" | "false")) => text.to_string(),
+            _ => lit_bool(term)?.to_string(),
+        },
+        V::Unit => "()".into(),
+        V::Tup(items) => match ty_kind? {
+            IrTy::Tuple(list) => {
+                let parts: Vec<String> = items.iter().zip(list).map(|(item, id)| debug_text(item, ty.map(|ty| ty.at(*id)).as_ref(), model)).collect::<Option<_>>()?;
+                if parts.len() == 1 { format!("({},)", parts[0]) } else { format!("({})", parts.join(", ")) }
+            }
+            IrTy::Adt { n, v, fs, g: true, e: false, .. } => {
+                let types = v.first().cloned().unwrap_or_default();
+                let names = fs.first().cloned().unwrap_or_default();
+                let parts: Vec<String> = items.iter().zip(&types).map(|(item, id)| debug_text(item, ty.map(|ty| ty.at(*id)).as_ref(), model)).collect::<Option<_>>()?;
+                fields_text(&short_type(n), &names, &parts)
+            }
+            _ => return None,
+        },
+        V::Enum { d, w, ds, f } => {
+            let Some(IrTy::Adt { v, vn, fs, g: true, .. }) = ty_kind else { return None };
+            let index = ds.iter().position(|value| Some(*value) == bits(d, *w))?;
+            let types = v.get(index)?;
+            let parts: Vec<String> = f.get(index)?.iter().zip(types).map(|(item, id)| debug_text(item, ty.map(|ty| ty.at(*id)).as_ref(), model)).collect::<Option<_>>()?;
+            fields_text(vn.get(index)?, fs.get(index).map(Vec::as_slice).unwrap_or_default(), &parts)
+        }
+        V::Seq(Sq { s: term, e, .. }) => {
+            let item = match ty_kind? {
+                IrTy::Seq { e, .. } => ty.map(|ty| ty.at(*e)),
+                _ => return None,
+            };
+            let raw = model.get(&term.s)?;
+            let parts: Vec<String> = seq_units(raw)
+                .iter()
+                .map(|unit| {
+                    let mut known = BTreeMap::new();
+                    known.insert(unit.clone(), unit.clone());
+                    debug_text(&e.value(t(unit.clone())), item.as_ref(), &known)
+                })
+                .collect::<Option<_>>()?;
+            format!("[{}]", parts.join(", "))
+        }
+        V::Ptr(_) | V::Opq(_) | V::Undef => return None,
+    })
+}
+
+/// The `Debug` text of a struct or of a variant with its fields: `Name`, `Name(1, 2)`, or
+/// `Name { a: 1, b: 2 }` (a field of a tuple struct has its index as name).
+fn fields_text(name: &str, names: &[String], parts: &[String]) -> String {
+    if parts.is_empty() {
+        return name.to_string();
+    }
+    if names.iter().all(|field| field.bytes().all(|b| b.is_ascii_digit())) {
+        return format!("{name}({})", parts.join(", "));
+    }
+    let pairs: Vec<String> = names.iter().zip(parts).map(|(field, part)| format!("{field}: {part}")).collect();
+    format!("{name} {{ {} }}", pairs.join(", "))
+}
+
+/// [R74.1-3] A Rust expression of a value of the model (the argument of a call of the probe),
+/// or the cause why there is none. An integer has no suffix: the parameter type of the call
+/// gives its type.
+fn rust_expr(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> Result<String, String> {
+    let kind = ty.and_then(|ty| ty.get()).ok_or_else(|| "a value with no type".to_string())?;
+    let missing = || "the model gives no value of a part of the input".to_string();
+    let path = |n: &str| n.split('<').next().unwrap_or(n).to_string();
+    match (value, kind) {
+        (V::Bv(..) | V::Bool(_) | V::Unit, _) => debug_text(value, ty, model).ok_or_else(missing),
+        (V::Tup(items), IrTy::Tuple(list)) => {
+            let parts: Vec<String> = items.iter().zip(list).map(|(item, id)| rust_expr(item, ty.map(|ty| ty.at(*id)).as_ref(), model)).collect::<Result<_, _>>()?;
+            Ok(if parts.len() == 1 { format!("({},)", parts[0]) } else { format!("({})", parts.join(", ")) })
+        }
+        (V::Tup(items), IrTy::Adt { n, v, fs, e: false, .. }) => {
+            let types = v.first().cloned().unwrap_or_default();
+            let names = fs.first().cloned().unwrap_or_default();
+            let parts: Vec<String> = items.iter().zip(&types).map(|(item, id)| rust_expr(item, ty.map(|ty| ty.at(*id)).as_ref(), model)).collect::<Result<_, _>>()?;
+            Ok(literal_text_of(&path(n), &names, &parts))
+        }
+        (V::Enum { d, w, ds, f }, IrTy::Adt { n, v, vn, fs, .. }) => {
+            let raw = model.get(&d.s).cloned().or_else(|| lit_bv(d).map(|v| format!("(_ bv{v} {w})"))).ok_or_else(missing)?;
+            let index = ds.iter().position(|value| Some(*value) == parse_bv(&raw)).ok_or_else(missing)?;
+            let types = v.get(index).cloned().unwrap_or_default();
+            let parts: Vec<String> = f.get(index).cloned().unwrap_or_default().iter().zip(&types).map(|(item, id)| rust_expr(item, ty.map(|ty| ty.at(*id)).as_ref(), model)).collect::<Result<_, _>>()?;
+            let variant = format!("{}::{}", path(n), vn.get(index).ok_or_else(missing)?);
+            Ok(literal_text_of(&variant, fs.get(index).map(Vec::as_slice).unwrap_or_default(), &parts))
+        }
+        (V::Seq(_), IrTy::Seq { k, .. }) => {
+            let text = debug_text(value, ty, model).ok_or_else(missing)?;
+            Ok(if k == "v" { format!("vec!{text}") } else { text })
+        }
+        (V::Ptr(_), _) => Err("a reference inside an input".into()),
+        _ => Err(format!("an input of the type `{}` has no value in the model", type_name(ty))),
+    }
+}
+
+/// The Rust text of a struct or a variant with its fields.
+fn literal_text_of(path: &str, names: &[String], parts: &[String]) -> String {
+    if parts.is_empty() {
+        return path.to_string();
+    }
+    if names.iter().all(|field| field.bytes().all(|b| b.is_ascii_digit())) {
+        return format!("{path}({})", parts.join(", "));
+    }
+    let pairs: Vec<String> = names.iter().zip(parts).map(|(field, part)| format!("{field}: {part}")).collect();
+    format!("{path} {{ {} }}", pairs.join(", "))
+}
+
+/// The name of a type for a cause.
+fn type_name(ty: Option<&Ty>) -> String {
+    match ty.and_then(|ty| ty.get()) {
+        Some(IrTy::Adt { n, .. } | IrTy::Opaque { n, .. } | IrTy::Clo { n, .. }) => n.clone(),
+        Some(IrTy::Ref(..)) => "a reference".into(),
+        _ => "?".into(),
+    }
+}
+
+/// [R74.1-1] The calls of a run that can confirm a difference: one call of each version with
+/// the input of the model. The probe gives each `&mut` argument a value and shows the value
+/// after the call.
+fn run_case(decls: &Decls, slots: &[V], types: &[Option<Ty>], muts: &[usize], before: (&PathOut, &Ty), after: (&PathOut, &Ty), model: &BTreeMap<String, String>) -> semilla_core::run::RunCase {
+    use semilla_core::run::{ArgMode, RunArg, RunCall, RunCase, RunExit, RunOut, RunSide};
+    let mut args = Vec::new();
+    let mut mut_slots = Vec::new();
+    for (name, value, ty) in &decls.inputs {
+        let (mode, expr) = match (value, ty.get()) {
+            (V::Ptr(loc), Some(IrTy::Ref(mutable, inner))) if loc.path.is_empty() => {
+                if *mutable {
+                    mut_slots.push(loc.slot);
+                }
+                let target = slots.get(loc.slot).ok_or_else(|| "a reference with no target".to_string());
+                (if *mutable { ArgMode::Mut } else { ArgMode::Ref }, target.and_then(|target| rust_expr(target, Some(&ty.at(*inner)), model)))
+            }
+            _ => (ArgMode::Value, rust_expr(value, Some(ty), model)),
+        };
+        args.push(RunArg { name: name.clone(), expr, mode });
+    }
+    let outcome = |out: &PathOut, ret: &Ty| -> RunOut {
+        let exit = match &out.exit {
+            Exit::Return(value) => RunExit::Returns(debug_text(value, Some(ret), model)),
+            Exit::Panic { kind, msg, .. } => RunExit::Panics(msg.clone().or_else(|| decls.kinds.get(kind).cloned())),
+            Exit::Abort | Exit::Cut => RunExit::Aborts,
+        };
+        let muts = muts.iter().enumerate().map(|(index, slot)| out.after.get(index).and_then(|value| debug_text(value, types.get(*slot).and_then(|ty| ty.as_ref()), model))).collect();
+        RunOut { exit, muts }
+    };
+    let (old, new) = (outcome(before.0, before.1), outcome(after.0, after.1));
+    // A `&mut` reference inside an input (not an argument of the call itself): the probe does
+    // not show its value.
+    let blind = if mut_slots != muts { Some("a `&mut` reference inside an input".to_string()) } else { semilla_core::run::blind_cause(&old, &new) };
+    let calls = vec![
+        RunCall { side: RunSide::Before, name: String::new(), target: String::new(), args: args.clone(), expect: old },
+        RunCall { side: RunSide::After, name: String::new(), target: String::new(), args, expect: new },
+    ];
+    RunCase { calls, blind }
+}
+
 /// The elements of a sequence value of a model: `(seq.++ (seq.unit #x00000001) (seq.unit
 /// #x00000002))` gives `#x00000001` and `#x00000002`; `(as seq.empty …)` gives none.
 fn seq_units(raw: &str) -> Vec<String> {
@@ -3506,6 +3732,45 @@ fn terms_of(value: &V, out: &mut Vec<String>) {
 /// step (`semilla_verify::equiv::BUDGET_CAUSE`). The oracle gives such a check the result "not
 /// checked (the budget of the step)".
 pub const DEADLINE_CAUSE: &str = "the budget of the step";
+
+thread_local! {
+    /// [R74.2-1] The bodies whose calls get a free behavior in the check of a claim: the side
+    /// (true for the old side) and the record name.
+    static FREE: std::cell::RefCell<Vec<(bool, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// [R74.2-1] True if a call of the body on this side gets a free behavior.
+fn free_callee(name: &str, old: bool) -> bool {
+    FREE.with(|cell| cell.borrow().iter().any(|(side, known)| *side == old && known == name))
+}
+
+/// [R74.2-1] The parts of a free result of a call of a version of the item of a claim: the
+/// returned value and the effect. Each part is a free function of the inputs of the call, by the
+/// version and the record name, so two calls of one version with equal inputs have one result,
+/// and the two versions have independent results. The call returns (the rule of the brief: "the
+/// results (and the effects)"). `shown`: the name of the item in the new version (the texts).
+struct FreeParts {
+    effect: Effect,
+    value: V,
+}
+
+fn free_parts(decls: &mut Decls, old: bool, name: &str, shown: &str, deep: &[V], ret: &Ty) -> Result<FreeParts, Stop> {
+    let flat: Vec<T> = deep.iter().flat_map(flatten).map(|(_, term)| term).collect();
+    let sorts: Vec<String> = deep.iter().flat_map(flatten).map(|(sort, _)| sort).collect();
+    let key = format!("free_{}_{}", if old { "before" } else { "after" }, sym_name(name));
+    let opaque = Ty { ir: Arc::new(Ir { t: vec![IrTy::Opaque { n: "the effect of an item".into(), d: false }], ..Ir::default() }), id: 0 };
+    let effect = call_value(decls, &opaque, &format!("e_{key}"), &flat, &sorts, 0)?;
+    let value = call_value(decls, ret, &format!("r_{key}"), &flat, &sorts, 0)?;
+    Ok(FreeParts { effect: Effect { callee: format!("the effect of `{shown}`"), args: vec![effect] }, value })
+}
+
+/// [R74.2-1] Runs `f` with free behavior for the calls of one body on one side.
+fn with_free<R>(old: bool, name: &str, f: impl FnOnce() -> R) -> R {
+    let outer = FREE.with(|cell| cell.replace(vec![(old, name.to_string())]));
+    let found = f();
+    FREE.with(|cell| cell.replace(outer));
+    found
+}
 
 thread_local! {
     /// The deadline of the body check that runs in this thread (also for its nested checks).
@@ -4110,7 +4375,10 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
             let before = outcome_text(x, Some(&Ty { ir: old.ir.clone(), id: old.ir.l[0] }), &values, y, &mut_names);
             let after = outcome_text(y, Some(&ret_ty), &values, x, &mut_names);
             let (before, after) = if before == after { (format!("{before} (a different effect or value behind a reference)"), after) } else { (before, after) };
-            (Verdict::Different { input, before, after }, inlined)
+            // [R74.1-1] The calls of a run that can confirm the difference: the input as Rust
+            // expressions, and the outcome of each version that the probe can see.
+            let run = run_case(&decls, slots, types, muts, (x, &Ty { ir: old.ir.clone(), id: old.ir.l[0] }), (y, &ret_ty), &values);
+            (Verdict::Different { input, before, after, run: Some(Box::new(run)) }, inlined)
         }
     }
 }
@@ -4147,7 +4415,7 @@ mod tests {
         let place = |l: usize, p: Vec<IrProj>| IrPlace { l, p };
         let one = || IrOp::K(IrConst::I("1".into(), 0));
         let stmt = |k: IrStmtKind| IrStmt { k, r: None, c: None };
-        let term = |k: IrTermKind, o: bool| IrTerm { k, r: None, c: None, o };
+        let term = |k: IrTermKind, o: bool| IrTerm { k, r: None, c: None, o, m: None };
         let old = Ir {
             a: 1,
             l: vec![0, 0, 2],
@@ -4270,7 +4538,7 @@ mod tests {
 
     #[test]
     fn a_loop_head_is_the_target_of_a_back_edge() {
-        let block = |k: IrTermKind| IrBlock { s: Vec::new(), t: IrTerm { k, r: None, c: None, o: false } };
+        let block = |k: IrTermKind| IrBlock { s: Vec::new(), t: IrTerm { k, r: None, c: None, o: false, m: None } };
         let ir = Ir { a: 0, l: vec![0], t: vec![IrTy::Unit], b: vec![block(IrTermKind::Goto(1)), block(IrTermKind::Sw(IrOp::R("f".into()), vec![("0".into(), 2)], 1)), block(IrTermKind::Ret)], f: Vec::new(), n: Vec::new(), u: None };
         assert_eq!(loop_heads(&ir), BTreeSet::from([1]));
     }

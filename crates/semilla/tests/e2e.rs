@@ -6567,8 +6567,8 @@ fn a_change_reaches_the_callers_of_its_body_in_each_view() {
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("1 => 4", "1 => 5"));
     let out = run(repo, &["step", "probe"], 0);
     assert!(out.contains("      reaches: 2 public functions: shop_core::cost, shop_core::quote (semilla status --verbose)\n"), "{out}");
-    assert!(out.contains("    reached bodies: 2\n      shop_core::cost (crates/shop-core/src/lib.rs:11): different through shop_core::tier: for k = 1, n = 1: before returns 4, after returns 5\n"), "{out}");
-    assert!(out.contains("      shop_core::quote (crates/shop-core/src/lib.rs:15): different through shop_core::cost: for k = 1, n = 1: before returns 5, after returns 6\n"), "{out}");
+    assert!(out.contains("    reached bodies: 2\n      shop_core::cost (crates/shop-core/src/lib.rs:11): different through shop_core::tier: for k = 1, n = 1: before returns 4, after returns 5 (confirmed by a run)\n"), "{out}");
+    assert!(out.contains("      shop_core::quote (crates/shop-core/src/lib.rs:15): different through shop_core::cost: for k = 1, n = 1: before returns 5, after returns 6 (confirmed by a run)\n"), "{out}");
     let verbose = run(repo, &["status", "--verbose", "--wait", "600"], 0);
     assert!(verbose.contains("          chain: shop_core::quote → shop_core::cost → shop_core::tier\n"), "{verbose}");
     let md = dir.path().join("review.md");
@@ -6599,7 +6599,7 @@ fn the_budget_of_the_equivalence_check_stops_each_check_with_one_line_for_the_st
     assert!(!out.contains("equivalence: different") && !out.contains("not decided (the budget"), "{out}");
     run(repo, &["undo"], 0);
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("      equivalence: different: for k = 1: before returns 4, after returns 5\n"), "{out}");
+    assert!(out.contains("      equivalence: different: for k = 1: before returns 4, after returns 5 (confirmed by a run)\n"), "{out}");
     assert!(!out.contains("not checked") && !out.contains("the equivalence check stopped"), "{out}");
 }
 
@@ -6752,9 +6752,9 @@ fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_chan
     assert!(out.contains("    shop_core::limit (crates/shop-core/src/lib.rs:"), "{out}");
     // R61.6-2: the line of each body ends with its equivalence.
     assert!(out.contains("graph changes: +1 branch, +3 arrows, −1 arrow; no edit in the body; equivalent (proved by SMT)"), "{out}");
-    assert!(out.contains("    shop_core::mask (crates/shop-core/src/lib.rs:34): same graph (the edit keeps the control flow); different (for v = 0: before returns 1, after returns 2)\n"), "{out}");
-    assert!(out.contains("    shop_core::order (crates/shop-core/src/lib.rs:22): graph changes: +1 branch, +3 arrows, −1 arrow; different (for qty = 0: before returns Ok(0), after returns Err(Empty))\n"), "{out}");
-    assert!(out.contains("    shop_core::tax (crates/shop-core/src/lib.rs:30): same structure: 1 changed condition; different (for v = 3: before returns 3, after returns 1)\n"), "{out}");
+    assert!(out.contains("    shop_core::mask (crates/shop-core/src/lib.rs:34): same graph (the edit keeps the control flow); different (for v = 0: before returns 1, after returns 2; confirmed by a run)\n"), "{out}");
+    assert!(out.contains("    shop_core::order (crates/shop-core/src/lib.rs:22): graph changes: +1 branch, +3 arrows, −1 arrow; different (for qty = 0: before returns Ok(0), after returns Err(Empty); not confirmed by a run: the difference is in a part of the outcome that the probe does not see (an effect, or a value that the model does not give))\n"), "{out}");
+    assert!(out.contains("    shop_core::tax (crates/shop-core/src/lib.rs:30): same structure: 1 changed condition; different (for v = 3: before returns 3, after returns 1; confirmed by a run)\n"), "{out}");
     // R60.3-5: a new body has its full graph, not a diff.
     assert!(out.contains("    shop_core::twice (crates/shop-core/src/lib.rs:"), "{out}");
     assert!(out.contains("graph added: 2 points, 1 arrow"), "{out}");

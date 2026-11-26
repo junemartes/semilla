@@ -16,6 +16,9 @@ pub(crate) mod reach;
 #[path = "intent.rs"]
 mod intent;
 
+#[path = "probe.rs"]
+pub(crate) mod probe;
+
 /// Runs the MIR driver on the snapshots, and compares the bodies with the normal forms.
 ///
 /// Each level has one fixed build folder. Semilla updates it to each tree by delta, so cargo
@@ -1576,7 +1579,22 @@ impl NormalOracle {
         }
         let verdict = match checked.verdict {
             semilla_smt::mir::Verdict::Equivalent { method } => Verdict::Equivalent(method),
-            semilla_smt::mir::Verdict::Different { input, before, after } => Verdict::Different { input, before, after },
+            // [R74.1-1] The calls of the run get the record names and the targets of the two
+            // bodies; the probe of the step runs them (design 74).
+            semilla_smt::mir::Verdict::Different { input, before, after, run } => {
+                let run = match run {
+                    Some(mut case) => {
+                        for call in &mut case.calls {
+                            let record = if call.side == semilla_core::run::RunSide::Before { a } else { b };
+                            call.name = record.name.clone();
+                            call.target = record.target.clone();
+                        }
+                        semilla_verify::equiv::RunNote::Open(case)
+                    }
+                    None => semilla_verify::equiv::RunNote::None,
+                };
+                Verdict::Different { input, before, after, run }
+            }
             // A check that its deadline stops (R66.9-2): not checked, as a check that the budget
             // of the step does not start.
             semilla_smt::mir::Verdict::NotDecided { cause } if cause == semilla_smt::mir::DEADLINE_CAUSE => Verdict::NotChecked(semilla_verify::equiv::BUDGET_CAUSE.into()),
@@ -1869,7 +1887,7 @@ impl BodyOracle for NormalOracle {
         // next to the walk and the body checks of the step, from the start of the budget. Before,
         // they started after the body checks, so a body check that used its share of the budget
         // (R66.9-2) took the time of each build, also in a step that used less time than 10o.
-        let (plain_answers, variant_answers) = std::thread::scope(|scope| {
+        let (plain_answers, variant_answers, walks) = std::thread::scope(|scope| {
             let builds = scope.spawn(variants);
             // The walk of each configuration (design 61.10): the bodies that each check must
             // inline. It needs no build, so it runs first, in the budget.
@@ -1877,12 +1895,66 @@ impl BodyOracle for NormalOracle {
             crate::timing("the walk of the equivalence check", started);
             let found = run(&plain, None, &walks);
             crate::timing(&format!("the walk and {} body checks of the equivalence check", plain.len()), started);
-            (found, builds.join().unwrap_or_default())
+            (found, builds.join().unwrap_or_default(), walks)
         });
         for (index, answer) in plain_answers.into_iter().chain(variant_answers) {
             answers[index] = answer;
         }
         crate::timing(&format!("the equivalence check ({} queries, a budget of {} s)", queries.len(), budget.as_secs()), started);
+        // [R74.1-1] A run of the real code for each sure difference of the step: the results of
+        // the bodies, of the facts alone (in the tree of the variant), and of the walk.
+        let variant_trees: Vec<Option<String>> = queries
+            .iter()
+            .map(|query| {
+                let files = query.variant.as_ref()?;
+                let files: BTreeMap<String, Option<String>> = files.iter().map(|(path, text)| (path.clone(), Some(text.clone()))).collect();
+                self.repo.tree_with(&step.tree_before, &files).ok()
+            })
+            .collect();
+        let mut walk_copy: Option<Vec<(String, reach::ConfigReach)>> = walks.as_ref().map(|walks| walks.as_ref().clone());
+        {
+            let mut items: Vec<(&str, &str, &str, &mut semilla_verify::equiv::Verdict)> = Vec::new();
+            for ((query, answer), variant) in queries.iter().zip(answers.iter_mut()).zip(&variant_trees) {
+                let Some(answer) = answer else { continue };
+                let after = match (&query.variant, variant) {
+                    (None, _) => step.tree_after.as_str(),
+                    (Some(_), Some(tree)) => tree.as_str(),
+                    (Some(_), None) => continue,
+                };
+                items.push((query.config.as_str(), step.tree_before.as_str(), after, &mut answer.verdict));
+            }
+            for (config, walk) in walk_copy.iter_mut().flatten() {
+                for (_, _, _, verdict) in &mut walk.bodies {
+                    items.push((config.as_str(), step.tree_before.as_str(), step.tree_after.as_str(), verdict));
+                }
+            }
+            self.confirm(step, &mut items);
+        }
+        // [R74.1-3] A body that the probe cannot call (an item that is not public): the result of
+        // a caller that the walk reaches through it, when a run confirms it.
+        if let Some(copy) = &walk_copy {
+            use semilla_verify::equiv::{RunNote, Verdict};
+            for (query, answer) in queries.iter().zip(answers.iter_mut()) {
+                let Some(answer) = answer else { continue };
+                let Verdict::Different { run: RunNote::NotConfirmed(cause), .. } = &mut answer.verdict else { continue };
+                if query.variant.is_some() {
+                    continue;
+                }
+                let caller = copy
+                    .iter()
+                    .filter(|(config, _)| *config == query.config)
+                    .flat_map(|(_, walk)| walk.bodies.iter())
+                    .find(|(_, through, _, verdict)| through.contains(&query.new.0) && matches!(verdict, Verdict::Different { run: RunNote::Confirmed, .. }))
+                    .map(|(name, ..)| name.clone());
+                if let Some(caller) = caller {
+                    *cause = format!("{cause}; a run confirms the difference of the caller `{caller}`, which reaches this body");
+                }
+            }
+        }
+        if let Some(copy) = walk_copy {
+            let key = (step.tree_before.clone(), step.tree_after.clone());
+            self.added.lock().unwrap_or_else(|error| error.into_inner()).reached.insert(key, std::sync::Arc::new(copy));
+        }
         answers
     }
 
@@ -1893,7 +1965,22 @@ impl BodyOracle for NormalOracle {
     fn reach(&self, step: &Step, renames: &BTreeMap<String, String>) -> Option<semilla_verify::equiv::ReachReport> {
         let renames: Vec<(String, String)> = renames.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
         let limit = self.equivalence_time(step).min(reach::MAX_TIME);
-        let walks = self.reach_all(step, &renames.into_iter().collect(), limit)?;
+        let mut walks = self.reach_all(step, &renames.into_iter().collect(), limit)?;
+        // [R74.1-1] A walk with no run yet (a step with no other check): its runs.
+        let open = walks.iter().any(|(_, walk)| walk.bodies.iter().any(|(_, _, _, verdict)| matches!(verdict, semilla_verify::equiv::Verdict::Different { run: semilla_verify::equiv::RunNote::Open(_), .. })));
+        if open {
+            let mut copy = walks.as_ref().clone();
+            let mut items: Vec<(&str, &str, &str, &mut semilla_verify::equiv::Verdict)> = Vec::new();
+            for (config, walk) in copy.iter_mut() {
+                for (_, _, _, verdict) in &mut walk.bodies {
+                    items.push((config.as_str(), step.tree_before.as_str(), step.tree_after.as_str(), verdict));
+                }
+            }
+            self.confirm(step, &mut items);
+            walks = std::sync::Arc::new(copy);
+            let key = (step.tree_before.clone(), step.tree_after.clone());
+            self.added.lock().unwrap_or_else(|error| error.into_inner()).reached.insert(key, walks.clone());
+        }
         Some(reach::report(&walks))
     }
 

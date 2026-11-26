@@ -1,0 +1,51 @@
+note: a private body has no run; its public caller has one (design 74)
+rule+: R74.1-3
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+fn step(x: u32) -> u32 {
+    x * 2
+}
+
+pub fn caller(x: u32) -> u32 {
+    step(x) + 1
+}
+=== new src/lib.rs
+fn step(x: u32) -> u32 {
+    x * 3
+}
+
+pub fn caller(x: u32) -> u32 {
+    step(x) + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `2` → `3` (f1)
+      in: depot::step
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: --change 'depot::step=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::step=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `2` → `3` at `depot::step/tail/rhs` [semantics · code different]
+      affected bodies: depot::step
+      control flow: ~ check `overflow: x * 2` → `overflow: x * 3` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: different: for x = 1: before returns 2, after returns 3 (not confirmed by a run: the compiler does not accept the call in the probe (E0603: function `step` is private); a run confirms the difference of the caller `depot::caller`, which reaches this body)
+      reaches: 1 public function: depot::caller (semilla status --verbose)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::step (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for x = 1: before returns 2, after returns 3; not confirmed by a run: the compiler does not accept the call in the probe (E0603: function `step` is private); a run confirms the difference of the caller `depot::caller`, which reaches this body)
+    reached bodies: 1
+      depot::caller (src/lib.rs:5): different through depot::step: for x = 1: before returns 3, after returns 4 (confirmed by a run)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `2` → `3` at `depot::step/tail/rhs` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

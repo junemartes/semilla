@@ -471,6 +471,34 @@ mod group {
             libc::kill(-(leader as i32), libc::SIGKILL);
         }
     }
+
+    /// [R74.1-1] Waits until the leader of the group ends or the time limit ends, and then stops
+    /// each process of the group. True if the time limit stopped the group.
+    pub fn wait_within(leader: u32, limit: std::time::Duration) -> bool {
+        let started = std::time::Instant::now();
+        let mut stopped = false;
+        // SAFETY: as in `wait_and_stop`; `WNOHANG` returns at once, and `si_pid` is 0 while the
+        // child runs.
+        unsafe {
+            loop {
+                let mut info: libc::siginfo_t = std::mem::zeroed();
+                let found = libc::waitid(libc::P_PID, leader as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT | libc::WNOHANG);
+                if found != 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                    break;
+                }
+                if found == 0 && info.si_pid() != 0 {
+                    break;
+                }
+                if started.elapsed() > limit {
+                    stopped = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            libc::kill(-(leader as i32), libc::SIGKILL);
+        }
+        stopped
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -478,6 +506,10 @@ mod group {
     pub fn start(_command: &mut std::process::Command) {}
 
     pub fn wait_and_stop(_leader: u32) {}
+
+    pub fn wait_within(_leader: u32, _limit: std::time::Duration) -> bool {
+        false
+    }
 }
 
 /// Runs a build command to its end, and then stops each process that the build left (batch 5v,
@@ -507,6 +539,28 @@ pub fn run_and_stop(command: &mut Command) -> std::io::Result<std::process::Outp
     group::wait_and_stop(child.id());
     let status = child.wait()?;
     Ok(std::process::Output { status, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() })
+}
+
+/// [R74.1-1] [`run_and_stop`] with a time limit: the second value is true if the limit stopped
+/// the command (design 74: a build and a run of a probe).
+pub fn run_within(command: &mut Command, limit: std::time::Duration) -> std::io::Result<(std::process::Output, bool)> {
+    use std::io::Read;
+    group::start(command);
+    let mut child = command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn()?;
+    let reader = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut data = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut data);
+            }
+            data
+        })
+    };
+    let stdout = reader(child.stdout.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>));
+    let stderr = reader(child.stderr.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>));
+    let stopped = group::wait_within(child.id(), limit);
+    let status = child.wait()?;
+    Ok((std::process::Output { status, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() }, stopped))
 }
 
 #[cfg(not(target_os = "linux"))]

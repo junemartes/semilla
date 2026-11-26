@@ -31,10 +31,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `1000` → `100` at `shop::ms/tail/rhs/rhs` [semantics · code different]
       affected bodies: shop::ms
       control flow: ~ check `overflow: n * (60 * 1000)` → `overflow: n * (60 * 100)` (src/lib.rs:-2, src/lib.rs:2)
-      equivalence: different: for n = 1: before returns 60000, after returns 6000
+      equivalence: different: for n = 1: before returns 60000, after returns 6000 (confirmed by a run)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::ms (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for n = 1: before returns 60000, after returns 6000)
+    shop::ms (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for n = 1: before returns 60000, after returns 6000; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -46,17 +46,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f2 derived: changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different]
       affected bodies: shop::tier
-      equivalence: different: for k = 1: before returns 4, after returns 5
+      equivalence: different: for k = 1: before returns 4, after returns 5 (confirmed by a run)
       reaches: 1 public function: shop::cost (semilla status --verbose)
   ◆ f1 derived: inlined variable `t` = `tier(k)` (1 use) at `shop::cost/S0` [move · code equal]
       control flow: ~ check `overflow: n * t` → `overflow: n * tier(k)` (src/lib.rs:-11, src/lib.rs:10)
-      equivalence: different: for k = 1, n = 1: before returns 4, after returns 5
+      equivalence: different: for k = 1, n = 1: before returns 4, after returns 5 (confirmed by a run)
   cover: each of the 5 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::cost (src/lib.rs:9): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for k = 1, n = 1: before returns 4, after returns 5)
-    shop::tier (src/lib.rs:1): same graph (the edit keeps the control flow); different (for k = 1: before returns 4, after returns 5)
+    shop::cost (src/lib.rs:9): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for k = 1, n = 1: before returns 4, after returns 5; confirmed by a run)
+    shop::tier (src/lib.rs:1): same graph (the edit keeps the control flow); different (for k = 1: before returns 4, after returns 5; confirmed by a run)
     reached bodies: 1
-      shop::cost (src/lib.rs:9): different through shop::tier: for k = 1, n = 1: before returns 4, after returns 5
+      shop::cost (src/lib.rs:9): different through shop::tier: for k = 1, n = 1: before returns 4, after returns 5 (confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

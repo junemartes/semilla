@@ -203,7 +203,7 @@ fn each_supported_part_keeps_or_changes_the_outcome_and_each_other_part_gives_no
     assert!(problems.is_empty(), "{}", problems.join("\n"));
     // A different result has a real input and the two outcomes.
     match verdict(&old, &new, "probe::half") {
-        Verdict::Different { input, before, after } => {
+        Verdict::Different { input, before, after, .. } => {
             assert!(input.starts_with("x = -"), "{input}");
             assert_ne!(before, after);
         }

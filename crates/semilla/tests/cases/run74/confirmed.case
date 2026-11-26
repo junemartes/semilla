@@ -1,0 +1,62 @@
+note: a run of the real code confirms a difference of a value and of a panic (design 74)
+rule+: R74.1-1
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn pick(x: u8) -> Option<u8> {
+    if x > 3 { Some(x) } else { None }
+}
+
+pub fn add(a: u32, b: u32) -> u32 {
+    a + b
+}
+=== new src/lib.rs
+pub fn pick(x: u8) -> Option<u8> {
+    if x > 4 { Some(x) } else { None }
+}
+
+pub fn add(a: u32, b: u32) -> u32 {
+    a.wrapping_add(b)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed method_call: `a + b` → `a.wrapping_add(b)` (f1)
+      in: depot::add
+      lines: src/lib.rs:6, src/lib.rs:-6
+      to state it: --change 'depot::add=TEXT'
+  ? 1 place: change condition `3` → `4` (effect hint: narrow, example: x = 4) (f2)
+      in: depot::pick
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: --change 'depot::pick=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::add=TEXT' --change 'depot::pick=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed method_call: `a + b` → `a.wrapping_add(b)` at `depot::add/tail` [semantics · code different]
+      affected bodies: depot::add
+      control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:6): return → return
+      control flow: − check `overflow: a + b` (src/lib.rs:-6): ok → return, fail → panic `overflow`
+      control flow: − panic `overflow` (src/lib.rs:-6)
+      control flow: … 2 more (semilla status --verbose)
+      equivalence: different in dev: for a = 23, b = 4294967275: before panics (overflow add), after returns 2 (confirmed by a run); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
+  ◆ f2 derived: change condition `3` → `4` (effect hint: narrow, example: x = 4) at `depot::pick/S0/cond/rhs` [semantics · code different]
+      affected bodies: depot::pick
+      control flow: ~ branch `x > 3` → `x > 4` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: different: for x = 4: before returns Some(4), after returns None (confirmed by a run)
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::add (src/lib.rs:5): graph changes: +1 call, −1 check, −1 panic, +2 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); different in dev (for a = 23, b = 4294967275: before panics (overflow add), after returns 2; confirmed by a run); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
+    depot::pick (src/lib.rs:1): same structure: 1 changed condition; different (for x = 4: before returns Some(4), after returns None; confirmed by a run)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed method_call: `a + b` → `a.wrapping_add(b)` at `depot::add/tail` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6
+◆ f2 derived: change condition `3` → `4` (effect hint: narrow, example: x = 4) at `depot::pick/S0/cond/rhs` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

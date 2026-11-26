@@ -91,10 +91,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `1` → `2` at `shop::price/tail/rhs` [semantics · code different]
       affected bodies: shop::price
       control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-17, src/lib.rs:17)
-      equivalence: different: for x = 0: before returns 1, after returns 2
+      equivalence: different: for x = 0: before returns 1, after returns 2 (confirmed by a run)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:16): same structure: 1 changed check (in dev, dev, all features; 1 more result(s) in other configurations: semilla status --verbose); different (for x = 0: before returns 1, after returns 2)
+    shop::price (src/lib.rs:16): same structure: 1 changed check (in dev, dev, all features; 1 more result(s) in other configurations: semilla status --verbose); different (for x = 0: before returns 1, after returns 2; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

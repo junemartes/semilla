@@ -41,10 +41,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: moved statement `seen = i` from `shop::last/S2/body/S0` to `shop::last/S2/body/S1` [semantics · code different]
       affected bodies: shop::last
-      equivalence: different: for n = 1 (a bounded run of at most 4 loop iterations): before returns 0, after returns 1
+      equivalence: different: for n = 1 (a bounded run of at most 4 loop iterations): before returns 0, after returns 1 (confirmed by a run)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::last (src/lib.rs:1): same graph (the edit keeps the control flow); different (for n = 1 (a bounded run of at most 4 loop iterations): before returns 0, after returns 1)
+    shop::last (src/lib.rs:1): same graph (the edit keeps the control flow); different (for n = 1 (a bounded run of at most 4 loop iterations): before returns 0, after returns 1; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

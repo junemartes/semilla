@@ -53,7 +53,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::bill (src/lib.rs:15): same structure: 2 changed call targets; no edit in the body; different (for n = 1: before returns 5, after returns 20)
+    shop::bill (src/lib.rs:15): same structure: 2 changed call targets; no edit in the body; different (for n = 1: before returns 5, after returns 20; confirmed by a run)
     shop::charge (no place): instance charge::<shop::Fuel>: call `<T as shop::Tax>::rate` resolves to `<shop::Fuel as shop::Tax>::rate` (before: the instance charge::<shop::Food>)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

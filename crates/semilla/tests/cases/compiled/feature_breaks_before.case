@@ -40,14 +40,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f3 derived: changed literal `2` → `1` at `shop::price/tail/rhs` [semantics · code different]
       affected bodies: shop::price
       control flow: ~ check `overflow: n + 2` → `overflow: n + 1` (src/lib.rs:-4, src/lib.rs:2)
-      equivalence: different: for n = 0: before returns 2, after returns 1
+      equivalence: different: for n = 0: before returns 2, after returns 1 (confirmed by a run)
   ◆ f1 derived: attributes of `shop`: removed `#![cfg_attr(feature = "nightly", feature(no_such_feature_of_semilla))]` [attribute · code equal]
       ✗ spotlight: a changed `cfg` attribute (`cfg_attr`); it needs a reason: --reason 'shop=…'
   ◆ f2 derived: Cargo.toml: features.nightly removed ([]) [manifest · no code]
       ✗ spotlight: a build setting (profile, patch, features, lints, or a target table); it needs a reason: --reason 'Cargo.toml:features.nightly=…'
   cover: each of the 7 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for n = 0: before returns 2, after returns 1)
+    shop::price (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for n = 0: before returns 2, after returns 1; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: shop
   ! spotlight: features: Cargo.toml (the key of the reason: `Cargo.toml:features.nightly`)

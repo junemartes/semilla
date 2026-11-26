@@ -60,14 +60,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different]
       affected bodies: shop::<Food as Tax>::rate
-      equivalence: different: for self = &Food: before returns 5, after returns 6
+      equivalence: different: for self = &Food: before returns 5, after returns 6 (confirmed by a run)
       reaches: 2 public functions: shop::charge, shop::food_bill (semilla status --verbose)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    <shop::Food as shop::Tax>::rate (src/lib.rs:8): same graph (the edit keeps the control flow); different (for self = &Food: before returns 5, after returns 6)
+    <shop::Food as shop::Tax>::rate (src/lib.rs:8): same graph (the edit keeps the control flow); different (for self = &Food: before returns 5, after returns 6; confirmed by a run)
     reached bodies: 2
       shop::charge (src/lib.rs:13): reached through <shop::Food as shop::Tax>::rate, not decided (the impl `<shop::Food as shop::Tax>::rate` of the trait method changes in the step: t.rate() (src/lib.rs:-14))
-      shop::food_bill (src/lib.rs:17): different through shop::charge: for n = 1: before returns 5, after returns 6
+      shop::food_bill (src/lib.rs:17): different through shop::charge: for n = 1: before returns 5, after returns 6 (confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

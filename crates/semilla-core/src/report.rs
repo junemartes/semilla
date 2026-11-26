@@ -272,6 +272,10 @@ pub struct FlowReport {
     /// equivalence check stopped after 60 s: 41 bodies not checked; semilla status --verbose`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equivalence_stop: Option<String>,
+    /// [R74.1-2] The count of the results whose run of the real code disagrees with the model
+    /// (design 74): each one is a defect of Semilla, and the step says so in one line.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub run_defects: usize,
     /// The `reaches:` line of each fact whose body is in the start set of the walk, by the id
     /// of the fact, and the reached public functions of the fact (name and place) for the
     /// Markdown review.
@@ -1551,6 +1555,9 @@ impl StepReport {
             }
         }
         out.extend(flow.equivalence_stop.iter().map(|line| format!("  {line}")));
+        if flow.run_defects > 0 {
+            out.push(format!("  ! {} in {} check(s): a defect of Semilla (design 74); semilla status --verbose", crate::run::DISAGREE, flow.run_defects));
+        }
         out.extend(reach_lines(flow, full));
         out
     }

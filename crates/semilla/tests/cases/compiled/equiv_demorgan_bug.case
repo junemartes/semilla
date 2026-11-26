@@ -30,13 +30,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: deleted statement `!(a && b)` at `shop::closed/tail` [semantics · code different]
       affected bodies: shop::closed (with 1 other edit of this body)
-      equivalence: different: for a = true, b = false: before returns true, after returns false
+      equivalence: different: for a = true, b = false: before returns true, after returns false (confirmed by a run)
   ◆ f2 derived: added statement `!a && !b` at `shop::closed/tail` [semantics · code different]
       affected bodies: shop::closed (with 1 other edit of this body)
-      equivalence: different: for a = true, b = false: before returns true, after returns false
+      equivalence: different: for a = true, b = false: before returns true, after returns false (confirmed by a run)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::closed (src/lib.rs:1): same graph (the edit keeps the control flow); different (for a = true, b = false: before returns true, after returns false)
+    shop::closed (src/lib.rs:1): same graph (the edit keeps the control flow); different (for a = true, b = false: before returns true, after returns false; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

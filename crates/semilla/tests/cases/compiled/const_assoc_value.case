@@ -56,13 +56,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: value of `shop::S::B` changed: N as u32 → M as u32 (the public API can change: a different crate can use the item) [semantics · code different]
       affected bodies: shop::S::B, shop::get
       through: `shop::S::B` (1 body)
-      equivalence: different: for each input: before returns 7, after returns 6
+      equivalence: different: for each input: before returns 7, after returns 6 (confirmed by a run)
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 4 changed line(s) is in a fact
   control flow: 3 bodies
     shop::S::A (src/lib.rs:6): same graph (the edit keeps the control flow); equivalent (proved by SMT)
-    shop::S::B (src/lib.rs:7): same graph (the edit keeps the control flow); different (for each input: before returns 7, after returns 6)
-    shop::get (src/lib.rs:10): same graph; reads a changed constant: `shop::S::B` (7 → 6); different (for each input: before returns 14, after returns 13)
+    shop::S::B (src/lib.rs:7): same graph (the edit keeps the control flow); different (for each input: before returns 7, after returns 6; confirmed by a run)
+    shop::get (src/lib.rs:10): same graph; reads a changed constant: `shop::S::B` (7 → 6); different (for each input: before returns 14, after returns 13; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

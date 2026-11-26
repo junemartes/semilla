@@ -67,7 +67,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: replace macro input `depot::here!(2)` → `depot::here!(3)` at `shop::two/tail` [macro · code different]
       affected bodies: shop::two
-      equivalence: different: for each input: before returns (2, 6), after returns (3, 8)
+      equivalence: different: for each input: before returns (2, 6), after returns (3, 8) (confirmed by a run)
       expansion: `depot::here!(3)` at `shop::two/tail` (shop/src/lib.rs:8): expansion changed: changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `6u32` → `8u32` at `expansion/elems[1]` [semantics]
   ◆ f2 derived: the compiled code of `shop::one` changes with no edit at its place: `depot::here!(1)` [indirect · code different]
       affected bodies: shop::one
@@ -78,7 +78,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f4 derived: comment in `shop/src/lib.rs`: added `// The line of each call is in its value.` [docs · no code]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    shop::two (shop/src/lib.rs:7): same graph (the edit keeps the control flow); different (for each input: before returns (2, 6), after returns (3, 8))
+    shop::two (shop/src/lib.rs:7): same graph (the edit keeps the control flow); different (for each input: before returns (2, 6), after returns (3, 8); confirmed by a run)
   expansions: 2 changed
     `depot::here!(1)` at `shop::one/tail` (shop/src/lib.rs:4): expansion changed: `proc macro depot::here` (depot/src/lib.rs:4): only the context of the call changes: the line of the call (`depot::here!(1)`); the context of the call changes
     `depot::here!(3)` at `shop::two/tail` (shop/src/lib.rs:8): expansion changed: `proc macro depot::here` (depot/src/lib.rs:4): changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `6u32` → `8u32` at `expansion/elems[1]` [semantics]; the input of the call changes

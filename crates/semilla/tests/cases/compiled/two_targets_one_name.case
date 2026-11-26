@@ -79,10 +79,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: shop (bench "probe")::hash
       control flow: + branch `x == 0` (benches/probe.rs:2): false → call `num::<impl u64>::wrapping_mul`, true → return
       control flow: + arrow entry (benches/probe.rs:1) → branch `x == 0` (benches/probe.rs:2)
-      equivalence: different: for x = 0: before returns 7, after returns 1
+      equivalence: different: for x = 0: before returns 7, after returns 1 (not confirmed by a run: the body is in a target of the kind `test`, which another crate cannot use)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    probe::hash (benches/probe.rs:1): graph changes: +1 branch, +3 arrows, −1 arrow; different (for x = 0: before returns 7, after returns 1)
+    probe::hash (benches/probe.rs:1): graph changes: +1 branch, +3 arrows, −1 arrow; different (for x = 0: before returns 7, after returns 1; not confirmed by a run: the body is in a target of the kind `test`, which another crate cannot use)
     reached bodies: 1
       probe::bench_hash::{closure#0} (benches/probe.rs:8): reached through probe::bench_hash, not decided (a value of a type that the check does not model: fn bench_hash() { assert!(hash(1) > 0); } (benches/probe.rs:-6))
   expansions: 1 changed, 3 equal

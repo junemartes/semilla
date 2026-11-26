@@ -45,8 +45,9 @@ pub struct Tree<'a> {
 pub enum ClaimVerdict {
     /// The body holds for each input: the method (`SMT`, `SMT after inlining …`).
     Proved { method: String },
-    /// An exact input for which the body is false or panics, and the part that fails.
-    False { input: String, detail: String },
+    /// An exact input for which the body is false or panics, and the part that fails. `run`:
+    /// the calls of a run that can confirm it (design 74, R74.1-1).
+    False { input: String, detail: String, run: Option<Box<semilla_core::run::RunCase>> },
     /// Semilla cannot check the claim: the cause.
     Claimed { cause: String },
 }
@@ -76,6 +77,9 @@ pub struct ClaimOptions {
 /// The cause of the result of a dry check.
 pub const DRY_CAUSE: &str = "not checked: `semilla intent check` checks the references and the types only";
 
+/// The cause of a claim that can fail only for an input that the model does not give exactly.
+const NO_EXACT: &str = "the claim can fail for an input that depends on the result of a call or on a value that the check does not model (no exact input)";
+
 /// The most paths of one claim.
 const MAX_CLAIM_PATHS: usize = 256;
 /// The deepest call of a relation.
@@ -92,14 +96,15 @@ pub fn check_claim(solver: &Solver, file: &File, claim: &Claim, old: &Tree, new:
     DEADLINE.with(|cell| cell.set(own));
     let mut queries = 0;
     let mut first = attempt(solver, file, claim, old, new, step, options, false, &mut queries);
+    let mut inline_all = false;
     // [R67.3-1] The second try inlines each callee with a form, as the equivalence check does.
     if !options.dry && first.errors.is_empty() && matches!(&first.verdict, ClaimVerdict::Claimed { cause } if cause != DEADLINE_CAUSE) {
         let second = attempt(solver, file, claim, old, new, step, options, true, &mut queries);
         if !matches!(second.verdict, ClaimVerdict::Claimed { .. }) {
             first = second;
+            inline_all = true;
         }
     }
-    DEADLINE.with(|cell| cell.set(outer));
     // [R69.4-1] A proof of a claim on an item depends on the two versions of the item: the
     // claim calls `before::ITEM` and `after::ITEM`, in its body or in a relation that it calls.
     // Else the result is "claimed" with the cause.
@@ -122,6 +127,40 @@ pub fn check_claim(solver: &Solver, file: &File, claim: &Claim, old: &Tree, new:
             };
         }
     }
+    // [R74.2-1] The truth of a proof must depend on each version of its item. The first fast
+    // step is R69.4-1 above (a version that the claim does not call). Then, for each version,
+    // the check runs the claim again with a free result for each call of that version of the
+    // item (also a call in a callee): the returned value and the effect are free values. If the
+    // claim is still proved, it is true for any result of that version.
+    if matches!(first.verdict, ClaimVerdict::Proved { .. }) {
+        let ev = Eval::new(file, old, new, step, options, false);
+        let (old_name, new_name) = ev.item_versions(claim);
+        let item = claim.targets.first().map(Target::text).unwrap_or_default();
+        let item = item.trim_start_matches("before::").trim_start_matches("after::").to_string();
+        for (version, name) in [(Version::Before, old_name), (Version::After, new_name)] {
+            let Some(name) = name else { continue };
+            let free = Some((version, name.clone(), item.clone()));
+            let found = with_free(version == Version::Before, &name, || attempt_with(solver, file, claim, old, new, step, options, inline_all, &mut queries, free));
+            let method = match &first.verdict {
+                ClaimVerdict::Proved { method } => method.clone(),
+                _ => String::new(),
+            };
+            let cause = match &found.verdict {
+                // An input where the claim fails for a result of the version: it depends on it.
+                ClaimVerdict::False { .. } => continue,
+                ClaimVerdict::Claimed { cause } if cause == NO_EXACT => continue,
+                ClaimVerdict::Proved { .. } => format!(
+                    "the claim is true for any result of `{}::{name}`: it stays proved when each call of that version returns a free value with a free effect (a proof of a claim on `{item}` must depend on the two versions; the body alone is true by {method})",
+                    version.prefix()
+                ),
+                // No answer: the safe side, no proof.
+                ClaimVerdict::Claimed { cause } => format!("the check that the claim depends on `{}::{name}` gives no result: {cause}", version.prefix()),
+            };
+            first.verdict = ClaimVerdict::Claimed { cause };
+            break;
+        }
+    }
+    DEADLINE.with(|cell| cell.set(outer));
     ClaimCheck { verdict: first.verdict, errors: first.errors, reads: first.reads.into_iter().collect(), queries, millis: started.elapsed().as_millis() }
 }
 
@@ -152,7 +191,13 @@ struct Attempt {
 
 #[allow(clippy::too_many_arguments)]
 fn attempt(solver: &Solver, file: &File, claim: &Claim, old: &Tree, new: &Tree, step: &Step, options: ClaimOptions, inline_all: bool, queries: &mut usize) -> Attempt {
+    attempt_with(solver, file, claim, old, new, step, options, inline_all, queries, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn attempt_with(solver: &Solver, file: &File, claim: &Claim, old: &Tree, new: &Tree, step: &Step, options: ClaimOptions, inline_all: bool, queries: &mut usize, free: Option<(Version, String, String)>) -> Attempt {
     let mut ev = Eval::new(file, old, new, step, options, inline_all);
+    ev.free = free;
     let verdict = match ev.claim(solver, claim, queries) {
         Ok(verdict) => verdict,
         Err(Fail::Error(error)) => {
@@ -184,6 +229,19 @@ struct World {
     env: Vec<(String, Val)>,
     /// Each call of a version on this path and its outcome, for the text of a false claim.
     shown: Vec<(String, Shown)>,
+    /// [R74.1-1] Each call of a version on this path with its arguments and its exit, for the
+    /// run that confirms a false claim (design 74).
+    runs: Vec<CallRun>,
+}
+
+/// [R74.1-1] One call of a version on a path of a claim.
+#[derive(Clone)]
+struct CallRun {
+    version: Version,
+    name: String,
+    args: Vec<Val>,
+    exit: Exit,
+    ret: Ty,
 }
 
 #[derive(Clone)]
@@ -231,6 +289,9 @@ struct Eval<'a, 'b> {
     inlined: BTreeSet<String>,
     fresh: usize,
     relations: usize,
+    /// [R74.2-1] The version of the item whose calls get a free behavior: the version, the
+    /// record name, and the text of the item.
+    free: Option<(Version, String, String)>,
 }
 
 fn fail(place: &semilla_intent::Place, message: impl Into<String>) -> Fail {
@@ -344,6 +405,7 @@ impl<'a, 'b> Eval<'a, 'b> {
             inlined: BTreeSet::new(),
             fresh: 0,
             relations: 0,
+            free: None,
         }
     }
 
@@ -379,10 +441,10 @@ impl<'a, 'b> Eval<'a, 'b> {
         self.imported.insert(key, id);
         let copied = match ty.get().cloned() {
             Some(IrTy::Tuple(items)) => IrTy::Tuple(items.iter().map(|item| self.import(&ty.at(*item))).collect()),
-            Some(IrTy::Adt { n, v, vn, d, dt, e, fs }) => {
+            Some(IrTy::Adt { n, v, vn, d, dt, e, fs, g }) => {
                 let v = v.iter().map(|list| list.iter().map(|item| self.import(&ty.at(*item))).collect()).collect();
                 let dt = dt.map(|dt| self.import(&ty.at(dt)));
-                IrTy::Adt { n, v, vn, d, dt, e, fs }
+                IrTy::Adt { n, v, vn, d, dt, e, fs, g }
             }
             Some(IrTy::Ref(m, inner)) => IrTy::Ref(m, self.import(&ty.at(inner))),
             Some(IrTy::Seq { e, n, k }) => IrTy::Seq { e: self.import(&ty.at(e)), n, k },
@@ -541,7 +603,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                         None => {
                             let item = self.import(item);
                             let dt = self.add(IrTy::Int(64, true)).id;
-                            self.add(IrTy::Adt { n: text, v: vec![Vec::new(), vec![item]], vn: vec!["None".into(), "Some".into()], d: vec!["0".into(), "1".into()], dt: Some(dt), e: true, fs: vec![Vec::new(), vec!["0".into()]] })
+                            self.add(IrTy::Adt { n: text, v: vec![Vec::new(), vec![item]], vn: vec!["None".into(), "Some".into()], d: vec!["0".into(), "1".into()], dt: Some(dt), e: true, fs: vec![Vec::new(), vec!["0".into()]], g: true })
                         }
                     };
                     return Ok((found, ver));
@@ -553,7 +615,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                         None => {
                             let (ok, err) = (self.import(ok), self.import(err));
                             let dt = self.add(IrTy::Int(64, true)).id;
-                            self.add(IrTy::Adt { n: text, v: vec![vec![ok], vec![err]], vn: vec!["Ok".into(), "Err".into()], d: vec!["0".into(), "1".into()], dt: Some(dt), e: true, fs: vec![vec!["0".into()], vec!["0".into()]] })
+                            self.add(IrTy::Adt { n: text, v: vec![vec![ok], vec![err]], vn: vec!["Ok".into(), "Err".into()], d: vec!["0".into(), "1".into()], dt: Some(dt), e: true, fs: vec![vec!["0".into()], vec!["0".into()]], g: true })
                         }
                     };
                     return Ok((found, ver));
@@ -715,7 +777,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                     model = other;
                 }
                 None => {
-                    return Err(Fail::Claimed("the claim can fail for an input that depends on the result of a call or on a value that the check does not model (no exact input)".into()));
+                    return Err(Fail::Claimed(NO_EXACT.into()));
                 }
             }
         }
@@ -757,14 +819,29 @@ impl<'a, 'b> Eval<'a, 'b> {
             }
         }
         let (_, world, out) = &fails[index];
-        // The values of the calls on the failed path, with the inputs of the model.
+        // The values of the calls on the failed path, with the inputs of the model; and the
+        // values of their arguments for the run (R74.1-1).
         let mut wanted: Vec<(String, String)> = Vec::new();
+        let mut parts: Vec<V> = Vec::new();
         for (_, shown) in &world.shown {
             if let Shown::Value(value, _) = shown {
-                for (sort, term) in flatten(value) {
-                    if lit_bv(&term).is_none() && lit_bool(&term).is_none() && !wanted.iter().any(|(_, known)| *known == term.s) {
-                        wanted.push((sort, term.s));
-                    }
+                parts.push(value.clone());
+            }
+        }
+        for call in &world.runs {
+            for arg in &call.args {
+                parts.push(arg.v.clone());
+                if let V::Ptr(loc) = &arg.v
+                    && let Some(target) = world.slots.get(loc.slot)
+                {
+                    parts.push(target.clone());
+                }
+            }
+        }
+        for value in &parts {
+            for (sort, term) in flatten(value) {
+                if lit_bv(&term).is_none() && lit_bool(&term).is_none() && !wanted.iter().any(|(_, known)| *known == term.s) {
+                    wanted.push((sort, term.s));
                 }
             }
         }
@@ -824,7 +901,47 @@ impl<'a, 'b> Eval<'a, 'b> {
             Out::Abort(at) => format!("`{at}` aborts"),
         };
         let detail = if parts.is_empty() { head } else { format!("{head}: {}", parts.join("; ")) };
-        Ok(ClaimVerdict::False { input, detail })
+        let run = self.run_case(world, &values);
+        Ok(ClaimVerdict::False { input, detail, run })
+    }
+
+    /// [R74.1-1] The calls of a run that can confirm a false claim: each call of a version on
+    /// the failed path with its arguments of the model and the outcome of the model. No call:
+    /// no run (the claim is false by its own operations).
+    fn run_case(&self, world: &World, values: &BTreeMap<String, String>) -> Option<Box<semilla_core::run::RunCase>> {
+        use semilla_core::run::{ArgMode, RunArg, RunCall, RunCase, RunExit, RunOut, RunSide};
+        if world.runs.is_empty() {
+            return None;
+        }
+        let mut calls: Vec<RunCall> = Vec::new();
+        for call in &world.runs {
+            let args = call
+                .args
+                .iter()
+                .enumerate()
+                .map(|(at, arg)| {
+                    let (mode, expr) = match (&arg.v, arg.ty.get()) {
+                        (V::Ptr(loc), Some(IrTy::Ref(mutable, inner))) if loc.path.is_empty() => {
+                            let target = world.slots.get(loc.slot).ok_or_else(|| "a reference with no target".to_string());
+                            (if *mutable { ArgMode::Mut } else { ArgMode::Ref }, target.and_then(|target| rust_expr(target, Some(&arg.ty.at(*inner)), values)))
+                        }
+                        _ => (ArgMode::Value, rust_expr(&arg.v, Some(&arg.ty), values)),
+                    };
+                    RunArg { name: format!("argument {} of `{}::{}`", at + 1, call.version.prefix(), call.name), expr, mode }
+                })
+                .collect();
+            let exit = match &call.exit {
+                Exit::Return(value) => RunExit::Returns(debug_text(value, Some(&call.ret), values)),
+                Exit::Panic { kind, msg, .. } => RunExit::Panics(msg.clone().or_else(|| self.decls.kinds.get(kind).cloned())),
+                Exit::Abort | Exit::Cut => RunExit::Aborts,
+            };
+            let side = if call.version == Version::Before { RunSide::Before } else { RunSide::After };
+            let found = RunCall { side, name: call.name.clone(), target: String::new(), args, expect: RunOut { exit, muts: Vec::new() } };
+            if !calls.contains(&found) {
+                calls.push(found);
+            }
+        }
+        Some(Box::new(RunCase { calls, blind: None }))
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1720,6 +1837,14 @@ impl<'a, 'b> Eval<'a, 'b> {
     fn run_call(&mut self, world: World, version: Version, name: &str, form: Arc<Ir>, args: Vec<Val>, text: &str) -> Result<Branches, Fail> {
         self.reads.insert((version, name.to_string()));
         let ret = Ty { ir: form.clone(), id: form.l[0] };
+        if let Some((free, free_name, item)) = self.free.clone()
+            && free == version
+            && free_name == name
+            && !self.options.dry
+        {
+            let _ = item;
+            return self.free_call(world, version, &free_name, args, ret, text);
+        }
         if self.options.dry {
             let mut world = world;
             let symbol = format!("dry{}", self.fresh);
@@ -1747,6 +1872,7 @@ impl<'a, 'b> Eval<'a, 'b> {
             let mut next = world.clone();
             next.pc = vec![path.pc.clone()];
             next.effects.extend(path.effects.iter().cloned());
+            next.runs.push(CallRun { version, name: name.to_string(), args: args.clone(), exit: path.exit.clone(), ret: ret.clone() });
             match path.exit {
                 Exit::Return(value) => {
                     if refers_beyond(&value, world.slots.len()) {
@@ -1765,6 +1891,38 @@ impl<'a, 'b> Eval<'a, 'b> {
             }
         }
         Ok(out)
+    }
+
+    /// [R74.2-1] A call of a version of the item with a free result: it returns a value and has
+    /// one effect, each a free function of the inputs of the call (each argument and the value
+    /// behind each reference), other functions for each version. So two calls of one version
+    /// with equal inputs have one result, as a call of a claim starts in the world of the input.
+    fn free_call(&mut self, world: World, version: Version, name: &str, args: Vec<Val>, ret: Ty, text: &str) -> Result<Branches, Fail> {
+        // The inputs: each argument and each value behind a reference in it (as a call in the
+        // machine, so a direct call and a call in a callee have one behavior).
+        fn behind(world: &World, value: &V, out: &mut Vec<V>, depth: usize) {
+            match value {
+                V::Ptr(loc) if depth <= 4 => {
+                    if let Some(target) = read_loc(world, loc) {
+                        out.push(target.clone());
+                        behind(world, &target, out, depth + 1);
+                    }
+                }
+                V::Tup(items) => items.iter().for_each(|item| behind(world, item, out, depth)),
+                V::Enum { f, .. } => f.iter().flatten().for_each(|item| behind(world, item, out, depth)),
+                _ => {}
+            }
+        }
+        let mut deep: Vec<V> = args.iter().map(|arg| arg.v.clone()).collect();
+        for arg in &args {
+            behind(&world, &arg.v, &mut deep, 0);
+        }
+        let shown = if version == Version::Before { (self.old.rename)(name) } else { name.to_string() };
+        let parts = free_parts(&mut self.decls, version == Version::Before, name, &shown, &deep, &ret).map_err(|cause| Fail::Claimed(format!("`{text}` with a free result: {}", cause.0)))?;
+        let mut next = world;
+        next.effects.push(parts.effect);
+        next.shown.push((text.to_string(), Shown::Value(parts.value.clone(), ret.clone())));
+        Ok(vec![(next, Self::val(parts.value, ret, Some(version)))])
     }
 
     fn variant_call(&mut self, e: &Expr, ty: Ty, index: usize, ver: Option<Version>, args: &[Expr], world: World) -> Result<Branches, Fail> {
@@ -1808,7 +1966,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                     let text = format!("std::option::Option<{}>", ty_text(&value.ty));
                     let item = ev.import(&value.ty);
                     let dt = ev.add(IrTy::Int(64, true)).id;
-                    ev.add(IrTy::Adt { n: text, v: vec![Vec::new(), vec![item]], vn: vec!["None".into(), "Some".into()], d: vec!["0".into(), "1".into()], dt: Some(dt), e: true, fs: vec![Vec::new(), vec!["0".into()]] })
+                    ev.add(IrTy::Adt { n: text, v: vec![Vec::new(), vec![item]], vn: vec!["None".into(), "Some".into()], d: vec!["0".into(), "1".into()], dt: Some(dt), e: true, fs: vec![Vec::new(), vec!["0".into()]], g: true })
                 }
                 None => return Err(Fail::Claimed(format!("`{name}(…)` with no known type (`{}`): compare it with a value of a known type", e.text))),
             };

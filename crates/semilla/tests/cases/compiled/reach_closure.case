@@ -38,12 +38,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed operator `*x > 9` → `*x >= 9` at `shop::big/tail/args[0]/body` [semantics · code different]
       affected bodies: shop::big
       equivalence: `shop::big`: not decided: a raw pointer
-      equivalence: `shop::big::{closure#0} |x| *x >= 9`: different: for captures = &a closure, x = &9: before returns false, after returns true
+      equivalence: `shop::big::{closure#0} |x| *x >= 9`: different: for captures = &a closure, x = &9: before returns false, after returns true (not confirmed by a run: the body has no path that a call can name (a closure or a nested body))
       reaches: 2 public functions: shop::big, shop::report (semilla status --verbose)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
     shop::big (src/lib.rs:1): same graph (the edit keeps the control flow); not decided (a raw pointer); with its nested bodies: different in `shop::big::{closure#0}`
-    shop::big::{closure#0} |x| *x >= 9 (src/lib.rs:2): same graph (the edit keeps the control flow); different (for captures = &a closure, x = &9: before returns false, after returns true)
+    shop::big::{closure#0} |x| *x >= 9 (src/lib.rs:2): same graph (the edit keeps the control flow); different (for captures = &a closure, x = &9: before returns false, after returns true; not confirmed by a run: the body has no path that a call can name (a closure or a nested body))
     reached bodies: 2
       shop::big (src/lib.rs:1): reached through shop::big::{closure#0}, not decided (a raw pointer)
       shop::report (src/lib.rs:5): reached through shop::big, not decided (a raw pointer)
