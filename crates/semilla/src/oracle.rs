@@ -440,7 +440,7 @@ impl NormalOracle {
     }
 
     /// The cache folder of the records of a tree at a level and a configuration.
-    fn cache_folder(&self, tree: &str, level: &str, config: &Configuration) -> Result<(std::path::PathBuf, std::path::PathBuf, bool, String)> {
+    pub(crate) fn cache_folder(&self, tree: &str, level: &str, config: &Configuration) -> Result<(std::path::PathBuf, std::path::PathBuf, bool, String)> {
         let (root, marked) = self.root(tree)?;
         let base = root.join("build");
         let settings = semilla_normal::cargo::settings_key(&base, semilla_normal::cargo::find_driver().ok().as_deref());
@@ -504,7 +504,7 @@ impl NormalOracle {
 
     /// Makes the records of a tree at a level and a configuration, and reads them with `read`.
     /// A caller that needs only the build reads nothing (batch 5x, part F): the result is empty.
-    fn records_or_build(&self, tree: &str, level: &str, config: &Configuration, read: bool) -> Result<Vec<semilla_normal::BodyRecord>> {
+    pub(crate) fn records_or_build(&self, tree: &str, level: &str, config: &Configuration, read: bool) -> Result<Vec<semilla_normal::BodyRecord>> {
         // Design 62: the tree before a root commit is the empty tree. It has no body, so it has
         // no record, and no build runs.
         if crate::git::is_empty_tree(tree) {
@@ -565,6 +565,12 @@ impl NormalOracle {
         // the build decides the name: each hidden character becomes an escape.
         for file in &built.records {
             std::fs::copy(records.join(file), cache.join(file))?;
+        }
+        // [R78.1-2] The intent crate (design 78) compiles against the metadata of the N0 build.
+        // The build of the other tree in the same folder writes a file with the same name, so
+        // the metadata of each member goes into the cache.
+        if level == "n0" {
+            semilla_normal::intent::save_libraries(&cache, &built)?;
         }
         if !built.other.is_empty() {
             std::fs::write(cache.join(OTHER_FILES_FILE), built.other.iter().map(|name| format!("{}\n", semilla_core::text::inline(name).replace('`', "'"))).collect::<String>())?;

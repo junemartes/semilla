@@ -78,8 +78,8 @@ fn half(x: i32) -> bool {
 }
 
 #[same(shop::cart_len)]
-fn private_field(c: &after::shop::Cart) -> bool {
-    after::shop::cart_len(c) == c.len && before::shop::cart_len(c) == c.len
+fn private_field(b: &before::shop::Cart, a: &after::shop::Cart) -> bool {
+    b.len != a.len || before::shop::cart_len(b) == after::shop::cart_len(a)
 }
 
 #[same(shop::mode, cfg = "debug_assertions")]
@@ -181,6 +181,7 @@ fn templates(text: &str) -> Vec<String> {
 
 // rule+ R77.3-4
 // rule- R77.3-4
+// rule+ R78.1-5
 #[test]
 fn each_template_of_the_help_is_a_claim_that_intent_check_accepts() {
     let (_dir, repo) = setup();
@@ -196,8 +197,8 @@ fn each_template_of_the_help_is_a_claim_that_intent_check_accepts() {
     write(&repo, ".semilla/intent/step.rs", "intent!(\"Add an extra mode\");\n");
     let text = run(&repo, &["step", "extra mode", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
     let found = templates(&text);
-    assert!(found.iter().any(|template| template.starts_with("#[same(shop::Cart::total)] fn total(this: &before::shop::Cart, k: u32, extra: bool) -> bool")), "{text}");
-    assert!(found.iter().any(|template| template.contains("let old = before::shop::first(c); let new = after::shop::first(c); true")), "{text}");
+    assert!(found.iter().any(|template| template.starts_with("#[same(shop::Cart::total)] fn total(this_before: &before::shop::Cart, this_after: &after::shop::Cart, k: u32, extra: bool) -> bool")), "{text}");
+    assert!(found.iter().any(|template| template.contains("let old = before::shop::first(c_before); let new = after::shop::first(c_after); true")), "{text}");
     assert!(text.contains("intent help for `shop::apply`: no template: the type `&dyn Fn(u8) -> u8` of the parameter `f` has no form in a claim (`dyn …`)"), "{text}");
     // Each template, in place in the intent file, passes `semilla intent check`.
     for template in &found {
@@ -217,7 +218,7 @@ fn each_template_of_the_help_is_a_claim_that_intent_check_accepts() {
 #[test]
 fn a_false_claim_rejects_the_step_with_its_input() {
     let (_dir, repo) = setup();
-    let wrong = r#"
+    let wrong = r#"use semilla_intent::prelude::*;
 #[same(shop::parse)]
 fn parse_strict(x: u32) -> bool {
     after::shop::parse(x, true) == before::shop::parse(x)
@@ -251,13 +252,14 @@ fn half_loop(x: i32) -> bool {
 
 // rule+ R67.2-3
 // rule- R67.2-3
+// rule+ R78.3-1
 #[test]
 fn intent_check_gives_the_reference_errors_with_the_candidates() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/good.rs", INTENT);
     let text = run(&repo, &["intent", "check", ".semilla/intent/good.rs"], 0);
     assert!(text.contains("0 error(s)"), "{text}");
-    let bad = r#"
+    let bad = r#"use semilla_intent::prelude::*;
 #[same(shop::cart_len)]
 fn field(c: &after::shop::Cart) -> bool {
     c.items.len() == 0
@@ -278,14 +280,16 @@ fn one_version(b: &before::shop::Basket) -> bool {
 "#;
     write(&repo, ".semilla/intent/bad.rs", bad);
     let text = run(&repo, &["intent", "check", ".semilla/intent/bad.rs"], 1);
-    assert!(text.contains("`after::shop::Cart.items`: the new `shop::Cart` has no field `items`; its fields: `entries`, `len`"), "{text}");
-    assert!(text.contains("no version has a body `shop::pars`") && text.contains("`shop::parse`"), "{text}");
-    assert!(text.contains("`after::shop::parse` takes 2 argument(s); the claim gives 1"), "{text}");
-    assert!(text.contains("`before::shop::Basket`: the old version has no type `shop::Basket`"), "{text}");
+    // [R78.3-1] The errors of rustc, with their codes, the places of the file of the user, and
+    // the fields or the candidates.
+    assert!(text.contains("error[E0609]: no field `items` on type `&after::shop::Cart`") && text.contains(".semilla/intent/bad.rs:4:"), "{text}");
+    assert!(text.contains("error[S0112]: the scope path `before::shop::pars` names no item of the version") && text.contains("`before::shop::parse`"), "{text}");
+    assert!(text.contains("error[E0061]: this function takes 2 arguments but 1 argument was supplied"), "{text}");
+    assert!(text.contains("cannot find type `Basket` in crate `before::shop`"), "{text}");
     // A parse error names the place and what the parser expected.
-    write(&repo, ".semilla/intent/broken.rs", "#[same(shop::parse)]\nfn f( -> bool { true }\n");
+    write(&repo, ".semilla/intent/broken.rs", "use semilla_intent::prelude::*;\n#[same(shop::parse)]\nfn f( -> bool { true }\n");
     let text = run(&repo, &["intent", "check", ".semilla/intent/broken.rs"], 1);
-    assert!(text.contains(".semilla/intent/broken.rs:2:") && text.contains("expected"), "{text}");
+    assert!(text.contains(".semilla/intent/broken.rs:3:") && text.contains("unclosed delimiter"), "{text}");
 }
 
 // rule+ R67.5-2
@@ -377,13 +381,13 @@ fn a_false_form_of_same_or_a_change_claim_with_no_edit_rejects_the_step() {
 #[test]
 fn a_relation_before_a_claim_keeps_the_error_of_the_claim_in_the_step() {
     let (_dir, repo) = setup();
-    let text = "fn same_len(b: &before::shop::Cart, a: &after::shop::Cart) -> bool { b.len == a.len }\n\n#[same(shop::cart_len)]\nfn field(c: &after::shop::Cart) -> bool { c.items.len() == 0 }\n";
+    let text = "use semilla_intent::prelude::*;\nfn same_len(b: &before::shop::Cart, a: &after::shop::Cart) -> bool { b.len == a.len }\n\n#[same(shop::cart_len)]\nfn field(c: &after::shop::Cart) -> bool { c.items.len() == 0 }\n";
     write(&repo, ".semilla/intent/relation.rs", text);
     let check = run(&repo, &["intent", "check", ".semilla/intent/relation.rs"], 1);
-    assert!(check.contains("✗ i1 ") && check.contains("has no field `items`"), "{check}");
-    // The step finds the same error with the same id; it never shows "pending".
+    assert!(check.contains("error[E0609]: no field `items`"), "{check}");
+    // The step finds the same error at the claim; it never shows "pending".
     let step = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/relation.rs", "--compiled"], 1);
-    assert!(claim_line(&step, "i1").contains("error") && step.contains("has no field `items`") && !step.contains("pending"), "{step}");
+    assert!(claim_line(&step, "i1").contains("error") && claim_line(&step, "i1").contains("[E0609] no field `items`") && !step.contains("pending"), "{step}");
 }
 
 /// A repository of the crate `shop` with a method whose type of `self` changes a field.
@@ -410,8 +414,8 @@ fn the_help_names_the_changed_field_of_the_type_of_self() {
     assert!(!text.contains("`fn get (& self) -> u64` → `fn get (& self) -> u64`"), "{text}");
     // The result is "not decided": the help gives a template for each case, and the receiver
     // is a value of the old type.
-    assert!(text.contains("if the behavior does not change: `#[same(shop::Pt::get)] fn get(this: &before::shop::Pt)"), "{text}");
-    assert!(text.contains("if it changes: `#[change(shop::Pt::get, reason = \"…\")] fn get(this: &before::shop::Pt)"), "{text}");
+    assert!(text.contains("if the behavior does not change: `#[same(shop::Pt::get)] fn get(this_before: &before::shop::Pt, this_after: &after::shop::Pt)"), "{text}");
+    assert!(text.contains("if it changes: `#[change(shop::Pt::get, reason = \"…\")] fn get(this_before: &before::shop::Pt, this_after: &after::shop::Pt)"), "{text}");
 }
 
 // rule- R69.5-3
@@ -518,4 +522,64 @@ fn a_proved_claim_and_a_result_of_semilla_that_disagree_explain_nothing() {
     let section = semantic_section(&text);
     assert!(section.contains("✗ the result of Semilla and claim i1 disagree: a defect of Semilla: `shop::report` (src/lib.rs:6): Semilla: equivalent"), "{section}");
     assert!(section.contains("0 explained by claims, 0 equivalent (Semilla), 5 not explained, 1 with a disagreement"), "{section}");
+}
+
+// rule+ R78.3-6
+// rule- R78.3-6
+#[test]
+fn a_warm_check_of_the_same_trees_reads_only_the_prepared_facades() {
+    let (_dir, repo) = setup();
+    write(&repo, ".semilla/intent/good.rs", INTENT);
+    let first = run(&repo, &["intent", "check", ".semilla/intent/good.rs"], 0);
+    assert!(first.contains("cold: the facades of the two trees"), "{first}");
+    // The warm check needs no record of a tree: remove each record folder of the cache.
+    let cache = repo.parent().unwrap().join("cache");
+    let mut stack = vec![cache.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name == "mir") {
+                    std::fs::remove_dir_all(&path).unwrap();
+                } else {
+                    stack.push(path);
+                }
+            }
+        }
+    }
+    let warm = run(&repo, &["intent", "check", ".semilla/intent/good.rs"], 0);
+    assert!(warm.contains("0 error(s) of rustc") && !warm.contains("cold") && !warm.contains("the builds of the two trees"), "{warm}");
+    // Another tree after: no prepared pair, so the check builds the trees.
+    write(&repo, "src/lib.rs", &format!("{NEW}pub fn extra() -> u32 {{ 3 }}\n"));
+    let other = run(&repo, &["intent", "check", ".semilla/intent/good.rs"], 0);
+    assert!(other.contains("cold: the facades of the two trees") && other.contains("the builds of the two trees"), "{other}");
+}
+
+// rule+ R78.4-9
+// rule- R78.4-9
+#[test]
+fn a_proved_claim_mir_explains_its_body_on_the_coverage_line_and_a_vacuous_one_explains_nothing() {
+    let (_dir, repo) = setup();
+    // No `use` line: each file has the prelude (R78.1-4).
+    let intent = "#[change(shop::limit)]\nfn limit_panics(x: u32) -> bool {\n    panics(|| before::shop::limit(x)) == panics(|| after::shop::limit(x))\n}\n\n#[change(shop::half)]\nfn half_any(x: i32) -> bool {\n    let _ = before::shop::half(x);\n    let _ = after::shop::half(x);\n    true\n}\n";
+    write(&repo, ".semilla/intent/step.rs", intent);
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    let proved = claim_line(&text, "i1");
+    assert!(proved.contains("proved") && proved.contains("(the claim MIR of rustc)"), "{text}");
+    let section = semantic_section(&text);
+    assert!(section.contains("✓ changes: i1 `#[change(shop::limit)] fn limit_panics(x: u32)` (explains `shop::limit`)"), "{section}");
+    // The vacuous claim is true for any result of `shop::half`: no proof, so no body.
+    let vacuous = claim_line(&text, "i2");
+    assert!(vacuous.contains("claimed") && vacuous.contains("true for any result of `before::shop::half`"), "{text}");
+    assert!(!section.contains("explains `shop::half`") && section.contains("not explained: `shop::half` (src/lib.rs:4)"), "{section}");
+    // An error on line 1 has the place of the file of the user.
+    write(&repo, ".semilla/intent/bad.rs", "#[same(shop::report)] fn bad(x: u32) -> u8 { before::shop::report(x) }\n");
+    let text = run(&repo, &["intent", "check", ".semilla/intent/bad.rs"], 1);
+    assert!(text.contains(".semilla/intent/bad.rs:1:46") && text.contains("1 | #[same(shop::report)] fn bad"), "{text}");
+    assert!(!text.contains("semilla_intent::prelude"), "{text}");
+    // A file that starts with an inner attribute has the prelude too (the import at its end).
+    std::fs::remove_file(repo.join(".semilla/intent/bad.rs")).unwrap();
+    write(&repo, ".semilla/intent/inner.rs", "#![allow(dead_code)]\n#[same(shop::report)]\nfn report_inner() {}\n");
+    let text = run(&repo, &["intent", "check", ".semilla/intent/inner.rs", "--json"], 0);
+    assert!(!text.contains("\"level\": \"error\""), "{text}");
 }

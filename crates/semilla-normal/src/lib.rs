@@ -18,6 +18,7 @@
 //! compares the raw text.
 
 pub mod cargo;
+pub mod intent;
 pub mod elements;
 pub mod graph;
 pub mod hash;
@@ -306,6 +307,9 @@ pub struct UnitRecord {
     /// The target triple.
     #[serde(default)]
     pub triple: String,
+    /// The identity of the crate (`StableCrateId`, 16 hex digits; design 78.1).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub identity: String,
     /// The definitions of the crate and the symbols that each one names (design 44). At n0
     /// only.
     #[serde(default, skip_serializing_if = "Option::is_none")]

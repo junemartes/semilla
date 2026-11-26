@@ -12,6 +12,7 @@
 //! This crate has no compiler data. The references of a claim resolve against the compiler
 //! data of each version in `semilla-smt` (`mir::claim`), after the build check of the step.
 
+pub mod heads;
 pub mod parse;
 pub mod prelude;
 
@@ -416,7 +417,9 @@ pub fn candidates(wanted: &str, names: &[String], most: usize) -> Vec<String> {
     if found.is_empty() {
         let mut scored: Vec<(usize, &String)> = names.iter().map(|name| (distance(name.rsplit("::").next().unwrap_or(name), last), name)).filter(|(score, _)| *score <= last.len().max(3) / 2 + 1).collect();
         scored.sort();
-        found = scored.into_iter().map(|(_, name)| name.clone()).collect();
+        // The nearest names first: the list keeps the `most` nearest ones.
+        scored.dedup_by(|a, b| a.1 == b.1);
+        found = scored.into_iter().take(most).map(|(_, name)| name.clone()).collect();
     }
     found.sort();
     found.dedup();
@@ -425,6 +428,11 @@ pub fn candidates(wanted: &str, names: &[String], most: usize) -> Vec<String> {
 }
 
 /// The edit distance of two texts (Levenshtein, by characters).
+/// The edit distance of two names (for the candidates of an error).
+pub fn distance_of(a: &str, b: &str) -> usize {
+    distance(a, b)
+}
+
 fn distance(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let mut row: Vec<usize> = (0..=b.len()).collect();

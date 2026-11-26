@@ -99,6 +99,42 @@ impl NormalOracle {
         // The walk of the equivalence check (design 61.10): the bodies that each check must
         // inline. A dry check needs no walk.
         let walks = if dry || queries.is_empty() { None } else { self.reach_all(step, renames, super::reach::WALK_STEPS.min(super::equiv_steps())) };
+        // [R78.3-1] The intent crate: rustc compiles the files against the builds of the two
+        // trees. An error of rustc or of Semilla is an error of each claim of its file, so such a
+        // claim is never checked.
+        let sources: Vec<semilla_normal::intent::Source> = step.agent.intent.iter().map(|file| semilla_normal::intent::Source { path: file.path.clone(), text: file.text.clone() }).collect();
+        let mir = if dry || sources.is_empty() {
+            None
+        } else {
+            match crate::intentcrate::check(self, &step.tree_before, &step.tree_after, &sources) {
+                Ok(check) => Some(check),
+                Err(error) => {
+                    let text = format!("the intent crate does not compile: {error:#}");
+                    return Some(queries.iter().map(|_| Answer { result: Some(IntentResult::Error), errors: vec![text.clone()], ..Default::default() }).collect());
+                }
+            }
+        };
+        if let Some(check) = &mir {
+            let mut errors: Vec<(Option<String>, String)> = check.compiled.diagnostics.iter().filter(|d| d.level == "error").map(|d| (d.file.clone(), format!("{}:{}:{}: {}{}", d.file.as_deref().unwrap_or("the intent crate"), d.line, d.column, d.code.as_ref().map(|code| format!("[{code}] ")).unwrap_or_default(), d.message))).collect();
+            errors.extend(check.findings.iter().filter(|f| f.error).map(|f| (Some(f.file.clone()), format!("{}:{}:{}: [{}] {}", f.file, f.line, f.column, f.code, f.message))));
+            if !errors.is_empty() {
+                // Each error goes to the claim whose function has its line (the last claim that
+                // starts at or before it); each other claim gets the place of the first error.
+                let line_of = |text: &str| text.split(':').nth(1).and_then(|line| line.parse::<usize>().ok()).unwrap_or(0);
+                let start = |query: &Query| query.claim.place.line.min(query.claim.func.place.line);
+                return Some(
+                    queries
+                        .iter()
+                        .map(|query| {
+                            let next = queries.iter().filter(|other| other.file.path == query.file.path && start(other) > start(query)).map(start).min().unwrap_or(usize::MAX);
+                            let own: Vec<String> = errors.iter().filter(|(file, text)| file.as_deref().is_none_or(|file| file == query.file.path && (start(query)..next).contains(&line_of(text)))).map(|(_, text)| text.clone()).collect();
+                            let own = if own.is_empty() { vec![format!("not checked: the intent crate has an error at {} (rustc checks each claim of the crate together)", errors[0].1.split(": ").next().unwrap_or(""))] } else { own };
+                            Answer { result: Some(IntentResult::Error), errors: own, ..Default::default() }
+                        })
+                        .collect(),
+                );
+            }
+        }
         let mut answers = Vec::new();
         for query in queries {
             let mut results: Vec<(String, One)> = Vec::new();
@@ -125,7 +161,7 @@ impl NormalOracle {
                 let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
                 let new = EquivSide::new(sides.after.get("n0").unwrap_or(&empty));
                 let walk = walks.as_ref().and_then(|walks| walks.iter().find(|(name, _)| *name == config.name()).map(|(_, walk)| walk.clone()));
-                let one = self.claim_in(&solver, query, &old, &new, &pairs, walk.as_ref(), dry, (step, &config.name()));
+                let one = self.claim_in(&solver, query, &old, &new, &pairs, walk.as_ref(), dry, (step, &config.name()), mir.as_ref().map(|check| (&check.compiled, sources.as_slice())));
                 results.push((config.name(), one));
             }
             answers.push(join(results, skipped, query));
@@ -135,7 +171,7 @@ impl NormalOracle {
 
     /// The check of one claim in one configuration.
     #[allow(clippy::too_many_arguments)]
-    fn claim_in(&self, solver: &semilla_smt::Solver, query: &Query, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], walk: Option<&super::reach::ConfigReach>, dry: bool, (change, config): (&Step, &str)) -> One {
+    fn claim_in(&self, solver: &semilla_smt::Solver, query: &Query, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], walk: Option<&super::reach::ConfigReach>, dry: bool, (change, config): (&Step, &str), mir: Option<(&semilla_normal::intent::Compiled, &[semilla_normal::intent::Source])>) -> One {
         let claim = &query.claim;
         // [R67.2-4] The names of the bodies, one for each source body: two names of one source
         // body (the same place and plain form, for example an impl of `core::iter::Iterator` and of
@@ -183,6 +219,16 @@ impl NormalOracle {
         let (old_item, new_item) = match (loose(old, &old_names, old_item), loose(new, &new_names, new_item)) {
             (Ok(a), Ok(b)) => (a, b),
             (Err(error), _) | (_, Err(error)) => return One { result: IntentResult::Error, detail: String::new(), reads: Vec::new(), errors: vec![error], depends: Vec::new(), items: Vec::new() },
+        };
+        // [R78.1-3] The definition that rustc resolved for the scope path (also through a
+        // re-export or a method of a type): its record name in each tree.
+        let (old_item, new_item) = match mir {
+            Some((compiled, _)) => {
+                let key = item.name();
+                let resolved = |prefix: &str| compiled.links.iter().find(|link| link.path == format!("{prefix}{key}")).and_then(|link| link.resolved.as_ref()).and_then(|name| name.strip_prefix(prefix)).map(str::to_string);
+                (resolved("before::").unwrap_or(old_item), resolved("after::").unwrap_or(new_item))
+            }
+            None => (old_item, new_item),
         };
         let in_old = old.records.contains_key(old_item.as_str());
         let in_new = new.records.contains_key(new_item.as_str());
@@ -234,6 +280,17 @@ impl NormalOracle {
             let depends = if result == IntentResult::Proved { vec![format!("before::{old_item}"), format!("after::{new_item}")] } else { Vec::new() };
             return One { result, detail, reads, errors: Vec::new(), depends, items };
         }
+        // [R78.4-4] A property claim: the engine checks the claim MIR of rustc.
+        let mir_one = mir.map(|(compiled, sources)| self.claim_mir(solver, query, compiled, sources, old, new, (&old_item, &new_item), &changed, &hash_of, &items));
+        // [R74.1-5] A false claim MIR has no run of its own yet: when the parser of 10r1 reads the
+        // claim, its model runs too, and a false result of that model (an exact input too) gives
+        // the line with its run. Each other result of the claim MIR stays.
+        let parsed = claim.func.body.as_ref().is_some_and(|body| !matches!(&body.kind, semilla_intent::ExprKind::Other(kind) if kind.starts_with("a body that rustc checks")));
+        if let Some(one) = &mir_one
+            && (one.result != IntentResult::False || !parsed)
+        {
+            return mir_one.unwrap_or_else(|| unreachable!());
+        }
         // A property claim (R67.3-1).
         let mut calls = Vec::new();
         if let Some(body) = &claim.func.body {
@@ -281,13 +338,75 @@ impl NormalOracle {
             ClaimVerdict::Claimed { cause } => (IntentResult::Claimed, cause),
         };
         let depends = if result == IntentResult::Proved { checked.depends.iter().map(|(version, name)| format!("{}::{name}", version.prefix())).collect() } else { Vec::new() };
-        One { result, detail, reads, errors, depends, items }
+        let found = One { result, detail, reads, errors, depends, items };
+        match mir_one {
+            Some(mir) if found.result != IntentResult::False || !found.errors.is_empty() => mir,
+            _ => found,
+        }
     }
 }
 
 /// The answer of a claim from the results of each configuration (R67.3-10): a false result
 /// in one configuration makes the claim false; the claim is proved only if each checked
 /// configuration proves it.
+impl NormalOracle {
+    /// [R78.4-4] The check of one property claim as the MIR of rustc (design 78, part D).
+    #[allow(clippy::too_many_arguments)]
+    fn claim_mir(&self, solver: &semilla_smt::Solver, query: &Query, compiled: &semilla_normal::intent::Compiled, sources: &[semilla_normal::intent::Source], old: &EquivSide, new: &EquivSide, (old_item, new_item): (&str, &str), changed: &BTreeSet<String>, hash_of: &dyn Fn(Version, &str) -> Option<String>, items: &[String]) -> One {
+        let claim = &query.claim;
+        let module = sources.iter().position(|source| source.path == query.file.path).and_then(|index| compiled.modules.get(index));
+        let find = |name: &str| compiled.records.iter().find(|record| record.name == name && record.q.is_some()).and_then(record_form);
+        let Some(ir) = module.and_then(|module| find(&format!("{}::{module}::{}", semilla_normal::intent::CLAIMS_CRATE, claim.func.name))) else {
+            return One { result: IntentResult::Claimed, detail: format!("the intent crate has no form of `fn {}`", claim.func.name), reads: Vec::new(), errors: Vec::new(), depends: Vec::new(), items: items.to_vec() };
+        };
+        // The bodies of each tree that the claim calls: their small callees of the standard
+        // library and their instances.
+        // [R78.4-6] The calls of the claim and of its own bodies (its closures).
+        let claim_name = format!("{}::{}::{}", semilla_normal::intent::CLAIMS_CRATE, module.cloned().unwrap_or_default(), claim.func.name);
+        let own_forms: Vec<std::sync::Arc<semilla_smt::mir::Ir>> = compiled.records.iter().filter(|record| record.name.starts_with(&format!("{claim_name}::{{"))).filter_map(record_form).chain(std::iter::once(ir.clone())).collect();
+        let mut calls: [Vec<String>; 2] = [Vec::new(), Vec::new()];
+        for form in &own_forms {
+            for block in &form.b {
+                if let semilla_smt::mir::IrTermKind::Call(callee, ..) = &block.t.k
+                    && let Some(name) = &callee.w
+                {
+                    if let Some(rest) = name.strip_prefix("before::") {
+                        calls[0].push(rest.to_string());
+                    } else if let Some(rest) = name.strip_prefix("after::") {
+                        calls[1].push(rest.to_string());
+                    }
+                }
+            }
+        }
+        let (std_a, std_b) = (reached_std(old, &calls[0]), reached_std(new, &calls[1]));
+        let workspace_a = |name: &str| old.find(name, "", "").and_then(record_form);
+        let workspace_b = |name: &str| new.find(name, "", "").and_then(record_form);
+        let own = |name: &str| find(name);
+        let is_changed = |name: &str| changed.contains(name);
+        let version_a = semilla_smt::mir::property::Version { workspace: &workspace_a, std: &std_a, changed: &is_changed };
+        let version_b = semilla_smt::mir::property::Version { workspace: &workspace_b, std: &std_b, changed: &is_changed };
+        let own_std = std_forms(&compiled.records.iter().collect::<Vec<_>>());
+        let property = semilla_smt::mir::property::Property { ir, own: &own, std: &own_std, item: (old.records.contains_key(old_item).then(|| old_item.to_string()), new.records.contains_key(new_item).then(|| new_item.to_string())) };
+        // [R67.3-7] `except = [panic_message]`: two panics of one kind are the same panic.
+        let check = || semilla_smt::mir::property::check_property(solver, &property, &version_a, &version_b, Some(claim_budget()));
+        let checked = if claim.options.except.iter().any(|name| name == "panic_message") { semilla_smt::mir::claim::with_panic_messages_ignored(check) } else { check() };
+        let reads: Vec<String> = checked.reads.iter().filter_map(|read| match read.split_once("::") {
+            Some(("before", name)) => hash_of(Version::Before, name),
+            Some(("after", name)) => hash_of(Version::After, name),
+            _ => None,
+        }).collect();
+        use semilla_smt::mir::claim::ClaimVerdict;
+        let (result, detail) = match checked.verdict {
+            ClaimVerdict::Proved { method } => (IntentResult::Proved, format!("by {method} (the claim MIR of rustc)")),
+            ClaimVerdict::False { input, detail, .. } => (IntentResult::False, format!("for {input}: {detail}")),
+            ClaimVerdict::Claimed { cause } => (IntentResult::Claimed, cause),
+        };
+        // [R78.4-9] A proved claim MIR explains each body of its dependence set (R77.1-1).
+        let depends = if result == IntentResult::Proved { checked.depends.clone() } else { Vec::new() };
+        One { result, detail, reads, errors: Vec::new(), depends, items: items.to_vec() }
+    }
+}
+
 fn join(results: Vec<(String, One)>, skipped: Vec<String>, query: &Query) -> Answer {
     let mut reads: Vec<String> = results.iter().flat_map(|(_, one)| one.reads.iter().cloned()).collect();
     reads.sort();

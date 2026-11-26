@@ -20,6 +20,7 @@ mod background;
 mod buildcheck;
 mod buildcode;
 mod git;
+mod intentcrate;
 mod mcp;
 mod onestep;
 mod oracle;
@@ -427,17 +428,26 @@ enum Command {
 
 #[derive(Subcommand)]
 enum IntentAction {
-    /// Parse each intent file, then resolve each reference of each claim against the compiler
-    /// data of the two trees, and check the types. The default files: each `.rs` file of
+    /// Compile the intent files with rustc against the two versions (design 78): the errors of
+    /// rustc (with their codes, the caret, and the suggestions), then the errors of Semilla for
+    /// the meaning of the attributes. The default files: each `.rs` file of
     /// `.semilla/intent/`. The default step: the working tree against `HEAD`. The command
-    /// builds the compiled records only if the cache has no record of the two trees. It runs
-    /// no claim check: `semilla step --intent FILE --compiled` gives the results.
+    /// builds the two trees only if the cache has no build of them. It runs no claim check:
+    /// `semilla step --intent FILE --compiled` gives the results.
     Check {
         /// The intent files.
         files: Vec<PathBuf>,
         /// A stored step of the session.
         #[arg(long)]
         step: Option<usize>,
+        /// The same data as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// The long text of a code: a code of Semilla (`S0107`) or of rustc (`E0425`).
+    Explain {
+        /// The code.
+        code: String,
     },
 }
 
@@ -872,8 +882,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         },
         Command::Index => println!("{}", app.index()?),
-        Command::Intent { action: IntentAction::Check { files, step } } => {
-            let (text, clean) = app.intent_check(&files, step)?;
+        Command::Intent { action: IntentAction::Explain { code } } => {
+            print!("{}", app::intent_explain(&code)?);
+        }
+        Command::Intent { action: IntentAction::Check { files, step, json } } => {
+            let (text, clean) = app.intent_check(&files, step, json)?;
             print!("{text}");
             if !clean {
                 return Ok(ExitCode::from(1));

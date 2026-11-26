@@ -757,6 +757,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "semilla-intent-macros"
+version = "0.1.0"
+
+[[package]]
+name = "semilla-intent-prelude"
+version = "0.1.0"
+dependencies = [
+ "semilla-intent-macros",
+]
+
+[[package]]
 name = "semilla-mir"
 version = "0.1.0"
 dependencies = [

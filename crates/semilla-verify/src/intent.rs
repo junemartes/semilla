@@ -72,10 +72,23 @@ pub fn parse_files(files: &[IntentFile]) -> Result<Vec<semilla_intent::File>, Ve
     for file in files {
         match semilla_intent::parse_file(&file.path, &file.text) {
             Ok(found) => parsed.push(found),
+            // [R78.3-5] A file in a form of the compiled language: its claims come from the
+            // heads, and rustc checks it in the step (design 78). A file that the Rust parser
+            // cannot read keeps its errors.
+            Err(found) if ra_parse_clean(&file.text) => {
+                let _ = found;
+                parsed.push(semilla_intent::heads::as_file(&file.path, &file.text));
+            }
             Err(mut found) => errors.append(&mut found),
         }
     }
     if errors.is_empty() { Ok(parsed) } else { Err(errors) }
+}
+
+/// True if the Rust parser reads the file with no error, and no head has an error of Semilla.
+fn ra_parse_clean(text: &str) -> bool {
+    let (_, findings) = semilla_intent::heads::check("f.rs", text);
+    semilla_intent::parse::rust_parses(text) && findings.iter().all(|finding| !finding.error)
 }
 
 /// The text of the `--same` fact of a claim of the forms of `--same` (R67.4-1).
@@ -344,7 +357,9 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
                             line(claim.kind.name(), claim.text(), &claim.place, result, detail, options);
                         }
                         ClaimKind::Later => {
-                            let batch = semilla_intent::prelude::CLAIMS.iter().find(|(name, _)| *name == claim.attribute).map(|(_, batch)| *batch).unwrap_or("later");
+                            // [R78.3-5] The batch of draft 3 of the language (the heads), else of 10r1.
+                            let wide = claim.attribute.ends_with(" of a wide scope").then_some("13b");
+                            let batch = wide.or_else(|| semilla_intent::heads::KINDS.iter().find(|kind| kind.name == claim.attribute).and_then(|kind| kind.later)).or_else(|| semilla_intent::prelude::CLAIMS.iter().find(|(name, _)| *name == claim.attribute).map(|(_, batch)| *batch)).unwrap_or("later");
                             line(&claim.attribute, claim.text(), &claim.place, IntentResult::Claimed, format!("the check of `#[{}]` comes in batch {batch}", claim.attribute), options);
                         }
                         ClaimKind::Same | ClaimKind::Change | ClaimKind::Different => {

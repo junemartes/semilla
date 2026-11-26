@@ -381,6 +381,22 @@ fn later_claims(set: &ChangeSet, all: &[Step], bodies: &dyn semilla_verify::Body
 }
 
 /// The stored reads of the intent claims of a report (design 67, part D): `ID PATH HASH`.
+/// [R78.3-4] `semilla intent explain CODE`: the long text of a code of Semilla, or the text of
+/// rustc for a code of rustc.
+pub(crate) fn intent_explain(code: &str) -> Result<String> {
+    if let Some(text) = semilla_intent::heads::explain(code) {
+        return Ok(text);
+    }
+    let root = semilla_normal::cargo::toolchain_root()?;
+    let mut command = std::process::Command::new(root.join("bin/rustc"));
+    semilla_normal::cargo::build_environment(&mut command, &root, None);
+    let output = command.arg("--explain").arg(code).output().context("cannot start rustc")?;
+    if !output.status.success() {
+        bail!("`{code}` is not a code of Semilla ({}) or of rustc", semilla_intent::heads::CODES.iter().map(|row| row.code).collect::<Vec<_>>().join(", "));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 pub(crate) fn intent_reads(step: &semilla_core::report::StepReport) -> Vec<String> {
     step.intent_claims.iter().flat_map(|claim| claim.reads.iter().map(move |read| format!("{} {read}", claim.id))).collect()
 }
@@ -1923,10 +1939,10 @@ impl App {
         Ok(files)
     }
 
-    /// `semilla intent check [FILE]` (design 67, part B): the parse errors, then the reference
-    /// errors and the type errors of each claim against the compiler data of the two trees.
-    /// The result is true if no file has an error.
-    pub fn intent_check(&mut self, paths: &[std::path::PathBuf], step: Option<usize>) -> Result<(String, bool)> {
+    /// [R78.3-1] `semilla intent check [FILE]` (design 78, part C): rustc compiles the intent
+    /// files against the two versions, then Semilla checks the meaning of each attribute. The
+    /// result is true if no file has an error.
+    pub fn intent_check(&mut self, paths: &[std::path::PathBuf], step: Option<usize>, json: bool) -> Result<(String, bool)> {
         let mut paths = paths.to_vec();
         if paths.is_empty() {
             let folder = self.repo.root.join(".semilla/intent");
@@ -1938,17 +1954,6 @@ impl App {
             paths = found;
         }
         let files = self.read_intent_files(&paths)?;
-        let mut text = String::new();
-        let parsed = match semilla_verify::intent::parse_files(&files) {
-            Ok(parsed) => parsed,
-            Err(errors) => {
-                for error in &errors {
-                    put_line(&mut text, &format!("✗ {error}"));
-                }
-                put_line(&mut text, &format!("{} parse error(s); Semilla did not check the references", errors.len()));
-                return Ok((text, false));
-            }
-        };
         let (before, after) = match step {
             Some(index) => {
                 let set = self.current_changeset()?;
@@ -1957,38 +1962,57 @@ impl App {
             }
             None => (self.repo.commit_tree("HEAD")?, self.repo.write_tree()?),
         };
-        let step = Step { index: 0, intent: "intent check".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons: Default::default(), compiled: true, build_check: None, agent: Default::default(), tags: Vec::new() };
-        let set = ChangeSet { base_tree: before.clone(), head_tree: after.clone(), steps: vec![step.clone()], ..Default::default() };
-        let code = self.build_code(&set)?;
-        self.set_compiled(true);
-        let oracle = NormalOracle { repo: self.repo.clone(), code, mode: self.mode, log: self.config_log.clone(), added: Default::default(), after_commit: false };
-        let queries = semilla_verify::intent::queries(&parsed, true);
-        let answers = semilla_verify::BodyOracle::intent(&oracle, &step, &BTreeMap::new(), &queries).context("the compiled build of the two trees gives no records")?;
-        let mut errors = 0;
-        for (query, answer) in queries.iter().zip(&answers) {
-            if answer.errors.is_empty() {
-                let mut paths: Vec<String> = answer.reads.iter().map(|read| format!("`{}`", read.rsplit_once(' ').map(|(path, _)| path).unwrap_or(read))).collect();
-                paths.dedup();
-                let reads = if paths.is_empty() { String::new() } else { format!(" (reads {})", paths.join(", ")) };
-                let outside = match (&answer.result, answer.detail.as_str()) {
-                    (Some(semilla_core::IntentResult::Claimed), detail) if detail != semilla_smt::mir::claim::DRY_CAUSE => format!("; outside the model: {detail}"),
-                    _ => String::new(),
-                };
-                put_line(&mut text, &format!("✓ {} `{}` ({}:{}): the references and the types are correct{reads}{outside}", query.id, query.claim.text(), query.claim.place.file, query.claim.place.line));
-            } else {
-                errors += answer.errors.len();
-                put_line(&mut text, &format!("✗ {} `{}` ({}:{}):", query.id, query.claim.text(), query.claim.place.file, query.claim.place.line));
-                for error in &answer.errors {
-                    put_line(&mut text, &format!("    {error}"));
-                }
+        let sources: Vec<semilla_normal::intent::Source> = files.iter().map(|file| semilla_normal::intent::Source { path: file.path.clone(), text: file.text.clone() }).collect();
+        // [R78.3-6] A warm check: the facades of the same two trees, no build code test.
+        let check = match crate::intentcrate::check_fast(&self.repo.cache_dir(), &self.repo.root, &before, &after, &sources)? {
+            Some(check) => check,
+            None => {
+                let step = Step { index: 0, intent: "intent check".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons: Default::default(), compiled: true, build_check: None, agent: Default::default(), tags: Vec::new() };
+                let set = ChangeSet { base_tree: before.clone(), head_tree: after.clone(), steps: vec![step], ..Default::default() };
+                let code = self.build_code(&set)?;
+                self.set_compiled(true);
+                let oracle = NormalOracle { repo: self.repo.clone(), code, mode: self.mode, log: self.config_log.clone(), added: Default::default(), after_commit: false };
+                crate::intentcrate::check(&oracle, &before, &after, &sources)?
             }
+        };
+        let (rustc_errors, semilla_errors) = check.errors();
+        let clean = rustc_errors == 0 && semilla_errors == 0;
+        let claims: usize = check.heads.iter().map(|(_, heads)| heads.len()).sum();
+        let later = check.findings.iter().filter(|finding| !finding.error).count();
+        if json {
+            let value = serde_json::json!({
+                "ok": clean,
+                "trees": {"before": before, "after": after},
+                "files": files.iter().map(|file| &file.path).collect::<Vec<_>>(),
+                "rustc": check.compiled.diagnostics,
+                "semilla": check.findings,
+                "claims": check.heads.iter().map(|(file, heads)| serde_json::json!({"file": file, "heads": heads})).collect::<Vec<_>>(),
+                "cold": check.cold,
+                "millis": {"build": check.build.as_millis() as u64, "check": check.took.as_millis() as u64, "second_build": check.second.map(|(time, _)| time.as_millis() as u64)},
+            });
+            return Ok((format!("{}\n", serde_json::to_string_pretty(&value)?), clean));
         }
-        let forms: usize = parsed.iter().map(|file| file.claims().filter(|claim| semilla_verify::intent::same_text(claim).is_some()).count()).sum();
-        if forms > 0 {
-            put_line(&mut text, &format!("{forms} claim(s) of the forms of `--same` (`rename`, `moved`, `rewrite`): `semilla step` checks them against the syntax tree"));
+        let mut text = String::new();
+        // The text of rustc as it is (more than one line for each message).
+        for diagnostic in &check.compiled.diagnostics {
+            text.push_str(&format!("{}\n\n", diagnostic.rendered));
         }
-        put_line(&mut text, &format!("{} claim(s) checked against the trees {} (before) and {} (after): {errors} error(s). The step gives the results: `semilla step \"<intent>\" --intent FILE --compiled`", queries.len(), &before[..before.len().min(12)], &after[..after.len().min(12)]));
-        Ok((text, errors == 0))
+        for finding in &check.findings {
+            let source = files.iter().find(|file| file.path == finding.file).map(|file| file.text.as_str()).unwrap_or("");
+            text.push_str(&format!("{}\n", crate::intentcrate::render_finding(finding, source)));
+        }
+        let mark = if clean { "✓" } else { "✗" };
+        let cold = if check.cold { "; cold: the facades of the two trees" } else { "" };
+        let build = if check.build.is_zero() { String::new() } else { format!("; the builds of the two trees {:.1} s", check.build.as_secs_f64()) };
+        let second = match check.second {
+            Some((time, true)) => format!("; the second build of the old tree {:.1} s", time.as_secs_f64()),
+            Some((time, false)) => format!("; the second build of the old tree from the cache {:.2} s", time.as_secs_f64()),
+            None => String::new(),
+        };
+        let build = format!("{build}{second}");
+        let not_yet = if later > 0 { format!("; {later} line(s) that the model cannot check yet") } else { String::new() };
+        put_line(&mut text, &format!("{mark} {claims} claim(s) in {} file(s) against the trees {} (before) and {} (after): {rustc_errors} error(s) of rustc, {semilla_errors} error(s) of Semilla{not_yet}. The check took {:.2} s{cold}{build}. The step gives the results: `semilla step \"<intent>\" --intent FILE --compiled`", files.len(), &before[..before.len().min(12)], &after[..after.len().min(12)], check.took.as_secs_f64()));
+        Ok((text, clean))
     }
 
     pub fn index(&mut self) -> Result<String> {
