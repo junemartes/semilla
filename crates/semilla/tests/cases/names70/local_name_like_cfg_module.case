@@ -64,7 +64,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: not decided alone: the variant with only this edit does not compile; the body: different: for b = 1: before returns 2, after returns 3 (confirmed by a run)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    shop::width (src/lib.rs:12): graph changes: +1 check, +1 panic, 1 changed check, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for b = 1: before returns 2, after returns 3; confirmed by a run)
+    shop::width (src/lib.rs:12): graph changes: +1 check, +1 panic, 1 changed check, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for b = 1: before returns 2, after returns 3; confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

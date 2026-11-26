@@ -92,7 +92,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: different: for n = 0: before returns 1, after returns 2 (not confirmed by a run: the compiler does not accept the call in the probe (E0425: cannot find type `Id` in this scope))
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    store::DataContainer::<Id, D, S>::next (src/lib.rs:30): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for n = 0: before returns 1, after returns 2; not confirmed by a run: the compiler does not accept the call in the probe (E0425: cannot find type `Id` in this scope))
+    store::DataContainer::<Id, D, S>::next (src/lib.rs:30): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for n = 0: before returns 1, after returns 2; not confirmed by a run: the compiler does not accept the call in the probe (E0425: cannot find type `Id` in this scope))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

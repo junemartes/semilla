@@ -61,7 +61,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different]
       affected bodies: shop::<Food as Tax>::rate
       equivalence: different: for self = &Food: before returns 5, after returns 6 (confirmed by a run)
-      reaches: 2 public functions: shop::charge, shop::food_bill (semilla status --verbose)
+      reaches: 2 public functions: shop::charge, shop::food_bill (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     <shop::Food as shop::Tax>::rate (src/lib.rs:8): same graph (the edit keeps the control flow); different (for self = &Food: before returns 5, after returns 6; confirmed by a run)

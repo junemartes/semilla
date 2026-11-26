@@ -32,7 +32,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   new and removed items, filled in by Semilla:
   ◆ f1 derived: added macro call `field_get!(total, sum)` (makes: `pub fn Cart::total`) [added · code different]
       affected bodies: shop::Cart::total
-      control flow: + graph of `shop::Cart::total`: 2 points, 1 arrow (semilla status --verbose)
+      control flow: + graph of `shop::Cart::total`: 2 points, 1 arrow (semilla expand --step 0)
       expansion: `field_get!(total, sum)` at `shop::Cart::field_get!#0` (src/lib.rs:7): expansion added: makes `shop::Cart::total`
   cover: each of the 1 changed line(s) is in a fact
   control flow: 1 body

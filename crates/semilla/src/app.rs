@@ -87,6 +87,21 @@ pub struct RejectedStep {
     /// The command that runs the step again with the missing parts, if a command can succeed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// The step that the command checked (R76.1-1): its number and its trees, for each
+    /// full-text command of its output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<Step>,
+}
+
+/// The record of the text that a command printed for one step (R76.1-1): the report of the
+/// step and the lines of the step outside the report (the build code, the configurations), each
+/// with no cut. `semilla expand --step S` and `semilla expand fN --step S` print it in full. The
+/// record is in the cache of this machine, not in the repository.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PrintedStep {
+    pub report: semilla_core::report::StepReport,
+    #[serde(default)]
+    pub lines: Vec<String>,
 }
 
 impl Session {
@@ -1362,6 +1377,11 @@ impl App {
                 None => text,
             }
         };
+        // R76.1-1: in the result of a commit, each full-text command names the commit.
+        let scoped = |text: String| match commit {
+            Some(name) => semilla_core::budget::with_commit(&text, name),
+            None => text,
+        };
         match stored {
             Some(stored) => {
                 // Design 28.4: a result that ran the changed build code says so first.
@@ -1378,7 +1398,7 @@ impl App {
                     put_line(&mut text, &line);
                 }
                 text.push_str("phase 2 (computed on this machine):\n");
-                text.push_str(&if verbose { stored.text } else { short(&stored.report) });
+                text.push_str(&scoped(if verbose { stored.text } else { short(&stored.report) }));
                 // Design 40.2: the counts of the map from the MIR elements to the tree.
                 if verbose {
                     for step in stored.report.steps.iter().filter(|step| !step.mir_map.is_empty()) {
@@ -1388,11 +1408,11 @@ impl App {
             }
             None if tree_only => {
                 text.push_str("the result of the syntax tree (computed now; no step has the compiled check):\n");
-                text.push_str(&if verbose { phase1.text } else { short(&phase1.report) });
+                text.push_str(&scoped(if verbose { phase1.text } else { short(&phase1.report) }));
             }
             None => {
                 text.push_str("phase 1 (computed now):\n");
-                text.push_str(&if verbose { phase1.text } else { short(&phase1.report) });
+                text.push_str(&scoped(if verbose { phase1.text } else { short(&phase1.report) }));
                 if wait.is_some() {
                     let log = std::fs::read_to_string(self.repo.cache_dir().join("worker.log")).unwrap_or_default();
                     let last = log.lines().rev().find(|line| line.contains("failed")).unwrap_or("no message");
@@ -1729,25 +1749,29 @@ impl App {
     /// place, before and after a step. The default step is the working tree against `HEAD`. The
     /// records come from the cache of the build check (a step of the default mode, R65.8-1), else
     /// from the cache of the compiled check; a build runs only if the cache has no record of a
-    /// tree.
-    pub fn expand(&mut self, place: &str, step: Option<usize>, full: bool, sides: semilla_verify::expand::Sides) -> Result<String> {
+    /// tree. A fact number gives the full text of the fact (R71.1-1), and no place gives the full
+    /// text of the step (R76.1-1). `--step` and `--commit` name the step as each full-text
+    /// command of an output names it ([`App::named_step`]).
+    pub fn expand(&mut self, place: Option<&str>, step: Option<usize>, commit: Option<&str>, full: bool, sides: semilla_verify::expand::Sides) -> Result<String> {
+        let Some(place) = place else { return self.expand_step(None, step, commit) };
         // R71.1-1: a fact number gives each text of the fact in full.
         if let Some(id) = fact_number(place) {
-            return self.expand_fact(&id, step);
+            return self.expand_step(Some(&id), step, commit);
         }
-        let (before, after) = match step {
-            Some(index) => {
-                let set = self.current_changeset()?;
-                let step = set.steps.get(index).with_context(|| format!("the session has no step {index}"))?;
-                (step.tree_before.clone(), step.tree_after.clone())
+        let (before, after) = match (step, commit) {
+            (None, None) => (self.repo.commit_tree("HEAD")?, self.repo.write_tree()?),
+            _ => {
+                let (one, _) = self.named_step(step, commit)?;
+                (one.base_tree.clone(), one.head_tree.clone())
             }
-            None => (self.repo.commit_tree("HEAD")?, self.repo.write_tree()?),
         };
+        // R76.1-1: the command of this output, for the line of a cut text.
+        let again = format!("semilla expand {place}{}{}", step.map(|step| format!(" --step {step}")).unwrap_or_default(), commit.map(|commit| format!(" --commit {commit}")).unwrap_or_default());
         // R65.8-1: the records of the build check of the two trees (a step of the default mode)
         // are in the cache: no build runs.
         if let (Ok(old), Ok(new)) = (self.check_expansions(&before), self.check_expansions(&after)) {
             let trees = [self.workspace(&before)?, self.workspace(&after)?];
-            return semilla_verify::expand::view(place, [&old, &new], [&trees[0], &trees[1]], full, sides).map_err(|error| anyhow::anyhow!(error));
+            return semilla_verify::expand::view(place, [&old, &new], [&trees[0], &trees[1]], full, sides, &again).map_err(|error| anyhow::anyhow!(error));
         }
         let step = Step { index: 0, intent: "expand".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons: Default::default(), compiled: true, build_check: None, agent: Default::default(), tags: Vec::new() };
         let set = ChangeSet { base_tree: before.clone(), head_tree: after.clone(), steps: vec![step.clone()], ..Default::default() };
@@ -1756,18 +1780,37 @@ impl App {
         let oracle = NormalOracle { repo: self.repo.clone(), code, mode: self.mode, log: self.config_log.clone(), added: Default::default(), after_commit: false };
         let units = semilla_verify::BodyOracle::expansions(&oracle, &step).context("the compiled build of the two trees gives no expansion records")?;
         let trees = [self.workspace(&before)?, self.workspace(&after)?];
-        semilla_verify::expand::view(place, [&units[0], &units[1]], [&trees[0], &trees[1]], full, sides).map_err(|error| anyhow::anyhow!(error))
+        semilla_verify::expand::view(place, [&units[0], &units[1]], [&trees[0], &trees[1]], full, sides, &again).map_err(|error| anyhow::anyhow!(error))
     }
 
-    /// The text of `semilla expand fN` (R71.1-1): the fact `fN` of a step with each text in
-    /// full. `step` is a stored step of the session; with no step, or with the number of the
-    /// next step, the step is the working tree against the end of the last stored step (the
-    /// step that the last `semilla step` printed and did not store), or the last stored step if
-    /// the working tree has no change since it. The facts come from the syntax tree and from
-    /// the records in the cache: the command starts no build.
-    fn expand_fact(&mut self, id: &str, step: Option<usize>) -> Result<String> {
+    /// The step that a full-text command names (R76.1-1), as a change set of the one step, and
+    /// the commit of its note. The command works in each state after the output that names it:
+    /// - `--commit REV`: step `S` of the note of the commit (with no `--step`, its last step);
+    /// - the step that the last `semilla step` printed and did not store (a rejected step),
+    ///   with its number, or with no `--step` while the working tree is its tree after; the
+    ///   record stays until the next `semilla step`;
+    /// - a stored step of the session, also of a change set that `semilla tag` closed;
+    /// - the next step: the working tree against the end of the last stored step. With no
+    ///   `--step`, the last stored step if the working tree has no change since it.
+    pub(crate) fn named_step(&self, step: Option<usize>, commit: Option<&str>) -> Result<(ChangeSet, Option<String>)> {
+        if let Some(rev) = commit {
+            let (_, set) = self.commit_changeset(rev)?;
+            let index = step.unwrap_or(set.steps.len().saturating_sub(1));
+            let one = one_step_set(&set, index).with_context(|| format!("the note of commit {rev} has no step {index}; its steps: 0 to {}", set.steps.len().saturating_sub(1)))?;
+            return Ok((one, Some(rev.to_string())));
+        }
+        let session = self.load_session()?;
         let set = self.current_changeset()?;
         let tree = self.repo.write_tree()?;
+        if let Some(rejected) = session.rejected.as_ref().and_then(|rejected| rejected.step.clone()) {
+            let named = match step {
+                Some(index) => index == rejected.index,
+                None => rejected.tree_after == tree,
+            };
+            if named {
+                return Ok((ChangeSet { base_tree: rejected.tree_before.clone(), head_tree: rejected.tree_after.clone(), steps: vec![rejected], pair_refusals: set.pair_refusals.clone(), ..Default::default() }, None));
+            }
+        }
         let next = || -> Result<ChangeSet> {
             let before = if set.steps.is_empty() { self.repo.commit_tree("HEAD").context("the repository has no commit")? } else { set.head_tree.clone() };
             if before == tree {
@@ -1783,14 +1826,83 @@ impl App {
             None if set.steps.last().is_some_and(|last| last.tree_after == tree) => one_step_set(&set, set.steps.len() - 1)?,
             None => next()?,
         };
-        let code = BuildCode { base: one.base_tree.clone(), ..Default::default() };
-        let saved = self.no_bodies;
-        self.no_bodies = true;
-        let result = self.check_set_with(&one, false, &code);
-        self.no_bodies = saved;
-        let report = result?.report.steps.into_iter().next().context("the check gives no step")?;
-        let ids: Vec<&str> = report.facts.iter().map(|fact| fact.id.as_str()).collect();
-        semilla_verify::views::fact_full_text(&report, id).with_context(|| format!("step {} has no fact {id}; its facts: {}", report.step, ids.join(", ")))
+        Ok((one, None))
+    }
+
+    /// The text of `semilla expand fN` (R71.1-1) and of `semilla expand` with no place
+    /// (R76.1-1): the fact `fN`, or each line of the step, with each text in full, each line
+    /// with no cut, and each list in full. The step is the step of [`App::named_step`]. The
+    /// report is the record of the text that the command of the step printed (`semilla step`,
+    /// `semilla fact`, a tag after the commit), with its compiled lines; with no record, the
+    /// facts come from the syntax tree and from the records in the cache, and the command
+    /// starts no build.
+    fn expand_step(&mut self, id: Option<&str>, step: Option<usize>, commit: Option<&str>) -> Result<String> {
+        let (one, scope) = self.named_step(step, commit)?;
+        let named = one.steps[0].clone();
+        let (report, lines, note) = match self.printed(&named) {
+            Some(printed) => (printed.report, printed.lines, None),
+            None => {
+                let code = BuildCode { base: one.base_tree.clone(), ..Default::default() };
+                let saved = self.no_bodies;
+                self.no_bodies = true;
+                let result = self.check_set_with(&one, false, &code);
+                self.no_bodies = saved;
+                let report = result?.report.steps.into_iter().next().context("the check gives no step")?;
+                // A compiled step whose printed record is not on this machine: the text has no
+                // line of the compiled check, and says so.
+                let note = named.compiled.then(|| format!("note: this machine has no record of the output of step {}; the text has the facts of the syntax tree, computed now, and no line of the compiled check", named.index));
+                (report, Vec::new(), note)
+            }
+        };
+        let mut text = String::new();
+        if let Some(note) = note {
+            put_line(&mut text, &note);
+        }
+        match id {
+            Some(id) => {
+                let ids: Vec<&str> = report.facts.iter().map(|fact| fact.id.as_str()).collect();
+                text.push_str(&semilla_verify::views::fact_full_text(&report, id).with_context(|| format!("step {} has no fact {id}; its facts: {}", report.step, ids.join(", ")))?);
+            }
+            None => {
+                for line in &lines {
+                    put_line(&mut text, line);
+                }
+                text.push_str(&semilla_verify::views::step_full_text(&report));
+            }
+        }
+        Ok(match scope {
+            Some(commit) => semilla_core::budget::with_commit(&text, &commit),
+            None => text,
+        })
+    }
+
+    /// The file of the record of the text that a command printed for a step (R76.1-1). The key
+    /// is the step (its trees, its intent, its claims, its reasons, its facts of the agent, its
+    /// tags, its mode) and the tools: a stored step and the step that the command checked have
+    /// one key. The build check record is not a part of the key: a command stores it after the
+    /// check.
+    fn printed_file(&self, step: &Step) -> std::path::PathBuf {
+        let mut key = step.clone();
+        key.build_check = None;
+        let text = format!("{}|{}", serde_json::to_string(&key).unwrap_or_default(), self.tools_key());
+        self.repo.store.dir.join("printed").join(format!("{:016x}.json", crate::store::stable_hash(text.as_bytes())))
+    }
+
+    /// Stores the record of the text that a command printed for a step (R76.1-1): the report and
+    /// the lines of the step outside the report, with no cut. A failure stores nothing: the
+    /// full-text command then computes the facts again.
+    pub(crate) fn store_printed(&self, step: &Step, report: &semilla_core::report::StepReport, lines: &[String]) {
+        let file = self.printed_file(step);
+        let record = PrintedStep { report: report.clone(), lines: lines.to_vec() };
+        if let (Some(folder), Ok(text)) = (file.parent(), serde_json::to_string(&record)) {
+            let _ = std::fs::create_dir_all(folder);
+            let _ = std::fs::write(&file, text);
+        }
+    }
+
+    /// The record of the text that a command printed for a step, if this machine has it.
+    fn printed(&self, step: &Step) -> Option<PrintedStep> {
+        serde_json::from_str(&std::fs::read_to_string(self.printed_file(step)).ok()?).ok()
     }
 
     /// Reads the intent files of a command (design 67, part D): the path relative to the

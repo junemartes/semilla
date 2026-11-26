@@ -283,12 +283,16 @@ impl App {
         for warning in crate::oracle::build_warnings() {
             put_line(&mut text, &format!("  ! {warning}"));
         }
-        if let Some(line) = report.build_code.as_ref().and_then(|note| note.step_line_with(0, semilla_normal::sandbox::missing().map(|missing| missing.state()).as_deref())) {
-            put_line(&mut text, &semilla_verify::views::fit_line(&format!("  {line}")));
+        // The lines of the step outside its report, each with no cut (R76.1-1): the record of
+        // the printed text keeps them.
+        let mut outside: Vec<String> = Vec::new();
+        outside.extend(report.build_code.as_ref().and_then(|note| note.step_line_with(0, semilla_normal::sandbox::missing().map(|missing| missing.state()).as_deref())).map(|line| format!("  {line}")));
+        outside.extend(crate::app::config_lines(&report).into_iter().map(|line| format!("  {line}")));
+        for line in &outside {
+            put_line(&mut text, &with_commit_command(&semilla_verify::views::fit_line(line, &semilla_core::budget::step_text_command(0)), &short, 0));
         }
-        for line in crate::app::config_lines(&report) {
-            put_line(&mut text, &semilla_verify::views::fit_line(&format!("  {line}")));
-        }
+        // R76.1-1: the record of the printed text of the step of the note.
+        self.store_printed(&set.steps[0], &step_report, &outside);
         text.push_str(&with_commit_command(&step_body(&step_report), &short, 0));
         if !text.ends_with('\n') {
             text.push('\n');
@@ -308,12 +312,13 @@ pub(crate) fn step_body(report: &semilla_core::report::StepReport) -> String {
 
 /// The gap list names the command of a stored step of the session. In the output of a commit,
 /// the command names the commit: `semilla fact --commit SHORT`. One step of a note is the
-/// last step, so the command needs no `--step`; a different step keeps `--step N`.
+/// last step, so the command needs no `--step`; a different step keeps `--step N`. Each
+/// full-text command (R76.1-1) gets `--commit SHORT` too: it names the step of the note.
 fn with_commit_command(text: &str, short: &str, index: usize) -> String {
     let step_command = format!("{}{index} ", semilla_core::report::GAP_COMMAND);
     let step_option = if index == 0 { String::new() } else { format!("--step {index} ") };
     let commit_command = semilla_core::report::GAP_COMMAND.replace("semilla fact --step ", &format!("semilla fact --commit {short} {step_option}"));
-    text.replace(&step_command, &commit_command)
+    semilla_core::budget::with_commit(&text.replace(&step_command, &commit_command), short)
 }
 
 /// `14 facts`.
@@ -508,7 +513,12 @@ impl App {
                 put_line(&mut text, &format!("to give the other reasons, run: semilla fact --commit {short} {}", missing.iter().map(|reason| format!("--reason {}", quote(reason))).collect::<Vec<_>>().join(" ")));
             }
         }
-        put_line(&mut text, &format!("For each fact of the step, run `semilla status {short} --verbose`."));
+        // R76.1-1: the record of the printed text of the step with its new facts, and the
+        // command of the full text of the step.
+        if let Some(step) = set.steps.get(index) {
+            self.store_printed(step, &report, &[]);
+        }
+        put_line(&mut text, &format!("For each fact of the step, run `{}`.", semilla_core::budget::with_commit(&semilla_core::budget::step_text_command(index), &short)));
         Ok((text, true))
     }
 }

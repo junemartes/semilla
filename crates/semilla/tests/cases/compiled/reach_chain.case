@@ -91,7 +91,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different]
       affected bodies: shop::tier
       equivalence: different: for k = 1: before returns 4, after returns 5 (confirmed by a run)
-      reaches: 3 public functions: shop::cost, shop::quote, shop::bill (semilla status --verbose)
+      reaches: 3 public functions: shop::cost, shop::quote, shop::bill (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     shop::tier (src/lib.rs:1): same graph (the edit keeps the control flow); different (for k = 1: before returns 4, after returns 5; confirmed by a run)

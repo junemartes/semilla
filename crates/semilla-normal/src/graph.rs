@@ -21,7 +21,9 @@ pub struct RecordGraph {
     /// The counts of the parts that are not in the graph.
     #[serde(default)]
     pub n: GraphCounts,
-    /// True for the body of a coroutine: the driver shows no graph (design 60, A6).
+    /// True for the body of a coroutine whose MIR before the coroutine transform the driver
+    /// does not have (R76.2-1): the record has only the entry (design 60, A6). A coroutine body
+    /// with that MIR has its full graph and no mark.
     #[serde(default)]
     pub co: bool,
 }
@@ -78,7 +80,7 @@ impl RecordGraph {
     /// the same arrows. The places can differ. Then the map of each point to the point with
     /// the same index pairs each point and shares each arrow: the graph is the same.
     pub fn same_shape(&self, other: &RecordGraph) -> bool {
-        // A coroutine body has no points, so two coroutine graphs are never the same shape:
+        // A coroutine record with the mark has no points, so two such graphs are never the same shape:
         // the empty lists prove nothing (design 60, A6).
         !self.co
             && !other.co

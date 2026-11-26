@@ -33,18 +33,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   new and removed items, filled in by Semilla:
   ◆ f2 derived: added `shop::ship` [added · code different]
       affected bodies: shop::ship
-      control flow: + graph of `shop::ship`: 3 points, 3 arrows (semilla status --verbose)
+      control flow: + graph of `shop::ship`: 3 points, 3 arrows (semilla expand --step 0)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `shop::cost/S0/init` [semantics · code different]
       affected bodies: shop::cost
       control flow: + call `ship` (src/lib.rs:6): return → check `overflow: base + 1`
       control flow: − branch `w > 10` (src/lib.rs:-2): false → check `overflow: base + 1`, true → check `overflow: base + 1`
       control flow: + arrow entry (src/lib.rs:5) → call `ship` (src/lib.rs:6)
-      control flow: … 1 more (semilla status --verbose)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: equivalent (proved by SMT after inlining `shop::ship`)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::cost (src/lib.rs:5): graph changes: +1 call, −1 branch, +2 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by SMT after inlining `shop::ship`)
+    shop::cost (src/lib.rs:5): graph changes: +1 call, −1 branch, +2 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `shop::ship`)
     shop::ship (src/lib.rs:1): graph added: 3 points, 3 arrows
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

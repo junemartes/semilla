@@ -213,8 +213,8 @@ fn graph_lines(out: &Path) -> Vec<(String, String)> {
     found
 }
 
-// rule+ R60.2-1 R60.2-2 R60.2-3 R60.2-4 R60.2-5 R60.2-6 R60.2-7 R60.2-8 R60.2-9 R60.2-10 R60.2-11 R60.2-12
-// rule- R60.2-1 R60.2-2 R60.2-3 R60.2-4 R60.2-5 R60.2-7 R60.2-8 R60.2-9 R60.2-10 R60.2-11 R60.2-12
+// rule+ R60.2-1 R60.2-2 R60.2-3 R60.2-4 R60.2-6 R60.2-7 R60.2-8 R60.2-9 R60.2-10 R60.2-11 R60.2-12 R76.2-1 R76.2-2
+// rule- R60.2-1 R60.2-2 R60.2-3 R60.2-4 R60.2-7 R60.2-8 R60.2-9 R60.2-10 R60.2-11 R60.2-12 R76.2-1
 #[test]
 fn each_construct_gives_its_points_and_its_arrows_and_two_runs_give_the_same_graph() {
     let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("semilla-normal-graph");
@@ -262,10 +262,15 @@ fn each_construct_gives_its_points_and_its_arrows_and_two_runs_give_the_same_gra
         assert_eq!((generic.n.drops, generic.n.unwind, generic.n.cleanup), (1, 3, 2), "{generic:?}");
         assert!(generic.p.iter().all(|point| point.k != "drop"));
         assert_eq!(graph("probe::f_if").n, semilla_normal::graph::GraphCounts::default());
-        // R60.2-5: the body of a coroutine has only its entry (for its place). The negative
-        // case: the `async fn` itself has its graph.
+        // R76.2-1 (before batch 12b, R60.2-5: only the entry): the body of a coroutine has the
+        // graph of its MIR before the coroutine transform. R76.2-2: the `.await` is one point
+        // `await` (its two expansions, the expression and the keyword, are one construct), with
+        // the text of the expression, the callees of its parts, and one arrow `done` (the poll
+        // loop is inside the point). The negative case: the `async fn` itself (the function
+        // that makes the future) keeps its own graph, and no record has the mark `co`.
         let body = graph("probe::f_async::{closure#0}");
-        assert!(body.co && body.p.len() == 1 && body.p[0].k == "entry" && body.a.is_empty() && body.p[0].r.is_some(), "{body:?}");
+        assert_eq!(graph_text(&body), "0 entry: →1; 1 call `std::future::ready::<u32>`: return→2; 2 await `std::future::ready(x).await` {<std::future::Ready<u32> as std::future::Future>::poll, <std::future::Ready<u32> as std::future::IntoFuture>::into_future, std::future::get_context::<'_, '_>, std::pin::Pin::<&mut std::future::Ready<u32>>::new_unchecked}: done→3; 3 check `overflow: std::future::ready(x).await + 1`: ok→4, fail→5; 4 return; 5 panic `overflow`");
+        assert!(!body.co && body.p[0].r.is_some(), "{body:?}");
         assert!(!graph("probe::f_async").co);
         // R60.2-10: a point from a macro has the range of the macro call; a point of a
         // desugaring has no macro call.
@@ -288,5 +293,17 @@ fn each_construct_gives_its_points_and_its_arrows_and_two_runs_give_the_same_gra
     // R60.2-6: two runs give the same graph text.
     assert!(!texts[0].is_empty());
     assert_eq!(texts[0], texts[1]);
+    // R76.2-1: a build that takes the unchanged coroutine body from its incremental data does
+    // not run the query override; the driver copies the body of `mir_promoted` at the read, so
+    // the body keeps its graph. The third build uses the target folder of the second one, with
+    // a new function in the crate.
+    write(&root.join("src/lib.rs"), &format!("{SOURCE}\npub fn f_added(x: u32) -> u32 {{ x + 7 }}\n"));
+    let out = scratch.join("records-three");
+    let _ = std::fs::remove_dir_all(&out);
+    run_cargo_check(&root, "n0", &out, &scratch.join("target-two")).unwrap_or_else(|error| panic!("{error:#}"));
+    let after: Vec<(String, String)> = graph_lines(&out).into_iter().filter(|(name, _)| !name.contains("f_added")).collect();
+    let coroutine = |list: &[(String, String)]| list.iter().find(|(name, _)| name.contains("f_async::{closure#0}")).cloned();
+    assert!(coroutine(&after).is_some_and(|(_, graph)| graph.contains("\"await\"") && !graph.contains("\"co\"")), "{:?}", coroutine(&after));
+    assert_eq!(coroutine(&after), coroutine(&texts[1]));
     let _ = std::fs::remove_dir_all(&scratch);
 }

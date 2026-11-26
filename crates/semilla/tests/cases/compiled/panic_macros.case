@@ -45,7 +45,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + branch `x > 9` (src/lib.rs:1): false → return, true → panic `panic!("too big")`
       control flow: + panic `panic!("too big")` (src/lib.rs:1)
       control flow: + arrow entry (src/lib.rs:1) → branch `x > 9` (src/lib.rs:1)
-      control flow: … 4 more (semilla status --verbose)
+      control flow: … 4 more (semilla expand --step 0)
       equivalence: different: for x = 10: before returns 11, after panics (`std::rt::panic_fmt` with the message "too big") (confirmed by a run)
   ◆ f2 derived: added macro statement `assert_eq!(x, y);` at `shop::b/S0` [semantics · code different]
       affected bodies: shop::b

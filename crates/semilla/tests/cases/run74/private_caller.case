@@ -38,10 +38,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: depot::step
       control flow: ~ check `overflow: x * 2` → `overflow: x * 3` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: different: for x = 1: before returns 2, after returns 3 (not confirmed by a run: the compiler does not accept the call in the probe (E0603: function `step` is private); a run confirms the difference of the caller `depot::caller`, which reaches this body)
-      reaches: 1 public function: depot::caller (semilla status --verbose)
+      reaches: 1 public function: depot::caller (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::step (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for x = 1: before returns 2, after returns 3; not confirmed by a run: the compiler does not accept the call in the probe (E0603: function `step` is private); a run confirms the difference of the caller `depot::caller`, which reaches this body)
+    depot::step (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for x = 1: before returns 2, after returns 3; not confirmed by a run: the compiler does not accept the call in the probe (E0603: function `step` is private); a run confirms the difference of the caller `depot::caller`, which reaches this body)
     reached bodies: 1
       depot::caller (src/lib.rs:5): different through depot::step: for x = 1: before returns 3, after returns 4 (confirmed by a run)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

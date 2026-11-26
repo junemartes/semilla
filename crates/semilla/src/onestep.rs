@@ -505,6 +505,9 @@ impl App {
             }
         };
         let report = result.report.steps.first().cloned().unwrap_or_default();
+        // R76.1-1: the step that the check used (the open step of the session), for the record
+        // of the printed text and for the full-text commands after a rejected step.
+        let checked = self.current_changeset().ok().and_then(|set| set.steps.last().cloned()).filter(|step| step.index == index);
         // Design 55.3: a line number of a tag after the last line of its file is an error of
         // the form of the command, as a tag with no name.
         if let Some(error) = report.tags.iter().filter(|tag| tag.form).find_map(|tag| tag.error.clone()) {
@@ -612,14 +615,24 @@ impl App {
         // A build with a limit of the sandbox missing (design 27), and a file of the records
         // folder that is not a record (design 28.8): each result says so.
         let sandbox_line: String = crate::oracle::build_warnings().iter().map(|warning| format!("  ! {warning}\n")).collect();
+        // The lines of the step outside its report, each with no cut (R76.1-1): the record of
+        // the printed text keeps them for `semilla expand --step S`.
+        let mut outside: Vec<String> = Vec::new();
         // Build code that the change set changes (design 28): the step that changes it has the
         // full line, and each later step has the short form.
-        let sandbox_line = format!("{sandbox_line}{}", result.report.build_code.as_ref().and_then(|note| note.step_line_with(index, semilla_normal::sandbox::missing().map(|missing| missing.state()).as_deref())).map(|line| format!("{}\n", semilla_verify::views::fit_line(&format!("  {line}")))).unwrap_or_default());
+        outside.extend(result.report.build_code.as_ref().and_then(|note| note.step_line_with(index, semilla_normal::sandbox::missing().map(|missing| missing.state()).as_deref())).map(|line| format!("  {line}")));
         // A configuration of the default list with no check in this step (batch 5s, B1): one
         // line. A step with a check in each configuration has no line.
-        let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.gap_lines(1)).map(|line| format!("{}\n", semilla_verify::views::fit_line(&format!("  {line}")))).collect::<String>());
+        outside.extend(result.report.configs.iter().flat_map(|note| note.gap_lines(1)).map(|line| format!("  {line}")));
         // A configuration that Semilla added for a joint state of this step (batch 5u, part C): one line.
-        let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.added_line()).map(|line| format!("{}\n", semilla_verify::views::fit_line(&format!("  {line}")))).collect::<String>());
+        outside.extend(result.report.configs.iter().flat_map(|note| note.added_line()).map(|line| format!("  {line}")));
+        // R76.1-1: a cut line names the command of the full text of the step.
+        let step_command = semilla_core::budget::step_text_command(index);
+        let sandbox_line = format!("{sandbox_line}{}", outside.iter().map(|line| format!("{}\n", semilla_verify::views::fit_line(line, &step_command))).collect::<String>());
+        // R76.1-1: the record of the printed text of the step, stored or rejected.
+        if let Some(step) = &checked {
+            self.store_printed(step, &report, &outside);
+        }
         if !accepted || build_stop.is_some() {
             // Nothing is stored. The reasons first, then the command to run again.
             let mut restore = saved;
@@ -792,7 +805,7 @@ impl App {
             if causes.is_empty() {
                 causes.push("the result of the step says the cause".to_string());
             }
-            restore.rejected = Some(crate::app::RejectedStep { intent: request.intent.clone(), cause: causes.join("; "), command: again });
+            restore.rejected = Some(crate::app::RejectedStep { intent: request.intent.clone(), cause: causes.join("; "), command: again, step: checked.clone() });
             self.save_session(&restore)?;
             return Ok((text, false));
         }
@@ -808,6 +821,8 @@ impl App {
             let mut session = self.load_session()?;
             if let Some(step) = session.changeset.steps.get_mut(index) {
                 step.agent.intent_reads = crate::app::intent_reads(&report);
+                // R76.1-1: the key of the record of the printed text is the stored step.
+                self.store_printed(step, &report, &outside);
             }
             self.save_session(&session)?;
         }
@@ -1094,7 +1109,12 @@ impl App {
             }
             self.save_session(&session)?;
         }
-        put_line(&mut text, "For each fact of the step, run `semilla status --verbose`.");
+        // R76.1-1: the record of the printed text of the step with its new facts, and the
+        // command of the full text of the step.
+        if let Some(step) = self.load_session()?.changeset.steps.get(index) {
+            self.store_printed(step, &report, &[]);
+        }
+        put_line(&mut text, &format!("For each fact of the step, run `{}`.", semilla_core::budget::step_text_command(index)));
         Ok((text, true))
     }
 

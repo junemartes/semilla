@@ -1,0 +1,51 @@
+note: batch 12b, G4: a closure that the compiler makes a coroutine (an `async` closure) has the graph of its coroutine bodies (the body and its by-move body); the two bodies with no place are the bodies that the driver cannot read (also before batch 12b)
+rule+: R76.2-1
+option: --compiled
+must_match: control flow: ~ check `overflow: x \+ 1` → `overflow: x \+ 2`
+must_not_match: graph not shown
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub async fn apply(a: u32) -> u32 {
+    let f = async |x: u32| x + 1;
+    f(a).await
+}
+=== new src/lib.rs
+pub async fn apply(a: u32) -> u32 {
+    let f = async |x: u32| x + 2;
+    f(a).await
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `1` → `2` (f1)
+      in: shop::apply
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::apply=TEXT'; if it does not change, --same 'rewrite 1 => 2'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `1` → `2` at `shop::apply/S0/init/body/rhs` [semantics · code different]
+      affected bodies: shop::apply
+      control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: `shop::apply`: not decided: a coroutine value: { let f = async |x: u32| x + 1; f(a).await } (src/lib.rs:-1)
+      equivalence: `shop::apply::{closure#0}::{closure#0}::{closure#0} x + 2`: not decided: a coroutine body
+      equivalence: `shop::apply::{closure#0}::{closure#0}::{synthetic#0} x + 2`: not decided: a coroutine body
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 5 bodies
+    shop::apply (src/lib.rs:1): same graph; not decided (a coroutine value: { let f = async |x: u32| x + 1; f(a).await } (src/lib.rs:-1))
+    shop::apply::{closure#0} (no place): no graph data: a record of the driver has no graph
+    shop::apply::{closure#0}::{closure#0} (no place): no graph data: a record of the driver has no graph
+    shop::apply::{closure#0}::{closure#0}::{closure#0} x + 2 (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a coroutine body)
+    shop::apply::{closure#0}::{closure#0}::{synthetic#0} x + 2 (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a coroutine body)
+    reached bodies: 1
+      shop::apply (src/lib.rs:1): reached through shop::apply::{closure#0}, not decided (a coroutine value: { let f = async |x: u32| x + 1; f(a).await } (src/lib.rs:-1))
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `1` → `2` at `shop::apply/S0/init/body/rhs` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

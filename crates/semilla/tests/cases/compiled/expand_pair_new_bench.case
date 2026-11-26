@@ -66,8 +66,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   tests and benches, filled in by Semilla:
   ◆ f3 derived: added `shop (bench "extra")::x` [added · code different]
       affected bodies: shop (bench "extra")::x
-      control flow: + graph of `extra::x`: 2 points, 1 arrow (semilla status --verbose)
-      control flow: + graph of `extra::x::{closure#0} #[test]`: 4 points, 3 arrows (semilla status --verbose)
+      control flow: + graph of `extra::x`: 2 points, 1 arrow (semilla expand --step 0)
+      control flow: + graph of `extra::x::{closure#0} #[test]`: 4 points, 3 arrows (semilla expand --step 0)
       expansion: `#[test]` at `shop (bench "extra")::x` (benches/extra.rs:3): expansion added: makes `extra::test`, `extra::x`
   ◆ f2 derived: added macro `ck` [added · no code]
   cover: each of the 8 changed line(s) is in a fact

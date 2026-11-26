@@ -39,7 +39,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: shop::big
       equivalence: `shop::big`: not decided: a raw pointer
       equivalence: `shop::big::{closure#0} |x| *x >= 9`: different: for captures = &a closure, x = &9: before returns false, after returns true (not confirmed by a run: the body has no path that a call can name (a closure or a nested body))
-      reaches: 2 public functions: shop::big, shop::report (semilla status --verbose)
+      reaches: 2 public functions: shop::big, shop::report (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
     shop::big (src/lib.rs:1): same graph (the edit keeps the control flow); not decided (a raw pointer); with its nested bodies: different in `shop::big::{closure#0}`

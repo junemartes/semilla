@@ -32,7 +32,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + try `a?` (src/lib.rs:2): continue → return, exit → return
       control flow: − call `Option::<u32>::unwrap_or` (src/lib.rs:-2): return → return
       control flow: + arrow entry (src/lib.rs:1) → try `a?` (src/lib.rs:2)
-      control flow: … 1 more (semilla status --verbose)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: not decided: the discriminant of a value that is not a modeled enum
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

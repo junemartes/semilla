@@ -2067,7 +2067,8 @@ fn md_expansions(out: &mut String, model: &Model) {
         let first = list[0];
         let calls: Vec<String> = list.iter().map(|site| format!("{} at {} ({})", md_with_code(&site.call), code(&site.at), line_link(&site.place))).collect();
         if index >= EXPANSION_PARTS {
-            let _ = writeln!(out, "- step {step}: {}: {}", calls.join(", "), md(&first.result));
+            // R76.1-1: a part with no diff names the command that prints it.
+            let _ = writeln!(out, "- step {step}: {}: {} ({})", calls.join(", "), md(&first.result), code(&semilla_core::budget::expansion_command(&first.place, *step)));
             continue;
         }
         let title = if list.len() == 1 { calls[0].clone() } else { format!("{} calls of {}", list.len(), md_with_code(&first.definition)) };
@@ -2092,7 +2093,7 @@ fn md_expansions(out: &mut String, model: &Model) {
         }
     }
     if parts.len() > EXPANSION_PARTS {
-        let _ = writeln!(out, "{}\n", md(&format!("The parts after the first {EXPANSION_PARTS} have no diff: `semilla expand PLACE` prints each one.")));
+        let _ = writeln!(out, "{}\n", md(&format!("The parts after the first {EXPANSION_PARTS} have no diff: the command of each part prints it.")));
     }
 }
 

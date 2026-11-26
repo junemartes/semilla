@@ -31,7 +31,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + call `slice::<impl [u32]>::iter` (src/lib.rs:2): return → call `<Iter<'_, u32> as Iterator>::map::<u32, {closure#0}> (trait default)`
       control flow: + call `<Iter<'_, u32> as Iterator>::map::<u32, {closure#0}> (trait default)` (src/lib.rs:2): return → call `<Map<Iter<'_, u32>, {closure#0}> as Iterator>::sum::<u32> (trait default)`
       control flow: + call `<Map<Iter<'_, u32>, {closure#0}> as Iterator>::sum::<u32> (trait default)` (src/lib.rs:2): return → call `slice::<impl [u32]>::iter`
-      control flow: … 2 more (semilla status --verbose)
+      control flow: … 2 more (semilla expand --step 0)
       equivalence: `shop::grow`: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: not decided: the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined)
       equivalence: `shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a…`: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: not decided: the parameters change
   ◆ f2 derived: changed if: `x.wrapping_add(1)` → `if *x > k { 0 } else { x.wrapping_add(k) }` at `shop::grow/tail/recv/args[0]/body` [semantics · code different]
@@ -39,7 +39,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: − arrow entry (src/lib.rs:-1) → call `slice::<impl [u32]>::iter` (src/lib.rs:-2)
       control flow: + branch `*x > k` (src/lib.rs:3): false → call `num::<impl u32>::wrapping_add`, true → return
       control flow: + arrow entry (src/lib.rs:3) → branch `*x > k` (src/lib.rs:3)
-      control flow: … 1 more (semilla status --verbose)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: `shop::grow`: not decided alone: the variant with only this edit does not compile; the body: not decided: the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined)
       equivalence: `shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a…`: not decided alone: the variant with only this edit does not compile; the body: not decided: the parameters change
   cover: each of the 3 changed line(s) is in a fact

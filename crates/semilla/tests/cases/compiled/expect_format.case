@@ -42,7 +42,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + construct `{x}` (src/lib.rs:2): return → call `format`
       control flow: + call `must_use::<String>` (src/lib.rs:2): return → return
       control flow: ~ call `String::new` → `format` (src/lib.rs:-2, src/lib.rs:2)
-      control flow: … 2 more (semilla status --verbose)
+      control flow: … 2 more (semilla expand --step 0)
       equivalence: not decided: an array
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies

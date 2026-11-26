@@ -112,9 +112,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: different: for v = 0: before returns 1, after returns 0 (confirmed by a run)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::base (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); no edit in the body; different (for v = 0: before returns 1, after returns 2; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:5)
-    shop::keep (src/lib.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for v = 0: before returns 0, after returns 2; confirmed by a run)
-    shop::pick (src/lib.rs:3): graph changes: −1 check, −1 panic, +1 arrow, −3 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for v = 0: before returns 1, after returns 0; confirmed by a run)
+    shop::base (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 1, after returns 2; confirmed by a run); the expansion of `bump!(v)` changes (semilla expand src/lib.rs:5 --step 0)
+    shop::keep (src/lib.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for v = 0: before returns 0, after returns 2; confirmed by a run)
+    shop::pick (src/lib.rs:3): graph changes: −1 check, −1 panic, +1 arrow, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for v = 0: before returns 1, after returns 0; confirmed by a run)
   expansions: 1 changed, 1 added, 1 removed, 25 equal
     `bump!(v)` at `shop::keep/tail` (src/lib.rs:4): expansion added: `macro_rules! bump` (src/lib.rs:1): 1 line(s) of code; the step adds the call or its input
     `bump!(v)` at `shop::base/tail` (src/lib.rs:5): expansion changed: `macro_rules! bump` (src/lib.rs:1): changed literal `1` → `2` at `expansion/rhs` [semantics]; from `macro_rules! bump` (src/lib.rs:1)

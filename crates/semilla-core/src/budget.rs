@@ -46,9 +46,55 @@ pub const HEAD_LINES: usize = 3;
 /// The first characters of a text of one line with no other side.
 pub const HEAD_CHARS: usize = 80;
 
-/// The command that shows each text of a fact in full (R71.1-1): `semilla expand fN --step S`.
+/// The command that shows each text of a fact in full (R71.1-1, R76.1-1): `semilla expand fN
+/// --step S`. A line of a fact names it: the size form, the cut of a long line, and a list of
+/// the fact.
 pub fn full_text_command(id: &str, step: usize) -> String {
     format!("semilla expand {id} --step {step}")
+}
+
+/// The command that shows the full text of a step (R76.1-1): `semilla expand --step S`. Each
+/// other line of the step names it: a line of a section of the step, and a count of lines or
+/// items whose full list is in a section of the step (the bodies of the control flow section,
+/// the reached bodies, the calls of a macro).
+pub fn step_text_command(step: usize) -> String {
+    format!("semilla expand --step {step}")
+}
+
+/// The command that shows the expansion of a macro call at a place in full (R76.1-1):
+/// `semilla expand PLACE --step S`.
+pub fn expansion_command(place: &str, step: usize) -> String {
+    format!("semilla expand {place} --step {step}")
+}
+
+/// A text of an output about a commit (a tag after the commit, `semilla status REV`, the review
+/// of a commit): each full-text command (R76.1-1) gets `--commit SHORT`, so that it names the
+/// step of the note of the commit, and not a step of the session.
+pub fn with_commit(text: &str, short: &str) -> String {
+    const HEAD: &str = "semilla expand ";
+    const STEP: &str = "--step ";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(HEAD) {
+        let start = at + HEAD.len();
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        // The option `--step N` of the same command: no end mark of a command before it.
+        let end = rest.find(['`', ')', ';', '\n']).unwrap_or(rest.len());
+        let Some(step) = rest[..end].find(STEP) else { continue };
+        let digits = rest[step + STEP.len()..].chars().take_while(char::is_ascii_digit).count();
+        if digits == 0 {
+            continue;
+        }
+        let after = step + STEP.len() + digits;
+        out.push_str(&rest[..after]);
+        rest = &rest[after..];
+        if !rest.starts_with(" --commit ") {
+            out.push_str(&format!(" --commit {short}"));
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The lines of a text: a line end is `\n` or the line mark of a fact text.
@@ -688,5 +734,24 @@ mod tests {
         let Some(Form::Block(note, rows)) = changed_single(&huge, Some("CMD")) else { panic!() };
         assert!(note.contains("over 50 kB of changed text: the first 3 lines, 19997 more lines; the full text: CMD"), "{note}");
         assert_eq!(rows.len(), HEAD_LINES);
+    }
+
+    // R76.1-1: one form of the full-text command for each kind of cut text, and the scope of a
+    // commit. The negative part: a command with no `--step` and a text with no full-text
+    // command do not change.
+    // rule+ R76.1-1
+    // rule- R76.1-1
+    #[test]
+    fn each_kind_of_cut_text_has_one_command_and_an_output_of_a_commit_names_the_commit() {
+        assert_eq!(full_text_command("f3", 2), "semilla expand f3 --step 2");
+        assert_eq!(step_text_command(2), "semilla expand --step 2");
+        assert_eq!(expansion_command("src/lib.rs:4", 2), "semilla expand src/lib.rs:4 --step 2");
+        let text = "a (`semilla expand f1 --step 0` shows the full line); … 3 more (semilla expand --step 0)\nthe full text: semilla expand src/lib.rs:4 --step 12)";
+        assert_eq!(with_commit(text, "abc1234"), "a (`semilla expand f1 --step 0 --commit abc1234` shows the full line); … 3 more (semilla expand --step 0 --commit abc1234)\nthe full text: semilla expand src/lib.rs:4 --step 12 --commit abc1234)");
+        // Two passes give one option.
+        assert_eq!(with_commit(&with_commit(text, "abc1234"), "abc1234"), with_commit(text, "abc1234"));
+        for same in ["semilla expand src/lib.rs:4 (no step)", "`semilla status --verbose`", "semilla fact --step 0 --change 'x=y'", "no command"] {
+            assert_eq!(with_commit(same, "abc1234"), same);
+        }
     }
 }

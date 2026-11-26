@@ -40,7 +40,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + call `<Iter<'_, Item> as Iterator>::filter::<{closure#0}> (trait default)` (src/lib.rs:7): return → call `<Filter<Iter<'_, Item>, {closure#0}> as Iterator>::map::<u32, {closure#1}> (trait default)`
       control flow: ~ call `<Iter<'_, Item> as Iterator>::map::<u32, {closure#1}> (trait default)` → `<Filter<Iter<'_, Item>, {closure#0}> as Iterator>::map::<u32, {closure#1}> (trait default)` (src/lib.rs:-7, src/lib.rs:7)
       control flow: ~ call `<Map<Iter<'_, Item>, {closure#1}> as Iterator>::sum::<u32> (trait default)` → `<Map<Filter<Iter<'_, Item>, {closure#0}>, {closure#1}> as Iterator>::sum::<u32> (trait default)` (src/lib.rs:-7, src/lib.rs:7)
-      control flow: … 3 more (semilla status --verbose)
+      control flow: … 3 more (semilla expand --step 0)
       equivalence: `shop::total`: not decided: the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined)
       equivalence: `shop::total::{closure#1} |x| x.cost()`: equivalent (proved by SMT)
   cover: each of the 2 changed line(s) is in a fact

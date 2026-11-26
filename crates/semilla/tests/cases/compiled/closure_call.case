@@ -31,7 +31,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: equivalent (proved by SMT after inlining `depot::apply::{closure#0}`)
   ◆ f2 derived: added `let` `let f = |x: u32| x ^ 1;` at `depot::apply/S0` [semantics · code different]
       affected bodies: depot::apply (with 2 other edits of this body)
-      control flow: + graph of `depot::apply::{closure#0} |x: u32| x ^ 1`: 2 points, 1 arrow (semilla status --verbose)
+      control flow: + graph of `depot::apply::{closure#0} |x: u32| x ^ 1`: 2 points, 1 arrow (semilla expand --step 0)
       equivalence: equivalent (proved by SMT after inlining `depot::apply::{closure#0}`)
   ◆ f3 derived: added statement `f(v)` at `depot::apply/tail` [semantics · code different]
       affected bodies: depot::apply (with 2 other edits of this body)

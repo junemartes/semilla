@@ -82,7 +82,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: `twice!(<(u8, u8, u8)>::size())` at `shop::price/tail` (shop/src/lib.rs:5): expansion changed: changed path `<(u8, u8)>::size` → `<(u8, u8, u8)>::size` at `expansion/lhs/callee` [semantics]
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (shop/src/lib.rs:5): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))
+    shop::price (shop/src/lib.rs:5): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))
   expansions: 1 changed, 6 equal
     `twice!(<(u8, u8, u8)>::size())` at `shop::price/tail` (shop/src/lib.rs:5): expansion changed: `macro_rules! twice` (shop/src/lib.rs:3): changed path `<(u8, u8)>::size` → `<(u8, u8, u8)>::size` at `expansion/lhs/callee` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

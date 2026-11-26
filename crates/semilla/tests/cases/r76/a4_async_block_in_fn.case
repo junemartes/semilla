@@ -1,0 +1,47 @@
+note: batch 12b, G4: an `async` block inside a normal function is a nested body of the item: its graph change is a line of the fact of the edit, and the line of the function does not say that the edit keeps the control flow
+rule+: R76.2-1
+option: --compiled
+must_match: control flow: ~ check `overflow: a \+ 1` → `overflow: a \+ 2`
+must_match: shop::make::\{closure#0\} async move \{ a \+ 2 \} \(src/lib.rs:2\): same structure: 1 changed check
+must_not_match: shop::make \(src/lib.rs:1\): same graph \(the edit keeps the control flow\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn make(a: u32) -> impl std::future::Future<Output = u32> {
+    async move { a + 1 }
+}
+=== new src/lib.rs
+pub fn make(a: u32) -> impl std::future::Future<Output = u32> {
+    async move { a + 2 }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `1` → `2` (f1)
+      in: shop::make
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::make=TEXT'; if it does not change, --same 'rewrite 1 => 2'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `1` → `2` at `shop::make/tail/body/tail/rhs` [semantics · code different]
+      affected bodies: shop::make
+      control flow: ~ check `overflow: a + 1` → `overflow: a + 2` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: `shop::make`: not decided: a coroutine value: async move { a + 1 } (src/lib.rs:-2)
+      equivalence: `shop::make::{closure#0} async move { a + 2 }`: not decided: a coroutine body
+      reaches: 1 public function: shop::make (semilla expand --step 0)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::make (src/lib.rs:1): same graph; not decided (a coroutine value: async move { a + 1 } (src/lib.rs:-2))
+    shop::make::{closure#0} async move { a + 2 } (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a coroutine body)
+    reached bodies: 1
+      shop::make (src/lib.rs:1): reached through shop::make::{closure#0}, not decided (a coroutine value: async move { a + 1 } (src/lib.rs:-2))
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `1` → `2` at `shop::make/tail/body/tail/rhs` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

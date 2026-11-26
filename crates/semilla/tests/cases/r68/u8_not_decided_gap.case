@@ -33,11 +33,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: moved check `bounds: v[i]` (src/lib.rs:2) from `shop::pick::{closure#0}`: ok → call `num::<impl u32>::wrapping_add`, fail → panic `bounds`
       control flow: moved panic `bounds` (src/lib.rs:2) from `shop::pick::{closure#0}`
       control flow: − call `get` [closure] (src/lib.rs:-3): return → call `num::<impl u32>::wrapping_add`
-      control flow: … 2 more (semilla status --verbose)
+      control flow: … 2 more (semilla expand --step 0)
       equivalence: not decided alone: a raw pointer: v[k] (src/lib.rs:-2); the body: not decided: a raw pointer: v[k] (src/lib.rs:-2)
   ◆ f2 derived: deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different]
       affected bodies: shop::pick (with 1 other edit of this body)
-      control flow: − graph of `shop::pick::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows; moved out to `shop::pick`: 1 check, 1 panic (semilla status --verbose)
+      control flow: − graph of `shop::pick::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows; moved out to `shop::pick`: 1 check, 1 panic (semilla expand --step 0)
       equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: not decided: a raw pointer: v[k] (src/lib.rs:-2)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies

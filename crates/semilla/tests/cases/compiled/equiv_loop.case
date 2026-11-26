@@ -36,11 +36,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + check `overflow: i * 1` (src/lib.rs:4): ok → call `num::<impl u32>::wrapping_add`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:4)
       control flow: + arrow branch `i < n` (src/lib.rs:4) → check `overflow: i * 1` (src/lib.rs:4) (true)
-      control flow: … 1 more (semilla status --verbose)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`, by induction over the loop)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::sum (src/lib.rs:1): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`, by induction over the loop)
+    shop::sum (src/lib.rs:1): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`, by induction over the loop)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

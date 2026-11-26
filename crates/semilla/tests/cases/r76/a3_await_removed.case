@@ -1,0 +1,73 @@
+note: batch 12b, G4: a removed `.await` is one removed point `await`
+rule+: R76.2-2
+option: --compiled
+must_match: shop::total::\{closure#0\} .*: graph changes: −1 await, −1 call
+must_match: control flow: − await `get\(v\)\.await` \(src/lib.rs:-7\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub async fn get(x: u32) -> u32 {
+    x + 1
+}
+
+pub async fn total(a: u32) -> u32 {
+    let v = get(a).await;
+    let w = get(v).await;
+    w
+}
+=== new src/lib.rs
+pub async fn get(x: u32) -> u32 {
+    x + 1
+}
+
+pub async fn total(a: u32) -> u32 {
+    let v = get(a).await;
+    v
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 3 places: 3 different edits (f1, f2, f3)
+      in: shop::total
+      lines: src/lib.rs:7, src/lib.rs:-7-8
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+  other facts, filled in by Semilla:
+  ◆ f1 derived: deleted statement `let w = get(v).await;` at `shop::total/S1` [semantics · code different]
+      affected bodies: shop::total (with 2 other edits of this body)
+      control flow: − call `get` (src/lib.rs:-7): return → await `get(v).await`
+      control flow: − await `get(v).await` (src/lib.rs:-7): done → return
+      control flow: − arrow await `get(a).await` (src/lib.rs:-6) → call `get` (src/lib.rs:-7) (done)
+      equivalence: `shop::total`: not decided: a coroutine value: { let v = get(a).await; let w = get(v).await; w … (src/lib.rs:-5) (the same line for f2, f3)
+      equivalence: `shop::total::{closure#0} { let v = get(a).await; v }`: not decided: a coroutine body
+      reaches: 1 public function: shop::total (semilla expand --step 0)
+  ◆ f2 derived: added statement `v` at `shop::total/tail` [semantics · code different]
+      affected bodies: shop::total (with 2 other edits of this body)
+      equivalence: the same line as f1
+      equivalence: `shop::total::{closure#0} { let v = get(a).await; v }`: not decided: a coroutine body
+      reaches: 1 public function: shop::total (semilla expand --step 0)
+  ◆ f3 derived: deleted statement `w` at `shop::total/tail` [semantics · code different]
+      affected bodies: shop::total (with 2 other edits of this body)
+      equivalence: the same line as f1
+      equivalence: `shop::total::{closure#0} { let v = get(a).await; v }`: not decided: a coroutine body
+      reaches: 1 public function: shop::total (semilla expand --step 0)
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::total (src/lib.rs:5): same graph; not decided (a coroutine value: { let v = get(a).await; let w = get(v).await; w … (src/lib.rs:-5))
+    shop::total::{closure#0} { let v = get(a).await; v } (src/lib.rs:5): graph changes: −1 await, −1 call, +1 arrow, −3 arrows; not decided (a coroutine body)
+    reached bodies: 1
+      shop::total (src/lib.rs:5): reached through shop::total::{closure#0}, not decided (a coroutine value: { let v = get(a).await; let w = get(v).await; w … (src/lib.rs:-5))
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: deleted statement `let w = get(v).await;` at `shop::total/S1` [semantics · code different]
+    lines: src/lib.rs:-7
+◆ f2 derived: added statement `v` at `shop::total/tail` [semantics · code different]
+    lines: src/lib.rs:7
+◆ f3 derived: deleted statement `w` at `shop::total/tail` [semantics · code different]
+    lines: src/lib.rs:-8

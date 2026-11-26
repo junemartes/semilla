@@ -75,7 +75,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: depot::limit
       lines: src/lib.rs:11, src/lib.rs:-11
       to state it: --change 'depot::limit=TEXT'
-  and 2 more line(s) with 2 place(s): `semilla status --verbose` shows each line
+  and 2 more line(s) with 2 place(s): `semilla expand --step 0` shows each line
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::a=TEXT' --change 'depot::b=TEXT' --change 'depot::conf::depth=TEXT' --change 'depot::idle=TEXT' --change 'depot::limit=TEXT'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `1` → `9` at `depot::a/tail/rhs` [semantics]

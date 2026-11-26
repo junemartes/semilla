@@ -28,7 +28,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: `fee!(v)` at `shop::price/tail` (src/lib.rs:4): expansion changed: changed literal `10` → `12` at `expansion/lhs/rhs` [semantics]
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:4): same structure: 2 changed checks (in dev; 1 more result(s) in other configurations: semilla status --verbose); no edit in the body; different (for v = 0: before returns 20, after returns 24; confirmed by a run); the expansion of `fee!(v)` changes (semilla expand src/lib.rs:4)
+    shop::price (src/lib.rs:4): same structure: 2 changed checks (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 20, after returns 24; confirmed by a run); the expansion of `fee!(v)` changes (semilla expand src/lib.rs:4 --step 0)
   expansions: 1 changed
     `fee!(v)` at `shop::price/tail` (src/lib.rs:4): expansion changed: `macro_rules! fee` (src/lib.rs:2): changed literal `10` → `12` at `expansion/lhs/rhs` [semantics]; from `macro_rules! base` (src/lib.rs:1)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
