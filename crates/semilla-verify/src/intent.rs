@@ -47,6 +47,9 @@ pub struct Answer {
     pub items: Vec<String>,
     /// [R75.1-3] The suggested test of a false claim (design 75).
     pub tests: Vec<semilla_core::run::SuggestedTest>,
+    /// [R80.3-2] The line of each item of a scope of more than one item (`impl`, a glob,
+    /// `callers`).
+    pub scope: Vec<String>,
 }
 
 /// [R69.5-1] The result of a claim with no answer of the oracle. The oracle answered the other
@@ -248,7 +251,9 @@ fn coverage(input: &StepInput, outcome: &StepOutcome, asked: &[Query], answers: 
     let mut proved: Vec<Proved> = Vec::new();
     for (at, query) in asked.iter().enumerate() {
         let answer = answers.and_then(|answers| answers.get(at));
-        if final_result(&query.claim, answer) != Some(IntentResult::Proved) {
+        // [R80.3-2] A claim on a scope with a claimed item: each proved item explains its bodies.
+        let partial = answer.is_some_and(|answer| !answer.scope.is_empty() && !answer.depends.is_empty()) && final_result(&query.claim, answer) == Some(IntentResult::Claimed);
+        if final_result(&query.claim, answer) != Some(IntentResult::Proved) && !partial {
             continue;
         }
         let Some(answer) = answer else { continue };
@@ -358,10 +363,14 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
                             };
                             line(claim.kind.name(), claim.text(), &claim.place, result, detail, options);
                         }
+                        // [R80.1-1] A relation of two types is a hint: the claims use it where
+                        // the types of the two versions differ, and it explains no body alone.
+                        ClaimKind::Later if claim.attribute == RELATION => {
+                            line(RELATION, claim.text(), &claim.place, IntentResult::Hint, "a relation of an old type and a new type: each claim uses it where the types of the two versions differ, and each use is checked; it proves nothing alone".into(), options);
+                        }
                         ClaimKind::Later => {
                             // [R78.3-5] The batch of draft 3 of the language (the heads), else of 10r1.
-                            let wide = claim.attribute.ends_with(" of a wide scope").then_some("13b");
-                            let batch = wide.or_else(|| semilla_intent::heads::KINDS.iter().find(|kind| kind.name == claim.attribute).and_then(|kind| kind.later)).or_else(|| semilla_intent::prelude::CLAIMS.iter().find(|(name, _)| *name == claim.attribute).map(|(_, batch)| *batch)).unwrap_or("later");
+                            let batch = None.or_else(|| semilla_intent::heads::KINDS.iter().find(|kind| kind.name == claim.attribute).and_then(|kind| kind.later)).or_else(|| semilla_intent::prelude::CLAIMS.iter().find(|(name, _)| *name == claim.attribute).map(|(_, batch)| *batch)).unwrap_or("later");
                             line(&claim.attribute, claim.text(), &claim.place, IntentResult::Claimed, format!("the check of `#[{}]` comes in batch {batch}", claim.attribute), options);
                         }
                         ClaimKind::Same | ClaimKind::Change | ClaimKind::Different => {
@@ -379,7 +388,8 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
                                         let flow = outcome.report.flow.get_or_insert_with(Default::default);
                                         crate::equiv::merge_test(&mut flow.tests, test);
                                     }
-                                    (answer.result.unwrap_or(IntentResult::Claimed), answer.detail, answer.configs, answer.reads, answer.errors)
+                                    // [R80.3-2] The line of each item of a scope comes first.
+                                    (answer.result.unwrap_or(IntentResult::Claimed), answer.detail, answer.scope.into_iter().chain(answer.configs).collect(), answer.reads, answer.errors)
                                 }
                                 None => {
                                     let (result, detail) = no_answer(answers.is_some(), input.step.compiled);
@@ -610,8 +620,12 @@ pub fn semantic_lines(step: &semilla_core::StepReport, limit: Option<usize>) -> 
 
 /// [R77.4-1] True for the kind of a hint of an intent file (a form of `--same`).
 pub fn is_hint(kind: &str) -> bool {
-    [ClaimKind::Rename, ClaimKind::Moved, ClaimKind::Rewrite].iter().any(|hint| hint.name() == kind)
+    // [R80.1-1] A relation is a hint too: claims use it, and it proves nothing alone.
+    [ClaimKind::Rename, ClaimKind::Moved, ClaimKind::Rewrite].iter().any(|hint| hint.name() == kind) || kind == RELATION
 }
+
+/// [R80.1-1] The attribute of a relation of two types.
+pub const RELATION: &str = "relation";
 
 /// The help for a claim result that an agent can fix.
 fn help(claim: &IntentClaim) -> Option<String> {

@@ -210,6 +210,98 @@ pub struct Link {
     pub resolved: Option<String>,
     /// The names next to the last resolved part of the path (for the candidates of an error).
     pub near: Vec<String>,
+    /// [R80.3-1] The items of the definition for a scope: for a type, each function of its
+    /// inherent impls; for a module, each function and each method of a type that the module
+    /// defines with the visibility `pub` (the visibility of the metadata, not the override); for a
+    /// trait, each method of each impl of the trait in an open crate.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<Member>,
+}
+
+/// [R80.3-1] One item of a scope: the record name with the facade, and for a method of an impl
+/// the type of the impl (its record name with the facade).
+#[derive(serde::Serialize)]
+pub struct Member {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// The name with the visible paths of the other crates (`<shop::Cart as std::fmt::Display>::
+    /// fmt`), when it is not `name`: a record of a tree names a trait of another crate by its
+    /// visible path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible: Option<String>,
+}
+
+/// [R80.3-1] The items of a definition for a scope (see [`Link::members`]).
+fn members(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<Member> {
+    use rustc_hir::def::DefKind;
+    let name_of = |def_id: DefId| callee_name(tcx, def_id).unwrap_or_else(|| tcx.def_path_str(def_id));
+    let is_fn = |def_id: DefId| matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn);
+    // The name with the visible paths, with the facade of the tree in front only: the visible
+    // path of an item of an open crate goes through its facade (`after::shop::Cart`).
+    let visible = |def_id: DefId, name: &str| -> Option<String> {
+        let side = name.split("::").next()?;
+        let path = rustc_middle::ty::print::with_no_trimmed_paths!(tcx.def_path_str(def_id));
+        let text = format!("{side}::{}", path.replace(&format!("{side}::"), ""));
+        (text != name).then_some(text)
+    };
+    let member = |def_id: DefId, owner: Option<String>| -> Member {
+        let name = name_of(def_id);
+        Member { visible: visible(def_id, &name), name, owner }
+    };
+    // The functions of the inherent impls of a type, in the order of the definitions.
+    let methods = |adt: DefId, public_only: bool| -> Vec<Member> {
+        let mut found = Vec::new();
+        for &impl_id in tcx.inherent_impls(adt) {
+            for item in tcx.associated_items(impl_id).in_definition_order() {
+                if is_fn(item.def_id) && (!public_only || (defaults().visibility)(tcx, item.def_id).is_public()) {
+                    found.push(member(item.def_id, Some(name_of(adt))));
+                }
+            }
+        }
+        found
+    };
+    match tcx.def_kind(def_id) {
+        DefKind::Struct | DefKind::Enum | DefKind::Union => methods(def_id, false),
+        DefKind::Mod => {
+            let mut found = Vec::new();
+            for child in (defaults().module_children)(tcx, def_id) {
+                let Some(child_id) = child.res.opt_def_id() else { continue };
+                // The items that the module defines, with `pub` (a re-export names an item of
+                // another module).
+                if tcx.opt_parent(child_id) != Some(def_id) || !(defaults().visibility)(tcx, child_id).is_public() {
+                    continue;
+                }
+                match tcx.def_kind(child_id) {
+                    DefKind::Fn => found.push(member(child_id, None)),
+                    DefKind::Struct | DefKind::Enum | DefKind::Union => found.extend(methods(child_id, true)),
+                    _ => {}
+                }
+            }
+            found
+        }
+        DefKind::Trait => {
+            let mut found = Vec::new();
+            for &krate in tcx.crates(()) {
+                if !is_open(tcx, krate) {
+                    continue;
+                }
+                for &impl_id in tcx.trait_impls_in_crate(krate) {
+                    if tcx.impl_trait_id(impl_id) != def_id {
+                        continue;
+                    }
+                    let owner = tcx.type_of(impl_id).instantiate_identity().skip_norm_wip().ty_adt_def().map(|adt| name_of(adt.did()));
+                    for item in tcx.associated_items(impl_id).in_definition_order() {
+                        if is_fn(item.def_id) {
+                            found.push(member(item.def_id, owner.clone()));
+                        }
+                    }
+                }
+            }
+            found
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// [R78.1-3] The definition of each doc link `before::…` and `after::…` of the intent crate: the
@@ -230,11 +322,14 @@ pub fn links(tcx: TyCtxt<'_>) -> Vec<Link> {
                 _ => None,
             }
         };
-        let paths: std::collections::BTreeSet<String> = map.keys().map(|(path, _)| path.to_string()).filter(|path| path.starts_with("before::") || path.starts_with("after::")).collect();
+        // [R80.3-1] The scope paths of the two versions, and a trait path of a scope
+        // `impl TRAIT for …` (a path of the intent file).
+        let is_trait = |path: &str| get(path, Namespace::TypeNS).is_some_and(|def_id| matches!(tcx.def_kind(def_id), DefKind::Trait));
+        let paths: std::collections::BTreeSet<String> = map.keys().map(|(path, _)| path.to_string()).filter(|path| path.starts_with("before::") || path.starts_with("after::") || is_trait(path)).collect();
         for path in paths {
             let direct = get(&path, Namespace::ValueNS).or_else(|| get(&path, Namespace::TypeNS)).or_else(|| get(&path, Namespace::MacroNS));
             if let Some(def_id) = direct {
-                found.push(Link { path, resolved: Some(name_of(def_id)), near: Vec::new() });
+                found.push(Link { path, resolved: Some(name_of(def_id)), near: Vec::new(), members: members(tcx, def_id) });
                 continue;
             }
             // A type-relative path: the last part is an item of the resolved type or trait.
@@ -255,12 +350,12 @@ pub fn links(tcx: TyCtxt<'_>) -> Vec<Link> {
                 {
                     near = tcx.module_children(module).iter().map(|child| format!("{prefix}::{}", child.ident)).collect();
                 }
-                found.push(Link { path, resolved: None, near });
+                found.push(Link { path, resolved: None, near, members: Vec::new() });
                 continue;
             };
             if matches!(tcx.def_kind(owner), DefKind::Mod) {
                 let near = tcx.module_children(owner).iter().map(|child| format!("{prefix}::{}", child.ident)).collect();
-                found.push(Link { path, resolved: None, near });
+                found.push(Link { path, resolved: None, near, members: Vec::new() });
                 continue;
             }
             let symbol = rustc_span::Symbol::intern(last);
@@ -280,7 +375,7 @@ pub fn links(tcx: TyCtxt<'_>) -> Vec<Link> {
             }
             let item = owners.iter().find_map(|owner| tcx.associated_items(*owner).filter_by_name_unhygienic(symbol).next().map(|item| item.def_id));
             let near = if item.is_none() { owners.iter().flat_map(|owner| tcx.associated_items(*owner).in_definition_order().map(|item| format!("{prefix}::{}", item.name()))).collect() } else { Vec::new() };
-            found.push(Link { path, resolved: item.map(name_of), near });
+            found.push(Link { path, resolved: item.map(name_of), near, members: Vec::new() });
         }
     }
     found

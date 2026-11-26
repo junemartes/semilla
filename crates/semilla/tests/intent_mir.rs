@@ -184,16 +184,72 @@ impl Pair {
         let old = Version { workspace: &wa, std: &std_a, changed: &is_changed };
         let new = Version { workspace: &wb, std: &std_b, changed: &is_changed };
 
+        // [R80.1-1] The relations of the intent text.
+        let relations = relations_of(&compiled, &heads);
         heads
             .iter()
+            .filter(|head| head.kind != "relation")
             .map(|head| {
                 let name = format!("{}::claims::{}", semilla_normal::intent::CLAIMS_CRATE, head.function);
                 let ir = find(&compiled.records, &name).unwrap_or_else(|| panic!("no record {name}"));
                 let item = head.scope.first().map(|scope| scope.to_string());
                 let property = Property { ir, own: &own, std: &own_std, item: (item.clone(), item) };
-                let run = || check_property(&solver, &property, &old, &new, budget);
+                let run = || semilla_smt::mir::with_relations(&relations, || check_property(&solver, &property, &old, &new, budget));
                 let checked = if head.except.iter().any(|name| name == "panic_message") { semilla_smt::mir::claim::with_panic_messages_ignored(run) } else { run() };
                 (head.function.clone(), checked.verdict, checked.steps, checked.depends)
+            })
+            .collect()
+    }
+}
+
+/// [R80.1-1] The relations of a compiled intent text: the form of each `#[relation]` function.
+fn relations_of(compiled: &Compiled, heads: &[semilla_intent::heads::Head]) -> Vec<semilla_smt::mir::Relation> {
+    heads
+        .iter()
+        .filter(|head| head.kind == "relation")
+        .filter_map(|head| {
+            let name = format!("{}::claims::{}", semilla_normal::intent::CLAIMS_CRATE, head.function);
+            let form = compiled.records.iter().find(|record| record.name == name && record.q.is_some()).and_then(form)?;
+            Some(semilla_smt::mir::Relation { name, form })
+        })
+        .collect()
+}
+
+impl Pair {
+    /// [R80.1-4] The check of an empty `#[same]` claim on each item, with the relations of an
+    /// intent text: the result and the dependence set of each item.
+    fn check_items(&self, intent: &str, items: &[&str]) -> Vec<(String, ClaimVerdict, Vec<String>)> {
+        let compiled = self.compile(intent);
+        assert!(compiled.ok, "{:#?}", compiled.diagnostics);
+        let (heads, _) = semilla_intent::heads::check("claims.rs", intent);
+        let relations = relations_of(&compiled, &heads);
+        let solver = semilla_smt::Solver::find().expect("a Z3 solver");
+        let texts = |records: &[semilla_normal::BodyRecord]| -> BTreeMap<String, String> { records.iter().map(|record| (record.name.clone(), record.text.clone())).collect() };
+        let (ta, tb) = (texts(&self.old), texts(&self.new));
+        let changed: BTreeSet<String> = ta.keys().chain(tb.keys()).filter(|name| ta.get(*name) != tb.get(*name)).cloned().collect();
+        let is_changed = |name: &str| changed.contains(name);
+        let find = |records: &[semilla_normal::BodyRecord], name: &str| records.iter().find(|record| record.name == name && record.q.is_some()).and_then(form);
+        let wa = |name: &str| find(&self.old, name);
+        let wb = |name: &str| find(&self.new, name);
+        let own = |name: &str| find(&compiled.records, name);
+        let std_of = |records: &[semilla_normal::BodyRecord]| {
+            let mut found: BTreeMap<String, Arc<Ir>> = BTreeMap::new();
+            for record in records {
+                let Some(text) = record.qx.as_deref() else { continue };
+                for (key, form) in serde_json::from_str::<BTreeMap<String, Ir>>(text).unwrap_or_default() {
+                    found.entry(key).or_insert_with(|| Arc::new(form));
+                }
+            }
+            found
+        };
+        let (std_a, std_b, own_std) = (std_of(&self.old), std_of(&self.new), std_of(&compiled.records));
+        let old = Version { workspace: &wa, std: &std_a, changed: &is_changed };
+        let new = Version { workspace: &wb, std: &std_b, changed: &is_changed };
+        items
+            .iter()
+            .map(|item| {
+                let checked = semilla_smt::mir::with_relations(&relations, || semilla_smt::mir::property::check_related(&solver, (item, item), &own, &own_std, &old, &new, None));
+                (item.to_string(), checked.verdict, checked.depends)
             })
             .collect()
     }
@@ -716,4 +772,210 @@ fn the_claim_mir_keeps_each_proof_and_each_false_claim_of_the_model_of_10r1() {
     }
     eprintln!("the two models: {compared} claim(s) with a proof or a false result of 10r1 compared");
     assert!(problems.is_empty() && compared > 0, "{compared} compared: {problems:#?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Design 80, part A: the relations of the types that change.
+
+/// A type with a new private field (a cached length), and a field whose type changes from a type
+/// of the crate to a plain integer (the trial of draft 3).
+const REL_OLD: &str = r#"
+pub struct Cart { items: Vec<u32> }
+impl Cart {
+    pub fn new() -> Cart { Cart { items: Vec::new() } }
+    pub fn len(&self) -> usize { self.items.len() }
+    pub fn is_empty(&self) -> bool { self.items.is_empty() }
+    pub fn twice(&self) -> usize { self.items.len().wrapping_mul(2) }
+    pub fn push(&mut self, x: u32) { self.items.push(x) }
+}
+#[derive(Clone, Copy)]
+pub struct Tier(u8);
+pub struct Level { v: Tier }
+impl Level {
+    pub fn get(&self) -> u8 { self.v.0 }
+    pub fn make(x: u8) -> Level { Level { v: Tier(x) } }
+}
+pub fn level_of(x: u8) -> Option<Level> { if x > 9 { None } else { Some(Level::make(x)) } }
+"#;
+
+const REL_NEW: &str = r#"
+pub struct Cart { items: Vec<u32>, len: usize }
+impl Cart {
+    pub fn new() -> Cart { Cart { items: Vec::new(), len: 0 } }
+    pub fn len(&self) -> usize { self.len }
+    pub fn is_empty(&self) -> bool { self.len == 0 }
+    pub fn twice(&self) -> usize { self.len.wrapping_mul(3) }
+    pub fn push(&mut self, x: u32) { self.items.push(x); self.len += 1 }
+}
+pub struct Level { v: i8 }
+impl Level {
+    pub fn get(&self) -> u8 { self.v as u8 }
+    pub fn make(x: u8) -> Level { Level { v: x as i8 } }
+}
+pub fn level_of(x: u8) -> Option<Level> { if x >= 10 { None } else { Some(Level::make(x)) } }
+"#;
+
+const RELATIONS: &str = r#"use semilla_intent::prelude::*;
+
+#[relation(before::shop::Cart, after::shop::Cart)]
+fn cart(b: &before::shop::Cart, a: &after::shop::Cart) -> bool {
+    same(&b.items, &a.items) && a.len == b.items.len()
+}
+
+#[relation(before::shop::Level, after::shop::Level)]
+fn level(b: &before::shop::Level, a: &after::shop::Level) -> bool {
+    b.v.0 == a.v as u8
+}
+"#;
+
+const REL_CLAIMS: &str = r#"
+#[same(shop::Cart::len)]
+fn len_prop(b: before::shop::Cart, a: after::shop::Cart) -> bool {
+    before::shop::Cart::len(&b) == after::shop::Cart::len(&a)
+}
+
+#[same(shop::Cart::new)]
+fn new_same() -> bool {
+    same(&before::shop::Cart::new(), &after::shop::Cart::new())
+}
+
+#[same(shop::level_of)]
+fn level_of_same(x: u8) -> bool {
+    same(&before::shop::level_of(x), &after::shop::level_of(x))
+}
+
+#[same(shop::Level::make)]
+fn make_same(x: u8) -> bool {
+    same(&before::shop::Level::make(x), &after::shop::Level::make(x))
+}
+"#;
+
+fn rel_pair(name: &str) -> Pair {
+    Pair::build(name, (REL_OLD, ""), (REL_NEW, ""))
+}
+
+// rule+ R80.1-2 R80.1-3
+// rule- R80.1-2 R80.1-3
+#[test]
+fn a_relation_relates_the_inputs_and_the_results_of_a_claim_where_the_types_differ() {
+    let pair = rel_pair("relations");
+    let with = pair.check(&format!("{RELATIONS}{REL_CLAIMS}"));
+    let get = |results: &[(String, ClaimVerdict)], name: &str| results.iter().find(|(function, _)| function == name).map(|(_, verdict)| verdict.clone()).unwrap();
+    // R80.1-3 (positive): the inputs of the two types are each pair that the relation holds
+    // for, so the cached length is the length of the old list.
+    assert!(matches!(get(&with, "len_prop"), ClaimVerdict::Proved { .. }), "{:?}", get(&with, "len_prop"));
+    // R80.1-2 (positive): `same` of two values of the two types is their relation, also inside
+    // an `Option` (part by part), and for a field whose type changes.
+    assert!(matches!(get(&with, "new_same"), ClaimVerdict::Proved { .. }), "{:?}", get(&with, "new_same"));
+    assert!(matches!(get(&with, "level_of_same"), ClaimVerdict::Proved { .. }), "{:?}", get(&with, "level_of_same"));
+    assert!(matches!(get(&with, "make_same"), ClaimVerdict::Proved { .. }), "{:?}", get(&with, "make_same"));
+    // With no relation: R80.1-3 (negative) the inputs are any two values, so the claim is false
+    // with an input; R80.1-2 (negative) two values of other shapes have no correspondence.
+    let without = pair.check(&format!("use semilla_intent::prelude::*;\n{REL_CLAIMS}"));
+    let ClaimVerdict::False { input, .. } = get(&without, "len_prop") else { panic!("{:?}", get(&without, "len_prop")) };
+    assert!(input.contains("b = ") && input.contains("a = "), "{input}");
+    assert!(matches!(get(&without, "new_same"), ClaimVerdict::Claimed { ref cause } if cause.contains("no `#[relation]`")), "{:?}", get(&without, "new_same"));
+}
+
+// rule+ R80.1-4
+// rule- R80.1-4
+#[test]
+fn an_empty_same_claim_on_items_whose_types_change_checks_related_inputs_and_outcomes() {
+    let pair = rel_pair("related");
+    let results = pair.check_items(RELATIONS, &["shop::Cart::new", "shop::Cart::len", "shop::Cart::is_empty", "shop::Level::get", "shop::Level::make", "shop::Cart::twice", "shop::Cart::push"]);
+    let get = |name: &str| results.iter().find(|(item, ..)| item == name).cloned().unwrap();
+    // R80.1-4 (positive): related inputs give related outcomes; the proof depends on the two
+    // versions of the item.
+    for name in ["shop::Cart::new", "shop::Cart::len", "shop::Cart::is_empty", "shop::Level::get", "shop::Level::make"] {
+        let (_, verdict, depends) = get(name);
+        assert!(matches!(verdict, ClaimVerdict::Proved { .. }), "{name}: {verdict:?}");
+        assert_eq!(depends, [format!("before::{name}"), format!("after::{name}")], "{name}");
+    }
+    // R80.1-4 (negative): a method whose outcome does not correspond is false with an exact
+    // pair of inputs; a `&mut self` method of a type that changes is "claimed" (batch 13c).
+    let (_, twice, _) = get("shop::Cart::twice");
+    assert!(matches!(&twice, ClaimVerdict::False { input, detail, .. } if input.contains("self_before") && input.contains("self_after") && detail.contains("returns")), "{twice:?}");
+    let (_, push, _) = get("shop::Cart::push");
+    assert!(matches!(&push, ClaimVerdict::Claimed { cause } if cause.contains("`&mut` comes in 13c")), "{push:?}");
+}
+
+// rule+ R80.1-5
+// rule- R80.1-5
+#[test]
+fn a_relation_is_a_hint_and_never_makes_a_proof_by_itself() {
+    let pair = rel_pair("hint");
+    // R80.1-5 (positive): a right relation gives proofs that depend on the code (the test of
+    // R80.1-4); a wrong relation gives "false" with an input, never "proved": the relation does
+    // not say that the cached length is the length of the list.
+    let loose = "use semilla_intent::prelude::*;\n#[relation(before::shop::Cart, after::shop::Cart)]\nfn cart(b: &before::shop::Cart, a: &after::shop::Cart) -> bool { same(&b.items, &a.items) }\n";
+    let results = pair.check_items(loose, &["shop::Cart::len", "shop::Cart::is_empty"]);
+    for (name, verdict, _) in &results {
+        assert!(matches!(verdict, ClaimVerdict::False { .. }), "{name}: {verdict:?}");
+    }
+    let claims = pair.check(&format!("{loose}{REL_CLAIMS}"));
+    assert!(matches!(claims.iter().find(|(name, _)| name == "len_prop").map(|(_, verdict)| verdict), Some(ClaimVerdict::False { .. })), "{claims:?}");
+    // R80.1-5 (negative): a relation that holds for no pair makes each claim true: "claimed
+    // (vacuous)". A relation that holds for each pair makes the result of `new` true for any
+    // result of the old version: "claimed", never "proved".
+    let never = "use semilla_intent::prelude::*;\n#[relation(before::shop::Cart, after::shop::Cart)]\nfn cart(b: &before::shop::Cart, a: &after::shop::Cart) -> bool { b.items.len() > 3 && b.items.len() < 2 && a.len == 0 }\n";
+    let results = pair.check_items(never, &["shop::Cart::len"]);
+    assert!(matches!(&results[0].1, ClaimVerdict::Claimed { cause } if cause.starts_with("vacuous")), "{results:?}");
+    let claims = pair.check(&format!("{never}{REL_CLAIMS}"));
+    assert!(matches!(claims.iter().find(|(name, _)| name == "len_prop").map(|(_, verdict)| verdict), Some(ClaimVerdict::Claimed { cause }) if cause.starts_with("vacuous")), "{claims:?}");
+    let always = "use semilla_intent::prelude::*;\n#[relation(before::shop::Cart, after::shop::Cart)]\nfn cart(b: &before::shop::Cart, a: &after::shop::Cart) -> bool { let _ = (b, a); true }\n";
+    let results = pair.check_items(always, &["shop::Cart::new", "shop::Cart::len"]);
+    assert!(matches!(&results[0].1, ClaimVerdict::Claimed { cause } if cause.contains("for any result of `before::shop::Cart::new`") && cause.contains("never an assumption")), "{results:?}");
+    assert!(matches!(&results[1].1, ClaimVerdict::False { .. }), "{results:?}");
+}
+
+/// A list of bytes with a new cached length; `count` returns the length, and `bad` of the new
+/// version is one too large.
+const VIEW_OLD: &str = r#"
+pub struct Doc { lines: Vec<u8> }
+impl Doc {
+    pub fn count(&self) -> usize { self.lines.len() }
+    pub fn bad(&self) -> usize { self.lines.len() }
+}
+pub struct Tag { v: u8 }
+impl Tag {
+    pub fn get(&self) -> u8 { self.v }
+}
+"#;
+
+const VIEW_NEW: &str = r#"
+pub struct Doc { lines: Vec<u8>, n: usize }
+impl Doc {
+    pub fn count(&self) -> usize { self.n }
+    pub fn bad(&self) -> usize { self.n.wrapping_add(1) }
+}
+pub struct Tag { v: i8 }
+impl Tag {
+    pub fn get(&self) -> u8 { self.v as u8 }
+}
+"#;
+
+const VIEW: &str = "use semilla_intent::prelude::*;\n#[relation(before::shop::Doc, after::shop::Doc)]\nfn view(b: &before::shop::Doc, a: &after::shop::Doc) -> bool {\n    a.lines == b.lines && a.n == b.lines.len()\n}\n";
+
+// rule+ R80.1-6
+// rule- R80.1-6
+#[test]
+fn a_relation_reads_a_vec_field_with_the_model_of_a_claim_body() {
+    let pair = Pair::build("view", (VIEW_OLD, ""), (VIEW_NEW, ""));
+    // A claim body with `==` of the two lists and their lengths: the same model.
+    let claims = pair.check("use semilla_intent::prelude::*;\n#[same(shop::Doc::count)]\nfn count(b: before::shop::Doc, a: after::shop::Doc) -> bool {\n    !(a.lines == b.lines && a.n == b.lines.len()) || before::shop::Doc::count(&b) == after::shop::Doc::count(&a)\n}\n#[same(shop::Doc::bad)]\nfn bad(b: before::shop::Doc, a: after::shop::Doc) -> bool {\n    !(a.lines == b.lines && a.n == b.lines.len()) || before::shop::Doc::bad(&b) == after::shop::Doc::bad(&a)\n}\n");
+    assert!(matches!(&claims[0].1, ClaimVerdict::Proved { .. }), "{claims:?}");
+    assert!(matches!(&claims[1].1, ClaimVerdict::False { .. }), "{claims:?}");
+    let results = pair.check_items(VIEW, &["shop::Doc::count", "shop::Doc::bad"]);
+    // R80.1-6 (positive): the relation reads `len` and `==` of the two lists with the sequence
+    // model, so the cached length gives the same count.
+    assert!(matches!(&results[0].1, ClaimVerdict::Proved { .. }), "{results:?}");
+    // R80.1-6 (negative): the new `bad` is one too large: false with an exact input, never proved.
+    assert!(matches!(&results[1].1, ClaimVerdict::False { input, .. } if input.contains("self_before") && input.contains("self_after")), "{results:?}");
+    // R80.1-6 (positive): the relation runs in the inline mode of its check: a callee of the
+    // standard library with a large body (`char::is_alphanumeric`, a table of the standard
+    // library) is a value of its inputs in the first try, as in a claim body, so the relation
+    // still gives the proof.
+    let with_call = format!("{VIEW}#[relation(before::shop::Tag, after::shop::Tag)]\nfn tag(b: &before::shop::Tag, a: &after::shop::Tag) -> bool {{\n    b.v == a.v as u8 && char::from(b.v).is_alphanumeric() == char::from(a.v as u8).is_alphanumeric()\n}}\n");
+    let results = pair.check_items(&with_call, &["shop::Tag::get"]);
+    assert!(matches!(&results[0].1, ClaimVerdict::Proved { .. }), "{results:?}");
 }

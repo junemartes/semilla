@@ -9113,3 +9113,171 @@ Rule index: no rule: the subsection has the limits and the open questions.
 **Open questions for the user.**
 
 - Should a file with no `use semilla_intent::prelude::*;` get the line from Semilla? Decided by Claude first: no. Changed in the rebase on 13a: yes (R78.1-4), because the help templates of 13a (R77.3-4) must pass `semilla intent check` and have no `use` line. The user can choose the other way: then each template and each claim of the guide gets the line.
+
+## 80. Batch 13b: relations of changed types, congruence, and scopes across the codebase (the proof layer)
+
+The decisions of the user (2026-11-26, draft 3 of the intent language):
+
+> "The intent file is the semantic specification of the pull request"; "claims can happen across the codebase"; "Let's ensure that the claims cover as much code as possible".
+
+> "We should almost never have to solve without hints": the agent gives the relation, Semilla checks it.
+
+> "The language shouldn't have to change": this batch gives meaning to `#[relation]` and to the scopes of draft 3; it adds no syntax.
+
+> 2026-11-24: "In general we should ensure we don't special case to a specific set of crates or symbols if not necessary".
+
+In the blind trial of draft 3, a changed type was the first blocker in each of the three pull requests: a private field changed its type, a new private field was added (a cached value), a field type changed from a ranged type of the crate to a plain integer. Each method of the type was then "not decided (the parameters change)", and no claim could relate the old `self` and the new `self`. This batch adds three general rules to the proof pass: a relation of two types at each boundary where the types differ (A), congruence of calls and values that the model does not give (B), and scopes of more than one item (C).
+
+### 80.1 Part A: `#[relation]`
+
+Rule index: the identities are below.
+
+1. [R80.1-1] **A relation of two types is found by its compiler types, and it is a hint.** `#[relation(before::T, after::T)] fn r(b: &before::T, a: &after::T) -> bool` (or the two values) states how an old value and a new value correspond. The oracle takes the form of each `#[relation]` function of the intent crate (its record in the claim crate); the engine finds the relation of two types by the types of its two parameters (or of their targets): a type fits when it has the same structure, the same field names and variant names, and the same name after the key of `type_key` (the last part of each path: the compiler prints a type of a tree with its short path and a type of the claim crate with its crate). Never by the name of the function. A relation is used only where its two types are not one type. Its line in the step is `hint` (it is not in the count of the claims, R77.3-1), and it explains no body alone. Tests: `a_type_of_the_claim_crate_fits_the_type_of_a_tree_by_its_structure`, `a_type_with_other_fields_or_another_name_does_not_fit` (a type with other fields or names does not fit, and no relation applies to two types that are one type), the step test of R80.3-1 (the line `hint`).
+2. [R80.1-2] **`same(&x, &y)` across two types.** Two values of one type: equal values (R78.4-3). Two types that differ: the relation that fits them; else, for two values of one type constructor (a reference, a tuple, a struct or an enum of one definition, for example `Option<before::T>` and `Option<after::T>`), each part by this rule (an enum: the same variant, and the parts of the variant); else equal parts of the same shape (R78.4-3). Else "claimed: the two values of `same` have other shapes, and no `#[relation]` of their two types gives their correspondence". A relation runs as a form (each path that returns `true`); a path that returns `false` or panics does not relate the values; a loop, a relation that uses itself, or another stop gives no condition (the claim is "claimed" with the cause). Tests: `a_relation_relates_the_inputs_and_the_results_of_a_claim_where_the_types_differ` (`Cart::new` and `Option<Level>` through the relations; with no relation, "claimed").
+3. [R80.1-3] **The inputs of a claim of the two types.** For each relation, the k-th parameter of a claim whose type (or target type) fits the old type and the k-th parameter that fits the new type are a related pair: the claim is about each pair that the relation holds for. A false result needs an exact relation too (R61.4-2: the input of the model must be a related pair). Tests: the test of R80.1-2 (`len_prop` is proved with the relations, and false with an input with no relation).
+4. [R80.1-4] **An empty `#[same]` claim on an item whose types change.** When the equivalence check of the step gives "the parameters change" or "the return type changes" and the intent files have a relation, the check runs the two bodies as a claim MIR runs them (R78.4-1): one input for each parameter of one type, and an old input and a new input for each parameter whose type differs, with their relation as the condition of the inputs. The two outcomes must correspond: the same exit and the same kind of panic, the same effects (R64), equal results of one type, related results of two types (R80.1-2). A `&mut` parameter of a type that changes gives "claimed: `&mut` comes in 13c" (batch 13c is not merged). Another count of parameters gives "claimed" (a property claim states the new parameters). A proof depends on the two versions of the item (R77.1-1). Tests: `an_empty_same_claim_on_items_whose_types_change_checks_related_inputs_and_outcomes` (five methods proved, each with the two versions in its dependence set; `twice` false with an exact pair; `push` claimed).
+5. [R80.1-5] **A relation is a hint, never an assumption.** A relation never makes a proof by itself: (a) a relation that holds for no pair of the inputs of a check (an `unsat` answer for the relations alone) gives "claimed: vacuous: …"; (b) the check of R80.1-4 runs again with a free outcome of each version (a free result and free values behind the `&mut` parameters, R74.2-1; a reference in it is a new place with a free value; no effect, because a free effect differs from each real outcome and the test would then pass for any check): if it is still proved, the result is "claimed: the check is true for any result of …: the relations alone make it true"; (c) a related input that gives an outcome that does not correspond gives "false" with the exact input, else "claimed". The rule R74.2-1 of a property claim stays. Tests: `a_relation_is_a_hint_and_never_makes_a_proof_by_itself` (a loose relation gives "false" for `len` and `is_empty`; a relation that holds for no pair gives "vacuous"; a relation that is always `true` gives "claimed" for `new` and "false" for `len`).
+
+6. [R80.1-6] **A relation has the model of a claim body.** A relation runs in the inline mode of the check that uses it (the try of the claim or of the check of R80.1-4: a callee of the standard library with no small form is a value of its inputs in the first try), each body of the intent crate that it calls (another relation, a helper) is inlined, and the effects of its calls are not a part of its result (as in a claim body; the first version of this batch gave "claimed: the relation calls a function with an effect on the world" for each such call). Before (the first version of this batch), a relation inlined each callee with a form, so `a.lines == b.lines` inlined the MIR of `<Vec<u8> as PartialEq>::eq` and stopped at a private field of `Vec` ("a field of a value that the check does not model"). The sequence model of design 64 gets `==` and `!=` of two `Vec`s of one scalar type (`impl PartialEq<Vec<U, A2>> for Vec<T, A1>`, with `T` = `U` and the global allocator: `vec_eq`, `vec_ne`): the equality of the two sequences, in each check of the intent files (a claim MIR, a relation, R80.1-4); the equivalence check of a step keeps the call as before. Tests: `a_relation_reads_a_vec_field_with_the_model_of_a_claim_body` (a relation `a.lines == b.lines && a.n == b.lines.len()` over a `Vec<u8>` field and a new cached length: `count` is proved, an off-by-one `bad` is false with an exact pair; a claim body with the same `==` gives the same two results; a relation of a second type (`Tag { v: u8 }` → `Tag { v: i8 }`) that also calls `char::is_alphanumeric` on the two fields (a callee of the standard library with a large body and a summary with an effect: a value of its inputs in the first try) gives the proof of `get`).
+
+**Decided by Claude.**
+
+- The relations of all the intent files of a step are one set: a relation applies to each claim of the step.
+- R80.1-6: `vec_eq` and `vec_ne` act only in the checks of the intent files in this batch, so the output of a step with no intent file stays the same; the equivalence check of a step can take them in a later batch with its own measure.
+- `same` with a relation is the relation of the agent, so the template guard of R78.1-5 (`!(same(&x_before, &x_after)) || …`) is the condition of R80.1-3 written out; the two give one condition.
+- The structural fallback of `same` for two values of the same shape with no relation (R78.4-3) stays, so the claims of 13a2 keep their results; a relation that fits takes the place of the fallback.
+- The empty `#[same]` claim uses the relations only where the check of the step says that the types change, so each other result of an empty claim stays.
+
+### 80.2 Part B: congruence
+
+Rule index: the identities are below.
+
+1. [R80.2-1] **A value of a type that the check does not model is a function of its parts.** The driver gives an aggregate of a struct or an enum of the standard library that the check does not model (the cause "a value of a type that the check does not model", 155 of 413 "not decided" lines of the training set at `22cb627`) as its type, its variant, and its operands (`IrAgg::O`; a union keeps the mark). The engine makes a value that is an uninterpreted function of the type (with the rename map of the step), the variant, and the operands with the value behind each shared reference in them (the inputs of a call, R64.2-1). Two aggregates of one type and variant with equal operands are one value on the two sides; nothing else is known of the value, so a model with it is never exact (no false "different"). A `&mut` reference in an operand stops the path. **The tries.** The tries of the equivalence check of designs 61 and 66 run as before (a value of such a type stops them with the cause of before); a body that stays "not decided" after it met such a value runs the congruence tries (the first try, then the second try), with their own budget (`budget::CONGRUENCE_STEPS`, 60 000 000 solver steps, the budget of one body check) apart from the budgets of the step (their solver steps and queries do not count in them): a try that decides gives the result, else the result and its cause stay. So a step with no intent file gives the same output, except a body that congruence decides. A claim MIR has the congruence in each run. Tests: `a_value_of_a_type_that_the_check_does_not_model_is_a_function_of_its_operands` (`Reverse(x)` against `Reverse(x + 0)`: equivalent), `a_value_of_a_type_that_the_check_does_not_model_with_other_operands_is_never_a_sure_difference` (other operands or another variant: not decided, never different; a `&mut` operand: the cause).
+2. [R80.2-2] **The joins of a congruence.** Congruence joins two calls only when they name one definition (the callee text after the rename map of the step, the matcher of design 72) and their arguments, with the values behind the references in them, are equal terms; a call with an effect on the world is the k-th effect of its side, a function of the callee, k, and the inputs (10o), so two versions that make the calls with effects in another order get no congruence for them ("the order of the calls changes"). A call of one definition with arguments that are related but not equal (two types) gets no congruence: the check inlines its form, so the relation of the results is checked, never assumed. Tests: `two_calls_of_one_definition_with_equal_arguments_give_one_result`, `a_congruence_never_joins_two_definitions_or_calls_with_effects_in_another_order` (two definitions, other arguments, another order of the effects: not decided).
+
+**Decided by Claude.**
+
+- The congruence of a value comes after the tries of before, not in place of them: the brief asks for the same output of a step with no intent file, and a cause of a body that stays "not decided" must not change. The cost: two more tries for a body that met such a value and stays "not decided".
+- The congruence tries have their own budget, apart from the budgets of the step. My first version charged them to the budget of the step: on winnow the extra tries used the budget ("the equivalence check stopped at its budget: 10 bodies not checked, 8 facts not checked alone"), and the results of other bodies changed. The safety time limit of the step stays over them.
+- A small helper of the standard library whose form has such an aggregate is not inlined in the first try (its value is not exact), as with the mark of before.
+
+### 80.3 Part C: scopes across the codebase
+
+Rule index: the identities are below.
+
+1. [R80.3-1] **The items of a scope.** The scope of a claim is one item, a list (one claim for each item, as before), `impl TYPE` (each function of the inherent impls of the type), `impl TRAIT for TYPE` or `impl TRAIT for *` (each method of each impl of the trait in an open crate, for the type or for each type), `MODULE::*` (each function with the declared visibility `pub` that the module defines, and each `pub` method of a type that the module defines), or `callers(ITEM)` (each body whose callees have the definition of the item; a closure gives the item that has it). Rustc resolves each path of the scope (R78.1-3: the doc links of the attribute macro), and the driver gives the items of the definition with the compiler data: the inherent impls of the type, the children of the module with the visibility of the metadata (not the override of R78.2-1), the impls of the trait in each open crate (`Link::members`). A trait path of `impl TRAIT for …` is a path of the intent file. An item with no body record in a version is not an item of the scope. Tests: the step test `a_claim_on_a_scope_gives_one_line_for_each_item_and_explains_the_bodies_of_its_proofs` (each form; a private function and a trait impl method are not in the scope of the module and of the type), `a_scope_path_with_no_definition_is_an_error_and_a_claimed_item_explains_nothing` (a type or a module with no definition: an error of rustc).
+2. [R80.3-2] **One result for each item.** A claim on a scope of more than one item checks each item as a claim of one item (an empty `#[same]` claim: the equivalence check of the item or R80.1-4; a property claim: the claim MIR with that item for R69.4-1 and R74.2-1), at most 64 items. Its line has the count (`N item(s) of the scope …: P proved, F false, C claimed`) and one line for each item; its result is the worst result of its items (an error, then false, then claimed). Each proved item explains the bodies that its proof depends on, also when another item is only claimed (an item counts only if each checked configuration proves it); a false item rejects the step. Tests: the two step tests of R80.3-1 (three proved items of `impl shop::Cart` explain their bodies and `push` does not; with no relation, no item is proved and the claim explains nothing).
+
+**Decided by Claude.**
+
+- The bound of 64 items for each scope keeps the cost of a claim bounded; the line gives the count of the items that were not checked.
+- A list keeps its form of before (one claim for each item), so each item has its own id.
+- A scope of a module has the items that the module defines (not its re-exports), with the declared visibility `pub` (not the effective visibility): "each public item of a module" of the language.
+
+### 80.4 The results, the tests, and the mutation checks
+
+Rule index: no rule: the subsection has the results, the tests, and the mutation checks.
+
+**A step with no intent file** (the seven pull requests of the training set; a copy at `old` with the tree of `new` in one fixed folder for each pull request (the identity of a path package depends on its path); `semilla step "the change" --compiled`, `SEMILLA_NO_CHECK`, an empty cache; the release binaries of `22cb627` and of this batch, one run at a time; the count of differing lines of the output):
+
+| PR | base vs base (two runs) | base vs this batch | The cause of each difference |
+|---|---|---|---|
+| bitflags #465 | 0 | 0 | — |
+| hashbrown #693 | 0 | 26 | congruence decides one body: `hashbrown::raw::RawTable::<T, A>::with_capacity_in` was "not decided (a value of a type that the check does not model: PhantomData)" and is "equivalent (proved after inlining `RawTableInner::with_capacity`)"; the walk of design 61.10 stops at an equivalent body, so 4 of its callers are not reached through it, and 3 other callers come into the 64 bodies of the walk |
+| indexmap #424 | 0 | 2 | the text `definition #HASH` of the digest of one constant (the hash of a dependency crate changes with each build of the driver: three builds of this batch gave three texts); no result changes |
+| itertools #1086 | 0 | 0 | — |
+| num-traits #334 | 0 | 0 | — |
+| uuid #932 | 0 | 0 | — |
+| winnow #891 | 0 | 0 | — |
+
+The cause "a value of a type that the check does not model" of the "not decided" lines of the training set (`causes.py`): 155 → 153 of 413 → 414 lines.
+
+**The case set.** One expected text changes, a body that congruence decides: `compiled/panic_macros`, `shop::b` (`assert_eq!(x, y); x ^ y` in place of `x ^ y`) was "not decided (a value of a type that the check does not model)" (the value `core::panicking::AssertKind::Eq` of the expansion) and is "different (for x = 1, y = 0: before returns 1, after panics (`core::panicking::assert_failed::<u32, u32>`))"; so its fact gets the template `--change 'shop::b=TEXT'`, and (after the rebase on 12a, 80.6) the suggested test `semilla_test_b_28cd7b`. No other case changes.
+
+**The intent files with relations** (written as the author of each pull request, `b13b/intent/`; the final binaries). Only three pull requests change a type that both versions have and whose bodies are "not decided (the parameters change)" or "(the return type changes)":
+
+| PR | The intent file | The results | Bodies from "not decided (the types change)" to explained |
+|---|---|---|---|
+| uuid #932 | 1 relation (`ErrorKind`: the same variant and fields; the old `ParseOther` and the new `ParseOther(_)`), 8 claims: `impl Clone`, `impl PartialEq` of `ErrorKind` and `Error`, `impl Debug`, `impl Hash`, `into_err`, `callers(into_err)` | 2 proved (`<ErrorKind as Clone>::clone`, `<Error as Clone>::clone`: related inputs give related outcomes); `eq` and `hash` claimed (no exact input: the text of `ParseOther` is an opaque `&str`); `Debug::fmt` claimed (a deref of a value that is not a reference); `into_err` and its 5 callers claimed (a call that returns a reference) | 1: `<ErrorKind as Clone>::clone` (explained by claim i3); `<Error as Clone>::clone` is proved too, but it is a body that the walk reaches, not a changed body |
+| indexmap #424 | 1 generic relation (`OccupiedEntry<'_, K, V>`: the index of the table entry and the entries of the map), 1 claim `impl OccupiedEntry` (24 items) | 24 claimed: 3 `&mut self` (13c), 3 an input of a deep type, 9 the relation does not fit (`self` by value: a relation of a generic type, 80.5), 9 an item of one version only | 0 |
+| winnow #891 | no file: the old type is the tuple `(I, usize)` (no path for `#[relation]`), and each body takes `&mut Bits<I>` (13c) | — | 0 |
+
+Before this batch, the relation and each scope `impl …`, `…::*`, `callers(…)` of these files were "claimed: the check of … comes in batch 13b".
+
+**The tests** (each rule has a positive and a negative test with the markers; `INDEXED` = 48..=80):
+
+| Rule | Tests |
+|---|---|
+| R80.1-1 | `a_type_of_the_claim_crate_fits_the_type_of_a_tree_by_its_structure`, `a_type_with_other_fields_or_another_name_does_not_fit`, the step test of R80.3-1 (the line `hint`) |
+| R80.1-2, R80.1-3 | `a_relation_relates_the_inputs_and_the_results_of_a_claim_where_the_types_differ` |
+| R80.1-4 | `an_empty_same_claim_on_items_whose_types_change_checks_related_inputs_and_outcomes` |
+| R80.1-5 | `a_relation_is_a_hint_and_never_makes_a_proof_by_itself` |
+| R80.1-6 | `a_relation_reads_a_vec_field_with_the_model_of_a_claim_body` |
+| R80.2-1 | `a_value_of_a_type_that_the_check_does_not_model_is_a_function_of_its_operands`, `…_with_other_operands_is_never_a_sure_difference` |
+| R80.2-2 | `two_calls_of_one_definition_with_equal_arguments_give_one_result`, `a_congruence_never_joins_two_definitions_or_calls_with_effects_in_another_order` |
+| R80.3-1, R80.3-2 | `a_claim_on_a_scope_gives_one_line_for_each_item_and_explains_the_bodies_of_its_proofs`, `a_scope_path_with_no_definition_is_an_error_and_a_claimed_item_explains_nothing` (`tests/intent_scope.rs`) |
+
+The differential test of R78.4-8 (`the_claim_mir_keeps_each_proof_and_each_false_claim_of_the_model_of_10r1`) passes. `cargo build`, then `cargo test --workspace --no-fail-fast` (no `SEMILLA_MIR_DRIVER`), at the end: 1202 tests, 1201 passed; the one failure was the case set before the new expected text of `compiled/panic_macros`, and the case set passes again with it (8 of 8). The test `a_relation_is_a_hint_and_never_makes_a_proof_by_itself` failed one time on the safety time limit at a load of 42, and passed alone (108 s).
+
+**The mutation checks** (`b13b/scripts/mutate.py`; each change is undone):
+
+| Change | Failed test |
+|---|---|
+| M1 R80.1-1: a relation applies to two types that are one type | `a_type_with_other_fields_or_another_name_does_not_fit` |
+| M2 R80.1-2: `same` never uses a relation | `a_relation_relates_the_inputs_and_the_results_of_a_claim_where_the_types_differ` |
+| M3 R80.1-3: no relation of the inputs of a claim | `a_relation_relates_the_inputs_and_the_results_of_a_claim_where_the_types_differ` |
+| M4 R80.1-4: the results of two types compare by equality | `an_empty_same_claim_on_items_whose_types_change_checks_related_inputs_and_outcomes` |
+| M5 R80.1-5 (a): no check of a vacuous relation | `a_relation_is_a_hint_and_never_makes_a_proof_by_itself` |
+| M5b R80.1-5 (b): no test with a free outcome | `a_relation_is_a_hint_and_never_makes_a_proof_by_itself` |
+| M6 R80.2-1: the value of an aggregate does not depend on its operands | `a_value_of_a_type_that_the_check_does_not_model_with_other_operands_is_never_a_sure_difference` |
+| M6b R80.2-1: no congruence try | `a_value_of_a_type_that_the_check_does_not_model_is_a_function_of_its_operands` |
+| M7 R80.2-2: one value function for each call (no callee in it) | `a_congruence_never_joins_two_definitions_or_calls_with_effects_in_another_order` |
+| M8 R80.3-1: a scope of a module has each item (no visibility) | `a_claim_on_a_scope_gives_one_line_for_each_item_and_explains_the_bodies_of_its_proofs` |
+| M9 R80.3-2: a claimed scope claim explains no body | `a_claim_on_a_scope_gives_one_line_for_each_item_and_explains_the_bodies_of_its_proofs` |
+| M10 R80.1-6: a relation inlines each callee with a form | `a_relation_reads_a_vec_field_with_the_model_of_a_claim_body` |
+| M10b R80.1-6: no model of `==` of two `Vec`s | `a_relation_reads_a_vec_field_with_the_model_of_a_claim_body` |
+| M10c R80.1-6: a relation rejects a call with an effect | `a_relation_reads_a_vec_field_with_the_model_of_a_claim_body` |
+
+The first runs of M10 and M10c were not caught: with `vec_eq`, the `==` of the test no longer reached the inline step, and `'a'.is_alphanumeric()` with a constant is modeled in each mode; the test now has a relation that calls `char::is_alphanumeric` on its fields. The first run of M1 was not caught: the relation form of the unit test had a wrong field type, so it never fit; the test now checks the positive side too. The first runs of M6 and M6b were not valid: the negative test expected the cause of the congruence try, and the rule keeps the cause of the tries of before; the test now checks the two.
+
+**The three numbers** (after the rebase on 12a, against `5b4dfaa`). Rules with an identity: +10 (548 → 558: R80.1-1 to R80.1-6, R80.2-1, R80.2-2, R80.3-1, R80.3-2; none removed). Rows of `docs/name-lists.md`: 0 (103 before and after). Code paths that decide by a name: +1: the sequence model of design 64 (`effects::seq_model`, which reads the names of the instances of the standard library and has no row) matches the `PartialEq` impl of two `Vec`s for `vec_eq`/`vec_ne` (R80.1-6). None other added: a relation is found by the compiler types of its parameters, a scope by the resolution of rustc and the items of the definition, a congruence by the callee and the type of the aggregate; the test of a wide scope (`impl `, `callers(`, `::*`) reads the syntax of the language. None removed.
+
+### 80.5 Limits and open questions
+
+Rule index: no rule: the subsection has the limits and the open questions.
+
+**Limits.**
+
+- `&mut`: a method with `&mut self` of a type that changes is "claimed: `&mut` comes in 13c" (setters, writers, `Hasher`, `Formatter`). In the training set each method of the changed types of winnow (`&mut Bits<I>`) and most methods of the entries of indexmap have it.
+- A relation names two paths (`#[relation(before::T, after::T)]`): a type that is not a path (the tuple `(I, usize)` that winnow replaces with `Bits<I>`) has no relation.
+- A relation cannot relate two sequences of other element types (`Vec<before::Item>` and `Vec<after::Item>`): that needs a loop (13d). A type of the standard library with a type of the crate inside is an opaque type that the check compares by its name text (design 61); a change of the inner type is not seen there.
+- Congruence joins equal arguments only. A field of a value of an opaque type has no projection (the cause "a field of a value that the check does not model" stays), and a value of a union keeps its mark.
+- A relation of a generic type has its type parameters as opaque types; a value that a call of a generic method gives needs the form of its instance (78.6).
+- A scope has at most 64 items. A member of a scope whose record name differs from the two names of the compiler (the definition path, and the path with the visible paths of the other crates; for example a method of a trait impl for a type with a re-export path) has no record, so it is not an item of the scope.
+- The text `definition #HASH` of a constant digest has the hash of a dependency crate, which changes with each build of the driver: the indexmap line of 80.4 differs between two drivers with the same rules.
+
+**Open questions for the user.**
+
+- A relation applies only where the two types differ. A field whose type stays but whose meaning changes (cents to tenths of cents) has no relation: should a relation also apply to two types that are one type?
+- Is the bound of 64 items for each scope right, or should a scope claim check each item?
+- A claim on a scope with one claimed item is "claimed", and its proved items explain their bodies. Should the line be a separate result word (for example "partly proved")?
+
+### 80.6 Rebase on 12a
+
+Rule index: no rule: the subsection has the merge with batch 12a and the results after it.
+
+The coordinator rebased this batch onto `5b4dfaa` (batch 12a, design 75: no run of the code of the user; each sure difference and each false claim gets a suggested `#[test]`). Claude resolved the conflicts by edits (no jj, no git):
+
+- `crates/semilla/src/intent.rs` (14 conflicts): each `One` has the field `tests` of 12a and the field `lines` of this batch; the empty `#[same]` claim keeps the `tests` of its difference and the check of R80.1-4 before it; `join` merges the tests of each configuration (`merge_test`) and keeps the scope lines and the rule of R80.3-2.
+- `crates/semilla-verify/src/intent.rs` (2): `Answer` has `tests` and `scope`; a claim line puts the tests of its answer into the list of the step and the scope lines first.
+- `crates/semilla/tests/cases/compiled/panic_macros.case` (1): the text of 12a, then the case set wrote the new expected text: only the lines of `shop::b` change (the fact template, the `semilla fact` line, the equivalence line, the control-flow line, "suggested tests: 3" → 4), and the suggested test `semilla_test_b_28cd7b` (`x = 1, y = 0`, the old outcome 1) is added. No "confirmed by a run": 12a runs no code.
+- New parts for 12a: a false result of R80.1-4 gives its counterexample (`RunCase`: the call of the old version with the old inputs, the call of the new version with the new inputs), and the oracle makes its suggested test with `suggest_claim` (the target and the place of each body; never a run); a claim on a scope merges the suggested tests of its false items.
+- The addendum of the coordinator (a finding of the held-out checks): a relation over a `Vec` field was "claimed: … a field of a value that the check does not model"; R80.1-6 is the rule, with its test.
+
+**The results after the rebase.**
+
+- A step with no intent file (the release binaries of `5b4dfaa` and of this batch, the same method as 80.4): bitflags 0, hashbrown 26, indexmap 2, itertools 0, num-traits 0, uuid 0, winnow 0 differing lines: the same causes as in 80.4 (congruence decides `hashbrown::raw::RawTable::<T, A>::with_capacity_in`; the digest text of one constant of indexmap). `vec_eq` acts in the checks of the intent files only, so it changes no line.
+- The intent files of 80.4 with the final binaries: the same sections "intent" (uuid: 2 proved, 1 changed body explained; indexmap: 0).
+- The rule index: R80.1-6 is new (+10 rules against `5b4dfaa`, 80.4); `INDEXED` = 48..=80; section 80 follows section 78 (section 75 is the section of 12a).
+- The full suite after the rebase (`cargo build`, then `cargo test --workspace --no-fail-fast`, no `SEMILLA_MIR_DRIVER`): 1207 tests, 1207 passed (the differential test R78.4-8 and the case set too). A run before at a load of about 50 had 4 failures of `tests/large.rs`, each on its time limit only (129 s against 120 s; 285 to 337 s against 240 s); at a load of 5 to 8 they pass.
+- The mutations M10, M10b, and M10c of R80.1-6 are caught (80.4); each change is undone.

@@ -205,6 +205,9 @@ pub enum IrAgg {
     S(u32),
     /// A closure: its type (an `IrTy::Clo`) and the captures (design 66, part A).
     C(u32),
+    /// [R80.2-1] A value of a type that the check does not model: the type (an `IrTy::Opaque`)
+    /// and the variant.
+    O(u32, usize),
 }
 
 /// A place in the source: `[file, start, end]` (an index into `f`).
@@ -1430,6 +1433,10 @@ impl<'a, 'b> Run<'a, 'b> {
                         values.push(V::Opq(identity));
                         Ok(V::Tup(values))
                     }
+                    IrAgg::O(ty_id, variant) => {
+                        let ir = state.frames.last().unwrap().ir.clone();
+                        self.opaque_aggregate(state, &Ty { ir, id: *ty_id }, *variant, operands, values)
+                    }
                     IrAgg::A(ty_id, variant) => {
                         let ir = state.frames.last().unwrap().ir.clone();
                         match ir.t.get(*ty_id as usize) {
@@ -1468,6 +1475,40 @@ impl<'a, 'b> Run<'a, 'b> {
             }
             IrRvalue::U(cause) => Err(Stop(cause.clone())),
         }
+    }
+
+    /// [R80.2-1] A value of a type that the check does not model, made from its operands: a
+    /// function of the type, the variant, and the operands (with the value behind each shared
+    /// reference in them, as the inputs of a call). Two aggregates of one type and variant with
+    /// equal operands are one value on the two sides (the congruence of an uninterpreted
+    /// function); the check knows nothing else of the value, so a model of it is never exact. A
+    /// `&mut` reference in an operand stops the path: a later write through it changes the value.
+    fn opaque_aggregate(&mut self, state: &State, ty: &Ty, variant: usize, operands: &[IrOp], values: Vec<V>) -> Result<V, Stop> {
+        // The tries of the equivalence check before the congruence try keep the cause of
+        // before 13b (R80.2-1).
+        if NO_CONGRUENCE.with(|cell| cell.get()) {
+            MET_OPAQUE.with(|cell| cell.set(true));
+            return Err(Stop("a value of a type that the check does not model".into()));
+        }
+        let Some(IrTy::Opaque { n, .. }) = ty.get().cloned() else { return Err(Stop("a value of a type that the check does not model".into())) };
+        for (operand, value) in operands.iter().zip(&values) {
+            let mutable = match operand {
+                IrOp::C(place) | IrOp::M(place) => matches!(self.place_ty(state, place).as_ref().and_then(|ty| ty.get()), Some(IrTy::Ref(true, _))),
+                _ => false,
+            };
+            if mutable || contains_mut_ref_inside(value) {
+                return Err(Stop("a `&mut` reference inside a value of a type that the check does not model".into()));
+            }
+        }
+        let mut deep = values.clone();
+        for value in &values {
+            self.behind(state, value, &mut deep, 0)?;
+        }
+        let flat: Vec<T> = deep.iter().flat_map(flatten).map(|(_, term)| term).collect();
+        let sorts: Vec<String> = deep.iter().flat_map(flatten).map(|(sort, _)| sort).collect();
+        // The type with the rename map of the step: one type of the two versions is one function.
+        let name = format!("agg_{}", sym_name(&format!("{}#{variant}", without_closure_places(&(self.side.rename)(&without_place(&n))))));
+        call_value(self.decls, ty, &name, &flat, &sorts, 0)
     }
 
     /// True if an operand has a signed integer type.
@@ -1714,11 +1755,23 @@ impl<'a, 'b> Run<'a, 'b> {
             "same" => {
                 let [V::Ptr(a), V::Ptr(b)] = values.as_slice() else { return Err(Stop("the prelude function `same` takes two references".into())) };
                 let (a, b) = (self.read(state, a)?, self.read(state, b)?);
-                let shape = |value: &V| flatten(value).into_iter().map(|(sort, _)| sort).collect::<Vec<_>>();
-                if shape(&a) != shape(&b) {
-                    return Err(Stop("the two values of `same` have other shapes: a `#[relation]` gives their correspondence (batch 13b)".into()));
-                }
-                self.write(state, &dest, V::Bool(not(&differ(&a, &b))))?;
+                // [R80.1-2] The two types of the values: equal values of one type, the relation
+                // of two types that differ, or part by part.
+                let pointee = |ty: Option<Ty>| ty.and_then(|ty| match ty.get() {
+                    Some(IrTy::Ref(_, inner)) => Some(ty.at(*inner)),
+                    _ => None,
+                });
+                let holds = match (pointee(ty_of(self, state, 0)), pointee(ty_of(self, state, 1))) {
+                    (Some(ta), Some(tb)) => self.relate(state, &a, &ta, &b, &tb, 0)?,
+                    _ => {
+                        let shape = |value: &V| flatten(value).into_iter().map(|(sort, _)| sort).collect::<Vec<_>>();
+                        if shape(&a) != shape(&b) {
+                            return Err(Stop("the two values of `same` have other shapes, and no `#[relation]` of their two types gives their correspondence".into()));
+                        }
+                        not(&differ(&a, &b))
+                    }
+                };
+                self.write(state, &dest, V::Bool(holds))?;
                 self.jump(state, target)?;
                 Ok(Next::Continue)
             }
@@ -1841,8 +1894,12 @@ impl<'a, 'b> Run<'a, 'b> {
             let Some(target) = target else { return Err(Stop(format!("the prelude function `{name}` never returns"))) };
             return self.prelude_call(state, &name, args, values, dest_loc, target);
         }
-        // An operation of the sequence model (design 64, part C).
-        if let Some(model) = &callee.s {
+        // An operation of the sequence model (design 64, part C). [R80.1-6] `==` and `!=` of two
+        // `Vec`s have the model in a check of the intent files only: the equivalence check of a
+        // step keeps the call as before (its results stay).
+        if let Some(model) = &callee.s
+            && (!matches!(model.as_str(), "vec_eq" | "vec_ne") || INTENT_MODEL.with(|cell| cell.get()))
+        {
             return self.seq_call(state, model, &values, &dest_loc, dest_ty.as_ref(), target, unwind);
         }
         // A call of a closure whose body the check knows: the check inlines the body with the
@@ -2225,6 +2282,16 @@ impl<'a, 'b> Run<'a, 'b> {
             }
             "vec_len" | "slice_len" => V::Bv(behind(self, state, 0)?.1.n, 64),
             "vec_is_empty" => V::Bool(behind(self, state, 0)?.1.is_empty()),
+            // [R80.1-6] `==` and `!=` of two `Vec`s of one scalar type: the equality of the two
+            // sequences (their lengths and their elements).
+            "vec_eq" | "vec_ne" => {
+                let ((_, a), (_, b)) = (behind(self, state, 0)?, behind(self, state, 1)?);
+                if a.e != b.e {
+                    return Err(no_value());
+                }
+                let equal = eq_t(&a.s, &b.s);
+                V::Bool(if model == "vec_eq" { equal } else { not(&equal) })
+            }
             "vec_clear" => {
                 let (loc, sq) = behind(self, state, 0)?;
                 write = Some((loc, V::Seq(Sq::empty(sq.e))));
@@ -2512,6 +2579,9 @@ fn small_std(form: &Ir) -> bool {
                         && match value {
                             IrRvalue::Use(a) | IrRvalue::Un(_, a) | IrRvalue::Cast(a, _) => op_ok(a),
                             IrRvalue::Bin(_, a, b) | IrRvalue::Chk(_, a, b) => op_ok(a) && op_ok(b),
+                            // [R80.2-1] A value of a type that the check does not model is
+                            // not an exact value of the helper.
+                            IrRvalue::Agg(IrAgg::O(..), _) => false,
                             IrRvalue::Agg(_, list) => list.iter().all(op_ok),
                             IrRvalue::Ref(_, place) | IrRvalue::Disc(place) => place_ok(place),
                             IrRvalue::U(_) => false,
@@ -4015,6 +4085,20 @@ fn with_free<R>(old: bool, name: &str, f: impl FnOnce() -> R) -> R {
 }
 
 thread_local! {
+    /// [R80.1-6] True while the engine checks a claim of an intent file (a claim MIR, a relation,
+    /// the check of R80.1-4): the model of a claim body.
+    pub(crate) static INTENT_MODEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [R80.1-6] Runs `f` with the model of a claim body.
+pub(crate) fn with_intent_model<R>(f: impl FnOnce() -> R) -> R {
+    let outer = INTENT_MODEL.with(|cell| cell.replace(true));
+    let found = f();
+    INTENT_MODEL.with(|cell| cell.set(outer));
+    found
+}
+
+thread_local! {
     /// [R78.4-6] True while the engine runs a claim MIR (`property.rs`).
     pub(crate) static CLAIM_RUN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -4060,6 +4144,16 @@ thread_local! {
     static HELPER_STOPS: std::cell::RefCell<BTreeSet<String>> = const { std::cell::RefCell::new(BTreeSet::new()) };
 }
 
+thread_local! {
+    /// [R80.2-1] True while a try of the equivalence check runs with no congruence for a value
+    /// of a type that the check does not model (the tries of designs 61 and 66: their results
+    /// stay the results of before 13b).
+    static NO_CONGRUENCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// [R80.2-1] True if a try with no congruence stopped at a value of a type that the check
+    /// does not model.
+    static MET_OPAQUE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// The most runs of the first try that give back the helpers that stop it (R66.10-4).
 const HELPER_ROUNDS: usize = 4;
 
@@ -4075,6 +4169,42 @@ fn note_helper_stop(state: &State) {
 }
 
 fn check_bodies_helpers(solver: &Solver, old: &Side, new: &Side, step: &Step) -> Checked {
+    let outer = (NO_CONGRUENCE.with(|cell| cell.replace(true)), MET_OPAQUE.with(|cell| cell.replace(false)));
+    let mut checked = check_bodies_tries(solver, old, new, step);
+    // [R80.2-1] The congruence tries: a body that stays "not decided" after a try met a value
+    // of a type that the check does not model runs again with the congruence of such values
+    // (the first try, then the second try). A try that decides gives the result; else the
+    // result and its cause stay.
+    NO_CONGRUENCE.with(|cell| cell.set(false));
+    let met = MET_OPAQUE.with(|cell| cell.get());
+    // The tries have their own budget, apart from the budget of the step: they never change
+    // another result of the step.
+    if met && matches!(&checked.verdict, Verdict::NotDecided { cause } if !crate::budget::is_stop(cause)) {
+        let started = Instant::now();
+        let mut queries = 0;
+        crate::budget::apart(crate::budget::CONGRUENCE_STEPS, || {
+            for inline_all in [false, true] {
+                let (verdict, inlined) = check_once(solver, old, new, step, inline_all, &mut queries);
+                if matches!(&verdict, Verdict::NotDecided { cause } if crate::budget::is_stop(cause)) {
+                    break;
+                }
+                if !matches!(verdict, Verdict::NotDecided { .. }) {
+                    checked.verdict = verdict;
+                    checked.inlined = inlined.into_iter().collect();
+                    break;
+                }
+            }
+        });
+        // The queries of these tries are not in the query budget of the step either.
+        let _ = queries;
+        checked.millis += started.elapsed().as_millis();
+    }
+    NO_CONGRUENCE.with(|cell| cell.set(outer.0));
+    MET_OPAQUE.with(|cell| cell.set(outer.1));
+    checked
+}
+
+fn check_bodies_tries(solver: &Solver, old: &Side, new: &Side, step: &Step) -> Checked {
     let started = Instant::now();
     let mut queries = 0;
     let stopped = |verdict: &Verdict| matches!(verdict, Verdict::NotDecided { cause } if crate::budget::is_stop(cause));
@@ -4626,6 +4756,273 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
 }
 
 
+// ---------------------------------------------------------------------------------------------
+// The relations of two types (design 80, part A).
+
+/// [R80.1-1] A relation of an old type and a new type: the form of its function in the intent
+/// crate (`#[relation(before::T, after::T)] fn r(b: &before::T, a: &after::T) -> bool`). The
+/// types of its two parameters (or of their targets, for references) are the two types: Semilla
+/// finds the relation of two values by these compiler types, never by a name.
+#[derive(Clone, Debug)]
+pub struct Relation {
+    /// The record name of the function in the intent crate (for the texts).
+    pub name: String,
+    pub form: Arc<Ir>,
+}
+
+impl Relation {
+    /// The old type and the new type of the relation.
+    fn types(&self) -> Option<(Ty, Ty)> {
+        if self.form.a != 2 || self.form.u.is_some() {
+            return None;
+        }
+        let param = |local: usize| -> Option<Ty> {
+            let ty = Ty { ir: self.form.clone(), id: *self.form.l.get(local)? };
+            Some(match ty.get()? {
+                IrTy::Ref(false, inner) => ty.at(*inner),
+                _ => ty,
+            })
+        };
+        Some((param(1)?, param(2)?))
+    }
+
+    /// The short name of the function (`cart`).
+    pub fn short(&self) -> &str {
+        self.name.rsplit("::").next().unwrap_or(&self.name)
+    }
+}
+
+thread_local! {
+    /// [R80.1-1] The relations of the intent files of the check that runs on this thread.
+    static RELATIONS: std::cell::RefCell<Arc<Vec<Relation>>> = std::cell::RefCell::new(Arc::new(Vec::new()));
+    /// The relations whose run is open (a relation that uses itself stops).
+    static RELATING: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// [R80.1-1] Runs `f` with the relations of the intent files.
+pub fn with_relations<R>(relations: &[Relation], f: impl FnOnce() -> R) -> R {
+    let outer = RELATIONS.with(|cell| cell.replace(Arc::new(relations.to_vec())));
+    let found = f();
+    RELATIONS.with(|cell| cell.replace(outer));
+    found
+}
+
+fn relations() -> Arc<Vec<Relation>> {
+    RELATIONS.with(|cell| cell.borrow().clone())
+}
+
+/// The relations of the check that runs on this thread.
+pub fn relations_now() -> Vec<Relation> {
+    relations().to_vec()
+}
+
+/// [R80.1-1] The text of a type with the last part of each path only (`std::option::Option<shop::
+/// Cart>` gives `Option<Cart>`). The compiler prints a type of a tree with the short path where
+/// the name is unique in its crate, and a type of the claim crate with the crate (two versions
+/// of one crate): the structure of the type (its fields, their names and types, its variants)
+/// decides the rest.
+fn type_key(text: &str) -> String {
+    let text = without_place(text);
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == ':' && chars.peek() == Some(&':') {
+            chars.next();
+            // Remove the path part before `::` (the letters, digits, and `_` at the end).
+            let keep = out.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len();
+            if keep < out.len() {
+                out.truncate(keep);
+            } else {
+                out.push_str("::");
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// [R80.1-1] True if two types are one type: the same structure, the same names (the key of
+/// [`type_key`]), and the same names of the fields and of the variants. A type of the claim
+/// crate and a type of a tree fit when the tree has the definition that the claim names.
+fn fits(a: &Ty, b: &Ty, depth: usize) -> bool {
+    if depth > 8 {
+        return true;
+    }
+    let all = |x: &[u32], y: &[u32]| x.len() == y.len() && x.iter().zip(y).all(|(p, q)| fits(&a.at(*p), &b.at(*q), depth + 1));
+    match (a.get(), b.get()) {
+        (Some(IrTy::Adt { n: nx, v: x, d: dx, e: ex, fs: fx, vn: vx, .. }), Some(IrTy::Adt { n: ny, v: y, d: dy, e: ey, fs: fy, vn: vy, .. })) => {
+            type_key(nx) == type_key(ny) && ex == ey && dx == dy && fx == fy && vx == vy && x.len() == y.len() && x.iter().zip(y).all(|(p, q)| all(p, q))
+        }
+        (Some(IrTy::Tuple(x)), Some(IrTy::Tuple(y))) => all(x, y),
+        (Some(IrTy::Ref(m, x)), Some(IrTy::Ref(n, y))) => m == n && fits(&a.at(*x), &b.at(*y), depth + 1),
+        (Some(IrTy::Seq { e: x, n: m, k: p }), Some(IrTy::Seq { e: y, n, k: q })) => m == n && p == q && fits(&a.at(*x), &b.at(*y), depth + 1),
+        (Some(IrTy::Clo { v: x, n: nx, .. }), Some(IrTy::Clo { v: y, n: ny, .. })) => nx == ny && all(x, y),
+        (Some(IrTy::Opaque { n: x, .. }), Some(IrTy::Opaque { n: y, .. })) => type_key(x) == type_key(y),
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// [R80.1-2] The condition that two values of one shape have equal parts (R78.4-3): each term
+/// of one value equals the term at its place in the other value.
+fn same_parts(x: &V, y: &V) -> T {
+    let (a, b) = (flatten(x), flatten(y));
+    and(&a.iter().zip(&b).map(|((_, p), (_, q))| eq_t(p, q)).collect::<Vec<_>>())
+}
+
+/// [R80.1-1] The relation of an old type and a new type that are not one type.
+fn relation_for(old: &Ty, new: &Ty) -> Option<Relation> {
+    if fits(old, new, 0) {
+        return None;
+    }
+    relations().iter().find(|relation| relation.types().is_some_and(|(a, b)| !fits(&a, &b, 0) && fits(&a, old, 0) && fits(&b, new, 0))).cloned()
+}
+
+/// The definition part of a type text (`std::option::Option<shop::Cart>` gives `Option`).
+fn definition_of(text: &str) -> String {
+    type_key(text).split('<').next().unwrap_or("").to_string()
+}
+
+/// The prefixes of the names of the two trees in a claim MIR (R78.4-1).
+const BEFORE_PREFIX: &str = "before::";
+const AFTER_PREFIX: &str = "after::";
+
+/// [R80.1-1] The condition that a relation holds for an old value and a new value: a run of the
+/// form of the relation; the condition is true on each path that returns `true`. A path that
+/// returns `false`, panics, or aborts does not relate the values. The run has the model of a
+/// claim body in the same try (R80.1-6). A loop or another stop of a path gives no condition.
+#[allow(clippy::too_many_arguments)]
+fn relation_run(side: &Side, step: &Step, inline_all: bool, decls: &mut Decls, slots: &[V], types: &[Option<Ty>], relation: &Relation, old_value: V, new_value: V, from_old: bool) -> Result<T, Stop> {
+    let name = relation.short().to_string();
+    if RELATING.with(|cell| cell.borrow().contains(&relation.name)) {
+        return Err(Stop(format!("the relation `{name}` uses itself (a relation of a recursive type is outside the model of this batch)")));
+    }
+    let mut slots = slots.to_vec();
+    let mut types = types.to_vec();
+    let mut inputs = Vec::new();
+    for (local, value) in [(1usize, old_value), (2, new_value)] {
+        let Some(id) = relation.form.l.get(local) else { return Err(Stop(format!("the relation `{name}` has no two parameters"))) };
+        let ty = Ty { ir: relation.form.clone(), id: *id };
+        match ty.get() {
+            Some(IrTy::Ref(_, inner)) => {
+                slots.push(value);
+                types.push(Some(ty.at(*inner)));
+                inputs.push(V::Ptr(Loc { slot: slots.len() - 1, path: Vec::new() }));
+            }
+            _ => inputs.push(value),
+        }
+    }
+    let own = Side { ir: relation.form.clone(), workspace: side.workspace, std: side.std, rename: side.rename };
+    let state = start_state(&own, &inputs, &slots, &types);
+    // [R80.1-6] The relation runs with the model of the check that uses it (a claim body in the
+    // same try): its callees in the same inline mode. Each body of the intent crate (another
+    // relation, a helper) is inlined, as a callee that the step changes.
+    let workspace = side.workspace;
+    let own_body = |name: &str| !name.starts_with(BEFORE_PREFIX) && !name.starts_with(AFTER_PREFIX) && workspace(name).is_some();
+    let changed = |name: &str| (step.changed)(name) || own_body(name);
+    let inner = Step { changed: &changed, changed_names: step.changed_names };
+    RELATING.with(|cell| cell.borrow_mut().push(relation.name.clone()));
+    let paths = run_state(&own, &inner, inline_all, decls, state, &[], from_old, LoopMode::Plain);
+    RELATING.with(|cell| cell.borrow_mut().pop());
+    if let Some((_, cause)) = paths.stops.first() {
+        return Err(Stop(format!("the relation `{name}`: {cause}")));
+    }
+    let mut holds = Vec::new();
+    for out in &paths.outs {
+        match &out.exit {
+            // [R80.1-6] As in a claim body, the effects of the calls of a relation are not a part
+            // of its result: a call that the check does not inline is a value of its inputs.
+            Exit::Return(V::Bool(value)) => holds.push(and(&[out.pc.clone(), value.clone()])),
+            Exit::Panic { .. } | Exit::Abort => {}
+            Exit::Return(_) => return Err(Stop(format!("the relation `{name}` does not return a `bool` value that the check models"))),
+            Exit::Cut => return Err(Stop(format!("a loop in the relation `{name}`"))),
+        }
+    }
+    Ok(or(&holds))
+}
+
+/// [R80.1-2] The condition that two values of the inputs or of the outcomes correspond (the
+/// rule of `same`), outside a run: a run state with the slots of the values.
+#[allow(clippy::too_many_arguments)]
+fn relate_values(side: &Side, step: &Step, inline_all: bool, decls: &mut Decls, slots: &[V], types: &[Option<Ty>], (x, tx): (&V, &Ty), (y, ty): (&V, &Ty), old: bool) -> Result<T, Stop> {
+    let state = State { slots: slots.to_vec(), types: types.to_vec(), frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), calls: Vec::new(), visits: Vec::new(), serial: 0 };
+    let mut run = Run { side, step, inline_all, decls, steps: 0, outs: Vec::new(), stops: Vec::new(), inlined: BTreeSet::new(), muts: Vec::new(), calls: 0, old, mode: LoopMode::Plain, dropped: 0 };
+    run.relate(&state, x, tx, y, ty, 0)
+}
+
+impl Run<'_, '_> {
+    /// [R80.1-2] The condition that an old value and a new value correspond: equal values when
+    /// the two types are one type; the relation of the two types when they differ and a
+    /// `#[relation]` gives one; part by part for two values of one type constructor (a
+    /// reference, a tuple, a struct or an enum of one definition); else equal values of the
+    /// same shape (R78.4-3). Two values of other shapes with no relation: no condition.
+    fn relate(&mut self, state: &State, x: &V, tx: &Ty, y: &V, ty: &Ty, depth: usize) -> Result<T, Stop> {
+        if depth > 6 {
+            return Err(Stop("a value of a deep type in `same`".into()));
+        }
+        if fits(tx, ty, 0) {
+            return Ok(not(&differ(x, y)));
+        }
+        if let Some(relation) = relation_for(tx, ty) {
+            return relation_run(self.side, self.step, self.inline_all, self.decls, &state.slots, &state.types, &relation, x.clone(), y.clone(), self.old);
+        }
+        let shapes = |this: &V, that: &V| flatten(this).into_iter().map(|(sort, _)| sort).collect::<Vec<_>>() == flatten(that).into_iter().map(|(sort, _)| sort).collect::<Vec<_>>();
+        let plain = |x: &V, y: &V| -> Result<T, Stop> {
+            if shapes(x, y) {
+                Ok(same_parts(x, y))
+            } else {
+                Err(Stop("the two values of `same` have other shapes, and no `#[relation]` of their two types gives their correspondence".into()))
+            }
+        };
+        match (tx.get().cloned(), ty.get().cloned(), x, y) {
+            (Some(IrTy::Ref(_, a)), Some(IrTy::Ref(_, b)), V::Ptr(la), V::Ptr(lb)) => {
+                let (va, vb) = (self.read(state, la)?, self.read(state, lb)?);
+                self.relate(state, &va, &tx.at(a), &vb, &ty.at(b), depth + 1)
+            }
+            (Some(IrTy::Tuple(a)), Some(IrTy::Tuple(b)), V::Tup(va), V::Tup(vb)) if a.len() == b.len() && va.len() == a.len() && vb.len() == b.len() => {
+                let mut parts = Vec::new();
+                for index in 0..a.len() {
+                    parts.push(self.relate(state, &va[index], &tx.at(a[index]), &vb[index], &ty.at(b[index]), depth + 1)?);
+                }
+                Ok(and(&parts))
+            }
+            (Some(IrTy::Adt { n: na, e: ea, v: fa, .. }), Some(IrTy::Adt { n: nb, e: eb, v: fb, .. }), _, _)
+                if definition_of(&na) == definition_of(&(self.side.rename)(&nb)) && ea == eb && fa.len() == fb.len() && fa.iter().zip(&fb).all(|(p, q)| p.len() == q.len()) =>
+            {
+                match (x, y) {
+                    (V::Tup(va), V::Tup(vb)) if !ea && fa.len() == 1 && va.len() == fa[0].len() && vb.len() == fb[0].len() => {
+                        let mut parts = Vec::new();
+                        for index in 0..va.len() {
+                            parts.push(self.relate(state, &va[index], &tx.at(fa[0][index]), &vb[index], &ty.at(fb[0][index]), depth + 1)?);
+                        }
+                        Ok(and(&parts))
+                    }
+                    (V::Enum { d: dx, w: wx, ds: sx, f: vx }, V::Enum { d: dy, w: wy, ds: sy, f: vy }) if wx == wy && sx == sy && vx.len() == fa.len() && vy.len() == fb.len() => {
+                        let mut parts = vec![eq_t(dx, dy)];
+                        for (variant, fields) in fa.iter().enumerate() {
+                            let value = sx.get(variant).copied().unwrap_or(variant as u128);
+                            let active = and(&[eq_t(dx, &bv_lit(value, *wx)), eq_t(dy, &bv_lit(value, *wx))]);
+                            if lit_bool(&active) == Some(false) {
+                                continue;
+                            }
+                            let mut same_fields = Vec::new();
+                            for index in 0..fields.len() {
+                                let (p, q) = (&vx[variant][index], &vy[variant][index]);
+                                same_fields.push(self.relate(state, p, &tx.at(fields[index]), q, &ty.at(fb[variant][index]), depth + 1)?);
+                            }
+                            parts.push(or(&[not(&active), and(&same_fields)]));
+                        }
+                        Ok(and(&parts))
+                    }
+                    _ => plain(x, y),
+                }
+            }
+            _ => plain(x, y),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4784,4 +5181,169 @@ mod tests {
         let ir = Ir { a: 0, l: vec![0], t: vec![IrTy::Unit], b: vec![block(IrTermKind::Goto(1)), block(IrTermKind::Sw(IrOp::R("f".into()), vec![("0".into(), 2)], 1)), block(IrTermKind::Ret)], f: Vec::new(), n: Vec::new(), u: None };
         assert_eq!(loop_heads(&ir), BTreeSet::from([1]));
     }
+
+    // ---------------------------------------------------------------------------------------
+    // Design 80, part B: congruence.
+
+    /// A body of two `u32` parameters with the extra locals and the blocks; `ret` is the type of
+    /// the result (an index of `types`).
+    fn body(types: Vec<IrTy>, ret: u32, extra: Vec<u32>, blocks: Vec<IrBlock>) -> Ir {
+        let mut l = vec![ret, 0, 0];
+        l.extend(extra);
+        Ir { a: 2, l, t: types, b: blocks, n: vec!["x".into(), "y".into()], ..Ir::default() }
+    }
+
+    fn set(local: usize, value: IrRvalue) -> IrStmt {
+        IrStmt { k: IrStmtKind::Set(IrPlace { l: local, p: Vec::new() }, value), r: None, c: None }
+    }
+
+    fn ret_block(s: Vec<IrStmt>) -> IrBlock {
+        IrBlock { s, t: IrTerm { k: IrTermKind::Ret, r: None, c: None, o: false, m: None } }
+    }
+
+    fn local(l: usize) -> IrOp {
+        IrOp::C(IrPlace { l, p: Vec::new() })
+    }
+
+    /// A call of a function with no form: `world` gives it an effect on the world.
+    fn call_block(name: &str, arg: usize, dest: usize, target: usize, world: bool) -> IrBlock {
+        let callee = IrCallee { p: name.into(), w: None, k: None, m: None, g: false, e: Some(IrEff { w: world.then(|| "an output".to_string()), p: false }), s: None, c: None, q: Vec::new(), f: None, a: false };
+        IrBlock { s: Vec::new(), t: IrTerm { k: IrTermKind::Call(callee, vec![local(arg)], IrPlace { l: dest, p: Vec::new() }, Some(target), IrUnwind::Drops(Vec::new())), r: None, c: None, o: false, m: None } }
+    }
+
+    fn verdict(old: Ir, new: Ir) -> Verdict {
+        let std = BTreeMap::new();
+        let none = |_: &str| None;
+        let same = |text: &str| text.to_string();
+        let changed = |_: &str| false;
+        let step = Step { changed: &changed, changed_names: &[] };
+        let solver = Solver::find_for(&[], None).expect("the solver of the workspace");
+        let side = |ir: Ir| Side { ir: Arc::new(ir), workspace: &none, std: &std, rename: &same };
+        check_bodies(&solver, &side(old), &side(new), &step).verdict
+    }
+
+    fn reverse_types() -> Vec<IrTy> {
+        vec![IrTy::Int(32, false), IrTy::Opaque { n: "std::cmp::Reverse<u32>".into(), d: false }, IrTy::Ref(true, 0)]
+    }
+
+    // rule+ R80.2-1
+    #[test]
+    fn a_value_of_a_type_that_the_check_does_not_model_is_a_function_of_its_operands() {
+        // `Reverse(x)` against `Reverse(x + 0)`: equal operands give one value of the opaque
+        // type, so the two bodies are equivalent (before: "not decided: a value of a type that
+        // the check does not model").
+        let old = body(reverse_types(), 1, Vec::new(), vec![ret_block(vec![set(0, IrRvalue::Agg(IrAgg::O(1, 0), vec![local(1)]))])]);
+        let new = body(reverse_types(), 1, vec![0], vec![ret_block(vec![set(3, IrRvalue::Bin("add".into(), local(1), IrOp::K(IrConst::I("0".into(), 0)))), set(0, IrRvalue::Agg(IrAgg::O(1, 0), vec![local(3)]))])]);
+        let found = verdict(old, new);
+        assert!(matches!(found, Verdict::Equivalent { .. }), "{found:?}");
+    }
+
+    // rule- R80.2-1
+    #[test]
+    fn a_value_of_a_type_that_the_check_does_not_model_with_other_operands_is_never_a_sure_difference() {
+        // `Reverse(x)` against `Reverse(y)`: the check knows nothing of the value but its
+        // operands, so a model of a difference is not exact: "not decided", never "different".
+        // The result keeps the cause of the tries of before (the congruence try does not decide).
+        let old = body(reverse_types(), 1, Vec::new(), vec![ret_block(vec![set(0, IrRvalue::Agg(IrAgg::O(1, 0), vec![local(1)]))])]);
+        let new = body(reverse_types(), 1, Vec::new(), vec![ret_block(vec![set(0, IrRvalue::Agg(IrAgg::O(1, 0), vec![local(2)]))])]);
+        let found = verdict(old.clone(), new.clone());
+        assert!(matches!(&found, Verdict::NotDecided { cause } if cause.contains("a value of a type that the check does not model")), "{found:?}");
+        // The congruence try alone: the difference depends on a value that the check does not
+        // model.
+        assert!(matches!(&congruence(old.clone(), new), Verdict::NotDecided { cause } if cause.contains("depends on")));
+        // Two variants of one type are two functions.
+        let other = body(reverse_types(), 1, Vec::new(), vec![ret_block(vec![set(0, IrRvalue::Agg(IrAgg::O(1, 1), vec![local(1)]))])]);
+        let found = verdict(old.clone(), other.clone());
+        assert!(matches!(&found, Verdict::NotDecided { .. }), "{found:?}");
+        assert!(matches!(&congruence(old.clone(), other), Verdict::NotDecided { cause } if cause.contains("depends on")));
+        // A `&mut` reference in an operand: a later write can change the value.
+        let writer = body(reverse_types(), 1, vec![2], vec![ret_block(vec![set(3, IrRvalue::Ref(true, IrPlace { l: 1, p: Vec::new() })), set(0, IrRvalue::Agg(IrAgg::O(1, 0), vec![local(3)]))])]);
+        let found = verdict(old.clone(), writer.clone());
+        assert!(matches!(&found, Verdict::NotDecided { .. }), "{found:?}");
+        assert!(matches!(&congruence(old, writer), Verdict::NotDecided { cause } if cause.contains("`&mut` reference inside a value")));
+    }
+
+    /// One try of the check with the congruence of R80.2-1 (the first try).
+    fn congruence(old: Ir, new: Ir) -> Verdict {
+        let std = BTreeMap::new();
+        let none = |_: &str| None;
+        let same = |text: &str| text.to_string();
+        let changed = |_: &str| false;
+        let step = Step { changed: &changed, changed_names: &[] };
+        let solver = Solver::find_for(&[], None).expect("the solver of the workspace");
+        let side = |ir: Ir| Side { ir: Arc::new(ir), workspace: &none, std: &std, rename: &same };
+        check_once(&solver, &side(old), &side(new), &step, false, &mut 0).0
+    }
+
+    // rule+ R80.2-2
+    #[test]
+    fn two_calls_of_one_definition_with_equal_arguments_give_one_result() {
+        // `f(x)` against `f(x + 0)`, with no form of `f`: an uninterpreted function.
+        let types = vec![IrTy::Int(32, false)];
+        let old = body(types.clone(), 0, Vec::new(), vec![call_block("core::hint::f", 1, 0, 1, false), ret_block(Vec::new())]);
+        let new = body(types.clone(), 0, vec![0], vec![ret_block(vec![set(3, IrRvalue::Bin("add".into(), local(1), IrOp::K(IrConst::I("0".into(), 0))))]), call_block("core::hint::f", 3, 0, 2, false), ret_block(Vec::new())]);
+        let mut new = new;
+        new.b[0].t.k = IrTermKind::Goto(1);
+        let found = verdict(old, new);
+        assert!(matches!(found, Verdict::Equivalent { .. }), "{found:?}");
+        // Two calls with an effect on the world in the same order: the k-th effect of the two
+        // sides is one function of the callee, k, and the inputs.
+        let effects = |first: &str, second: &str| body(types.clone(), 0, vec![0], vec![call_block(first, 1, 3, 1, true), call_block(second, 2, 0, 2, true), ret_block(Vec::new())]);
+        let found = verdict(effects("std::io::a", "std::io::b"), effects("std::io::a", "std::io::b"));
+        assert!(matches!(found, Verdict::Equivalent { .. }), "{found:?}");
+    }
+
+    // rule- R80.2-2
+    #[test]
+    fn a_congruence_never_joins_two_definitions_or_calls_with_effects_in_another_order() {
+        let types = vec![IrTy::Int(32, false)];
+        // `f(x)` against `g(x)`: two definitions, so two results.
+        let one = |name: &str| body(types.clone(), 0, Vec::new(), vec![call_block(name, 1, 0, 1, false), ret_block(Vec::new())]);
+        let found = verdict(one("core::hint::f"), one("core::hint::g"));
+        assert!(matches!(&found, Verdict::NotDecided { cause } if cause.contains("depends on")), "{found:?}");
+        // `f(x)` against `f(y)`: arguments that are not shown equal.
+        let mut other = one("core::hint::f");
+        other.b[0].t.k = match other.b[0].t.k.clone() {
+            IrTermKind::Call(callee, _, dest, target, unwind) => IrTermKind::Call(callee, vec![local(2)], dest, target, unwind),
+            kind => kind,
+        };
+        let found = verdict(one("core::hint::f"), other);
+        assert!(matches!(&found, Verdict::NotDecided { .. }), "{found:?}");
+        // Two calls with an effect on the world in another order: no congruence for them.
+        let effects = |first: &str, second: &str| body(types.clone(), 0, vec![0], vec![call_block(first, 1, 3, 1, true), call_block(second, 2, 0, 2, true), ret_block(Vec::new())]);
+        let found = verdict(effects("std::io::a", "std::io::b"), effects("std::io::b", "std::io::a"));
+        assert!(matches!(&found, Verdict::NotDecided { cause } if cause.contains("order of the calls")), "{found:?}");
+    }
+
+    // rule+ R80.1-1
+    #[test]
+    fn a_type_of_the_claim_crate_fits_the_type_of_a_tree_by_its_structure() {
+        // The short path of a tree and the path with the crate of the claim crate are one key;
+        // the fields decide the rest.
+        assert_eq!(type_key("std::option::Option<shop::Cart>"), "Option<Cart>");
+        assert_eq!(type_key("Option<Cart>"), "Option<Cart>");
+        let adt = |n: &str, fields: &[&str]| Ty { ir: Arc::new(Ir { t: vec![IrTy::Int(32, false), IrTy::Adt { n: n.into(), v: vec![vec![0; fields.len()]], vn: Vec::new(), d: Vec::new(), dt: None, e: false, fs: vec![fields.iter().map(|f| f.to_string()).collect()] }], ..Ir::default() }), id: 1 };
+        assert!(fits(&adt("shop::Cart", &["items"]), &adt("Cart", &["items"]), 0));
+    }
+
+    // rule- R80.1-1
+    #[test]
+    fn a_type_with_other_fields_or_another_name_does_not_fit() {
+        let adt = |n: &str, fields: &[&str]| Ty { ir: Arc::new(Ir { t: vec![IrTy::Int(32, false), IrTy::Adt { n: n.into(), v: vec![vec![0; fields.len()]], vn: Vec::new(), d: Vec::new(), dt: None, e: false, fs: vec![fields.iter().map(|f| f.to_string()).collect()] }], ..Ir::default() }), id: 1 };
+        assert!(!fits(&adt("shop::Cart", &["items"]), &adt("Cart", &["items", "len"]), 0));
+        assert!(!fits(&adt("shop::Cart", &["items"]), &adt("Cart", &["entries"]), 0));
+        assert!(!fits(&adt("shop::Cart", &["items"]), &adt("Basket", &["items"]), 0));
+        // No relation fits two types that are one type: equality relates them.
+        let relation = |old: &[&str], new: &[&str]| {
+            let (a, b) = (adt("shop::Cart", old).get().unwrap().clone(), adt("shop::Cart", new).get().unwrap().clone());
+            Relation { name: "claims::cart".into(), form: Arc::new(Ir { a: 2, l: vec![5, 3, 4], t: vec![IrTy::Int(32, false), a, b, IrTy::Ref(false, 1), IrTy::Ref(false, 2), IrTy::Bool], ..Ir::default() }) }
+        };
+        // The relation of two types that differ fits them (the positive side of this test).
+        let found = with_relations(&[relation(&["items"], &["items", "len"])], || relation_for(&adt("Cart", &["items"]), &adt("Cart", &["items", "len"])).is_some());
+        assert!(found);
+        // No relation applies to two types that are one type: equality relates them.
+        let found = with_relations(&[relation(&["items"], &["items"])], || relation_for(&adt("Cart", &["items"]), &adt("Cart", &["items"])).is_some());
+        assert!(!found);
+    }
+
 }
