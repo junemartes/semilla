@@ -160,7 +160,7 @@ fn check_in(solver: &Solver, property: &Property, old: &Version, new: &Version) 
                 let (found, _) = attempt(inline_all, Some(format!("{prefix}{name}")), &mut queries);
                 let cause = match found {
                     ClaimVerdict::False { .. } => continue,
-                    ClaimVerdict::Claimed { cause } if cause == NO_EXACT => continue,
+                    ClaimVerdict::Claimed { cause } if cause.starts_with(NO_EXACT) => continue,
                     ClaimVerdict::Proved { .. } => format!("the claim is true for any result of `{prefix}{name}`: it stays proved when each call of that version returns a free value with a free effect (the body alone is true by {method})"),
                     ClaimVerdict::Claimed { cause } => format!("the check that the claim depends on `{prefix}{name}` gives no result: {cause}"),
                 };
@@ -195,7 +195,7 @@ fn check_in(solver: &Solver, property: &Property, old: &Version, new: &Version) 
             let (found, _) = attempt(inline_all, Some(name.clone()), &mut queries);
             let uses = match &found {
                 ClaimVerdict::False { .. } => true,
-                ClaimVerdict::Claimed { cause } => cause == NO_EXACT,
+                ClaimVerdict::Claimed { cause } => cause.starts_with(NO_EXACT),
                 ClaimVerdict::Proved { .. } => false,
             };
             if uses && !depends.contains(&name) {
@@ -354,11 +354,12 @@ fn run_claim_in(solver: &Solver, property: &Property, old: &Version, new: &Versi
             // [R61.4-2] The failed path must be exact: its condition and its failure use only
             // the inputs and the literals.
             let failed = outs.iter().copied().zip(&fails).enumerate().find(|(index, _)| model.get(&format!("|f{index}|")).map(String::as_str) == Some("true"));
-            let Some((_, (out, fail))) = failed else { return claimed(NO_EXACT.into()) };
+            let no_exact = || no_exact_cause(&decls);
+            let Some((_, (out, fail))) = failed else { return claimed(no_exact()) };
             // [R80.1-3] The relation of the inputs must be exact too: else the input of the
             // model can be a pair that the relation does not hold for.
             if !fail.x || !out.pc.x || related.iter().any(|(_, term)| !term.x) {
-                return claimed(NO_EXACT.into());
+                return claimed(no_exact());
             }
             let input = decls.inputs.iter().map(|(name, value, ty)| format!("{name} = {}", value_text(value, Some(ty), &model))).collect::<Vec<_>>().join(", ");
             let detail = match &out.exit {
@@ -366,8 +367,200 @@ fn run_claim_in(solver: &Solver, property: &Property, old: &Version, new: &Versi
                 Exit::Abort => "the claim aborts".to_string(),
                 _ => "the claim returns `false`".to_string(),
             };
-            ClaimVerdict::False { input, detail, run: None }
+            // [R82.3-1] The calls of a version on the failed path, in order: the suggested test.
+            let mut list = Vec::new();
+            for entry in &out.trace {
+                for (value, _, target) in &entry.args {
+                    list.push(value.clone());
+                    list.extend(target.iter().cloned());
+                }
+                list.extend(entry.result.iter().cloned());
+                list.extend(entry.after.iter().map(|(_, value)| value.clone()));
+            }
+            let values = model_values(solver, &decls, &related, &symbols, &model, &list, queries);
+            let run = trace_case(out, &values).map(Box::new);
+            ClaimVerdict::False { input, detail, run }
         }
+    }
+}
+
+/// [R82.2-3] The cause of a check that can fail only for an input that is not exact. It names
+/// each write through `&mut` of a place of a type that the check does not model (a writer of the
+/// standard library: `String`, `fmt::Formatter`): the std spec library (batch 13f) gives these
+/// writes their meaning.
+fn no_exact_cause(decls: &Decls) -> String {
+    if decls.unmodeled.is_empty() {
+        return NO_EXACT.to_string();
+    }
+    let shown: Vec<&str> = decls.unmodeled.iter().take(3).map(String::as_str).collect();
+    format!("{NO_EXACT}; a write through `&mut` has no meaning in the model: {}: the check does not model a part of these types (the std spec library of batch 13f gives a meaning to the types of the standard library)", shown.join(", "))
+}
+
+/// [R82.3-1] The calls of one version on the failed path of a claim, in their order, for the
+/// suggested test (design 75): the calls of the old version, or the calls of the new version for
+/// a claim with no call of the old version. An argument with a value of the model is that value;
+/// an argument that the model does not give exactly is the variable of the test that holds it
+/// (the result of an earlier call of the list, or a place that the test made for an earlier
+/// call and that the calls changed since). A call that panics is the last call.
+fn trace_case(out: &PathOut, model: &BTreeMap<String, String>) -> Option<semilla_core::run::RunCase> {
+    use semilla_core::run::{ArgMode, Pat, RunArg, RunCall, RunCase, RunExit, RunOut, RunSide};
+    let of = |prefix: &str| -> Vec<&TraceCall> { out.trace.iter().filter(|entry| entry.name.starts_with(prefix)).collect() };
+    let (side, entries) = if of(BEFORE).is_empty() { (RunSide::After, of(AFTER)) } else { (RunSide::Before, of(BEFORE)) };
+    if entries.is_empty() {
+        return None;
+    }
+    // A variable of the test: its place in the claim (for a place or a result), the key of its
+    // value now, and a mark for a value that a call took by value.
+    struct Known {
+        var: String,
+        loc: Option<Loc>,
+        key: String,
+        moved: bool,
+    }
+    let mut known: Vec<Known> = Vec::new();
+    let mut calls = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let mut args = Vec::new();
+        for (position, (value, ty, target)) in entry.args.iter().enumerate() {
+            let (mode, inner) = match ty.as_ref().and_then(|ty| ty.get()) {
+                Some(IrTy::Ref(true, inner)) => (ArgMode::Mut, ty.as_ref().map(|ty| ty.at(*inner))),
+                Some(IrTy::Ref(false, inner)) => (ArgMode::Ref, ty.as_ref().map(|ty| ty.at(*inner))),
+                _ => (ArgMode::Value, ty.clone()),
+            };
+            let name = format!("arg{}", position + 1);
+            match (value, target) {
+                (V::Ptr(loc), Some(target)) => {
+                    let key = value_key(target);
+                    // The variable of this place with the value of now, else a variable with the
+                    // same value (a result that the claim moved into the place).
+                    let found = known.iter().position(|k| k.loc.as_ref() == Some(loc) && k.key == key && !k.moved).or_else(|| known.iter().position(|k| k.key == key && !k.moved));
+                    match found {
+                        Some(at) => {
+                            known[at].loc = Some(loc.clone());
+                            args.push(RunArg { name, expr: Ok(String::new()), mode, var: Some(known[at].var.clone()) });
+                        }
+                        None => {
+                            let var = format!("place{}_{}", index + 1, position + 1);
+                            known.retain(|k| k.loc.as_ref() != Some(loc));
+                            known.push(Known { var: var.clone(), loc: Some(loc.clone()), key, moved: false });
+                            args.push(RunArg { name, expr: rust_expr(target, inner.as_ref(), model), mode, var: Some(var) });
+                        }
+                    }
+                }
+                (V::Ptr(_), None) => args.push(RunArg { name, expr: Err("a reference with no target".into()), mode, var: None }),
+                _ => {
+                    let expr = rust_expr(value, ty.as_ref(), model);
+                    let key = value_key(value);
+                    // A value with no form in the model that an earlier call gave: its variable.
+                    match (&expr, known.iter_mut().find(|k| k.key == key && !k.moved)) {
+                        (Err(_), Some(found)) => {
+                            found.moved = !matches!(value, V::Bv(..) | V::Bool(_) | V::Unit);
+                            args.push(RunArg { name, expr: Ok(String::new()), mode, var: Some(found.var.clone()) });
+                        }
+                        _ => args.push(RunArg { name, expr, mode, var: None }),
+                    }
+                }
+            }
+        }
+        // The value behind each `&mut` argument after the call, in the order of the arguments.
+        let mut muts = Vec::new();
+        for (position, (value, ty, _)) in entry.args.iter().enumerate() {
+            let (V::Ptr(loc), Some(IrTy::Ref(true, inner))) = (value, ty.as_ref().and_then(|ty| ty.get())) else { continue };
+            let inner = ty.as_ref().map(|ty| ty.at(*inner));
+            match entry.after.iter().find(|(at, _)| *at == position) {
+                Some((_, after)) => {
+                    muts.push(fixed_pattern(after, inner.as_ref(), model));
+                    if let Some(found) = known.iter_mut().find(|k| k.loc.as_ref() == Some(loc)) {
+                        found.key = value_key(after);
+                    }
+                }
+                None => muts.push(Pat::Any),
+            }
+        }
+        let (exit, bind) = match &entry.result {
+            Some(result) => {
+                let var = format!("value{}", index + 1);
+                let loc = entry.dest.path.is_empty().then(|| entry.dest.clone());
+                known.retain(|k| loc.is_none() || k.loc != loc);
+                known.push(Known { var: var.clone(), loc, key: value_key(result), moved: false });
+                (RunExit::Returns(fixed_pattern(result, entry.dest_ty.as_ref(), model)), Some(var))
+            }
+            None => (RunExit::Panics(None), None),
+        };
+        let panicked = entry.result.is_none();
+        calls.push(RunCall { side, name: record_name(&entry.name).1.to_string(), target: String::new(), args, expect: RunOut { exit, muts }, file: String::new(), line: 0, value: false, bind });
+        if panicked {
+            break;
+        }
+    }
+    // A result variable that no later call takes is no variable.
+    let used: Vec<String> = calls.iter().flat_map(|call| call.args.iter().filter_map(|arg| arg.var.clone())).collect();
+    for call in &mut calls {
+        if call.bind.as_ref().is_some_and(|var| !used.contains(var)) {
+            call.bind = None;
+        }
+        // The claim names a type of a version by its facade (`before::shop::Cart`); a test in
+        // the crate names it by its path (`shop::Cart`).
+        for arg in &mut call.args {
+            if let Ok(expr) = &mut arg.expr {
+                *expr = unversioned(expr);
+            }
+        }
+        if let RunExit::Returns(pat) = &mut call.expect.exit {
+            unversioned_pat(pat);
+        }
+        call.expect.muts.iter_mut().for_each(unversioned_pat);
+    }
+    Some(RunCase { calls, blind: None, sequence: true })
+}
+
+/// [R82.3-1] The pattern of a value for an assertion of a sequence: a struct whose fields the
+/// model does not fix is `_` (a struct pattern with only `_` fields matches each value, so
+/// it asserts nothing); an enum keeps its variant.
+fn fixed_pattern(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> semilla_core::run::Pat {
+    use semilla_core::run::Pat;
+    let found = pattern(value, ty, model, true);
+    let is_struct = matches!(ty.and_then(|ty| ty.get()), Some(IrTy::Adt { e: false, .. }));
+    match &found {
+        Pat::Struct { fields, .. } if is_struct && fields.iter().all(|(_, pat)| *pat == Pat::Any) => Pat::Any,
+        Pat::TupleStruct { items, .. } if is_struct && items.iter().all(|pat| *pat == Pat::Any) => Pat::Any,
+        _ => found,
+    }
+}
+
+/// [R82.3-1] A text with no facade prefix (`before::`, `after::`) at the start of a path.
+fn unversioned(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        let next = [BEFORE, AFTER].iter().filter_map(|prefix| rest.find(prefix).map(|at| (at, prefix.len()))).min();
+        let Some((at, len)) = next else { break };
+        let start = rest[..at].chars().last().is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == ':'));
+        out.push_str(&rest[..at]);
+        if !start {
+            out.push_str(&rest[at..at + len]);
+        }
+        rest = &rest[at + len..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// [R82.3-1] [`unversioned`] for each path of a pattern.
+fn unversioned_pat(pat: &mut semilla_core::run::Pat) {
+    use semilla_core::run::Pat;
+    match pat {
+        Pat::Any | Pat::Lit(_) => {}
+        Pat::Tuple(items) | Pat::Slice(items) => items.iter_mut().for_each(unversioned_pat),
+        Pat::Struct { path, fields } => {
+            *path = unversioned(path);
+            fields.iter_mut().for_each(|(_, pat)| unversioned_pat(pat));
+        }
+        Pat::TupleStruct { path, items } => {
+            *path = unversioned(path);
+            items.iter_mut().for_each(unversioned_pat);
+        }
+        Pat::Unit(path) => *path = unversioned(path),
     }
 }
 
@@ -422,8 +615,9 @@ fn vacuous(solver: &Solver, body: &str, related: &[(String, T)], queries: &mut u
 /// and a new value that the relation of the two types holds for), the two outcomes must
 /// correspond: the same exit and kind of panic, the same effects, equal results of one type, and
 /// related results of two types. The check runs the two bodies as a claim MIR runs them
-/// (R78.4-1: each callee in its tree). A `&mut` parameter of a type that changes gives "claimed"
-/// (batch 13c). [R80.1-5] The proof must depend on each version: a check that stays true for a
+/// (R78.4-1: each callee in its tree). [R82.1-4] A `&mut` parameter of a type that changes is a
+/// place of each version: the related places before the call must give related places after
+/// it. [R80.1-5] The proof must depend on each version: a check that stays true for a
 /// free result of one version is "claimed".
 pub fn check_related(solver: &Solver, (old_item, new_item): (&str, &str), own: &dyn Fn(&str) -> Option<Arc<Ir>>, own_std: &BTreeMap<String, Arc<Ir>>, old: &Version, new: &Version, budget: Option<crate::budget::Budget>) -> PropertyCheck {
     let (mut checked, steps) = crate::budget::with(budget, || with_intent_model(|| related_in(solver, (old_item, new_item), own, own_std, old, new)));
@@ -498,7 +692,7 @@ fn related_in(solver: &Solver, (old_item, new_item): (&str, &str), own: &dyn Fn(
             let (found, _) = related_once(solver, &old_side, &new_side, &step, inline_all, Some(old_side_free), &names, &mut queries);
             let cause = match found {
                 ClaimVerdict::False { .. } => continue,
-                ClaimVerdict::Claimed { cause } if cause == NO_EXACT => continue,
+                ClaimVerdict::Claimed { cause } if cause.starts_with(NO_EXACT) => continue,
                 ClaimVerdict::Proved { .. } => format!("the check is true for any result of `{name}`: the relations alone make it true, and a relation is a hint, never an assumption (the check alone is true by {method})"),
                 ClaimVerdict::Claimed { cause } => format!("the check that the proof depends on `{name}` gives no result: {cause}"),
             };
@@ -534,6 +728,10 @@ fn related_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all
     let (mut slots, mut types, mut muts) = (Vec::new(), Vec::new(), Vec::new());
     let (mut old_inputs, mut new_inputs) = (Vec::new(), Vec::new());
     let mut pairs: Vec<(String, V, Ty, V, Ty)> = Vec::new();
+    // [R82.1-4] The `&mut` places of a parameter whose type changes: one place of each version.
+    // The old side writes its place only and the new side its place only, so each side has its
+    // own list of `&mut` places (the k-th place of the two lists is one parameter).
+    let (mut old_only, mut new_only): (Vec<usize>, Vec<usize>) = (Vec::new(), Vec::new());
     for local in 1..=fo.a {
         let (tb, ta) = (Ty { ir: fo.clone(), id: fo.l[local] }, Ty { ir: fnew.clone(), id: fnew.l[local] });
         let name = fnew.n.get(local - 1).cloned().unwrap_or_else(|| format!("_{local}"));
@@ -548,22 +746,28 @@ fn related_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all
             }
             continue;
         }
-        if matches!(tb.get(), Some(IrTy::Ref(true, _))) || matches!(ta.get(), Some(IrTy::Ref(true, _))) {
-            return claimed(format!("`&mut` comes in 13c: the parameter `{name}` is a `&mut` reference to a type that changes, and the relation of the value after the call needs the effects of batch 13c"));
-        }
-        let mut one = |ty: &Ty, text: String, decls: &mut Decls| -> Result<V, Stop> {
+        let mut one = |ty: &Ty, text: String, decls: &mut Decls, only: &mut Vec<usize>| -> Result<V, Stop> {
+            let start = muts.len();
             let value = input(decls, ty, &text, &mut slots, &mut types, &mut muts, 0)?;
+            only.extend(muts[start..].iter().copied());
             decls.inputs.push((text, value.clone(), ty.clone()));
             Ok(value)
         };
-        let (vb, va) = match (one(&tb, format!("{name}_before"), &mut decls), one(&ta, format!("{name}_after"), &mut decls)) {
+        let (vb, va) = match (one(&tb, format!("{name}_before"), &mut decls, &mut old_only), one(&ta, format!("{name}_after"), &mut decls, &mut new_only)) {
             (Ok(vb), Ok(va)) => (vb, va),
             (Err(Stop(cause)), _) | (_, Err(Stop(cause))) => return claimed(cause),
         };
+        if old_only.len() != new_only.len() {
+            return claimed(format!("the parameter `{name}` has another count of `&mut` places in the two versions"));
+        }
         old_inputs.push(vb.clone());
         new_inputs.push(va.clone());
         pairs.push((name, vb, tb, va, ta));
     }
+    let old_muts: Vec<usize> = muts.iter().copied().filter(|slot| !new_only.contains(slot)).collect();
+    let new_muts: Vec<usize> = muts.iter().copied().filter(|slot| !old_only.contains(slot)).collect();
+    // The positions of the places of two versions in the two lists, with their two types.
+    let mut_pairs: Vec<(usize, usize, usize)> = old_only.iter().zip(&new_only).filter_map(|(b, a)| Some((old_muts.iter().position(|slot| slot == b)?, *b, *a))).collect();
     // [R80.1-3] The inputs of two types: each pair that their relation holds for.
     let mut related: Vec<(String, T)> = Vec::new();
     for (name, vb, tb, va, ta) in &pairs {
@@ -598,22 +802,22 @@ fn related_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all
             Err(Stop(cause)) => return claimed(cause),
         };
         let mut after = Vec::new();
-        for (index, slot) in muts.iter().enumerate() {
+        for (index, slot) in (if is_old { &old_muts } else { &new_muts }).iter().enumerate() {
             let Some(ty) = types.get(*slot).cloned().flatten() else { return claimed("a `&mut` parameter with no type".into()) };
             match free_value(&mut decls, &ty, &format!("m{index}_{key}"), &flat, &sorts, &mut slots, &mut types, 0) {
                 Ok(value) => after.push(value),
                 Err(Stop(cause)) => return claimed(cause),
             }
         }
-        free_out = Some(Paths { outs: vec![PathOut { pc: t("true"), effects: Vec::new(), calls: Vec::new(), exit: Exit::Return(value), after, cut: None }], stops: Vec::new(), inlined: BTreeSet::new() });
+        free_out = Some(Paths { outs: vec![PathOut { pc: t("true"), effects: Vec::new(), trace: Vec::new(), calls: Vec::new(), exit: Exit::Return(value), after, cut: None }], stops: Vec::new(), inlined: BTreeSet::new() });
     }
     let a = match (free, free_out.as_ref()) {
         (Some(true), Some(found)) => Paths { outs: found.outs.clone(), stops: Vec::new(), inlined: BTreeSet::new() },
-        _ => run_side(old, step, inline_all, &mut decls, &old_inputs, &slots, &types, &muts, true),
+        _ => run_side(old, step, inline_all, &mut decls, &old_inputs, &slots, &types, &old_muts, true),
     };
     let b = match (free, free_out.as_ref()) {
         (Some(false), Some(found)) => Paths { outs: found.outs.clone(), stops: Vec::new(), inlined: BTreeSet::new() },
-        _ => run_side(new, step, inline_all, &mut decls, &new_inputs, &slots, &types, &muts, false),
+        _ => run_side(new, step, inline_all, &mut decls, &new_inputs, &slots, &types, &new_muts, false),
     };
     let mut inlined = a.inlined.clone();
     inlined.extend(b.inlined.iter().cloned());
@@ -637,21 +841,35 @@ fn related_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all
     for (i, x) in a.outs.iter().enumerate() {
         let mut row = Vec::new();
         for (j, y) in b.outs.iter().enumerate() {
+            // [R82.1-4] The places of a parameter whose type changes are related after the call
+            // (on each exit: the values behind the `&mut` parameters are a part of a panic too);
+            // each other place keeps the rule of the equivalence check (equal values).
+            let (mut xs, mut ys) = (x.clone(), y.clone());
+            let mut places = Vec::new();
+            for (position, slot_b, slot_a) in &mut_pairs {
+                let (Some(vx), Some(vy)) = (x.after.get(*position), y.after.get(*position)) else { continue };
+                let (Some(Some(tx)), Some(Some(ty))) = (types.get(*slot_b), types.get(*slot_a)) else { continue };
+                match relate_values(old, step, inline_all, &mut decls, &slots, &types, (vx, tx), (vy, ty), true) {
+                    Ok(holds) => places.push(not(&holds)),
+                    Err(Stop(cause)) => return (ClaimVerdict::Claimed { cause: format!("the place `{}` after the call: {cause}", decls.mut_names.iter().find(|(at, _)| at == slot_b).map(|(_, name)| name.as_str()).unwrap_or("*_")) }, inlined),
+                }
+                xs.after[*position] = V::Unit;
+                ys.after[*position] = V::Unit;
+            }
             let d = match (&x.exit, &y.exit) {
                 (Exit::Return(vx), Exit::Return(vy)) if !same_result => {
                     if points_into(vx, &muts) || points_into(vy, &muts) {
-                        return (ClaimVerdict::Claimed { cause: "a result that refers to a `&mut` parameter, with a relation (batch 13c)".into() }, inlined);
+                        return (ClaimVerdict::Claimed { cause: "a result that refers to a `&mut` parameter, with a relation (the pointer memory of batch 13e)".into() }, inlined);
                     }
-                    let (mut xs, mut ys) = (x.clone(), y.clone());
                     xs.exit = Exit::Return(V::Unit);
                     ys.exit = Exit::Return(V::Unit);
                     let rest = outcome_differs(&xs, &ys);
                     match relate_values(old, step, inline_all, &mut decls, &slots, &types, (vx, &rb), (vy, &ra), true) {
-                        Ok(holds) => or(&[rest, not(&holds)]),
+                        Ok(holds) => or(&[rest, not(&holds), or(&places)]),
                         Err(Stop(cause)) => return (ClaimVerdict::Claimed { cause: format!("the result: {cause}") }, inlined),
                     }
                 }
-                _ => outcome_differs(x, y),
+                _ => or(&[outcome_differs(&xs, &ys), or(&places)]),
             };
             if lit_bool(&d) != Some(false) {
                 alternatives.push(format!("(and |pa{i}| |pb{j}| {})", d.s));
@@ -701,12 +919,12 @@ fn related_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all
         Answer::Sat(model) => {
             let model: BTreeMap<String, String> = model.into_iter().collect();
             let pick = |prefix: &str, count: usize| (0..count).find(|index| model.get(&format!("|{prefix}{index}|")).map(String::as_str) == Some("true"));
-            let (Some(i), Some(j)) = (pick("pa", a.outs.len()), pick("pb", b.outs.len())) else { return (ClaimVerdict::Claimed { cause: NO_EXACT.into() }, inlined) };
+            let (Some(i), Some(j)) = (pick("pa", a.outs.len()), pick("pb", b.outs.len())) else { return (ClaimVerdict::Claimed { cause: no_exact_cause(&decls) }, inlined) };
             let (x, y) = (&a.outs[i], &b.outs[j]);
             // [R61.4-2] An exact input only: the two paths, the difference, and the relations of
             // the inputs use only the inputs and the literals.
             if !(x.pc.x && y.pc.x && differs[i][j].x && related.iter().all(|(_, term)| term.x)) {
-                return (ClaimVerdict::Claimed { cause: NO_EXACT.into() }, inlined);
+                return (ClaimVerdict::Claimed { cause: no_exact_cause(&decls) }, inlined);
             }
             let shown = |value: &V, ty: &Ty| -> String {
                 match (value, ty.get()) {
@@ -716,10 +934,12 @@ fn related_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all
             };
             let input = decls.inputs.iter().map(|(name, value, ty)| format!("{name} = {}", shown(value, ty))).collect::<Vec<_>>().join(", ");
             let input = if input.is_empty() { "each input".to_string() } else { input };
-            let mut_names: Vec<(String, Option<Ty>)> = muts.iter().map(|slot| (decls.mut_names.iter().find(|(at, _)| at == slot).map(|(_, name)| name.clone()).unwrap_or_else(|| "*_".into()), types[*slot].clone())).collect();
+            // [R82.1-4] The name of each place without the mark of its version (`*self`), with the
+            // type of the place of that side.
+            let mut_names = |list: &[usize]| -> Vec<(String, Option<Ty>)> { list.iter().map(|slot| (decls.mut_names.iter().find(|(at, _)| at == slot).map(|(_, name)| name.trim_end_matches("_before").trim_end_matches("_after").to_string()).unwrap_or_else(|| "*_".into()), types[*slot].clone())).collect() };
             let values = outcome_values(solver, &decls, &related, &symbols, &model, [x, y], queries);
-            let before = outcome_text(x, Some(&rb), &values, y, &mut_names);
-            let after = outcome_text(y, Some(&ra), &values, x, &mut_names);
+            let before = outcome_text(x, Some(&rb), &values, y, &mut_names(&old_muts));
+            let after = outcome_text(y, Some(&ra), &values, x, &mut_names(&new_muts));
             // [R75.1-3] The counterexample for a suggested test: the call of each version with
             // its own inputs (an input of a type that changes has two values).
             let side_case = |drop: &str| {
@@ -730,7 +950,7 @@ fn related_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all
                         *name = plain.to_string();
                     }
                 }
-                run_case(&own, &slots, &types, &muts, (x, &rb), (y, &ra), &values)
+                run_case(&own, &slots, &types, if drop == "_after" { &old_muts } else { &new_muts }, (x, &rb), (y, &ra), &values)
             };
             let (old_case, new_case) = (side_case("_after"), side_case("_before"));
             let mut calls = Vec::new();
@@ -741,7 +961,7 @@ fn related_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all
                     calls.push(call);
                 }
             }
-            let run = semilla_core::run::RunCase { calls, blind: old_case.blind.or(new_case.blind) };
+            let run = semilla_core::run::RunCase { calls, blind: old_case.blind.or(new_case.blind), sequence: false };
             (ClaimVerdict::False { input, detail: format!("the outcomes do not correspond: before {before}, after {after}"), run: Some(Box::new(run)) }, inlined)
         }
     }
@@ -750,15 +970,23 @@ fn related_once(solver: &Solver, old: &Side, new: &Side, step: &Step, inline_all
 /// The values of the terms of two outcomes for the inputs of a model (a second query with the
 /// inputs fixed), for the text of a false result.
 fn outcome_values(solver: &Solver, decls: &Decls, related: &[(String, T)], symbols: &[String], model: &BTreeMap<String, String>, outs: [&PathOut; 2], queries: &mut usize) -> BTreeMap<String, String> {
-    let mut values = model.clone();
-    let mut wanted = Vec::new();
+    let mut list = Vec::new();
     for out in outs {
         if let Exit::Return(value) = &out.exit {
-            terms_of(value, &mut wanted);
+            list.push(value.clone());
         }
-        for value in &out.after {
-            terms_of(value, &mut wanted);
-        }
+        list.extend(out.after.iter().cloned());
+    }
+    model_values(solver, decls, related, symbols, model, &list, queries)
+}
+
+/// The values of the terms of a list of values for the inputs of a model (a second query with
+/// the inputs fixed).
+fn model_values(solver: &Solver, decls: &Decls, related: &[(String, T)], symbols: &[String], model: &BTreeMap<String, String>, list: &[V], queries: &mut usize) -> BTreeMap<String, String> {
+    let mut values = model.clone();
+    let mut wanted = Vec::new();
+    for value in list {
+        terms_of(value, &mut wanted);
     }
     if wanted.is_empty() {
         return values;
@@ -784,13 +1012,7 @@ fn outcome_values(solver: &Solver, decls: &Decls, related: &[(String, T)], symbo
     }
     let mut names = Vec::new();
     for (index, term) in wanted.iter().enumerate() {
-        let sort = outs.iter().find_map(|out| {
-            let mut all: Vec<(String, T)> = out.after.iter().flat_map(flatten).collect();
-            if let Exit::Return(value) = &out.exit {
-                all.extend(flatten(value));
-            }
-            all.into_iter().find(|(_, found)| found.s == *term).map(|(sort, _)| sort)
-        });
+        let sort = list.iter().flat_map(flatten).find(|(_, found)| found.s == *term).map(|(sort, _)| sort);
         let Some(sort) = sort else { continue };
         fixed.push_str(&format!("(define-fun |w{index}| () {sort} {term})\n"));
         names.push((format!("|w{index}|"), term.clone()));

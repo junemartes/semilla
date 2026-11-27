@@ -973,7 +973,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                         }
                         _ => (ArgMode::Value, rust_expr(&arg.v, Some(&arg.ty), values)),
                     };
-                    RunArg { name: format!("argument {} of `{}::{}`", at + 1, call.version.prefix(), call.name), expr, mode }
+                    RunArg { name: format!("argument {} of `{}::{}`", at + 1, call.version.prefix(), call.name), expr, mode, var: None }
                 })
                 .collect();
             let exit = match &call.exit {
@@ -982,12 +982,12 @@ impl<'a, 'b> Eval<'a, 'b> {
                 Exit::Abort | Exit::Cut => RunExit::Aborts,
             };
             let side = if call.version == Version::Before { RunSide::Before } else { RunSide::After };
-            let found = RunCall { side, name: call.name.clone(), target: String::new(), args, expect: RunOut { exit, muts: Vec::new() }, file: String::new(), line: 0, value: false };
+            let found = RunCall { side, name: call.name.clone(), target: String::new(), args, expect: RunOut { exit, muts: Vec::new() }, file: String::new(), line: 0, value: false, bind: None };
             if !calls.contains(&found) {
                 calls.push(found);
             }
         }
-        Some(Box::new(RunCase { calls, blind: None }))
+        Some(Box::new(RunCase { calls, blind: None, sequence: false }))
     }
 
     // -----------------------------------------------------------------------------------------
@@ -2155,7 +2155,7 @@ impl<'a, 'b> Eval<'a, 'b> {
                                 Out::Panic { kind, args, msg, .. } => Exit::Panic { kind: kind.clone(), args: if self.options.except_panic_message { Vec::new() } else { args.clone() }, msg: msg.clone() },
                                 Out::Abort(_) => Exit::Abort,
                             };
-                            PathOut { pc: t("true"), effects: effects.to_vec(), calls: Vec::new(), exit, after: Vec::new(), cut: None }
+                            PathOut { pc: t("true"), effects: effects.to_vec(), trace: Vec::new(), calls: Vec::new(), exit, after: Vec::new(), cut: None }
                         };
                         if let (Out::Val(x), Out::Val(y)) = (&left, &right)
                             && !same_type(&x.ty, &y.ty, 0, &|text: &str| text.to_string())

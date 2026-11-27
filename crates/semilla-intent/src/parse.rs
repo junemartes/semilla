@@ -613,6 +613,8 @@ pub fn same_template(path: &str, old_signature: &str, new_signature: &str, type_
 struct Sig {
     name: String,
     params: Vec<(String, String)>,
+    /// [R82.3-2] The parameters that the function takes as `&mut` (a place).
+    places: Vec<String>,
     ret: String,
 }
 
@@ -626,14 +628,18 @@ fn read_signature(path: &str, signature: &str, type_path: &dyn Fn(&str) -> Optio
         let list = function.param_list().ok_or_else(|| "the signature has no parameters".to_string())?;
         let ty_text = |ty: &ast::Type, what: &str| -> Result<String, String> { claim_type(ty, &generics, type_path).map_err(|cause| format!("the type `{}` of {what} has no form in a claim ({cause})", compact(&ty.syntax().text().to_string()))) };
         let mut params = Vec::new();
+        let mut places = Vec::new();
         // [R69.5-3] The receiver of a method is a value of the type of the `impl` block.
         if let Some(receiver) = list.self_param() {
             let owner = path.rsplit_once("::").map(|(owner, _)| owner).unwrap_or(path);
             let reference = if receiver.amp_token().is_some() { "&" } else { "" };
+            // [R82.3-2] `&mut self`: a value of the claim that the call takes as `&mut`.
             if receiver.mut_token().is_some() && receiver.amp_token().is_some() {
-                return Err("the method takes `&mut self` (a claim reads values only)".into());
+                places.push("this".to_string());
+                params.push(("this".to_string(), format!("before::{owner}")));
+            } else {
+                params.push(("this".to_string(), format!("{reference}before::{owner}")));
             }
-            params.push(("this".to_string(), format!("{reference}before::{owner}")));
         }
         for param in list.params() {
             let pat = param.pat().map(|pat| pat.syntax().text().to_string()).unwrap_or_default();
@@ -642,6 +648,17 @@ fn read_signature(path: &str, signature: &str, type_path: &dyn Fn(&str) -> Optio
                 return Err(format!("the parameter `{pat}` is a pattern (a claim names each parameter)"));
             }
             let ty = param.ty().ok_or_else(|| format!("the parameter `{pat}` has no type"))?;
+            // [R82.3-2] A `&mut T` parameter: a value of the type `T` that the call takes as
+            // `&mut` (part A of design 82).
+            if let ast::Type::RefType(reference) = &ty
+                && reference.mut_token().is_some()
+                && let Some(inner) = reference.ty()
+            {
+                let text = ty_text(&inner, &format!("the parameter `{pat}`"))?;
+                places.push(pat.clone());
+                params.push((pat, text));
+                continue;
+            }
             let text = ty_text(&ty, &format!("the parameter `{pat}`"))?;
             params.push((pat, text));
         }
@@ -649,7 +666,7 @@ fn read_signature(path: &str, signature: &str, type_path: &dyn Fn(&str) -> Optio
             Some(ty) => ty_text(&ty, "the result")?,
             None => "()".to_string(),
         };
-        Ok(Sig { name, params, ret })
+        Ok(Sig { name, params, places, ret })
     }
 }
 
@@ -661,7 +678,22 @@ fn same_body(path: &str, old: &Sig, new: &Sig) -> Result<String, String> {
     let mut declared: Vec<String> = Vec::new();
     let mut guards: Vec<String> = Vec::new();
     let mut old_args: Vec<String> = Vec::new();
+    // [R82.3-2] A place of the old version is a place of the new version too.
+    for name in old.places.iter().chain(&new.places) {
+        if old.params.iter().any(|(known, _)| known == name) && new.params.iter().any(|(known, _)| known == name) && (old.places.contains(name) != new.places.contains(name)) {
+            return Err(format!("the parameter `{name}` is `&mut` in one version only: write the claim with a value of each version"));
+        }
+    }
     for (name, ty) in &old.params {
+        // [R82.3-2] A place: one value of each version (the start values are the same, or
+        // related), the call of each version on its own value, and the values after the calls.
+        if old.places.contains(name) {
+            declared.push(format!("mut {name}_before: {ty}"));
+            declared.push(format!("mut {name}_after: {}", ty.replace("before::", "after::")));
+            guards.push(format!("same(&{name}_before, &{name}_after)"));
+            old_args.push(format!("&mut {name}_before"));
+            continue;
+        }
         if ty.contains("before::") {
             declared.push(format!("{name}_before: {ty}"));
             declared.push(format!("{name}_after: {}", ty.replace("before::", "after::")));
@@ -676,6 +708,11 @@ fn same_body(path: &str, old: &Sig, new: &Sig) -> Result<String, String> {
     let mut new_args: Vec<String> = Vec::new();
     for (name, ty) in &new.params {
         match old.params.iter().find(|(known, _)| known == name) {
+            Some(_) if new.places.contains(name) => new_args.push(format!("&mut {name}_after")),
+            None if new.places.contains(name) => {
+                declared.push(format!("mut {name}: {}", ty.replace("before::", "after::")));
+                new_args.push(format!("&mut {name}"));
+            }
             Some((_, old_ty)) if old_ty.contains("before::") => new_args.push(format!("{name}_after")),
             Some(_) => new_args.push(name.clone()),
             None => {
@@ -686,6 +723,14 @@ fn same_body(path: &str, old: &Sig, new: &Sig) -> Result<String, String> {
     }
     let (old_call, new_call) = (format!("before::{path}({})", old_args.join(", ")), format!("after::{path}({})", new_args.join(", ")));
     let same_type = old.ret == new.ret && !old.ret.contains("before::");
+    // [R82.3-2] With a place: the two calls, the two results, and the values of the places after
+    // the calls.
+    let places: Vec<String> = old.places.iter().filter(|name| new.places.contains(name)).map(|name| format!("same(&{name}_before, &{name}_after)")).collect();
+    if !places.is_empty() {
+        let result = if same_type { "new == old" } else { "true" };
+        let body = format!("!({}) || {{ let old = {old_call}; let new = {new_call}; {result} && {} }}", guards.join(" && "), places.join(" && "));
+        return Ok(format!("#[same({path})] fn {}({}) -> bool {{ {body} }}", old.name, declared.join(", ")));
+    }
     let body = match (guards.is_empty(), same_type) {
         (true, true) => format!("{new_call} == {old_call}"),
         (true, false) => format!("let old = {old_call}; let new = {new_call}; true"),
@@ -703,8 +748,11 @@ fn same_body(path: &str, old: &Sig, new: &Sig) -> Result<String, String> {
 pub fn version_template(kind: &str, path: &str, signature: &str, type_path: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
     let version = if kind == "removed" { "before" } else { "after" };
     let sig = read_signature(path, signature, type_path)?;
-    let params: Vec<String> = sig.params.iter().map(|(name, ty)| format!("{name}: {}", ty.replace("before::", &format!("{version}::")))).collect();
-    let args: Vec<&str> = sig.params.iter().map(|(name, _)| name.as_str()).collect();
+    // [R82.3-2] A place (`&mut self`, a `&mut T` parameter) is a value of the claim that the
+    // call takes as `&mut`.
+    let place = |name: &String| sig.places.contains(name);
+    let params: Vec<String> = sig.params.iter().map(|(name, ty)| format!("{}{name}: {}", if place(name) { "mut " } else { "" }, ty.replace("before::", &format!("{version}::")))).collect();
+    let args: Vec<String> = sig.params.iter().map(|(name, _)| if place(name) { format!("&mut {name}") } else { name.clone() }).collect();
     let value = if kind == "removed" { "old" } else { "new" };
     Ok(format!("#[{kind}({path})] fn {}_{kind}({}) -> bool {{ let {value} = {version}::{path}({}); true }}", sig.name, params.join(", "), args.join(", ")))
 }
@@ -753,7 +801,7 @@ fn claim_type(ty: &ast::Type, generics: &[String], type_path: &dyn Fn(&str) -> O
         ast::Type::RefType(reference) => {
             let inner = reference.ty().ok_or_else(|| "a reference with no type".to_string())?;
             if reference.mut_token().is_some() {
-                return Err("`&mut` (a claim reads values only)".into());
+                return Err("`&mut` inside a type (a claim takes a `&mut` place as a parameter or a value of the claim only)".into());
             }
             format!("&{}", claim_type(&inner, generics, type_path)?)
         }
@@ -917,6 +965,35 @@ fn two() {}
         // A type that is not a type of the crate keeps its path.
         let found = same_template("cal::put", "fn put(t: std::time::Duration) -> u8", "fn put(t: std::time::Duration, k: u8) -> u8", &types).unwrap();
         assert_eq!(found, "#[same(cal::put)] fn put(t: std::time::Duration, k: u8) -> bool { after::cal::put(t, k) == before::cal::put(t) }");
+    }
+
+    // rule+ R82.3-2
+    // rule- R82.3-2
+    #[test]
+    fn a_template_of_an_item_with_mut_has_a_place_of_each_version() {
+        let types = |name: &str| (name == "Doc").then(|| "shop::Doc".to_string());
+        // R82.3-2 (positive): `&mut self` is a value of each version that the call takes as
+        // `&mut`; the claim compares the results and the values after the calls.
+        let found = same_template("shop::Doc::push", "fn push(&mut self, x: u8)", "fn push(&mut self, x: u8)", &types).unwrap();
+        assert_eq!(found, "#[same(shop::Doc::push)] fn push(mut this_before: before::shop::Doc, mut this_after: after::shop::Doc, x: u8) -> bool { !(same(&this_before, &this_after)) || { let old = before::shop::Doc::push(&mut this_before, x); let new = after::shop::Doc::push(&mut this_after, x); new == old && same(&this_before, &this_after) } }");
+        // A `&mut` parameter of a type of another crate: the same form.
+        let found = same_template("shop::add_to", "fn add_to(v: &mut u64, x: u64)", "fn add_to(v: &mut u64, x: u64, twice: bool)", &types).unwrap();
+        assert_eq!(found, "#[same(shop::add_to)] fn add_to(mut v_before: u64, mut v_after: u64, x: u64, twice: bool) -> bool { !(same(&v_before, &v_after)) || { let old = before::shop::add_to(&mut v_before, x); let new = after::shop::add_to(&mut v_after, x, twice); new == old && same(&v_before, &v_after) } }");
+        // R82.3-2 (negative): a parameter that is `&mut` in one version only, and a `&mut`
+        // inside a type, give the cause, never a template.
+        let error = same_template("shop::get", "fn get(v: &u64) -> u64", "fn get(v: &mut u64) -> u64", &types).unwrap_err();
+        assert!(error.contains("`&mut` in one version only"), "{error}");
+        let error = same_template("shop::pick", "fn pick(v: Option<&mut u64>) -> u64", "fn pick(v: Option<&mut u64>, k: u8) -> u64", &types).unwrap_err();
+        assert!(error.contains("`&mut` inside a type"), "{error}");
+        // [R79.5-1] The template of an added or a removed item has the same form of a place:
+        // rustc accepts the call with `&mut` of a value of the claim.
+        let found = version_template("new", "shop::Doc::push", "fn push(&mut self, x: u8)", &types).unwrap();
+        assert_eq!(found, "#[new(shop::Doc::push)] fn push_new(mut this: after::shop::Doc, x: u8) -> bool { let new = after::shop::Doc::push(&mut this, x); true }");
+        let found = version_template("removed", "shop::add_to", "fn add_to(v: &mut u64, x: u64)", &types).unwrap();
+        assert_eq!(found, "#[removed(shop::add_to)] fn add_to_removed(mut v: u64, x: u64) -> bool { let old = before::shop::add_to(&mut v, x); true }");
+        // A plain reference stays a parameter of the claim.
+        let found = version_template("new", "shop::Doc::len", "fn len(&self) -> usize", &types).unwrap();
+        assert_eq!(found, "#[new(shop::Doc::len)] fn len_new(this: &after::shop::Doc) -> bool { let new = after::shop::Doc::len(this); true }");
     }
 
     // rule+ R67.6-1

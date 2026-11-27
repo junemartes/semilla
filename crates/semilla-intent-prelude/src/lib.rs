@@ -51,19 +51,25 @@ pub fn returns<R>(call: impl FnOnce() -> R) -> bool {
     !panics(call)
 }
 
-/// True if the two calls have the same outcome: the same value, or a panic of the same kind.
+/// True if the two calls have the same outcome: the same value, or a panic of the same kind, and
+/// the same effects (R82.2-2: a write through a `&mut` capture is an effect).
 pub fn same_outcome<A, B>(first: impl FnOnce() -> A, second: impl FnOnce() -> B) -> bool {
     let _ = (first, second);
     false
 }
 
-/// The ordered effects of a call (batch 13c).
+/// The ordered effects of a call (design 82, R82.2-1): its effects on the world in their order
+/// (the calls with an effect of design 64), and the value of each place that the closure writes
+/// through a `&mut` capture, after the call. A claim compares two of them with [`same`].
 pub fn effects<R>(call: impl FnOnce() -> R) -> Effects {
     let _ = call;
     Effects(())
 }
 
-/// True if the two calls have the same effects in the same order (batch 13c).
+/// True if the two calls have the same effects in the same order (design 82, R82.2-2): the same
+/// effects on the world, and the same values (or related values, with the `#[relation]`
+/// functions) of the places that each closure writes through its `&mut` captures. The results
+/// and the panics of the calls are not effects: [`same_outcome`] compares them, with the effects.
 pub fn same_effects<A, B>(first: impl FnOnce() -> A, second: impl FnOnce() -> B) -> bool {
     let _ = (first, second);
     false

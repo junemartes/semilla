@@ -298,11 +298,12 @@ fn same_len(b: &before::shop::Cart, a: &after::shop::Cart) -> bool {
 A claim on such a scope is one line with the count of its items, and one line for each item (at most 64 items):
 
 ```
-  ? i3 `#[same(impl shop::Cart)] fn cart_methods()` (.semilla/intent/pr.rs:8): claimed: 4 item(s) of the scope `impl shop::Cart`: 3 proved, 0 false, 1 claimed
+  ? i3 `#[same(impl shop::Cart)] fn cart_methods()` (.semilla/intent/pr.rs:8): claimed: 5 item(s) of the scope `impl shop::Cart`: 4 proved, 0 false, 1 claimed
       `shop::Cart::new`: proved: related inputs give related outcomes, by SMT (the relations of the intent file)
       `shop::Cart::len`: proved: related inputs give related outcomes, by SMT (the relations of the intent file)
       `shop::Cart::is_empty`: proved: related inputs give related outcomes, by SMT (the relations of the intent file)
-      `shop::Cart::push`: claimed: `&mut` comes in 13c: the parameter `self` is a `&mut` reference to a type that changes, …
+      `shop::Cart::push`: proved: related inputs give related outcomes, by SMT (the relations of the intent file)
+      `shop::Cart::first`: claimed: …
 ```
 
 The result of the claim is the worst result of its items (an error, then `false`, then `claimed`). Each proved item explains its bodies, also when another item of the scope is only claimed. A false item rejects the step.
@@ -331,10 +332,60 @@ fn len(b: before::shop::Cart, a: after::shop::Cart) -> bool {
 - A relation is a function with two parameters, `&before::T` and `&after::T` (or the two values), that returns `bool`. It can read the private fields of the two values, call another relation, and use `same(&x, &y)` for parts whose type is the same in the two versions. A relation has the model of a claim body: `v.len()`, `v.is_empty()`, and `a == b` (or `!=`) of two `Vec`s of integers, `bool`, or `char` are exact (for example `a.lines == b.lines && a.n == b.lines.len()`).
 - Semilla finds the relation of two values by their two types (the compiler types: the fields, their names and types), never by the name of the function. A relation is used only where the two types differ.
 - `same(&old, &new)` of two values whose types differ is their relation; for an `Option`, a `Result`, a tuple, or a struct or an enum of one definition, each part by this rule.
-- An empty `#[same]` claim on an item whose parameters or result change: for each pair of related inputs, the two versions give the same exit and the same kind of panic, the same effects, equal results of one type, and related results of two types. A `&mut` parameter of a type that changes gives `claimed: `&mut` comes in 13c`. The count of the parameters must stay the same (else write a property claim).
+- An empty `#[same]` claim on an item whose parameters or result change: for each pair of related inputs, the two versions give the same exit and the same kind of panic, the same effects, equal results of one type, and related results of two types. A `&mut` parameter of a type that changes (also `&mut self`) is a place of each version: the places after the call must be related too (design 82). The count of the parameters must stay the same (else write a property claim).
+- **A relation decides each item whose signature has the type** (design 82, R82.1-3): an empty `#[same]` claim on an item with a parameter, a `&mut` place, or a result of a type that a relation fits is the check of related inputs and outcomes, never a proof by equal MIR. Example: the new `push` forgets to update a cached field, so its MIR is equal to the old MIR; with the relation, its claim is `false` (the places after the call do not correspond), not `proved: equivalent by equal MIR`. Equal MIR stays a proof for an item with no type of a relation.
+- **A proof with a relation is conditional on the bodies that write the type** (design 82, R82.1-5). Semilla takes from the compiler each body of the two versions that makes or changes a value of the type (a struct expression, a write of a field, a `&mut` of a field), also a body that no claim names, and checks that each keeps the relation. All keep it: the claim stays `proved` ("… 3 checked"). One breaks it: the claim is `false` with the input of that body ("the relation `doc` does not hold after `shop::Doc::push`: …"). A body of one version only, or one that the check does not prove: `claimed: proved if the relation `doc` holds; not checked: `shop::Doc::extra` (…)`; such a claim explains no body. Claim the behavior of each such body, or fix it.
 - In a property claim, the k-th parameter of the old type and the k-th parameter of the new type are related.
 - A false result of a method gives a suggested `#[test]` of its counterexample (design 75), as each false claim does; Semilla does not run it.
 - **A relation is a hint, never an assumption.** Its line is `hint` (it is not a claim), and it explains no body alone. Each use is checked: a wrong relation gives `false` with an input (for example a relation that does not say `a.len == b.items.len()`), never `proved`. A relation that holds for no pair gives `claimed: vacuous: …`. A check that is true for any result of one version (for example with a relation that is always `true`) gives `claimed: the check is true for any result of …`.
+
+**`&mut` in claims** (design 82). A claim can make a value, pass it as `&mut` to a call of a version, and read it after the call. The value is a place: each call writes it, the next call sees the last write, and a read after the calls sees the value after them. The order of the writes is a part of the result. A `&mut` parameter of the claim is a place too (its value at the start is an input).
+
+```rust
+// A setter: make the value, call the setter of each version, and read the values after it.
+#[same(shop::Counter::set)]
+fn set_then_get(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    before::shop::Counter::set(&mut b, x);
+    let mut a = after::shop::Counter::new();
+    after::shop::Counter::set(&mut a, x);
+    before::shop::Counter::get(&b) == after::shop::Counter::get(&a)
+}
+
+// A type that changes (a relation, design 80): the old value and the new value of `self`, one
+// call of each version, and the values after the calls.
+#[same(shop::Cart::push)]
+fn push(mut b: before::shop::Cart, mut a: after::shop::Cart, x: u32) -> bool {
+    before::shop::Cart::push(&mut b, x);
+    after::shop::Cart::push(&mut a, x);
+    same(&b, &a)
+}
+
+// A writer is a place like each other `&mut`: what the call writes is its value after the call.
+#[same(shop::emit_bytes)]
+fn emit(x: u8) -> bool {
+    let mut s: Vec<u8> = Vec::new();
+    before::shop::emit_bytes(&mut s, x);
+    let mut t: Vec<u8> = Vec::new();
+    after::shop::emit_bytes(&mut t, x);
+    s == t
+}
+
+// The effects of two calls: the effects on the world in their order, and the values that each
+// closure writes through its `&mut` captures (related values where the types differ).
+#[same(shop::Counter::bump)]
+fn bump_effects(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    let mut a = after::shop::Counter::new();
+    same_effects(|| before::shop::Counter::bump(&mut b, x), || after::shop::Counter::bump(&mut a, x))
+}
+```
+
+- `effects(|| e)` is the ordered effects of one call; `same(&effects(|| a), &effects(|| b))` is the same check as `same_effects(|| a, || b)`. `same_effects` does not compare the results or the panics; `same_outcome` compares the results, the panics, and the effects (a write through a `&mut` capture is an effect, so it is never lost).
+- A writer of a type that the check models (`Vec<u8>`, a type of your crate) is exact. A writer of a type that the check does not model (`String`, `fmt::Formatter`, `impl fmt::Write` with such a type) gives `claimed` with the cause "a write through `&mut` has no meaning in the model: `…::push_str` writes a place of the type `String`"; the std spec library (batch 13f) closes these.
+- A false claim with `&mut` gets a suggested test (design 75) that makes the values, makes the calls of the old version in their order (a result or a place of an earlier call is a variable of the test), and asserts the old outcome after each call: the result and the value behind each `&mut` that the model fixes. Semilla does not run it.
+- A claim that reads a value only before the call never sees the write of the call: it is `claimed: the claim is true for any result of …`, never `proved`.
+- The help template of an item with `&mut self` or a `&mut` parameter has one value of each version (`mut this_before: before::shop::Doc, mut this_after: after::shop::Doc`), calls each version with `&mut` of its own value, and compares the results and the values after the calls.
 
 **Congruence** (design 80, part B). When the two versions call one function (the same definition, after the rename map) with equal arguments, the results are equal, also when the check has no model of the function or of its types (a type of the standard library, for example `std::cmp::Reverse(x)`). A call with an effect keeps its place in the order of the effects: another order gets no congruence.
 
@@ -416,7 +467,7 @@ In the default mode, the step reads the compiled claims of the last `semilla int
 
 A claim with a property body needs `--compiled`: the default mode shows "claimed (the check needs `--compiled`)". `#[rename]`, `#[moved]`, and `#[rewrite]` have the checks of `--same` in each mode. A `#[change(ITEM)]` claim also states its item for the gap list, as `--change` does.
 
-**The rules of a body.** A call of a version runs the body of that version. Each call starts with the same world: a call does not see the effects of another call. A panic of a call outside `panics(|| …)`, `panics_with(|| …, "…")`, `returns(|| …)`, and `same_outcome(|| …, || …)` makes the claim false. An operation of the claim has the checks of a debug build (an overflow panics). `==` compares the values of integers, `bool`, `char`, tuples, sequences, and `Option` and `Result` of these; on a type of the workspace it calls `PartialEq::eq` of that version. A path can be loose (`shop::Cart::len` for `shop::Cart::<T>::len`); a trait method has its record name as a text: `#[same("<shop::Cart as core::fmt::Debug>::fmt")]`.
+**The rules of a body.** A call of a version runs the body of that version. A call sees the writes of the earlier calls through a `&mut` place of the claim (design 82); the effects on the world of one call are not inputs of another call. A panic of a call outside `panics(|| …)`, `panics_with(|| …, "…")`, `returns(|| …)`, and `same_outcome(|| …, || …)` makes the claim false. An operation of the claim has the checks of a debug build (an overflow panics). `==` compares the values of integers, `bool`, `char`, tuples, sequences, and `Option` and `Result` of these; on a type of the workspace it calls `PartialEq::eq` of that version. A path can be loose (`shop::Cart::len` for `shop::Cart::<T>::len`); a trait method has its record name as a text: `#[same("<shop::Cart as core::fmt::Debug>::fmt")]`.
 
 **The loop.**
 
@@ -427,19 +478,19 @@ A claim with a property body needs `--compiled`: the default mode shows "claimed
 
 A later step that changes a body that a claim reads checks that claim again (`s0.i3 … stale before this check: this step changes …`). A false result rejects the later step.
 
-**The help.** In a step with an intent file, a body whose equivalence check cannot compare the two versions because the parameters or the return type change gets a note with the two signatures (or, if their texts are equal, the type that changes, with its changed fields: "the type of `self` changes: `shop::Pt`: `x: u32` → `x: u64`") and two templates: one `#[same]` claim if the behavior does not change, and one `#[change]` claim if it changes. Each template is a complete claim that `semilla intent check` accepts: the parameters of the old version and the new parameters, a type of the crate with its path (`before::shop::Cart`), and no lifetime. With another return type the body names the two results (`let old = …; let new = …; true`): write their relation in place of `true`. A parameter type that a claim cannot name (a generic parameter, `Self`, `impl …`, `dyn …`, `&mut`) gives "no template" with the type and the cause.
+**The help.** In a step with an intent file, a body whose equivalence check cannot compare the two versions because the parameters or the return type change gets a note with the two signatures (or, if their texts are equal, the type that changes, with its changed fields: "the type of `self` changes: `shop::Pt`: `x: u32` → `x: u64`") and two templates: one `#[same]` claim if the behavior does not change, and one `#[change]` claim if it changes. Each template is a complete claim that `semilla intent check` accepts: the parameters of the old version and the new parameters, a type of the crate with its path (`before::shop::Cart`), and no lifetime. With another return type the body names the two results (`let old = …; let new = …; true`): write their relation in place of `true`. A parameter type that a claim cannot name (a generic parameter, `Self`, `impl …`, `dyn …`, a `&mut` inside a type, a parameter that is `&mut` in one version only) gives "no template" with the type and the cause. A `&mut self` or a `&mut T` parameter gives one value of each version that the call takes as `&mut` (design 82).
 
 **A panic message.** The literal text of a panic message is a part of the outcome: `assert!(x < 10, "too big")` → `assert!(x < 10, "x is too big")` is a difference ("panics (`std::rt::panic_fmt` with the message "too big")"). Use `except = [panic_message]` if only the kind of the panic matters. `panics_with(|| …, "TEXT")` compares the text of a literal message.
 
 **The results of a property claim** (the claim MIR, design 78):
 
 - `proved`: Semilla checked the MIR of the claim function for each input in each checked configuration: no input makes it return `false`, panic, or abort. A claim on `ITEM` is a proof only if it calls `before::ITEM` and `after::ITEM`, and only if it is not true for any result of one version.
-- `false`: an exact input where the claim returns `false` or panics. The step is rejected.
-- `claimed`: Semilla cannot check the claim; the line has the cause (a loop, a float, a part outside the model, a budget, a kind of a later batch). `panics(|| …)`, `returns(|| …)`, `panics_with(|| …, "…")`, and `same_outcome(|| …, || …)` run their closures; `panics_with` is never exact on a path that panics (the model has no text of a message).
+- `false`: an exact input where the claim returns `false` or panics. The step is rejected. The line names the suggested test of the calls of the claim (design 82, part C), or "no suggested test: …" with the cause.
+- `claimed`: Semilla cannot check the claim; the line has the cause (a loop, a float, a part outside the model, a budget, a kind of a later batch). `panics(|| …)`, `returns(|| …)`, `panics_with(|| …, "…")`, `same_outcome(|| …, || …)`, `effects(|| …)`, and `same_effects(|| …, || …)` run their closures; `panics_with` is never exact on a path that panics (the model has no text of a message).
 - `error`: an error of rustc or of Semilla (`semilla intent check` gives it with its place). The step is rejected. Rustc checks the whole file: a claim with no error of its own shows the place of the first error.
 - `shown`: the text of `intent!`.
 
-**The rules of a body.** A call of a version runs the body of that version. Each call starts with the same world: a call does not see the effects of another call. A panic of a call outside a prelude function makes the claim false for that input. A claim with a property body needs `--compiled`. The help of the step for a body whose signature changes shows the two signatures.
+**The rules of a body.** A call of a version runs the body of that version. A call sees the writes of the earlier calls through a `&mut` place of the claim (design 82); the effects on the world of one call are not inputs of another call. A panic of a call outside a prelude function makes the claim false for that input. A claim with a property body needs `--compiled`. The help of the step for a body whose signature changes shows the two signatures.
 
 The editor: rust-analyzer does not read the intent crate yet (no `semilla intent setup` in this version); `semilla intent check` is the check.
 

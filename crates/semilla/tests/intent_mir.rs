@@ -892,11 +892,11 @@ fn an_empty_same_claim_on_items_whose_types_change_checks_related_inputs_and_out
         assert_eq!(depends, [format!("before::{name}"), format!("after::{name}")], "{name}");
     }
     // R80.1-4 (negative): a method whose outcome does not correspond is false with an exact
-    // pair of inputs; a `&mut self` method of a type that changes is "claimed" (batch 13c).
+    // pair of inputs. A `&mut self` method of a type that changes has the rule R82.1-4.
     let (_, twice, _) = get("shop::Cart::twice");
     assert!(matches!(&twice, ClaimVerdict::False { input, detail, .. } if input.contains("self_before") && input.contains("self_after") && detail.contains("returns")), "{twice:?}");
     let (_, push, _) = get("shop::Cart::push");
-    assert!(matches!(&push, ClaimVerdict::Claimed { cause } if cause.contains("`&mut` comes in 13c")), "{push:?}");
+    assert!(matches!(&push, ClaimVerdict::Proved { .. }), "{push:?}");
 }
 
 // rule+ R80.1-5
@@ -978,4 +978,375 @@ fn a_relation_reads_a_vec_field_with_the_model_of_a_claim_body() {
     let with_call = format!("{VIEW}#[relation(before::shop::Tag, after::shop::Tag)]\nfn tag(b: &before::shop::Tag, a: &after::shop::Tag) -> bool {{\n    b.v == a.v as u8 && char::from(b.v).is_alphanumeric() == char::from(a.v as u8).is_alphanumeric()\n}}\n");
     let results = pair.check_items(&with_call, &["shop::Tag::get"]);
     assert!(matches!(&results[0].1, ClaimVerdict::Proved { .. }), "{results:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Design 82: `&mut` and effects in claims.
+
+/// A counter with setters, a function that writes through a `&mut` parameter, and two writers.
+/// In the new version `set` clamps the value, `take` returns one more, and `emit_bytes` and
+/// `emit_text` write more for one input; `bump`, `double`, `add_to`, and `scale` keep their
+/// behavior with another text.
+const EFF_OLD: &str = r#"
+pub struct Counter { n: u32 }
+impl Counter {
+    pub fn new() -> Counter { Counter { n: 0 } }
+    pub fn get(&self) -> u32 { self.n }
+    pub fn bump(&mut self, x: u32) { self.n = self.n.wrapping_add(x) }
+    pub fn set(&mut self, x: u32) { self.n = x }
+    pub fn double(&mut self) { self.n = self.n.wrapping_mul(2) }
+    pub fn take(&mut self) -> u32 { let n = self.n; self.n = 0; n }
+}
+pub fn add_to(v: &mut u64, x: u64) { *v = v.wrapping_add(x) }
+pub fn scale(v: &mut u64, k: u64) { *v = v.wrapping_mul(k) }
+pub fn emit_bytes(out: &mut Vec<u8>, x: u8) { out.push(x) }
+pub fn emit_text(out: &mut String, x: u32) { if x > 3 { out.push_str("big") } else { out.push('s') } }
+"#;
+
+const EFF_NEW: &str = r#"
+pub struct Counter { n: u32 }
+impl Counter {
+    pub fn new() -> Counter { Counter { n: 0 } }
+    pub fn get(&self) -> u32 { self.n }
+    pub fn bump(&mut self, x: u32) { self.n = x.wrapping_add(self.n) }
+    pub fn set(&mut self, x: u32) { if x > 100 { self.n = 100 } else { self.n = x } }
+    pub fn double(&mut self) { self.n = self.n.wrapping_add(self.n) }
+    pub fn take(&mut self) -> u32 { let n = self.n; self.n = 0; n.wrapping_add(1) }
+}
+pub fn add_to(v: &mut u64, x: u64) { *v = x.wrapping_add(*v) }
+pub fn scale(v: &mut u64, k: u64) { *v = k.wrapping_mul(*v) }
+pub fn emit_bytes(out: &mut Vec<u8>, x: u8) { out.push(x); if x == 7 { out.push(x) } }
+pub fn emit_text(out: &mut String, x: u32) { if x >= 3 { out.push_str("big") } else { out.push('s') } }
+"#;
+
+fn eff_pair(name: &str) -> Pair {
+    Pair::build(name, (EFF_OLD, ""), (EFF_NEW, ""))
+}
+
+fn verdict_of(results: &[(String, ClaimVerdict)], name: &str) -> ClaimVerdict {
+    results.iter().find(|(function, _)| function == name).map(|(_, verdict)| verdict.clone()).unwrap_or_else(|| panic!("no claim {name}"))
+}
+
+const PLACES: &str = r#"use semilla_intent::prelude::*;
+
+#[same(shop::Counter::bump)]
+fn bump_twice(x: u32, y: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    before::shop::Counter::bump(&mut b, x);
+    before::shop::Counter::bump(&mut b, y);
+    let mut a = after::shop::Counter::new();
+    after::shop::Counter::bump(&mut a, x);
+    after::shop::Counter::bump(&mut a, y);
+    before::shop::Counter::get(&b) == after::shop::Counter::get(&a)
+}
+
+#[same(shop::Counter::set)]
+fn set_local(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    before::shop::Counter::set(&mut b, x);
+    let mut a = after::shop::Counter::new();
+    after::shop::Counter::set(&mut a, x);
+    before::shop::Counter::get(&b) == after::shop::Counter::get(&a)
+}
+
+#[same(shop::Counter::double)]
+fn order_kept(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    before::shop::Counter::bump(&mut b, x);
+    before::shop::Counter::double(&mut b);
+    let mut a = after::shop::Counter::new();
+    after::shop::Counter::bump(&mut a, x);
+    after::shop::Counter::double(&mut a);
+    before::shop::Counter::get(&b) == after::shop::Counter::get(&a)
+}
+
+#[same(shop::Counter::double)]
+fn order_swapped(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    before::shop::Counter::bump(&mut b, x);
+    before::shop::Counter::double(&mut b);
+    let mut a = after::shop::Counter::new();
+    after::shop::Counter::double(&mut a);
+    after::shop::Counter::bump(&mut a, x);
+    before::shop::Counter::get(&b) == after::shop::Counter::get(&a)
+}
+
+#[same(shop::Counter::set)]
+fn read_before(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    let old = before::shop::Counter::get(&b);
+    before::shop::Counter::set(&mut b, x);
+    let mut a = after::shop::Counter::new();
+    let new = after::shop::Counter::get(&a);
+    after::shop::Counter::set(&mut a, x);
+    old == new
+}
+
+#[same(shop::Counter::set)]
+fn set_or_keep(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    before::shop::Counter::set(&mut b, x);
+    let mut a = after::shop::Counter::new();
+    after::shop::Counter::set(&mut a, x);
+    let (p, q) = (before::shop::Counter::get(&b), after::shop::Counter::get(&a));
+    (p == x || p == 0) && (q == x || q == 100 || q == 0)
+}
+
+#[same(shop::add_to)]
+fn add_param(v: &mut u64, x: u64) -> bool {
+    let start = *v;
+    before::shop::add_to(v, x);
+    let mut q = start;
+    after::shop::add_to(&mut q, x);
+    *v == q
+}
+
+#[same(shop::scale)]
+fn scale_params(p: &mut u64, q: &mut u64, k: u64) -> bool {
+    !(*p == *q) || {
+        before::shop::scale(p, k);
+        after::shop::scale(q, k);
+        *p == *q
+    }
+}
+
+#[same(shop::Counter::set)]
+fn set_params(b: &mut before::shop::Counter, a: &mut after::shop::Counter, x: u32) -> bool {
+    !(same(&*b, &*a)) || {
+        before::shop::Counter::set(b, x);
+        after::shop::Counter::set(a, x);
+        same(&*b, &*a)
+    }
+}
+"#;
+
+// rule+ R82.1-1 R82.1-2
+// rule- R82.1-1 R82.1-2
+#[test]
+fn a_local_value_and_a_mut_parameter_are_places_that_each_call_writes_in_order() {
+    let pair = eff_pair("places");
+    let results = pair.check(PLACES);
+    // R82.1-1 (positive): two calls in a row see the value of the first; a write that changes
+    // the value makes the claim false with an exact input; the order of two writes is seen.
+    assert!(matches!(verdict_of(&results, "bump_twice"), ClaimVerdict::Proved { .. }), "{results:?}");
+    assert!(matches!(verdict_of(&results, "order_kept"), ClaimVerdict::Proved { .. }), "{results:?}");
+    assert!(matches!(verdict_of(&results, "set_local"), ClaimVerdict::False { ref input, .. } if input.starts_with("x = ")), "{results:?}");
+    assert!(matches!(verdict_of(&results, "order_swapped"), ClaimVerdict::False { .. }), "{results:?}");
+    // The free behavior of a version (R74.2-1) writes a free value through each `&mut`
+    // argument: this proof needs the write of each version of `set` (a claim that is also true
+    // when `set` writes nothing), so it depends on them and stays proved.
+    assert!(matches!(verdict_of(&results, "set_or_keep"), ClaimVerdict::Proved { .. }), "{results:?}");
+    // R82.1-1 (negative): a claim that reads the value only before the write never sees the
+    // write, so it is not proved (it is true for any result of `set`).
+    assert!(matches!(verdict_of(&results, "read_before"), ClaimVerdict::Claimed { ref cause } if cause.contains("for any result of")), "{results:?}");
+    // R82.1-2 (positive): a `&mut` parameter of the claim is an input place; its value after
+    // the call is the new value.
+    assert!(matches!(verdict_of(&results, "add_param"), ClaimVerdict::Proved { .. }), "{results:?}");
+    assert!(matches!(verdict_of(&results, "scale_params"), ClaimVerdict::Proved { .. }), "{results:?}");
+    // R82.1-2 (negative): a new value that differs after the call makes the claim false, with
+    // the input of the place.
+    assert!(matches!(verdict_of(&results, "set_params"), ClaimVerdict::False { ref input, .. } if input.contains("b = ") && input.contains("x = ")), "{results:?}");
+}
+
+const EFFECTS: &str = r#"use semilla_intent::prelude::*;
+
+#[same(shop::Counter::bump)]
+fn bump_effects(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    let mut a = after::shop::Counter::new();
+    same_effects(|| before::shop::Counter::bump(&mut b, x), || after::shop::Counter::bump(&mut a, x))
+}
+
+#[same(shop::Counter::set)]
+fn set_effects(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    let mut a = after::shop::Counter::new();
+    same_effects(|| before::shop::Counter::set(&mut b, x), || after::shop::Counter::set(&mut a, x))
+}
+
+#[same(shop::Counter::bump)]
+fn bump_effects_value(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    let mut a = after::shop::Counter::new();
+    same(&effects(|| before::shop::Counter::bump(&mut b, x)), &effects(|| after::shop::Counter::bump(&mut a, x)))
+}
+
+#[same(shop::Counter::set)]
+fn set_effects_value(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    let mut a = after::shop::Counter::new();
+    same(&effects(|| before::shop::Counter::set(&mut b, x)), &effects(|| after::shop::Counter::set(&mut a, x)))
+}
+
+#[same(shop::Counter::double)]
+fn order_effects(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    let mut a = after::shop::Counter::new();
+    same_effects(
+        || {
+            before::shop::Counter::bump(&mut b, x);
+            before::shop::Counter::double(&mut b)
+        },
+        || {
+            after::shop::Counter::double(&mut a);
+            after::shop::Counter::bump(&mut a, x)
+        },
+    )
+}
+
+#[same(shop::Counter::take)]
+fn take_effects(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    let mut a = after::shop::Counter::new();
+    before::shop::Counter::set(&mut b, x);
+    after::shop::Counter::set(&mut a, x);
+    same_effects(|| before::shop::Counter::take(&mut b), || after::shop::Counter::take(&mut a))
+}
+
+#[same(shop::Counter::take)]
+fn take_outcome() -> bool {
+    let mut b = before::shop::Counter::new();
+    let mut a = after::shop::Counter::new();
+    same_outcome(|| before::shop::Counter::take(&mut b), || after::shop::Counter::take(&mut a))
+}
+
+#[same(shop::Counter::set)]
+fn set_outcome(x: u32) -> bool {
+    let mut b = before::shop::Counter::new();
+    let mut a = after::shop::Counter::new();
+    same_outcome(|| before::shop::Counter::set(&mut b, x), || after::shop::Counter::set(&mut a, x))
+}
+"#;
+
+// rule+ R82.2-1 R82.2-2
+// rule- R82.2-1 R82.2-2
+#[test]
+fn effects_and_same_effects_compare_the_writes_of_the_calls_in_their_order() {
+    let pair = eff_pair("effects");
+    let results = pair.check(EFFECTS);
+    // R82.2-1 (positive): `effects(|| e)` is the ordered effects of a call: two calls that write
+    // the same values give the same effects.
+    assert!(matches!(verdict_of(&results, "bump_effects_value"), ClaimVerdict::Proved { .. }), "{results:?}");
+    // R82.2-1 (negative): two calls that write other values give other effects.
+    assert!(matches!(verdict_of(&results, "set_effects_value"), ClaimVerdict::False { .. }), "{results:?}");
+    // R82.2-2 (positive): `same_effects` compares the effects only (`take` returns another
+    // value with the same writes); the order of the writes of a call is seen.
+    assert!(matches!(verdict_of(&results, "bump_effects"), ClaimVerdict::Proved { .. }), "{results:?}");
+    assert!(matches!(verdict_of(&results, "take_effects"), ClaimVerdict::Proved { .. }), "{results:?}");
+    assert!(matches!(verdict_of(&results, "set_effects"), ClaimVerdict::False { ref input, .. } if input.starts_with("x = ")), "{results:?}");
+    assert!(matches!(verdict_of(&results, "order_effects"), ClaimVerdict::False { .. }), "{results:?}");
+    // R82.2-2 (negative): `same_outcome` compares the outcomes and the writes: a write is never
+    // lost, also when the two calls return `()`.
+    assert!(matches!(verdict_of(&results, "set_outcome"), ClaimVerdict::False { .. }), "{results:?}");
+    assert!(matches!(verdict_of(&results, "take_outcome"), ClaimVerdict::False { .. }), "{results:?}");
+}
+
+const WRITERS: &str = r#"use semilla_intent::prelude::*;
+
+#[same(shop::emit_bytes)]
+fn emit_vec(x: u8) -> bool {
+    let mut s = Vec::new();
+    before::shop::emit_bytes(&mut s, x);
+    let mut t = Vec::new();
+    after::shop::emit_bytes(&mut t, x);
+    s == t
+}
+
+#[same(shop::emit_text)]
+fn emit_string(x: u32) -> bool {
+    let mut s = String::new();
+    before::shop::emit_text(&mut s, x);
+    let mut t = String::new();
+    after::shop::emit_text(&mut t, x);
+    s == t
+}
+"#;
+
+// rule+ R82.2-3
+// rule- R82.2-3
+#[test]
+fn a_writer_is_a_place_and_a_write_that_the_model_does_not_give_names_its_call() {
+    let pair = eff_pair("writers");
+    let results = pair.check(WRITERS);
+    // R82.2-3 (positive): a `&mut String` writer: the check has no model of `String`, so the
+    // claim is "claimed", and the cause names the write and its type (13f closes it).
+    let string = verdict_of(&results, "emit_string");
+    assert!(matches!(&string, ClaimVerdict::Claimed { cause } if cause.contains("writes a place of the type `String`") && cause.contains("13f")), "{string:?}");
+    // R82.2-3 (negative): a `&mut Vec<u8>` writer is a place of the model: the claim is false
+    // with an exact input, and no cause.
+    let bytes = verdict_of(&results, "emit_vec");
+    assert!(matches!(&bytes, ClaimVerdict::False { input, .. } if input == "x = 7"), "{bytes:?}");
+}
+
+// rule+ R82.3-1
+// rule- R82.3-1
+#[test]
+fn a_false_claim_with_mut_gives_a_test_that_makes_the_calls_in_order() {
+    let pair = eff_pair("trace");
+    let claims = format!("{PLACES}\n#[same(shop::Counter::set)]\nfn no_call(x: u32) -> bool {{ x != 7 }}\n");
+    let results = pair.check(&claims);
+    let place = semilla_core::run::TestPlace { flags: "", package: "shop", before: "", after: "for x = 101: the claim returns `false`" };
+    // R82.3-1 (positive): the calls of the old version on the failed path, in order: the test
+    // makes the value, calls `set` with `&mut` of it, and asserts the old values after the
+    // calls (the value behind `&mut`, the result of `get`).
+    let ClaimVerdict::False { run: Some(case), .. } = verdict_of(&results, "set_local") else { panic!("{results:?}") };
+    assert!(case.sequence && case.calls.iter().all(|call| call.side == semilla_core::run::RunSide::Before), "{case:?}");
+    let names: Vec<&str> = case.calls.iter().map(|call| call.name.as_str()).collect();
+    assert_eq!(names, ["shop::Counter::new", "shop::Counter::set", "shop::Counter::get"]);
+    let test = semilla_core::run::suggest_claim(&case, &place).unwrap();
+    for line in ["let mut value1 = crate::Counter::new();", "let _ = crate::Counter::set(&mut value1, arg2_2);", "assert!(matches!(value1, crate::Counter { n: 101 }));", "let got3 = crate::Counter::get(&value1);", "assert_eq!(got3, 101);"] {
+        assert!(test.text.contains(line), "{line}\n{}", test.text);
+    }
+    let order = |text: &str| test.text.find(text).unwrap();
+    assert!(order("Counter::new()") < order("Counter::set(") && order("Counter::set(") < order("Counter::get("), "{}", test.text);
+    // The order of two writes in the test: `bump`, then `double`.
+    let ClaimVerdict::False { run: Some(swapped), .. } = verdict_of(&results, "order_swapped") else { panic!("{results:?}") };
+    let text = semilla_core::run::suggest_claim(&swapped, &place).unwrap().text;
+    assert!(text.find("crate::Counter::bump(&mut value1").unwrap() < text.find("crate::Counter::double(&mut value1)").unwrap(), "{text}");
+    // R82.3-1 (negative): a claim that is false with no call of a version has no calls: no test.
+    assert!(matches!(verdict_of(&results, "no_call"), ClaimVerdict::False { run: None, .. }), "{results:?}");
+}
+
+/// The shape of a soundness finding of 13c (the coordinator, 2026-11-26): a new private field
+/// caches the length; `count` reads it and `add` keeps it, but `push` forgets it (its MIR stays
+/// equal to the old MIR).
+const DOC_OLD: &str = r#"
+pub struct Doc { lines: Vec<u8> }
+impl Doc {
+    pub fn new() -> Doc { Doc { lines: Vec::new() } }
+    pub fn count(&self) -> usize { self.lines.len() }
+    pub fn push(&mut self, x: u8) { self.lines.push(x) }
+    pub fn add(&mut self, x: u8) { self.lines.push(x) }
+}
+"#;
+
+const DOC_NEW: &str = r#"
+pub struct Doc { lines: Vec<u8>, n: usize }
+impl Doc {
+    pub fn new() -> Doc { Doc { lines: Vec::new(), n: 0 } }
+    pub fn count(&self) -> usize { self.n }
+    pub fn push(&mut self, x: u8) { self.lines.push(x) }
+    pub fn add(&mut self, x: u8) { self.lines.push(x); self.n += 1 }
+}
+"#;
+
+const DOC_RELATION: &str = "use semilla_intent::prelude::*;\n#[relation(before::shop::Doc, after::shop::Doc)]\nfn doc(b: &before::shop::Doc, a: &after::shop::Doc) -> bool {\n    a.lines == b.lines && a.n == b.lines.len()\n}\n";
+
+// rule+ R82.1-4
+// rule- R82.1-4
+#[test]
+fn a_mut_self_of_a_type_that_changes_relates_the_two_places_after_the_call() {
+    let pair = Pair::build("docs", (DOC_OLD, ""), (DOC_NEW, ""));
+    let results = pair.check_items(DOC_RELATION, &["shop::Doc::add", "shop::Doc::push", "shop::Doc::count"]);
+    let get = |name: &str| results.iter().find(|(item, ..)| item == name).cloned().unwrap();
+    // R82.1-4 (positive): related places before the call give related places after it (`add`
+    // keeps the cached length), and the proof depends on the two versions.
+    let (_, add, depends) = get("shop::Doc::add");
+    assert!(matches!(add, ClaimVerdict::Proved { .. }), "{add:?}");
+    assert_eq!(depends, ["before::shop::Doc::add", "after::shop::Doc::add"]);
+    assert!(matches!(get("shop::Doc::count").1, ClaimVerdict::Proved { .. }), "{results:?}");
+    // R82.1-4 (negative): `push` forgets the cached length: the places after the call do not
+    // correspond, so the item is false with an exact input (never "claimed: `&mut`").
+    let (_, push, _) = get("shop::Doc::push");
+    assert!(matches!(&push, ClaimVerdict::False { input, detail, .. } if input.contains("self_before") && input.contains("self_after") && detail.contains("with `*self` = ")), "{push:?}");
 }

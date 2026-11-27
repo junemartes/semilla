@@ -9447,3 +9447,162 @@ The coordinator rebased this batch onto `5b4dfaa` (batch 12a, design 75: no run 
 - The rule index: R80.1-6 is new (+10 rules against `5b4dfaa`, 80.4); `INDEXED` = 48..=80; section 80 follows section 78 (section 75 is the section of 12a).
 - The full suite after the rebase (`cargo build`, then `cargo test --workspace --no-fail-fast`, no `SEMILLA_MIR_DRIVER`): 1207 tests, 1207 passed (the differential test R78.4-8 and the case set too). A run before at a load of about 50 had 4 failures of `tests/large.rs`, each on its time limit only (129 s against 120 s; 285 to 337 s against 240 s); at a load of 5 to 8 they pass.
 - The mutations M10, M10b, and M10c of R80.1-6 are caught (80.4); each change is undone.
+
+## 82. Batch 13c: `&mut` and effects in claims (the proof layer)
+
+The decisions of the user (2026-11-26, draft 3 of the intent language):
+
+> "The intent file is the semantic specification of the pull request"; Semilla checks each claim; "We should almost never have to solve without hints".
+
+> "The language shouldn't have to change": this batch gives meaning to forms that rustc already accepts (a `&mut` borrow of a value of the claim, the prelude functions `effects` and `same_effects`), with no new syntax.
+
+> 2026-11-24: "In general we should ensure we don't special case to a specific set of crates or symbols if not necessary".
+
+In the blind trial of draft 3, each of the three pull requests had claims that need `&mut`: setters, writers (`&mut impl fmt::Write`), and methods that change `self` (`insert`, `push`). Batch 13b stopped at `&mut self` for relations ("claimed: `&mut` comes in 13c").
+
+The findings of the coordinator on `2ac32e9` (before this batch) set the work of part A:
+
+- A claim that makes a local value, passes it as `&mut` to a call of a version, and then reads it was already proved by the claim MIR, also with two writes whose order matters; a claim that reads the value only before the writes already stayed "claimed" (R74.2-1). Part A fixes this behavior with tests (R82.1-1, R82.1-2).
+- **A soundness defect (1).** A type gets a new private field (a cached value), and a relation states it. The new `&mut self` method `push` forgets to update the field, so its MIR is equal to the old MIR. The empty claims on `new`, `count`, and `push` gave three proofs ("push: equivalent by equal MIR"), but `count` after one `push` gives 1 before and 0 after. A proof by a relation assumes related inputs, and equal MIR of a method that writes `self` does not show that the method keeps the relation. R82.1-3 is the rule; the test is the shape of the finding.
+- **A soundness defect (2).** A relation proof is conditional: claims on `new` and `count` were "proved" with the relation `a.n == b.lines.len()`, and the report said "2 explained, 0 not explained", but an item that no claim names (`push`, with equal text in the two versions, so not a changed body) breaks the relation: `count` after one `push` differs. R82.1-5 is the rule.
+
+The decision of the user of 2026-11-27 (to the coordinator) cut the scope: no more proof depth until a trial measures what the checks of today cover. The order of importance became: the soundness rules (R82.1-3, R82.1-5), part C, the tests of the behavior of `2ac32e9` for a local `&mut` value, then `&mut self` of a type that changes. The parts of this section were already written and tested before the cut, so they stay (part B too: its meaning and its tests were complete).
+
+### 82.1 Part A: `&mut` of a value of the claim
+
+Rule index: the identities are below.
+
+1. [R82.1-1] **A `&mut` borrow of a local value of the claim is a place.** A claim body can make a value (`let mut b = before::shop::Counter::new();`), pass it as `&mut` to a call of a version, and read it after the call (a getter, a field, `same` with a value of the other version). The engine has one model of a write through `&mut`: the model of the equivalence check (R64.2-2). An inlined call writes the place; a call that the check does not inline gives the place a new value, a function of the call; each later read sees the value of the last write, so two calls in a row see the value of the first, and a claim that depends on the order of two writes sees that order. A claim that reads the value only before the writes is not proved (it is true for any result of the call, R74.2-1). The free behavior of a version (R74.2-1, R77.1-1) writes a free value through each `&mut` argument too: before this batch it wrote nothing, so a proof that needs the write of a version could not show that it depends on the version (the claim `set_or_keep` was "claimed: true for any result of …" and is proved now). Tests: `a_local_value_and_a_mut_parameter_are_places_that_each_call_writes_in_order` (`tests/intent_mir.rs`: `bump_twice`, `order_kept`, and `set_or_keep` proved; `set_local` and `order_swapped` false with an exact input; the negative case `read_before` claimed).
+2. [R82.1-2] **A `&mut` parameter of the claim is an input place.** A parameter `v: &mut T` of a claim is an input: its target is a free value of the type, and its value after a call is the new value. Two `&mut` parameters are two places (the rules of Rust: they do not alias). Tests: the test of R82.1-1 (`add_param` and `scale_params` proved; the negative case `set_params` false with the input of the place).
+3. [R82.1-3] **A relation of a type of the signature of an item is the check of the item, never equal MIR alone.** When a relation of the intent files fits a type of the signature of the item of an empty `#[same]` claim (a parameter, the target of a reference parameter or of a `&mut` place, or the result, also inside a tuple, a reference, a sequence, or a struct or an enum of one definition such as `Option<T>`), the claim is the check of related inputs and outcomes (R80.1-4 with R82.1-4), not the equivalence check of the step and not a proof by equal MIR. Equal MIR stays a proof only where no relation applies. The rule reads the compiler types of the two forms (`relation_applies`), never a name. Test: `a_relation_of_a_type_of_the_signature_is_the_check_of_the_item_and_never_equal_mir` (`tests/intent_effects.rs`: `new` and `count` proved, `push` false with an exact input; the negative case `Log::put`, a type with no relation, keeps "proved: equivalent by equal MIR").
+4. [R82.1-4] **A `&mut` parameter of a type that changes is a place of each version.** In the check of R80.1-4, a parameter `&mut T` whose type differs in the two versions is two inputs, an old place and a new place, related by the relation of the two types. Each side writes its own place only, so each side has its own list of `&mut` places (the k-th place of the two lists is one parameter). The two outcomes correspond only if the places after the call are related too (on each exit: the values behind the `&mut` parameters are a part of a panic as well); each other place keeps the rule of the equivalence check (equal values). The free outcome of R80.1-5 (b) has a free value for each place of its side. A result that refers to a `&mut` parameter stays "claimed" (the pointer memory of batch 13e). Tests: `a_mut_self_of_a_type_that_changes_relates_the_two_places_after_the_call` (`add` keeps the cached length: proved, with its dependence set; the negative case `push` forgets it: false with "with `*self` = …"); the test of R80.1-4 and the step test of R80.3-1 (`shop::Cart::push` is proved now).
+
+5. [R82.1-5] **A proof that uses a relation holds only if each body that makes or changes a value of the type keeps the relation.** The engine records each relation that the check of a claim runs (`with_used_relations`). For each such relation, the step takes from the compiler forms of the two versions the set of the bodies that can make or change a value of its type (`makes_or_changes`: an aggregate or a constant of the type, a write into a place of the type, a `&mut` borrow of a part of such a place; the old type for a body of the old tree, the new type for a body of the new tree; never a name), and runs the related check of R80.1-4 (with R82.1-4) on each body of the set that has the two versions (at most 32, one time for each relation in each configuration of a step). Each body proved: the claim stays proved, and its line says "the relation `NAME` holds after each body that makes or changes a value of its type: N checked". A body that breaks the relation: the claim is false with the input of that body ("the relation `doc` does not hold after `shop::Doc::push`: for …"), and the suggested test of that body. Else (a body of one version only, a body that the check does not prove, a body past the bound): "claimed: proved if the relation `NAME` holds; not checked: `ITEM` (cause) …" (the full list, sorted); such a claim explains no body and does not count as a proof in the summary lines. A claim on a scope that explains bodies has the same rule. Tests: `a_proof_with_a_relation_holds_only_if_each_body_that_writes_the_type_keeps_it` (`tests/intent_effects.rs`: a body of the new version only that writes the type gives "proved if"; the negative case: each body keeps the relation, so the proofs stay plain and explain their bodies), the step test of R82.1-3 (`push` breaks the relation, so the proofs of `new` and `count` are false with its input), the step test of R80.3-1 (each body of `Cart` keeps the relation: "2 checked").
+
+**Decided by Claude.**
+
+- R82.1-5: the claim that a broken relation makes false is the claim whose proof used the relation; the line gives the body that breaks it and the text of its check. The bound of 32 bodies for each relation keeps the cost of a step bounded; a body past it is "not checked".
+- R82.1-5: a body that makes a value of the type inside it and returns no value of it (a temporary value) is in the set too; its related check is the equivalence of its outcome, which shows that the temporary value does not matter.
+- A free behavior of a version writes a free value through each `&mut` argument (R82.1-1). The free result of R74.2-1 was "a returned value and an effect"; a write through `&mut` is an effect of the call (design 64), so it is free too. The change acts only in the dependence checks of claims (no step with no intent file runs them).
+- R82.1-3 routes each empty `#[same]` claim with a fitting relation to the check of R80.1-4, also when the equivalence check of the step could prove the item: the relation of the agent is the specification of the type, and only its check shows that the item keeps it.
+- In a check of the intent files, the equality of two sequences also states the equality of their lengths. The formula means the same (two equal sequences have one length), and Z3 needs the part: the link `seq.len` = `bv2nat` of the length made the vacuous check of the relation of R82.1-4 take 11 s (0.05 s with the part) and its free check reach the safety time limit of 60 s (0.1 s with the part). The equivalence check of a step keeps its formula, so a step with no intent file keeps its queries.
+
+### 82.2 Part B: effects and writers
+
+Rule index: the identities are below.
+
+1. [R82.2-1] **`effects(|| e)` is the ordered effects of a call.** The engine runs the closure (as for `same_outcome`, R78.4-6) and gives a value of its own: the effects on the world of the call in their order (the calls with an effect of design 64), and the value of each place that the closure can write (the target of each `&mut` capture, with its type) after the call. `same(&effects(|| a), &effects(|| b))` is true when the two lists of effects on the world are equal (the rule of the equivalence check: the same callees with equal arguments; another list is not an exact difference) and the k-th places of the two closures have equal values (of one type) or related values (of two types, with the relations of 13b). Tests: `effects_and_same_effects_compare_the_writes_of_the_calls_in_their_order` (`bump_effects_value` proved; the negative case `set_effects_value` false).
+2. [R82.2-2] **`same_effects(|| a, || b)` compares the effects only; `same_outcome` compares the outcome and the effects.** `same_effects` is the rule of R82.2-1 for its two closures: the results and the panics of the calls are not effects (a call that returns another value with the same writes has the same effects). `same_outcome` (R78.4-6) now also compares the places that its two closures write: a write through `&mut` is an effect (design 64), so a claim never loses it, also when the two calls return `()`. Tests: the test of R82.2-1 (`bump_effects` and `take_effects` proved; `set_effects` and `order_effects` false: the order of the writes in a closure is seen; the negative cases `set_outcome` and `take_outcome` false).
+3. [R82.2-3] **A writer is a place, and a write that the model does not give names its call.** A writer argument (`&mut Vec<u8>`, `&mut String`, `&mut impl fmt::Write`, `&mut fmt::Formatter`) is a place like each other `&mut`: what the call writes is the value of the place after the call. A `Vec` of scalars is a sequence of the model (design 64), so a claim on it is exact. A place of a type that the check does not model (an opaque type: `String`, `fmt::Formatter`) gets a value with no meaning from a call that the check does not inline; when a claim then has no exact result, the cause names each such write: "…; a write through `&mut` has no meaning in the model: `…::push_str` writes a place of the type `String`: the check does not model a part of these types (the std spec library of batch 13f gives a meaning to the types of the standard library)". The rule reads the type of the place (the opaque mark of the driver), never a name. Tests: `a_writer_is_a_place_and_a_write_that_the_model_does_not_give_names_its_call` (`emit_string` claimed with the cause; the negative case `emit_vec` false with the exact input `x = 7`).
+
+**Decided by Claude.**
+
+- A panic is not an effect of `same_effects` (it is the outcome; `same_outcome` and `panics` give it). The effects of a closure that panics are its effects up to the panic.
+- The value of `effects(|| e)` is a symbol of its own with the effects in the state of the path; only `same` reads it. Each other use of the value is an opaque value.
+- The cause of R82.2-3 names at most three writes. It is a part of the cause "no exact input" only (a claim with an exact result does not need it).
+
+### 82.3 Part C: suggested tests and help
+
+Rule index: the identities are below.
+
+1. [R82.3-1] **A false claim MIR gets the test of its calls in their order.** The engine keeps, on each path of a claim run, each call of a version that the claim makes (in its body, its closures, or its own helpers; not the calls inside an inlined body of a tree): the callee, the value of each argument and of the target of each reference, the result, and the value behind each `&mut` argument after the call. A false claim gives the calls of the old version on its failed path (or of the new version for a claim with no call of the old version) as one sequence: one `#[test]` that makes the values, makes the calls in their order, and asserts the outcome of the model after each call (each result and each value behind a `&mut` argument that the model fixes). An argument with a value of the model is that value; an argument with no exact value is the variable of the test that holds it (the result of an earlier call, or a place that the test made for an earlier call); a call that panics ends the test (`#[should_panic]`). The facade prefix of a type (`before::shop::Counter`) becomes the path of the crate (`crate::Counter`). Before, a false claim MIR had "no suggested test: the claim MIR gives no call of a version on its failed path". Tests: `a_false_claim_with_mut_gives_a_test_that_makes_the_calls_in_order` (`tests/intent_mir.rs`), `a_false_claim_mir_gets_the_test_of_its_calls_and_a_claim_with_no_call_gets_none` (`tests/intent_effects.rs`), the unit tests `a_sequence_of_calls_is_one_test_with_the_values_that_each_call_gives_the_next` and `a_call_that_panics_ends_the_sequence_and_an_input_with_no_form_gives_no_test` (`semilla-core/src/run.rs`); the negative cases: a claim that is false by its own operations has no calls, so no test.
+2. [R82.3-2] **The help template of an item with `&mut` gives a place of each version.** A template (R77.3-4, R78.1-5) of an item with `&mut self` or a parameter `&mut T` declares one value of each version (`mut this_before: before::shop::Doc, mut this_after: after::shop::Doc`), with the guard `!(same(&this_before, &this_after)) || …`, calls each version with `&mut` of its own value, and compares the results and the values after the calls (`new == old && same(&this_before, &this_after)`). A parameter that is `&mut` in one version only, and a `&mut` inside a type, give the cause, never a template. Tests: `a_template_of_an_item_with_mut_has_a_place_of_each_version` (`semilla-intent`), `the_help_template_of_an_item_with_mut_gives_a_place_of_each_version` (`tests/intent_effects.rs`: each template passes `semilla intent check`).
+
+**Decided by Claude.**
+
+- A test of a sequence asserts the outcome after each call, not only after the last: a value that a later call moves is asserted before the move, and each assertion that the model fixes can show the difference.
+- The variable of a value with an exact form in the model is the value itself (a literal); only a value with no exact form needs the variable of an earlier call. A place keeps its variable while its value is the value after the last call (a write of the claim between two calls gives a new variable with the new value).
+- The model of 10r1 still gives the test of a false claim that its parser reads (R75.1-3); a claim with `&mut` or with closures gets the test of R82.3-1.
+
+### 82.4 The results, the tests, and the mutation checks
+
+Rule index: no rule: the subsection has the results, the tests, and the mutation checks.
+
+**A step with no intent file** (the seven pull requests of the training set; a copy at `old` with the tree of `new` in one fixed folder for each pull request; `semilla step "the change" --compiled`, `SEMILLA_NO_CHECK`, an empty cache; the release binaries of `2ac32e9` and of this batch, one run at a time; the count of differing lines of the output and of the error stream):
+
+| PR | `2ac32e9` vs this batch | Time (s), `2ac32e9` / this batch (a load of 30 to 100) |
+|---|---|---|
+| bitflags #465 | 0 | 47 / 79 |
+| hashbrown #693 | 0 | 84 / 53 |
+| indexmap #424 | 2 | 136 / 67 |
+| itertools #1086 | 0 | 81 / 71 |
+| num-traits #334 | 0 | 61 / 65 |
+| uuid #932 | 0 | 97 / 75 |
+| winnow #891 | 0 | 323 / 299 |
+
+The 2 lines of indexmap are the text `definition #HASH` of the digest of one constant (80.5). The driver of this batch is byte-equal to the driver of `2ac32e9`, and two runs of the base binaries at one path give the same text; the base binaries copied to another path give another text. So the text depends on the path of the binaries (the build of a dependency), not on a rule of this batch. Each rule of this batch acts only in a check of the intent files (`INTENT_MODEL`, `CLAIM_RUN`, a relation of the intent files, a claim MIR), so a step with no intent file has the same output.
+
+**The intent files with `&mut` claims** (written as the author of each pull request, `b13c/intent/`; the pull requests whose methods take `&mut self` or a `&mut` place; the release binaries of `2ac32e9` and of this batch; the coverage line of the step):
+
+| PR | The claims | `2ac32e9` | This batch | Bodies that move to explained |
+|---|---|---|---|---|
+| indexmap #424 | 4 empty `#[same]` claims on the `&mut self` methods of `IndexMapCore` (`swap_indices`, `move_index`, `swap_remove_index`, `shift_remove_index`); `swap_effects` (`same_effects` of two empty cores); `insert_then_swap` (a map of each version, `insert`, `swap_indices`, then `len`); `impl OccupiedEntry` (24 items) | the 4 empty claims claimed ("a call that returns a reference: `self.borrow_mut()`"); `swap_effects` claimed ("`same_effects` is outside the model"); `insert_then_swap` claimed ("no exact input"); 24 items claimed | the 4 empty claims and the 24 items: the same; `swap_effects` and `insert_then_swap` claimed, with the cause of R82.2-3 ("`…::swap_indices` writes a place of the type `IndexMapCore`", "`IndexMap::insert` writes a place of the type `IndexMap`": the hash table of the map is outside the model) | 0 (0 explained, 2 equivalent, 233 not explained, before and after) |
+| winnow #891 | `next_bit_same` (a tuple and a `Bits` with the same bytes, one call of `next_bit` of each version through `&mut`, then the values); `bool_effects` (`same_effects` of the `bool` parser of each version) | `next_bit_same` claimed ("the callee `before::winnow::stream::next_bit` … has no MIR form"); `bool_effects` claimed ("`same_effects` is outside the model") | each claimed: the generic callees have no MIR form of the instance for `&[u8]` (78.6) | 0 (0 explained, 8 equivalent, 1141 not explained) |
+| itertools #1086 | `ring_buffer` (a `&mut self` method of a new generic type: a value, the call, the fields after it); `first_window` (the first window of `array_windows`) | the same results and causes | `ring_buffer` claimed ("no exact input"); `first_window` claimed (no MIR form of the instance) | 0 (0 explained, 0 equivalent, 137 not explained) |
+
+No claim of the training set changes to "proved" or "false". The cause of each one is outside the rules of this batch: a generic callee with no form of its instance (78.6), a call that returns a reference (the pointer memory of 13e), a hash table of another crate (13f). bitflags #465 has one new `&mut self` method (`next` of a new generic iterator over a trait that the library implements for no type), so a claim cannot call it; it has no file. The claims of the other pull requests take no `&mut`. No file has a relation, so R82.1-3 and R82.1-5 act in none of them.
+
+**The tests** (each rule has a positive and a negative test with the markers; `INDEXED` = 48..=82):
+
+| Rule | Tests |
+|---|---|
+| R82.1-1, R82.1-2 | `a_local_value_and_a_mut_parameter_are_places_that_each_call_writes_in_order` (`tests/intent_mir.rs`) |
+| R82.1-3 | `a_relation_of_a_type_of_the_signature_is_the_check_of_the_item_and_never_equal_mir` (`tests/intent_effects.rs`) |
+| R82.1-4 | `a_mut_self_of_a_type_that_changes_relates_the_two_places_after_the_call`; the test of R80.1-4; the step test of R80.3-1 |
+| R82.1-5 | `a_proof_with_a_relation_holds_only_if_each_body_that_writes_the_type_keeps_it`; the step test of R82.1-3 |
+| R82.2-1, R82.2-2 | `effects_and_same_effects_compare_the_writes_of_the_calls_in_their_order` |
+| R82.2-3 | `a_writer_is_a_place_and_a_write_that_the_model_does_not_give_names_its_call` |
+| R82.3-1 | `a_false_claim_with_mut_gives_a_test_that_makes_the_calls_in_order`, `a_false_claim_mir_gets_the_test_of_its_calls_and_a_claim_with_no_call_gets_none`, `a_sequence_of_calls_is_one_test_with_the_values_that_each_call_gives_the_next`, `a_call_that_panics_ends_the_sequence_and_an_input_with_no_form_gives_no_test` |
+| R82.3-2 | `a_template_of_an_item_with_mut_has_a_place_of_each_version`, `the_help_template_of_an_item_with_mut_gives_a_place_of_each_version` |
+
+Changed expected texts of earlier tests: the test of R80.1-4 and the step test of R80.3-1 (`shop::Cart::push` was "claimed: `&mut` comes in 13c" and is proved by R82.1-4); the step test of R80.3-1 has a new method `first` (a returned reference: claimed), so the rule R80.3-2 still has a claimed item next to proved items. The differential test of R78.4-8 passes. `cargo build`, then `cargo test --workspace --no-fail-fast` (no `SEMILLA_MIR_DRIVER`), at the end: 1219 tests, 1216 passed. The 3 failures are the needle tests of `tests/large.rs`, each on its time limit of 240 s only (554 to 640 s; the three ran at one time in the full run, at a load of 50 to 100; the first full run, before R82.1-5, had the same 3 failures: 362 to 417 s). These tests have no intent file. Alone, one at a time: part 1 passed (163 s, load 5 to 24), part 3 passed (150 s, load 5 to 22), part 2 failed one time on the time limit only (304 s, load 21 to 37; each needle assertion held) and passed the second time (189 s, load 4 to 7).
+
+**The mutation checks** (`b13c/scripts/mutate.py`; each change is undone):
+
+| Change | Failed test |
+|---|---|
+| M1 R82.1-1: the free behavior writes nothing through `&mut` | `a_local_value_and_a_mut_parameter_are_places_that_each_call_writes_in_order` |
+| M2 R82.1-2: a write to the place of a `&mut` parameter of a claim is lost | the same test |
+| M3 R82.1-3: equal MIR proves an item with a relation of its types | `a_relation_of_a_type_of_the_signature_is_the_check_of_the_item_and_never_equal_mir` |
+| M4 R82.1-4: the places after the call are not related | `a_mut_self_of_a_type_that_changes_relates_the_two_places_after_the_call` |
+| M5 R82.2-1: two values of `effects` are always the same | `effects_and_same_effects_compare_the_writes_of_the_calls_in_their_order` |
+| M6 R82.2-2: `same_outcome` ignores the places that its closures write | the same test |
+| M6b R82.2-2: `same_effects` compares the outcomes too | the same test |
+| M7 R82.2-3: no record of a write of a type outside the model | `a_writer_is_a_place_and_a_write_that_the_model_does_not_give_names_its_call` |
+| M8 R82.3-1: a false claim MIR gives no calls | `a_false_claim_with_mut_gives_a_test_that_makes_the_calls_in_order` |
+| M8b R82.3-1: an argument never takes the variable of an earlier call | the same test |
+| M9 R82.3-2: the template of `&mut self` is no template | `a_template_of_an_item_with_mut_has_a_place_of_each_version` |
+| M10 R82.1-5: no body makes or changes a value of a relation type | `a_proof_with_a_relation_holds_only_if_each_body_that_writes_the_type_keeps_it` |
+| M10b R82.1-5: a body that breaks the relation counts as kept | `a_relation_of_a_type_of_the_signature_is_the_check_of_the_item_and_never_equal_mir` |
+| M10c R82.1-5: a write of a field through `&mut` is not a change | the same test |
+
+**The three numbers** (against `2ac32e9`). Rules with an identity: +10 (558 → 568: R82.1-1 to R82.1-5, R82.2-1 to R82.2-3, R82.3-1, R82.3-2; none removed). Rows of `docs/name-lists.md`: 0 (101 before and after). Code paths that decide by a name: 0 added, 0 removed. The two new prelude functions (`effects`, `same_effects`) are arms of the existing dispatch of R78.4-2 (the function of the prelude crate by its definition); the set of R82.1-5, the rule of R82.1-3, and the writer cause of R82.2-3 read the compiler types of the forms; the trace of R82.3-1 reads the facade prefixes `before::` and `after::` of the language (the constants of 78.4).
+
+### 82.5 Limits and open questions
+
+Rule index: no rule: the subsection has the limits and the open questions.
+
+**Limits.**
+
+- The scope cut of 2026-11-27: no more proof depth in this batch. A claim with `&mut` reaches the same limits as each claim MIR: a generic callee with no form of its instance (78.6), a returned reference (13e), a type of the standard library or of another crate outside the model (13f). None of the training set claims changes its result.
+- R82.2-3: a writer of `String`, `fmt::Formatter`, or `impl fmt::Write` with such a type is "claimed" with the cause; the std spec library (13f) gives these writes their meaning. A writer of a type of the crate that calls `core::fmt::write` (a `dyn` call) is "claimed" with the cause "no exact input" only.
+- R82.1-5: the set of a relation is at most 32 bodies; a body past the bound, a body of one version only, and a body that the related check does not prove give "proved if". A body that makes or changes a value of the type only through a raw pointer, or through a `&mut` reference inside another value, is not in the set (the check of such a body stops at the pointer: 13e). A relation of a generic type matches the types of the bodies by `fits`, so a generic body of another instance can be out of the set.
+- R82.1-4: a result that refers to a `&mut` parameter of a type that changes stays "claimed" (13e).
+- R82.3-1: a struct pattern whose fields the model does not fix is no assertion; a test of a call that the claim makes through a closure of the claim is a call of the version (the closure itself is not in the test). The model of 10r1 keeps the test of a false claim that its parser reads.
+- `effects(|| e)` is a value for `same` only.
+
+**Open questions for the user.**
+
+- R82.1-5 makes a claim false when a body that no claim names breaks the relation (the coordinator's rule). Should the step also show the body that breaks it as its own line of the section "semantic changes"?
+- Should "proved if the relation holds" be a result word of its own (next to "holds if" of 13d), in place of "claimed"?
+
+### 82.6 Rebase on L1
+
+Rule index: no rule: the subsection has the merge with batch L1 and the results after it.
+
+The coordinator rebased this batch onto `7585c0a` (batch L1, design 79: the AST pass).
+
+- `crates/semilla-intent/src/parse.rs` (2 conflicts): batch L1 moved the signature reader out of `same_template` (`read_signature`, `same_body`, the struct `Sig`). The struct keeps the field `places` of R82.3-2, and the reader fills it.
+- A merge with no text conflict that changed a rule: the template of an added or a removed item (`version_template`, R79.5-1) reads the same signature. With the places of R82.3-2 it declared a value and passed it with no `&mut`, so rustc refused the template. The template now declares `mut NAME: T` and passes `&mut NAME` (R82.3-2 for R79.5-1). Test: `a_template_of_an_item_with_mut_has_a_place_of_each_version`.
+- A "not mapped" node of an item with `&mut self` or a `&mut T` parameter now has a template. Before, the line was "no template: the method takes `&mut self` (a claim reads values only)".
+- `INDEXED` is `48..=82`. Section 81 (the control-flow pass) has no batch yet.
