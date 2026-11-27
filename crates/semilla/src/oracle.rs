@@ -778,6 +778,10 @@ impl NormalOracle {
             }
         };
         crate::timing(&format!("cargo check {name} of tree {}", &tree[..8.min(tree.len())]), started);
+        // [R91.5-1] The split of the build from the timing lines of the driver.
+        if let Some(split) = semilla_normal::cargo::take_driver_split(&target) {
+            split_line(&format!("cargo check {name} of tree {}", &tree[..8.min(tree.len())]), &split);
+        }
         remove_cache(&cache);
         store.create(&cache)?;
         // The cache gets only the record file of each unit of this build (design 28.8). Each
@@ -995,6 +999,36 @@ impl NormalOracle {
     }
 
 }
+
+/// [R91.5-1] The timing line of the split of one build: the compiles of the member crates (the
+/// union of their times) with the time in rustc before the driver, the time of the driver, and
+/// the time in rustc after the driver (sums over the crates), and the rest of the cargo
+/// command (the build of the dependencies, and cargo). The totals of the process get the parts.
+pub(crate) fn split_line(build: &str, split: &semilla_normal::cargo::DriverSplit) {
+    let seconds = |nanos: u64| nanos as f64 / 1e9;
+    for (phase, nanos) in [(BUILD_BEFORE, split.before), (BUILD_DRIVER, split.driver), (BUILD_AFTER, split.after), (BUILD_MEMBERS, split.members), (BUILD_OTHER, split.total.saturating_sub(split.members))] {
+        semilla_core::timing::add_nanos(phase, nanos);
+    }
+    semilla_core::timing::count(BUILD_MEMBERS, "member crates", split.crates);
+    if semilla_core::timing::enabled() {
+        eprintln!(
+            "[timing] the split of {build}: the compiles of {} member crates {:.2} s (rustc before the driver {:.2} s, the driver {:.2} s, rustc after the driver {:.2} s), the dependencies and cargo {:.2} s",
+            split.crates,
+            seconds(split.members),
+            seconds(split.before),
+            seconds(split.driver),
+            seconds(split.after),
+            seconds(split.total.saturating_sub(split.members))
+        );
+    }
+}
+
+/// [R91.5-1] The phase names of the split of the builds in the totals of the timing lines.
+pub(crate) const BUILD_BEFORE: &str = "the builds: rustc before the driver (the sum over the member crates)";
+pub(crate) const BUILD_DRIVER: &str = "the builds: the driver (the sum over the member crates)";
+pub(crate) const BUILD_AFTER: &str = "the builds: rustc after the driver (the sum over the member crates)";
+pub(crate) const BUILD_MEMBERS: &str = "the builds: the compiles of the member crates (wall time)";
+pub(crate) const BUILD_OTHER: &str = "the builds: the dependencies and cargo (wall time)";
 
 /// The totals of the time of the phases that run for each configuration (batch 5x, part F).
 pub(crate) static N0_TIME: crate::TimeTotal = crate::TimeTotal::new();
@@ -1866,8 +1900,8 @@ impl NormalOracle {
 }
 
 impl BodyOracle for NormalOracle {
-    fn phase_store(&self) -> Option<std::sync::Arc<dyn semilla_verify::PhaseStore>> {
-        crate::recstore::PhaseDb::of(&self.repo.cache_dir())
+    fn phase_store(&self, step: &Step) -> Option<std::sync::Arc<dyn semilla_verify::PhaseStore>> {
+        crate::recstore::PhaseDb::of(&self.repo.cache_dir(), &step.tree_before, &step.tree_after)
     }
 
     fn check_templates(&self, step: &Step, asks: &[semilla_verify::template::Ask]) -> Option<Vec<semilla_verify::template::Verdict>> {

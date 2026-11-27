@@ -67,7 +67,7 @@ mod traits;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use rustc_driver::Compilation;
@@ -378,7 +378,11 @@ enum Output {
     File(PathBuf),
 }
 
+/// [R91.5-1] The start of the process, for the timing line of the driver.
+static STARTED: std::sync::OnceLock<(std::time::Instant, std::time::SystemTime)> = std::sync::OnceLock::new();
+
 fn main() -> ExitCode {
+    STARTED.get_or_init(|| (std::time::Instant::now(), std::time::SystemTime::now()));
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--level") {
         return command_mode(&args);
@@ -420,8 +424,15 @@ fn wrapper_mode(args: &[String]) -> ExitCode {
     let out = std::env::var_os("SEMILLA_MIR_OUT").map(PathBuf::from);
     match (level, out) {
         (Some(level), Some(out)) if !is_probe(rustc_args) && !is_build_script(rustc_args) => {
-            let file = out.join(output_file_name(rustc_args));
-            run_compiler(level, rustc_args, Output::File(file), None)
+            let name = output_file_name(rustc_args);
+            let file = out.join(&name);
+            let (code, times) = run_compiler_timed(level, rustc_args, Output::File(file), None);
+            // [R91.5-1] The timing line of the driver for this crate, only if Semilla asks for
+            // it. The line changes no record and no output of the build.
+            if let (Some(path), Some(times)) = (std::env::var_os("SEMILLA_DRIVER_TIMING"), times) {
+                write_timing_line(&PathBuf::from(path), &name, &times);
+            }
+            code
         }
         _ => pass_through(real_rustc, rustc_args),
     }
@@ -500,7 +511,37 @@ fn output_file_name(args: &[String]) -> String {
     format!("{crate_name}.{kind}.{metadata}.jsonl")
 }
 
+/// [R91.5-1] The parts of the time of one compile of a member crate: the time in rustc before
+/// the driver (the parse, the expansion, and the analysis), the time of the driver (the lists
+/// after the expansion, and the records after the analysis), and the time in rustc after the
+/// driver (the metadata for the dependent crates). With the start and the end in the time of
+/// the system, so that Semilla can join the compiles of one build.
+struct DriverTimes {
+    start: std::time::SystemTime,
+    before: std::time::Duration,
+    driver: std::time::Duration,
+    after: std::time::Duration,
+}
+
+/// Appends the timing line of one compile to the file of Semilla (one `write` with the append
+/// flag: the line of a compile in a parallel build stays whole). An error changes nothing of
+/// the build.
+fn write_timing_line(path: &Path, name: &str, times: &DriverTimes) {
+    let nanos = |time: std::time::SystemTime| time.duration_since(std::time::UNIX_EPOCH).map(|value| value.as_nanos()).unwrap_or(0);
+    let end = times.start + times.before + times.driver + times.after;
+    let line = format!("semilla-driver-timing {name} {} {} {} {} {} {}\n", nanos(times.start), nanos(end), times.before.as_nanos(), times.driver.as_nanos(), times.after.as_nanos(), std::process::id());
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
 fn run_compiler(level: Level, rustc_args: &[String], output: Output, open: Option<Vec<PathBuf>>) -> ExitCode {
+    run_compiler_timed(level, rustc_args, output, open).0
+}
+
+/// [`run_compiler`] with the parts of its time, if the compile reached the driver after the
+/// analysis.
+fn run_compiler_timed(level: Level, rustc_args: &[String], output: Output, open: Option<Vec<PathBuf>>) -> (ExitCode, Option<DriverTimes>) {
     let mut full_args = vec!["rustc".to_string()];
     full_args.extend(rustc_args.iter().cloned());
     full_args.extend(level.rustc_flags().iter().map(|flag| flag.to_string()));
@@ -508,17 +549,26 @@ fn run_compiler(level: Level, rustc_args: &[String], output: Output, open: Optio
     // Keep the values of the build that cargo asked for (from the profile of the tree).
     full_args.extend(inherited_checks(rustc_args));
 
-    let mut callbacks = Callbacks { level, output, open, error: None, made: None, expansions: None };
+    let mut callbacks = Callbacks { level, output, open, error: None, made: None, expansions: None, driver: std::time::Duration::ZERO, analysis: None };
     let result = rustc_driver::catch_fatal_errors(|| {
         rustc_driver::compiler_entrypoint(&full_args, &mut callbacks)
     });
+    let ended = std::time::Instant::now();
     if let Some(error) = callbacks.error {
         eprintln!("semilla-mir-driver: {error}");
-        return ExitCode::FAILURE;
+        return (ExitCode::FAILURE, None);
     }
+    // [R91.5-1] The parts of the time: from the start of the process to the start of the
+    // driver after the analysis (less the time of the driver after the expansion), the driver,
+    // and the rest.
+    let times = STARTED.get().zip(callbacks.analysis).map(|(&(start, start_system), (from, to))| {
+        let before = from.saturating_duration_since(start).saturating_sub(callbacks.driver);
+        let driver = callbacks.driver + to.saturating_duration_since(from);
+        DriverTimes { start: start_system, before, driver, after: ended.saturating_duration_since(to) }
+    });
     match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(_) => ExitCode::FAILURE,
+        Ok(()) => (ExitCode::SUCCESS, times),
+        Err(_) => (ExitCode::FAILURE, None),
     }
 }
 
@@ -534,6 +584,10 @@ struct Callbacks {
     /// The expansion of each macro call (batch 10c, design 63). `None`: the driver cannot read
     /// them.
     expansions: Option<Vec<expand::Expansion>>,
+    /// [R91.5-1] The time of the driver after the expansion.
+    driver: std::time::Duration,
+    /// [R91.5-1] The start and the end of the driver after the analysis.
+    analysis: Option<(std::time::Instant, std::time::Instant)>,
 }
 
 impl rustc_driver::Callbacks for Callbacks {
@@ -560,6 +614,26 @@ impl rustc_driver::Callbacks for Callbacks {
         _compiler: &interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
+        let started = std::time::Instant::now();
+        let result = self.after_expansion_work(tcx);
+        self.driver += started.elapsed();
+        result
+    }
+
+    fn after_analysis<'tcx>(
+        &mut self,
+        _compiler: &interface::Compiler,
+        tcx: TyCtxt<'tcx>,
+    ) -> Compilation {
+        let started = std::time::Instant::now();
+        let result = self.after_analysis_work(tcx);
+        self.analysis = Some((started, std::time::Instant::now()));
+        result
+    }
+}
+
+impl Callbacks {
+    fn after_expansion_work(&mut self, tcx: TyCtxt<'_>) -> Compilation {
         // [R78.2-1] The intent compile: the open ADT data comes first.
         open::open_adts(tcx);
         // [R78.1-3] The definitions of the scope paths, also when the type check finds errors.
@@ -574,11 +648,7 @@ impl rustc_driver::Callbacks for Callbacks {
         Compilation::Continue
     }
 
-    fn after_analysis<'tcx>(
-        &mut self,
-        _compiler: &interface::Compiler,
-        tcx: TyCtxt<'tcx>,
-    ) -> Compilation {
+    fn after_analysis_work(&mut self, tcx: TyCtxt<'_>) -> Compilation {
         if let Err(error) = traits::write(tcx) {
             self.error = Some(format!("cannot write the trait table: {error}"));
             return Compilation::Stop;

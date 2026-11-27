@@ -233,6 +233,9 @@ pub(crate) enum Kind {
     Metadata,
     /// [R89.1-1] A construction of the opaque inputs of two trees (design 89).
     Opaque,
+    /// [R91.1-1] The stored result of one item of a phase (design 91): the key text starts
+    /// with the name of the phase.
+    Item,
 }
 
 impl Kind {
@@ -242,6 +245,7 @@ impl Kind {
             Kind::Syntax => b's',
             Kind::Metadata => b'm',
             Kind::Opaque => b'o',
+            Kind::Item => b'r',
         }
     }
 }
@@ -288,6 +292,7 @@ impl Db {
         out.extend_from_slice(&semilla_normal::index::digest(key));
         out
     }
+
 
     /// Reads the payload of an entry with `read`, in one read transaction. `None` if the entry
     /// is not there, has another format key or another key text, or `read` does not accept it.
@@ -389,19 +394,44 @@ fn folder_prefix(db: &Db, folder: &Path) -> String {
     format!("index {}/", rel.display())
 }
 
+/// [R91.4-1] The inputs that the stored steps can use: the pair of trees of each stored step
+/// (`OLD:NEW`), and the digest of the content of each Rust file of the trees of the stored
+/// steps.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Live {
+    pub(crate) pairs: std::collections::BTreeSet<String>,
+    pub(crate) texts: std::collections::BTreeSet<String>,
+}
+
 /// [R89.4-2] `semilla cache --clean`: removes each entry of the database that no folder of the
 /// cache can use: the index of a record file that is not there, and an entry of a tree (the
 /// syntax data, the opaque inputs) of another Semilla binary (its key has the identity of the
-/// binary that made it). The result is the count of the removed entries.
-pub(crate) fn clean_database(cache: &Path) -> Result<usize> {
+/// binary that made it). [R91.4-1] It also removes each stored result of a pair of trees that
+/// no stored step has (a construction of the opaque inputs), and the syntax data of each file
+/// whose content no file of a tree of a stored step has. The result is the count of the
+/// removed entries.
+pub(crate) fn clean_database(cache: &Path, live: &Live) -> Result<usize> {
     let Some(db) = database_for(cache) else { return Ok(0) };
     let root = db.cache.clone();
     let mut count = db.remove_where(Kind::Index, &|key| key.strip_prefix("index ").is_none_or(|rel| !root.join(rel).is_file()))?;
     let identity = crate::store::binary_identity();
-    for kind in [Kind::Syntax, Kind::Opaque] {
-        count += db.remove_where(kind, &|key| !key.ends_with(&format!(" {identity}")))?;
-    }
+    count += db.remove_where(Kind::Syntax, &|key| !key.ends_with(&format!(" {identity}")))?;
+    count += db.remove_where(Kind::Opaque, &|key| !keeps(key, &identity, live))?;
+    count += db.remove_where(Kind::Item, &|key| !keeps(key, &identity, live))?;
     Ok(count)
+}
+
+/// [R89.4-2, R91.4-1] True if the clean keeps an entry of a stored result: the entry is of this
+/// binary, and a stored step can use it. A key of another form is not kept.
+fn keeps(key: &str, identity: &str, live: &Live) -> bool {
+    let words: Vec<&str> = key.split(' ').collect();
+    match words.as_slice() {
+        // `opaque DIGEST BINARY OLD:NEW SLOT` (R89.1-1 with the pair of R91.4-1).
+        ["opaque", _, binary, pair, _] => *binary == identity && live.pairs.contains(*pair),
+        // `file-syntax TEXT CONTEXT BINARY` (R91.2-1).
+        [FILE_PHASE, text, _, binary] => *binary == identity && live.texts.contains(*text),
+        _ => false,
+    }
 }
 
 /// [R89.7-1] Gives the whole pages of a value of the map of the database back to the system
@@ -501,13 +531,16 @@ pub(crate) const OPAQUE_FORMAT: &str = "semilla-opaque-1";
 /// [R89.1-1] The store of the phase results of the verifier in the database of a cache folder.
 pub(crate) struct PhaseDb {
     db: Arc<Db>,
+    /// [R91.4-1] The pair of trees of the step (`OLD:NEW`).
+    pair: String,
 }
 
 impl PhaseDb {
-    /// The store of the database of a cache folder, or `None` (no database).
-    pub(crate) fn of(cache: &Path) -> Option<Arc<dyn semilla_verify::PhaseStore>> {
+    /// The store of the database of a cache folder for the check of a step with these trees, or
+    /// `None` (no database).
+    pub(crate) fn of(cache: &Path, before: &str, after: &str) -> Option<Arc<dyn semilla_verify::PhaseStore>> {
         let db = database_for(cache)?;
-        Some(Arc::new(PhaseDb { db }))
+        Some(Arc::new(PhaseDb { db, pair: format!("{before}:{after}") }))
     }
 
     fn kind(kind: semilla_verify::PhaseKind) -> (Kind, &'static str, &'static str) {
@@ -518,8 +551,9 @@ impl PhaseDb {
 }
 
 impl semilla_verify::PhaseStore for PhaseDb {
-    /// The key text: the name of the kind, the digest of the inputs (each with its length), and
-    /// the identity of the Semilla binary (the code of the phase).
+    /// The key text: the name of the kind, the digest of the inputs (each with its length), the
+    /// identity of the Semilla binary (the code of the phase), and [R91.4-1] the pair of trees of
+    /// the step (the clean removes the entries of a pair that no stored step has).
     fn key(&self, kind: semilla_verify::PhaseKind, inputs: &[&[u8]]) -> String {
         let mut all = Vec::with_capacity(inputs.iter().map(|input| input.len() + 8).sum());
         for input in inputs {
@@ -527,7 +561,7 @@ impl semilla_verify::PhaseStore for PhaseDb {
             all.extend_from_slice(input);
         }
         let digest: String = semilla_normal::index::digest_bytes(&all).iter().map(|byte| format!("{byte:02x}")).collect();
-        format!("{} {digest} {}", PhaseDb::kind(kind).1, crate::store::binary_identity())
+        format!("{} {digest} {} {}", PhaseDb::kind(kind).1, crate::store::binary_identity(), self.pair)
     }
 
     fn get(&self, kind: semilla_verify::PhaseKind, key: &str) -> Option<Vec<u8>> {
@@ -538,6 +572,61 @@ impl semilla_verify::PhaseStore for PhaseDb {
     fn put(&self, kind: semilla_verify::PhaseKind, key: &str, payload: Vec<u8>) {
         let (kind, _, format) = PhaseDb::kind(kind);
         let _ = self.db.put(vec![(kind, key.to_string(), format, payload)]);
+    }
+}
+
+/// [R91.1-1] The text of a digest of the stored results of design 91: the first 16 bytes of
+/// SHA-256, as hexadecimal.
+pub(crate) fn hex_digest(bytes: &[u8]) -> String {
+    semilla_normal::index::digest_bytes(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// [R91.2-1] The name of the phase of the stored syntax data of one file.
+pub(crate) const FILE_PHASE: &str = "file-syntax";
+
+/// [R91.2-1] The store of the syntax data of each file in the database of a cache folder. A read
+/// is one read transaction; the parts of the parsed files of one load are one write
+/// transaction ([`FileSyntaxDb::finish`]).
+pub(crate) struct FileSyntaxDb {
+    db: Arc<Db>,
+    puts: std::cell::RefCell<Vec<Put>>,
+    counts: std::cell::Cell<(u64, u64)>,
+}
+
+impl FileSyntaxDb {
+    /// The store of the database of a cache folder, or `None` (no database).
+    pub(crate) fn of(cache: &Path) -> Option<FileSyntaxDb> {
+        Some(FileSyntaxDb { db: database_for(cache)?, puts: Default::default(), counts: Default::default() })
+    }
+
+    /// [R91.2-1] The key text of the part of a file: the name of the phase, the digest of the
+    /// content of the file, the digest of its context (the path, the module path, the test
+    /// state, the folder of the child modules, the edition, and the crate), and the identity of
+    /// the Semilla binary (the version of the parser and of the loader).
+    pub(crate) fn key(context: &str, text: &str) -> String {
+        format!("{FILE_PHASE} {} {} {}", hex_digest(text.as_bytes()), hex_digest(context.as_bytes()), crate::store::binary_identity())
+    }
+
+    /// Writes the parts of the parsed files (one transaction), and gives the count of the files
+    /// from the store and of the files parsed.
+    pub(crate) fn finish(self) -> (u64, u64) {
+        let _ = self.db.put(self.puts.take());
+        self.counts.get()
+    }
+}
+
+impl semilla_syntax::load::FileSyntaxStore for FileSyntaxDb {
+    fn get(&self, context: &str, text: &str) -> Option<Vec<u8>> {
+        self.db.get(Kind::Item, &FileSyntaxDb::key(context, text), semilla_syntax::stored::FILE_FORMAT, |payload| Some(payload.to_vec()))
+    }
+
+    fn put(&self, context: &str, text: &str, bytes: Vec<u8>) {
+        self.puts.borrow_mut().push((Kind::Item, FileSyntaxDb::key(context, text), semilla_syntax::stored::FILE_FORMAT, bytes));
+    }
+
+    fn count(&self, from_store: bool) {
+        let (stored, parsed) = self.counts.get();
+        self.counts.set(if from_store { (stored + 1, parsed) } else { (stored, parsed + 1) });
     }
 }
 
@@ -804,9 +893,10 @@ mod tests {
     }
 
     /// [R89.1-1] The kind of the test entry with this number: the kinds of the tree entries in
-    /// turn, so that the tests of R88.4-2 and R88.4-3 write and read each kind.
+    /// turn, so that the tests of R88.4-2 and R88.4-3 write and read each kind ([R91.1-1] also
+    /// the stored results of the items).
     fn kind_of(at: usize) -> Kind {
-        [Kind::Syntax, Kind::Opaque][at % 2]
+        [Kind::Syntax, Kind::Opaque, Kind::Item][at % 3]
     }
 
     fn read(db: &Db, key: &str) -> Option<Vec<u8>> {
@@ -1225,7 +1315,7 @@ mod tests {
         db.put(vec![(Kind::Opaque, "opaque 00 other-binary".to_string(), OPAQUE_FORMAT, b"x".to_vec()), (Kind::Syntax, "syntax t m other-binary".to_string(), "f", b"x".to_vec())]).unwrap();
         // The folder goes with no call of the store (as the clean of the build code cache).
         std::fs::remove_dir_all(&folder).unwrap();
-        assert_eq!(clean_database(dir.path()).unwrap(), 3);
+        assert_eq!(clean_database(dir.path(), &Live::default()).unwrap(), 3);
         assert_eq!(index_entries(&db, "index "), 0);
         assert!(db.get(Kind::Opaque, "opaque 00 other-binary", OPAQUE_FORMAT, |_| Some(())).is_none());
     }
@@ -1238,11 +1328,59 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = open_database(dir.path()).unwrap();
         let _folder = indexed_folder(dir.path(), RECORDS);
-        let own = format!("opaque 00 {}", crate::store::binary_identity());
+        // A construction of this binary for the pair of a stored step, with its slot (the key
+        // of R89.1-1; the test of batch 14g had no slot, and the clean of 14g removed each real
+        // construction).
+        let own = format!("opaque 00 {} a:b 0", crate::store::binary_identity());
         db.put(vec![(Kind::Opaque, own.clone(), OPAQUE_FORMAT, b"x".to_vec())]).unwrap();
-        assert_eq!(clean_database(dir.path()).unwrap(), 0);
+        let live = Live { pairs: ["a:b".to_string()].into_iter().collect(), texts: Default::default() };
+        assert_eq!(clean_database(dir.path(), &live).unwrap(), 0);
         assert_eq!(index_entries(&db, "index "), 1);
         assert!(db.get(Kind::Opaque, &own, OPAQUE_FORMAT, |_| Some(())).is_some());
+    }
+
+    /// The key text of the stored part of a file with this text (R91.2-1), and a database with
+    /// the entry.
+    fn file_entry(db: &Db, text: &str) -> String {
+        let key = FileSyntaxDb::key("src/lib.rs\ndepot\nfalse\nsrc\nEdition2021\ndepot", text);
+        db.put(vec![(Kind::Item, key.clone(), semilla_syntax::stored::FILE_FORMAT, b"x".to_vec())]).unwrap();
+        key
+    }
+
+    /// [R91.4-1] `semilla cache --clean` removes each stored result of a pair of trees that no
+    /// stored step has (a construction of the opaque inputs), and the stored part of a file
+    /// whose content no tree of a stored step has. An entry of another binary goes too.
+    // rule+ R91.4-1
+    #[test]
+    fn the_clean_removes_the_results_of_a_pair_that_no_stored_step_has() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let identity = crate::store::binary_identity();
+        let gone = format!("opaque 00 {identity} old:new 0");
+        let other = format!("opaque 00 other-binary a:b 0");
+        db.put(vec![(Kind::Opaque, gone.clone(), OPAQUE_FORMAT, b"x".to_vec()), (Kind::Opaque, other.clone(), OPAQUE_FORMAT, b"x".to_vec())]).unwrap();
+        let file = file_entry(&db, "pub fn gone() {}\n");
+        let live = Live { pairs: ["a:b".to_string()].into_iter().collect(), texts: [hex_digest(b"pub fn kept() {}\n")].into_iter().collect() };
+        assert_eq!(clean_database(dir.path(), &live).unwrap(), 3);
+        for (kind, key, format) in [(Kind::Opaque, &gone, OPAQUE_FORMAT), (Kind::Opaque, &other, OPAQUE_FORMAT), (Kind::Item, &file, semilla_syntax::stored::FILE_FORMAT)] {
+            assert!(db.get(kind, key, format, |_| Some(())).is_none(), "{key}");
+        }
+    }
+
+    /// [R91.4-1] The negative case: the clean keeps a construction of the pair of a stored step,
+    /// and the stored part of a file whose content a tree of a stored step has.
+    // rule- R91.4-1
+    #[test]
+    fn the_clean_keeps_the_results_that_a_stored_step_can_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let kept = format!("opaque 00 {} a:b 3", crate::store::binary_identity());
+        db.put(vec![(Kind::Opaque, kept.clone(), OPAQUE_FORMAT, b"x".to_vec())]).unwrap();
+        let file = file_entry(&db, "pub fn kept() {}\n");
+        let live = Live { pairs: ["a:b".to_string()].into_iter().collect(), texts: [hex_digest(b"pub fn kept() {}\n")].into_iter().collect() };
+        assert_eq!(clean_database(dir.path(), &live).unwrap(), 0);
+        assert!(db.get(Kind::Opaque, &kept, OPAQUE_FORMAT, |_| Some(())).is_some());
+        assert!(db.get(Kind::Item, &file, semilla_syntax::stored::FILE_FORMAT, |_| Some(())).is_some());
     }
 
     /// [R89.1-1] The key of a stored construction has the digest of each input and the
@@ -1254,15 +1392,56 @@ mod tests {
         use semilla_verify::PhaseStore as _;
         let dir = tempfile::tempdir().unwrap();
         let db = open_database(dir.path()).unwrap();
-        let store = PhaseDb { db: db.clone() };
+        let store = PhaseDb { db: db.clone(), pair: "a:b".to_string() };
         let key = store.key(semilla_verify::PhaseKind::Opaque, &[b"ab", b"c"]);
-        assert!(key.starts_with("opaque ") && key.ends_with(&format!(" {}", crate::store::binary_identity())));
+        assert!(key.starts_with("opaque ") && key.ends_with(&format!(" {} a:b", crate::store::binary_identity())));
+        // [R91.4-1] Another pair of trees gives another key.
+        assert_ne!(key, PhaseDb { db: db.clone(), pair: "a:c".to_string() }.key(semilla_verify::PhaseKind::Opaque, &[b"ab", b"c"]));
         assert_ne!(key, store.key(semilla_verify::PhaseKind::Opaque, &[b"a", b"bc"]));
         assert_ne!(key, store.key(semilla_verify::PhaseKind::Opaque, &[b"ab", b"d"]));
         store.put(semilla_verify::PhaseKind::Opaque, &key, b"payload".to_vec());
         assert_eq!(store.get(semilla_verify::PhaseKind::Opaque, &key).as_deref(), Some(&b"payload"[..]));
         db.put(vec![(Kind::Opaque, key.clone(), "semilla-opaque-0", b"old".to_vec())]).unwrap();
         assert!(store.get(semilla_verify::PhaseKind::Opaque, &key).is_none());
+    }
+
+    /// [R91.1-1] The key of the stored result of one item (here the part of one file, R91.2-1)
+    /// has the name of the phase, the digest of each input (the text and the context), and the
+    /// identity of the binary; the entry is read with its format key.
+    // rule+ R91.1-1
+    #[test]
+    fn the_key_of_a_file_part_has_the_text_the_context_and_the_binary() {
+        use semilla_syntax::load::FileSyntaxStore as _;
+        let dir = tempfile::tempdir().unwrap();
+        let _db = open_database(dir.path()).unwrap();
+        let store = FileSyntaxDb::of(dir.path()).unwrap();
+        let key = FileSyntaxDb::key("context", "text");
+        let words: Vec<&str> = key.split(' ').collect();
+        assert_eq!(words, [FILE_PHASE, &hex_digest(b"text"), &hex_digest(b"context"), &crate::store::binary_identity()]);
+        store.put("context", "text", b"part".to_vec());
+        assert_eq!(store.get("context", "text"), None, "a part is written at the end of the load");
+        store.finish();
+        let store = FileSyntaxDb::of(dir.path()).unwrap();
+        assert_eq!(store.get("context", "text").as_deref(), Some(&b"part"[..]));
+    }
+
+    /// [R91.1-1] The negative case: another text, another context, or another format gives no
+    /// stored result.
+    // rule- R91.1-1
+    #[test]
+    fn another_text_another_context_or_another_format_gives_no_stored_result() {
+        use semilla_syntax::load::FileSyntaxStore as _;
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let store = FileSyntaxDb::of(dir.path()).unwrap();
+        store.put("context", "text", b"part".to_vec());
+        store.finish();
+        let store = FileSyntaxDb::of(dir.path()).unwrap();
+        assert_eq!(store.get("context", "text 2"), None);
+        assert_eq!(store.get("context 2", "text"), None);
+        assert_ne!(FileSyntaxDb::key("a", "bc"), FileSyntaxDb::key("ab", "c"));
+        db.put(vec![(Kind::Item, FileSyntaxDb::key("context", "text"), "semilla-file-syntax-0", b"old".to_vec())]).unwrap();
+        assert_eq!(store.get("context", "text"), None, "an entry of another format is not read");
     }
 
     /// The resident pages of the files that the process maps, in kB.

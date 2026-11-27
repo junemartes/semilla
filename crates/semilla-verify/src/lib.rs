@@ -446,8 +446,11 @@ pub trait PhaseStore: Send + Sync {
 }
 
 pub trait BodyOracle {
-    /// [R89.1-1] The store of the phase results of the check (design 89), or `None`.
-    fn phase_store(&self) -> Option<std::sync::Arc<dyn PhaseStore>> {
+    /// [R89.1-1] The store of the phase results of the check of a step (design 89), or `None`.
+    /// [R91.4-1] The store knows the pair of trees of the step: a stored construction has the
+    /// pair in its key, so the clean can find the constructions of the pairs that no stored
+    /// step has.
+    fn phase_store(&self, _step: &Step) -> Option<std::sync::Arc<dyn PhaseStore>> {
         None
     }
 
@@ -829,7 +832,7 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
     impl_names(&mut step, input.before, input.after);
     let input = &StepInput { step: &step, before: input.before, after: input.after };
     // The opaque inputs of each check of this step, also of the rename search (R61.15-2).
-    let bases = joint::OpaqueBases::new(input.before, input.after).with_store(bodies.phase_store());
+    let bases = joint::OpaqueBases::new(input.before, input.after).with_store(bodies.phase_store(input.step));
     let mut plain = semilla_core::timing::phase(CORE_PHASE, || verify_core(input, bodies, exprs, derive_edits, false, &bases));
     if !derive_edits || input.step.claims.iter().any(is_identity) {
         if derive_edits {
@@ -1278,7 +1281,7 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     let bases = if shared.fits(input.before, input.after) {
         shared
     } else {
-        own = joint::OpaqueBases::new(input.before, input.after).with_store(bodies.phase_store());
+        own = joint::OpaqueBases::new(input.before, input.after).with_store(bodies.phase_store(input.step));
         &own
     };
     let settled = loop {

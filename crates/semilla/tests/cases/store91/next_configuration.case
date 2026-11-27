@@ -1,0 +1,60 @@
+note: R91.3-1: the step after the step changes the configuration (a default feature); the file with the `cfg` code comes from the store, and the check has the new configuration
+rule+: R91.3-1
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+fast = []
+=== both src/speed.rs
+pub fn speed() -> u32 {
+    if cfg!(feature = "fast") { 2 } else { 1 }
+}
+
+#[cfg(feature = "fast")]
+pub fn boost() -> u32 {
+    speed() * 2
+}
+=== old src/lib.rs
+pub mod speed;
+=== new src/lib.rs
+pub mod speed;
+
+pub fn base() -> u32 {
+    1
+}
+=== next Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["fast"]
+fast = []
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  ! features that no checked configuration enables: `shop/fast` (`--features fast` checks it); no result covers the code or the dependencies that they enable
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::base` (src/lib.rs:3): an added body: `#[new(shop::base)] fn base_new() -> bool { let new = after::shop::base(); true }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::base`:
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::base` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+      affected bodies: shop::base
+      control flow: + graph of `shop::base`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    shop::base (src/lib.rs:3): graph added: 2 points, 1 arrow
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::base` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+    lines: src/lib.rs:2-5

@@ -293,6 +293,68 @@ impl CodeFile {
     }
 }
 
+/// [R91.2-1] The store of the syntax data of each file (design 91, Q3). The loader has two
+/// parts: the load of one file (its parse, its items, and the `mod` lines that name other
+/// files), a function of the text of the file and of its context, and the link of the
+/// workspace (the targets, the module tree, and the files of the `mod` lines). The store keeps
+/// the part of one file with a key of the content of the file, of the context, and of the
+/// parser (the identity of the Semilla binary); a new tree parses only the files with a new
+/// key. The key of the text is the business of the store: the loader gives the full text.
+pub trait FileSyntaxStore {
+    /// The stored part of a file with this context and this text, if the store has it.
+    fn get(&self, context: &str, text: &str) -> Option<Vec<u8>>;
+    /// Keeps the part of a file with this context and this text.
+    fn put(&self, context: &str, text: &str, bytes: Vec<u8>);
+    /// Counts one file from the store (`true`) or one file parsed (`false`).
+    fn count(&self, _from_store: bool) {}
+}
+
+/// [R91.2-1] The load of one file (the first part of the loader): each effect of the file on
+/// the workspace, in the order of the load. A file that does not parse has only the reason.
+#[derive(Clone, Debug)]
+pub(crate) struct FileLoad {
+    pub(crate) parsed: Result<FileParts, String>,
+}
+
+/// The effects of a file that parses.
+#[derive(Clone, Debug)]
+pub(crate) struct FileParts {
+    /// The inner attributes of the file (their texts and their display texts), if it has some.
+    pub(crate) inner: Option<(Vec<String>, Vec<String>)>,
+    /// The items of the file and the loads of its child files, in the order of the load.
+    pub(crate) events: Vec<FileEvent>,
+    /// Each file that the `mod` lines of the file look for (a path from the root of the tree),
+    /// with the answer "the file exists". The link checks each answer again before it uses
+    /// the stored part (the folder is not a part of the key).
+    pub(crate) probes: Vec<(String, bool)>,
+}
+
+/// One effect of a file in the order of the load.
+#[derive(Clone, Debug)]
+pub(crate) enum FileEvent {
+    /// Items of the file.
+    Items(Vec<Item>),
+    /// The load of a child file: its path from the root, its module path, the test state, the
+    /// answer "an attribute names the file", and the macro call of its `mod` line (design 59).
+    Child { file: String, module: String, test: bool, by_attr: bool, made_by: Option<MacroModule> },
+}
+
+/// The open part of a file that the loader records (one for each file in the load).
+struct Frame {
+    /// The count of the items at the last child load: the items after it are of the file.
+    flushed: usize,
+    /// The events of the file: a range of the items of the loader, or a child load.
+    events: Vec<Recorded>,
+    probes: Vec<(String, bool)>,
+}
+
+/// One recorded event of an open file: the items are a range of the item list of the loader
+/// (no copy), so the encoding reads them in place.
+pub(crate) enum Recorded {
+    Items(usize, usize),
+    Child(FileEvent),
+}
+
 /// One package for the loader: the folder, the crate name, the member crates that it depends
 /// on, the targets (kind, name, root file), and the edition (design 39.1).
 struct Package {
@@ -333,6 +395,11 @@ impl Workspace {
     /// Loads the workspace at `root`. The packages and the targets come from the manifests, with
     /// the rules of cargo for the default targets. The app uses [`Workspace::load_with_metadata`].
     pub fn load(root: &Path) -> Result<Workspace> {
+        Workspace::load_manifests_with(root, None)
+    }
+
+    /// [`Workspace::load`] with the store of the syntax data of each file (R91.2-1).
+    pub fn load_manifests_with(root: &Path, store: Option<&dyn FileSyntaxStore>) -> Result<Workspace> {
         let mut packages = Vec::new();
         let found = find_packages(root)?;
         let names: Vec<String> = found.iter().map(|(_, name, _)| name.clone()).collect();
@@ -343,13 +410,19 @@ impl Workspace {
             let edition = manifest_edition(&manifest, workspace_edition.as_deref());
             packages.push(Package { dir, name, deps, targets, edition });
         }
-        Workspace::load_packages(root, packages)
+        Workspace::load_packages(root, packages, store)
     }
 
     /// Loads the workspace at `root` with the packages and the targets that cargo reports
     /// (`cargo metadata --no-deps --format-version 1`). So Semilla and cargo agree on each root
     /// file (invariant I4): `lib.path`, `[[bin]] path`, `package.build`, and each default target.
     pub fn load_with_metadata(root: &Path, metadata: &serde_json::Value) -> Result<Workspace> {
+        Workspace::load_with_store(root, metadata, None)
+    }
+
+    /// [`Workspace::load_with_metadata`] with the store of the syntax data of each file
+    /// (R91.2-1): a file with a stored part for its text and its context is not parsed.
+    pub fn load_with_store(root: &Path, metadata: &serde_json::Value, store: Option<&dyn FileSyntaxStore>) -> Result<Workspace> {
         let real_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         // A path of the metadata, as a path below `root`. `None` for a path outside the tree.
         let inside = |path: &str| -> Option<PathBuf> {
@@ -389,10 +462,10 @@ impl Workspace {
             packages.push(Package { dir, name: crate_name(package), deps, targets, edition });
         }
         packages.sort_by(|a, b| a.dir.cmp(&b.dir));
-        Workspace::load_packages(root, packages)
+        Workspace::load_packages(root, packages, store)
     }
 
-    fn load_packages(root: &Path, packages: Vec<Package>) -> Result<Workspace> {
+    fn load_packages(root: &Path, packages: Vec<Package>, store: Option<&dyn FileSyntaxStore>) -> Result<Workspace> {
         let mut workspace = Workspace::default();
         let mut items = Vec::new();
         for package in &packages {
@@ -417,7 +490,7 @@ impl Workspace {
                 // The rule does not look at the other targets of the package: `src/main.rs`
                 // of a package with no library has the form `depot (bin "depot")` too.
                 let module = target_root(&package.name, kind, name);
-                let mut loader = Loader { root, items: &mut items, parsed: &mut workspace.parsed_files, inner_attrs: &mut workspace.inner_attrs, inner_attrs_display: &mut workspace.inner_attrs_display, module_files: &mut workspace.module_files, macro_modules: &mut workspace.macro_modules, parse_errors: &mut workspace.parse_errors, editions: &mut workspace.editions, crate_name: &package.name, edition: package.edition };
+                let mut loader = Loader { root, items: &mut items, parsed: &mut workspace.parsed_files, inner_attrs: &mut workspace.inner_attrs, inner_attrs_display: &mut workspace.inner_attrs_display, module_files: &mut workspace.module_files, macro_modules: &mut workspace.macro_modules, parse_errors: &mut workspace.parse_errors, editions: &mut workspace.editions, crate_name: &package.name, edition: package.edition, store, frames: Vec::new() };
                 loader.load_file(file, &module, matches!(kind.as_str(), "test" | "bench"))?;
             }
         }
@@ -1120,20 +1193,158 @@ struct Loader<'a> {
     editions: &'a mut BTreeMap<String, Edition>,
     crate_name: &'a str,
     edition: Edition,
+    /// [R91.2-1] The store of the part of each file, if the caller has one.
+    store: Option<&'a dyn FileSyntaxStore>,
+    /// The parts of the files that the loader records now: the last one is the file of the
+    /// items that the loader makes now.
+    frames: Vec<Frame>,
 }
 
 impl Loader<'_> {
     fn load_file(&mut self, file: &Path, module: &str, test: bool) -> Result<()> {
         let text = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
-        let rel = relative(self.root, file);
-        let Some(parsed) = self.parse(&rel, &text) else { return Ok(()) };
-        self.parsed.insert(rel.clone());
         // The child modules of a root file are in the folder of the root file, whatever its name.
         let child_dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
-        let source = Source::new(&rel, &text, &parsed, self.edition);
-        self.record_inner_attrs(module, &rel, parsed.syntax());
+        self.load_one(file, &text, module, test, &child_dir, None)
+    }
+
+    /// [R91.2-1] The context of the load of a file: each input of its part but its text (the
+    /// path of the file, the module path, the test state, the folder of its child modules, the
+    /// edition, and the crate). The folder is a path from the root, so a new tree with the
+    /// same file has the same context.
+    fn context(&self, rel: &str, module: &str, test: bool, child_dir: &Path) -> String {
+        format!("{rel}\n{module}\n{test}\n{}\n{:?}\n{}", relative(self.root, child_dir), self.edition, self.crate_name)
+    }
+
+    /// Loads one file (the first part of the loader): from the store when it has the part of
+    /// the file and each answer of its probes holds now, else with a parse. A parsed file
+    /// gives its part to the store. `made_by`: the macro call of the `mod` line (design 59),
+    /// for the map of the modules of a file that parses.
+    fn load_one(&mut self, file: &Path, text: &str, module: &str, test: bool, child_dir: &Path, made_by: Option<MacroModule>) -> Result<()> {
+        let rel = relative(self.root, file);
+        let context = self.store.map(|_| self.context(&rel, module, test, child_dir));
+        if let (Some(store), Some(context)) = (self.store, context.as_deref()) {
+            let stored = store.get(context, text).and_then(|bytes| crate::stored::decode_file(&bytes));
+            if let Some(load) = stored.filter(|load| self.probes_hold(load)) {
+                store.count(true);
+                return self.replay(&rel, module, load, made_by);
+            }
+            store.count(false);
+        }
+        let Some(parsed) = self.parse(&rel, text) else {
+            if let (Some(store), Some(context)) = (self.store, context.as_deref()) {
+                let reason = self.parse_errors.get(&rel).cloned().unwrap_or_default();
+                store.put(context, text, crate::stored::encode_file(&FileLoad { parsed: Err(reason) }));
+            }
+            return Ok(());
+        };
+        self.parsed.insert(rel.clone());
+        let inner = self.record_inner_attrs(module, &rel, parsed.syntax());
+        if let Some(made_by) = made_by {
+            self.macro_modules.insert(module.to_string(), made_by);
+        }
+        let source = Source::new(&rel, text, &parsed, self.edition);
         let items: Vec<ast::Item> = parsed.items().collect();
-        self.load_items(&items, module, &source, &child_dir, test)
+        self.frames.push(Frame { flushed: self.items.len(), events: Vec::new(), probes: Vec::new() });
+        let result = self.load_items(&items, module, &source, child_dir, test);
+        self.flush();
+        let frame = self.frames.pop().expect("the frame of the file");
+        result?;
+        if let (Some(store), Some(context)) = (self.store, context.as_deref()) {
+            store.put(context, text, crate::stored::encode_recorded(&inner, &frame.events, self.items, &frame.probes));
+        }
+        Ok(())
+    }
+
+    /// Moves the items since the last child load into the part of the open file.
+    fn flush(&mut self) {
+        let count = self.items.len();
+        if let Some(frame) = self.frames.last_mut() {
+            if count > frame.flushed {
+                frame.events.push(Recorded::Items(frame.flushed, count));
+            }
+            frame.flushed = count;
+        }
+    }
+
+    /// Loads a child file of a `mod` line of the open file (the link part). The part of the
+    /// open file gets the load as an event, not the items of the child.
+    fn child(&mut self, found: &Path, module: String, test: bool, by_attr: bool, made_by: Option<MacroModule>) -> Result<()> {
+        self.flush();
+        let file = relative(self.root, found);
+        if let Some(frame) = self.frames.last_mut() {
+            frame.events.push(Recorded::Child(FileEvent::Child { file, module: module.clone(), test, by_attr, made_by: made_by.clone() }));
+        }
+        let text = std::fs::read_to_string(found)?;
+        // A file that `#[path]` names is a "mod-rs" file: its child modules are in its own folder.
+        let child_dir = if by_attr { found.parent().map(Path::to_path_buf).unwrap_or_default() } else { module_dir(found) };
+        let result = self.load_one(found, &text, &module, test, &child_dir, made_by);
+        if let Some(frame) = self.frames.last_mut() {
+            frame.flushed = self.items.len();
+        }
+        result
+    }
+
+    /// True if each probe of a stored part gives its answer now.
+    fn probes_hold(&self, load: &FileLoad) -> bool {
+        match &load.parsed {
+            Ok(parts) => parts.probes.iter().all(|(file, exists)| self.root.join(file).is_file() == *exists),
+            Err(_) => true,
+        }
+    }
+
+    /// The effects of a stored part, in the order of a load with a parse.
+    fn replay(&mut self, rel: &str, module: &str, load: FileLoad, made_by: Option<MacroModule>) -> Result<()> {
+        self.editions.insert(rel.to_string(), self.edition);
+        let parts = match load.parsed {
+            Ok(parts) => parts,
+            Err(reason) => {
+                self.parse_errors.insert(rel.to_string(), reason);
+                return Ok(());
+            }
+        };
+        self.parsed.insert(rel.to_string());
+        self.module_files.insert(module.to_string(), rel.to_string());
+        if let Some((texts, shown)) = parts.inner {
+            self.inner_attrs.insert(module.to_string(), (rel.to_string(), texts));
+            self.inner_attrs_display.insert(module.to_string(), shown);
+        }
+        if let Some(made_by) = made_by {
+            self.macro_modules.insert(module.to_string(), made_by);
+        }
+        // The child loads of a stored part record nothing in the part of the parent file: the
+        // parent records the load of this file as one event.
+        self.frames.push(Frame { flushed: self.items.len(), events: Vec::new(), probes: Vec::new() });
+        let mut result = Ok(());
+        for event in parts.events {
+            match event {
+                FileEvent::Items(items) => self.items.extend(items),
+                FileEvent::Child { file, module, test, by_attr, made_by } => {
+                    let found = self.root.join(&file);
+                    if let Err(error) = self.child(&found, module, test, by_attr, made_by) {
+                        result = Err(error);
+                        break;
+                    }
+                }
+            }
+        }
+        self.frames.pop();
+        result
+    }
+
+    /// The files of a `mod` line ([`mod_files`]), with each probe in the part of the open file.
+    fn mod_files(&mut self, attrs: &[Attr], base: &Path, dir: &Path, name: &str) -> Vec<(PathBuf, bool)> {
+        let root = self.root;
+        let mut probes = Vec::new();
+        let found = mod_files_with(attrs, base, dir, name, &mut |file: &Path| {
+            let exists = file.is_file();
+            probes.push((relative(root, file), exists));
+            exists
+        });
+        if let Some(frame) = self.frames.last_mut() {
+            frame.probes.extend(probes);
+        }
+        found
     }
 
     /// Parses the text of a file. A file that does not parse does not stop the load (design
@@ -1177,19 +1388,10 @@ impl Loader<'_> {
                         // is off. With two files or more, each file is a twin module (`name#N`).
                         let file = &source.rel;
                         let base = if *dir == module_dir(&self.root.join(file)) { self.root.join(file).parent().map(Path::to_path_buf).unwrap_or_default() } else { dir.to_path_buf() };
-                        let files = mod_files(&attrs, &base, dir, &name);
+                        let files = self.mod_files(&attrs, &base, dir, &name);
                         for (index, (found, by_attr)) in files.iter().enumerate() {
                             let path = if files.len() > 1 { format!("{path}#{index}") } else { path.clone() };
-                            let text = std::fs::read_to_string(found)?;
-                            let rel = relative(self.root, found);
-                            let Some(parsed) = self.parse(&rel, &text) else { continue };
-                            self.parsed.insert(rel.clone());
-                            self.record_inner_attrs(&path, &rel, parsed.syntax());
-                            // A file that `#[path]` names is a "mod-rs" file: its child modules are in its own folder.
-                            let child_dir = if *by_attr { found.parent().map(Path::to_path_buf).unwrap_or_default() } else { module_dir(found) };
-                            let inner = Source::new(&rel, &text, &parsed, self.edition);
-                            let content: Vec<ast::Item> = parsed.items().collect();
-                            self.load_items(&content, &path, &inner, &child_dir, is_test)?;
+                            self.child(found, path, is_test, *by_attr, None)?;
                         }
                     }
                     self.add(path, ItemKind::Mod, item, &vis_text(item_mod), &attrs, None, Vec::new(), source, is_test);
@@ -1414,7 +1616,7 @@ impl Loader<'_> {
                 order.push(declaration.names.clone());
                 Vec::new()
             });
-            for (found, by_attr) in mod_files(&declaration.attrs, &base, &inner_dir, &name) {
+            for (found, by_attr) in self.mod_files(&declaration.attrs, &base, &inner_dir, &name) {
                 if !list.iter().any(|entry| entry.0 == found) {
                     list.push((found, by_attr, is_test, declaration.clone(), call.clone()));
                 }
@@ -1425,16 +1627,8 @@ impl Loader<'_> {
             let path = format!("{module}::{}", names.join("::"));
             for (index, (found, by_attr, is_test, declaration, call)) in files.iter().enumerate() {
                 let path = if files.len() > 1 { format!("{path}#{index}") } else { path.clone() };
-                let text = std::fs::read_to_string(found)?;
-                let rel = relative(self.root, found);
-                let Some(parsed) = self.parse(&rel, &text) else { continue };
-                self.parsed.insert(rel.clone());
-                self.record_inner_attrs(&path, &rel, parsed.syntax());
-                self.macro_modules.insert(path.clone(), MacroModule { call: call.clone(), file: rel.clone(), at: (source.rel.clone(), declaration.line), text: declaration.text.clone() });
-                let child_dir = if *by_attr { found.parent().map(Path::to_path_buf).unwrap_or_default() } else { module_dir(found) };
-                let inner = Source::new(&rel, &text, &parsed, self.edition);
-                let content: Vec<ast::Item> = parsed.items().collect();
-                self.load_items(&content, &path, &inner, &child_dir, *is_test)?;
+                let made_by = MacroModule { call: call.clone(), file: relative(self.root, found), at: (source.rel.clone(), declaration.line), text: declaration.text.clone() };
+                self.child(found, path, *is_test, *by_attr, Some(made_by))?;
             }
         }
         Ok(())
@@ -1449,21 +1643,25 @@ impl Loader<'_> {
 
     /// Records the inner attributes of a file (`#![…]`). An inner doc comment is stored as a
     /// `//!` line, as in the source. Each other attribute is stored in its token form.
-    fn record_inner_attrs(&mut self, module: &str, file: &str, root: &SyntaxNode) {
+    fn record_inner_attrs(&mut self, module: &str, file: &str, root: &SyntaxNode) -> Option<(Vec<String>, Vec<String>)> {
         self.module_files.insert(module.to_string(), file.to_string());
         let attrs = attributes(root);
-        if !attrs.is_empty() {
-            let text = |attr: &Attr| match attr.doc_value() {
-                Some(value) => doc_lines("//!", &value),
-                None => attr.text.clone(),
-            };
-            self.inner_attrs.insert(module.to_string(), (file.to_string(), attrs.iter().map(text).collect()));
-            let shown = |attr: &Attr| match attr.doc_value() {
-                Some(value) => doc_lines("//!", &value),
-                None => attr.display.clone(),
-            };
-            self.inner_attrs_display.insert(module.to_string(), attrs.iter().map(shown).collect());
+        if attrs.is_empty() {
+            return None;
         }
+        let text = |attr: &Attr| match attr.doc_value() {
+            Some(value) => doc_lines("//!", &value),
+            None => attr.text.clone(),
+        };
+        let texts: Vec<String> = attrs.iter().map(text).collect();
+        self.inner_attrs.insert(module.to_string(), (file.to_string(), texts.clone()));
+        let shown = |attr: &Attr| match attr.doc_value() {
+            Some(value) => doc_lines("//!", &value),
+            None => attr.display.clone(),
+        };
+        let shown: Vec<String> = attrs.iter().map(shown).collect();
+        self.inner_attrs_display.insert(module.to_string(), shown.clone());
+        Some((texts, shown))
     }
 
     /// Adds the fields of a struct or a variant as items (`owner.name`, or `owner.0` for a tuple
@@ -1661,21 +1859,27 @@ fn module_dir(file: &Path) -> PathBuf {
 /// configurations (design 37.3). The list has each such file, then the file of the plain
 /// `#[path]` attribute or the usual file of the module.
 fn mod_files(attrs: &[Attr], base: &Path, dir: &Path, name: &str) -> Vec<(PathBuf, bool)> {
+    mod_files_with(attrs, base, dir, name, &mut |file: &Path| file.is_file())
+}
+
+/// [`mod_files`] with a probe of the existence of a file (the loader records each probe,
+/// R91.2-1).
+fn mod_files_with(attrs: &[Attr], base: &Path, dir: &Path, name: &str, is_file: &mut dyn FnMut(&Path) -> bool) -> Vec<(PathBuf, bool)> {
     let mut files: Vec<(PathBuf, bool)> = Vec::new();
-    let mut add = |file: PathBuf, by_attr: bool| {
-        if file.is_file() && !files.iter().any(|(found, _)| *found == file) {
+    let mut add = |file: PathBuf, by_attr: bool, is_file: &mut dyn FnMut(&Path) -> bool| {
+        if is_file(&file) && !files.iter().any(|(found, _)| *found == file) {
             files.push((file, by_attr));
         }
     };
     for target in attrs.iter().flat_map(conditional_paths) {
-        add(base.join(target), true);
+        add(base.join(target), true, is_file);
     }
     match path_attr(attrs) {
-        Some(target) => add(base.join(target), true),
+        Some(target) => add(base.join(target), true, is_file),
         None => {
             let usual = [dir.join(format!("{name}.rs")), dir.join(name).join("mod.rs")];
-            if let Some(found) = usual.into_iter().find(|candidate| candidate.is_file()) {
-                add(found, false);
+            if let Some(found) = usual.into_iter().find(|candidate| is_file(candidate)) {
+                add(found, false, is_file);
             }
         }
     }
@@ -1841,6 +2045,121 @@ mod tests {
         let full = dir.join(path);
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
         std::fs::write(full, text).unwrap();
+    }
+
+    /// [R91.2-1] A store of the parts of the files in memory, with its counts.
+    #[derive(Default)]
+    pub(crate) struct MemoryFiles {
+        pub(crate) parts: std::cell::RefCell<BTreeMap<(String, String), Vec<u8>>>,
+        pub(crate) counts: std::cell::Cell<(usize, usize)>,
+    }
+
+    impl FileSyntaxStore for MemoryFiles {
+        fn get(&self, context: &str, text: &str) -> Option<Vec<u8>> {
+            self.parts.borrow().get(&(context.to_string(), text.to_string())).cloned()
+        }
+        fn put(&self, context: &str, text: &str, bytes: Vec<u8>) {
+            self.parts.borrow_mut().insert((context.to_string(), text.to_string()), bytes);
+        }
+        fn count(&self, from_store: bool) {
+            let (stored, parsed) = self.counts.get();
+            self.counts.set(if from_store { (stored + 1, parsed) } else { (stored, parsed + 1) });
+        }
+    }
+
+    impl MemoryFiles {
+        /// The counts since the last call: the files from the store and the files parsed.
+        fn take(&self) -> (usize, usize) {
+            self.counts.replace((0, 0))
+        }
+    }
+
+    /// A tree with each kind of `mod` line: a file module, a `#[path]` module, a
+    /// `cfg_attr(…, path = …)` module, an inline module with a file module in it, a module of
+    /// a `mod` line in a macro input (design 59), a file that does not parse, and inner
+    /// attributes.
+    fn module_tree(root: &Path) {
+        write(root, "Cargo.toml", "[package]\nname = \"depot\"\nversion = \"0.1.0\"\nedition = \"2021\"\n");
+        write(root, "src/lib.rs", "//! The depot.\n#![allow(unused)]\npub mod a;\n#[path = \"other/b_file.rs\"]\nmod b;\n#[cfg_attr(unix, path = \"c_unix.rs\")]\nmod c;\nmod inner {\n    pub mod deep;\n    pub fn here() {}\n}\nmacro_rules! with { ($($t:tt)*) => { $($t)* } }\nwith! { mod d; }\nmod bad;\npub fn top() -> u32 { a::one() }\n");
+        write(root, "src/a.rs", "#![doc = \"a\"]\npub fn one() -> u32 { 1 }\npub mod a_child;\n");
+        write(root, "src/a/a_child.rs", "pub struct S { pub x: u8 }\nimpl S { pub fn get(&self) -> u8 { self.x } }\n");
+        write(root, "src/other/b_file.rs", "pub fn b() {}\n");
+        write(root, "src/c_unix.rs", "pub fn c_unix() {}\n");
+        write(root, "src/c.rs", "pub fn c_plain() {}\n");
+        write(root, "src/inner/deep.rs", "pub enum E { A, B(u8) }\n");
+        write(root, "src/d.rs", "pub const D: u8 = 4;\n");
+        write(root, "src/bad.rs", "pub fn broken( {\n");
+        write(root, "tests/t.rs", "mod common;\n#[test]\nfn t() { common::help(); }\n");
+        write(root, "tests/common/mod.rs", "pub fn help() {}\n");
+    }
+
+    /// The bytes of the stored form of a workspace (R88.5-1): each member, also the columns,
+    /// the display texts, the editions, and the byte ranges of the nodes.
+    fn form(ws: &Workspace) -> Vec<u8> {
+        crate::stored::encode(ws)
+    }
+
+    /// [R91.2-1] A load that takes the part of each file from the store gives the workspace of
+    /// a load that parses each file; after an edit of one file, only that file is parsed, and
+    /// the workspace is that of a full load of the new tree.
+    // rule+ R91.2-1
+    #[test]
+    fn the_parts_of_the_files_from_the_store_give_the_workspace_of_a_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        module_tree(root);
+        let full = Workspace::load(root).unwrap();
+        assert!(full.parse_errors.contains_key("src/bad.rs") && full.macro_modules.contains_key("depot::d") && full.items.contains_key("depot::inner::deep::E"), "{:?}", full.items.keys().collect::<Vec<_>>());
+        let store = MemoryFiles::default();
+        let first = Workspace::load_manifests_with(root, Some(&store)).unwrap();
+        assert_eq!(form(&first), form(&full));
+        let (stored, parsed) = store.take();
+        assert_eq!((stored, parsed), (0, 11), "each file is parsed one time");
+        let second = Workspace::load_manifests_with(root, Some(&store)).unwrap();
+        assert_eq!(form(&second), form(&full), "the workspace from the store is the workspace of the parse");
+        assert_eq!(store.take(), (11, 0));
+        // A new tree (a copy in another folder) with one edit: only the edited file is parsed.
+        let other = tempfile::tempdir().unwrap();
+        module_tree(other.path());
+        write(other.path(), "src/a.rs", "#![doc = \"a\"]\npub fn one() -> u32 {\n    2\n}\npub mod a_child;\n");
+        let next = Workspace::load_manifests_with(other.path(), Some(&store)).unwrap();
+        assert_eq!(store.take(), (10, 1));
+        assert_eq!(form(&next), form(&Workspace::load(other.path()).unwrap()));
+    }
+
+    /// [R91.2-1] The negative cases: a stored part is not used when a file that a `mod` line
+    /// looks for comes or goes (the answer of a probe changes), and the same text in another
+    /// context (another module path) has its own part.
+    // rule- R91.2-1
+    #[test]
+    fn a_part_with_another_probe_answer_or_another_context_is_not_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        module_tree(root);
+        let store = MemoryFiles::default();
+        Workspace::load_manifests_with(root, Some(&store)).unwrap();
+        store.take();
+        // `mod a;` finds `src/a/mod.rs` now: the text of `src/lib.rs` is the same, but the answer
+        // of its probe of `src/a.rs` is not.
+        std::fs::remove_file(root.join("src/a.rs")).unwrap();
+        write(root, "src/a/mod.rs", "pub fn one() -> u32 { 1 }\npub mod a_child;\n");
+        let moved = Workspace::load_manifests_with(root, Some(&store)).unwrap();
+        let (_, parsed) = store.take();
+        assert!(parsed >= 2, "the root file and the new file are parsed: {parsed}");
+        assert_eq!(form(&moved), form(&Workspace::load(root).unwrap()));
+        assert_eq!(moved.module_files.get("depot::a").map(String::as_str), Some("src/a/mod.rs"));
+        // The same text of a file in another crate: another context, so another part.
+        let other = tempfile::tempdir().unwrap();
+        module_tree(other.path());
+        write(other.path(), "Cargo.toml", "[package]\nname = \"store\"\nversion = \"0.1.0\"\nedition = \"2021\"\n");
+        let renamed = Workspace::load_manifests_with(other.path(), Some(&store)).unwrap();
+        assert_eq!(store.take().0, 0, "no part of the crate `depot` serves the crate `store`");
+        assert!(renamed.items.contains_key("store::a::one"));
+        assert_eq!(form(&renamed), form(&Workspace::load(other.path()).unwrap()));
+        // The same texts with another edition: another context.
+        write(other.path(), "Cargo.toml", "[package]\nname = \"store\"\nversion = \"0.1.0\"\nedition = \"2018\"\n");
+        Workspace::load_manifests_with(other.path(), Some(&store)).unwrap();
+        assert_eq!(store.take().0, 0, "no part of the edition 2021 serves the edition 2018");
     }
 
     #[test]

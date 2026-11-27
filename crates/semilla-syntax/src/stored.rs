@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::load::{CodeFile, CrateInfo, FileEntry, Item, ItemDisplay, ItemKind, MacroModule, Target, Workspace};
+use crate::load::{CodeFile, CrateInfo, FileEntry, FileEvent, FileLoad, FileParts, Item, ItemDisplay, ItemKind, MacroModule, Recorded, Target, Workspace};
 use crate::rs::Edition;
 use crate::tree::Node;
 
@@ -375,6 +375,89 @@ impl Stored for MacroModule {
 
 /// The bytes of a workspace. The index of the body items and the name record are not stored:
 /// a read makes the index at its first use, and the verifier sets the name record.
+/// [R91.2-1] The format key of the stored part of one file (design 91). A change of this
+/// encoding (or of the encoding of an item) needs a new key.
+pub const FILE_FORMAT: &str = "semilla-file-syntax-1";
+
+impl Stored for FileEvent {
+    fn put(&self, out: &mut Vec<u8>) {
+        match self {
+            FileEvent::Items(items) => {
+                out.push(0);
+                items.put(out);
+            }
+            FileEvent::Child { file, module, test, by_attr, made_by } => {
+                out.push(1);
+                file.put(out);
+                module.put(out);
+                test.put(out);
+                by_attr.put(out);
+                made_by.put(out);
+            }
+        }
+    }
+    fn take(reader: &mut Reader<'_>) -> Option<FileEvent> {
+        match reader.bytes(1)?[0] {
+            0 => Some(FileEvent::Items(Stored::take(reader)?)),
+            1 => Some(FileEvent::Child { file: Stored::take(reader)?, module: Stored::take(reader)?, test: Stored::take(reader)?, by_attr: Stored::take(reader)?, made_by: Stored::take(reader)? }),
+            _ => None,
+        }
+    }
+}
+
+/// [R91.2-1] The bytes of the part of one file.
+pub(crate) fn encode_file(load: &FileLoad) -> Vec<u8> {
+    let mut out = Vec::new();
+    match &load.parsed {
+        Err(reason) => {
+            out.push(0);
+            reason.put(&mut out);
+        }
+        Ok(parts) => {
+            out.push(1);
+            parts.inner.put(&mut out);
+            parts.events.put(&mut out);
+            parts.probes.put(&mut out);
+        }
+    }
+    out
+}
+
+/// [R91.2-1] The bytes of the part of one file that the loader recorded: the items of an
+/// event are a range of `items`. The bytes are those of [`encode_file`] for the same part.
+pub(crate) fn encode_recorded(inner: &Option<(Vec<String>, Vec<String>)>, events: &[Recorded], items: &[Item], probes: &[(String, bool)]) -> Vec<u8> {
+    let mut out = vec![1];
+    inner.put(&mut out);
+    events.len().put(&mut out);
+    for event in events {
+        match event {
+            Recorded::Items(start, end) => {
+                out.push(0);
+                let part = &items[*start..*end];
+                part.len().put(&mut out);
+                for item in part {
+                    item.put(&mut out);
+                }
+            }
+            Recorded::Child(child) => child.put(&mut out),
+        }
+    }
+    probes.to_vec().put(&mut out);
+    out
+}
+
+/// [R91.2-1] The part of one file of its bytes. `None`: the bytes are not a whole part.
+pub(crate) fn decode_file(bytes: &[u8]) -> Option<FileLoad> {
+    let mut reader = Reader { bytes, at: 0 };
+    let reader = &mut reader;
+    let parsed = match reader.bytes(1)?[0] {
+        0 => Err(Stored::take(reader)?),
+        1 => Ok(FileParts { inner: Stored::take(reader)?, events: Stored::take(reader)?, probes: Stored::take(reader)? }),
+        _ => return None,
+    };
+    (reader.at == bytes.len()).then_some(FileLoad { parsed })
+}
+
 pub fn encode(workspace: &Workspace) -> Vec<u8> {
     let mut out = Vec::new();
     workspace.crates.put(&mut out);

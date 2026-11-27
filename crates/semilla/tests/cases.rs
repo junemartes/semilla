@@ -56,6 +56,9 @@ struct Case {
     known: Vec<(String, String)>,
     old: BTreeMap<String, Vec<u8>>,
     new: BTreeMap<String, Vec<u8>>,
+    /// [R91.3-1] The files of the tree of a step after the step of the case (the side `next`:
+    /// the new tree with these files). Empty: the case has one step.
+    next: BTreeMap<String, Vec<u8>>,
     /// The text of the file before the expected text.
     head: String,
     expected: Option<String>,
@@ -86,7 +89,7 @@ fn base64(text: &str) -> Result<Vec<u8>, String> {
 
 impl Case {
     fn parse(id: &str, file: &Path, text: &str) -> Result<Case, String> {
-        let mut case = Case { id: id.to_string(), file: file.to_path_buf(), options: Vec::new(), exit: None, must_match: Vec::new(), must_not_match: Vec::new(), different: Vec::new(), same_facts: false, refactor: false, known: Vec::new(), old: BTreeMap::new(), new: BTreeMap::new(), head: String::new(), expected: None };
+        let mut case = Case { id: id.to_string(), file: file.to_path_buf(), options: Vec::new(), exit: None, must_match: Vec::new(), must_not_match: Vec::new(), different: Vec::new(), same_facts: false, refactor: false, known: Vec::new(), old: BTreeMap::new(), new: BTreeMap::new(), next: BTreeMap::new(), head: String::new(), expected: None };
         const EXPECTED: &str = "=== expected\n";
         let (head, expected) = match text.find(&format!("\n{EXPECTED}")) {
             Some(at) => (&text[..at + 1], Some(text[at + 1 + EXPECTED.len()..].to_string())),
@@ -114,8 +117,9 @@ impl Case {
             match side {
                 "old" => case.old.insert(path, bytes).map(|_| ()),
                 "new" => case.new.insert(path, bytes).map(|_| ()),
+                "next" => case.next.insert(path, bytes).map(|_| ()),
                 "both" => case.old.insert(path.clone(), bytes.clone()).or(case.new.insert(path, bytes)).map(|_| ()),
-                _ => return Err(format!("the section `{title}` has no side `old`, `new`, or `both`")),
+                _ => return Err(format!("the section `{title}` has no side `old`, `new`, `both`, or `next`")),
             }
             .map_or(Ok(()), |()| Err(format!("the section `{title}` names a file two times")))
         };
@@ -1355,6 +1359,11 @@ fn index_problems(cache: &Path) -> Vec<String> {
     problems
 }
 
+thread_local! {
+    /// [R91.7-1] True while the runner runs a command with the timing lines on.
+    static TIMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// The count of the checks of property 15 (R89.6-1): the compares of a stored path and a full
 /// path.
 static STORED_CHECKS: AtomicUsize = AtomicUsize::new(0);
@@ -1371,13 +1380,133 @@ fn stored_path_problems(work: &mut Work, first: &Path, second: &Path, step: &Run
             for entry in std::fs::read_dir(second.join("cache")).map_err(|error| error.to_string())?.flatten() {
                 let _ = std::fs::remove_dir_all(entry.path().join("store"));
             }
-            (stored, work.semilla(second, &args)?)
+            // [R91.7-1] The timing lines of this run count the constructions of the opaque
+            // inputs (stderr only: the compare reads stdout). A command with an empty database
+            // takes no construction from the store: a construction that the command wrote in a
+            // slot is for other answers of the rule (else the construction in memory serves).
+            let full = work.semilla_timed(second, &args)?;
+            EMPTY_CHECKS.fetch_add(1, Ordering::SeqCst);
+            if let Some(count) = work_count(&full.stderr, "opaque inputs from the store").filter(|count| *count > 0) {
+                work.fail("empty_store", format!("`verify` with an empty database took {count} construction(s) of the opaque inputs from the store: a construction for other answers of the rule"));
+            }
+            // The compare reads stdout only.
+            (stored, full)
         }
         1 => (work.step(first, options)?, step.clone()),
         _ => return Ok(Vec::new()),
     };
     STORED_CHECKS.fetch_add(1, Ordering::SeqCst);
     Ok(if stored.stdout == full.stdout { Vec::new() } else { vec![format!("the check with the stored results is different:\n{}", difference(&full.text(), &stored.text()))] })
+}
+
+/// [R91.7-1] The count of the commands with an empty database that the runner checked.
+static EMPTY_CHECKS: AtomicUsize = AtomicUsize::new(0);
+
+/// [R91.7-1] The value of a count of the line of the new work of a command (R88.6-1), summed
+/// over the lines of stderr. `None`: no such line.
+fn work_count(stderr: &str, name: &str) -> Option<u64> {
+    let mut found = None;
+    for line in stderr.lines().filter_map(|line| line.strip_prefix("[timing] count of the new work of the command (")) {
+        for part in line.trim_end_matches(')').split(", ") {
+            if let Some((count, rest)) = part.split_once(' ')
+                && rest == name
+            {
+                *found.get_or_insert(0) += count.parse::<u64>().unwrap_or(0);
+            }
+        }
+    }
+    found
+}
+
+/// The count of the checks of property 15, part 3 (R91.3-1): the files whose syntax data
+/// came from the store, and the steps after a step.
+static ITEM_FILES: AtomicUsize = AtomicUsize::new(0);
+static NEXT_STEPS: AtomicUsize = AtomicUsize::new(0);
+
+/// [R91.3-1] A store of the parts of the files in memory (the test has no database).
+#[derive(Default)]
+struct MemoryFiles {
+    parts: std::cell::RefCell<BTreeMap<(String, String), Vec<u8>>>,
+    from_store: std::cell::Cell<usize>,
+}
+
+impl semilla_syntax::load::FileSyntaxStore for MemoryFiles {
+    fn get(&self, context: &str, text: &str) -> Option<Vec<u8>> {
+        self.parts.borrow().get(&(context.to_string(), text.to_string())).cloned()
+    }
+    fn put(&self, context: &str, text: &str, bytes: Vec<u8>) {
+        self.parts.borrow_mut().insert((context.to_string(), text.to_string()), bytes);
+    }
+    fn count(&self, from_store: bool) {
+        if from_store {
+            self.from_store.set(self.from_store.get() + 1);
+        }
+    }
+}
+
+/// [R91.3-1] The problems of property 15, part 3, for the syntax data of the files: the old
+/// tree, then the new tree (and the tree of the step after the step), each with the store of
+/// the parts of the trees before it, give the stored form of a full load of each tree.
+fn stored_item_problems(case: &Case) -> Vec<String> {
+    let mut trees = vec![("old", case.old.clone()), ("new", case.new.clone())];
+    if !case.next.is_empty() {
+        let mut next = case.new.clone();
+        next.extend(case.next.clone());
+        trees.push(("next", next));
+    }
+    let store = MemoryFiles::default();
+    let mut problems = Vec::new();
+    for (name, files) in trees {
+        let Ok(dir) = tempfile::Builder::new().prefix("semilla-items-").tempdir() else { continue };
+        for (path, bytes) in &files {
+            let full = dir.path().join(path);
+            if std::fs::create_dir_all(full.parent().unwrap()).and_then(|()| std::fs::write(&full, bytes)).is_err() {
+                return vec![format!("the file `{path}` of the {name} tree cannot be written")];
+            }
+        }
+        let before = store.from_store.get();
+        let stored = semilla_syntax::Workspace::load_manifests_with(dir.path(), Some(&store));
+        ITEM_FILES.fetch_add(store.from_store.get() - before, Ordering::SeqCst);
+        let full = semilla_syntax::Workspace::load(dir.path());
+        match (stored, full) {
+            (Ok(stored), Ok(full)) => {
+                if semilla_syntax::stored::encode(&stored) != semilla_syntax::stored::encode(&full) {
+                    problems.push(format!("the syntax data of the {name} tree with the parts of the store is not the syntax data of a full load"));
+                }
+            }
+            (Err(_), Err(_)) => {}
+            (stored, full) => problems.push(format!("the load of the {name} tree with the store ({}) and the full load ({}) do not agree", stored.is_ok(), full.is_ok())),
+        }
+    }
+    problems
+}
+
+/// [R91.3-1] The problems of the step after the step of a case: the step after the step of the
+/// case in one copy (its database has each stored result of the step before) gives the output
+/// of the same step in a copy with no database.
+fn next_step_problems(work: &mut Work, case: &Case) -> Result<Vec<String>, String> {
+    let write = |folder: &Path| -> Result<(), String> {
+        for (path, bytes) in &case.next {
+            let full = folder.join("repo").join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).and_then(|()| std::fs::write(&full, bytes)).map_err(|error| format!("the file `{path}`: {error}"))?;
+        }
+        Ok(())
+    };
+    // The full path: the step of the case in a new copy, then no database, then the next step.
+    let other = work.copy("n")?;
+    work.step(&other, &case.options)?;
+    for entry in std::fs::read_dir(other.join("cache")).map_err(|error| error.to_string())?.flatten() {
+        let _ = std::fs::remove_dir_all(entry.path().join("store"));
+    }
+    write(&other)?;
+    let full = work.step(&other, &[])?;
+    // The stored path: the step of the case and the next step in one copy.
+    let kept = work.copy("m")?;
+    work.step(&kept, &case.options)?;
+    write(&kept)?;
+    let stored = work.step(&kept, &[])?;
+    NEXT_STEPS.fetch_add(1, Ordering::SeqCst);
+    Ok(if stored.stdout == full.stdout { Vec::new() } else { vec![format!("the step after the step with the stored results is different:\n{}", difference(&full.text(), &stored.text()))] })
 }
 
 /// The work of one case: the folder, and the results of the checks.
@@ -1417,11 +1546,24 @@ impl Work {
         // error, so the runner removes it.
         command.env_remove("SEMILLA_MIR_DRIVER").env_remove("SEMILLA_COMPILED").env_remove("SEMILLA_NO_CHECK").env_remove("SEMILLA_OWN_LINE_DIFF");
         command.env("SEMILLA_CACHE_DIR", folder.join("cache"));
+        if TIMED.with(|timed| timed.get()) {
+            command.env("SEMILLA_TIMING", "1");
+        } else {
+            command.env_remove("SEMILLA_TIMING");
+        }
         git_env(&mut command);
         let output = command.output().map_err(|error| format!("semilla does not start: {error}"))?;
         self.runs += 1;
         let text = |bytes: &[u8]| normal(&String::from_utf8_lossy(bytes), folder);
         Ok(Run { code: output.status.code().unwrap_or(-1), stdout: text(&output.stdout), stderr: text(&output.stderr) })
+    }
+
+    /// [`Work::semilla`] with the timing lines on (stderr only).
+    fn semilla_timed(&mut self, folder: &Path, args: &[String]) -> Result<Run, String> {
+        TIMED.with(|timed| timed.set(true));
+        let run = self.semilla(folder, args);
+        TIMED.with(|timed| timed.set(false));
+        run
     }
 
     fn step(&mut self, folder: &Path, more: &[String]) -> Result<Run, String> {
@@ -1586,6 +1728,18 @@ fn check(case: &Case) -> Result<Outcome, String> {
     // first copy, and the first step (a new cache).
     for problem in stored_path_problems(&mut work, &first, &second, &step, &case.options)? {
         work.fail("stored_path", problem);
+    }
+    // Property 15, part 3 (R91.3-1): the result of each item from the store equals the result
+    // of the full computation. The syntax data of each file of the new tree, with the parts of
+    // the files of the old tree in the store, is the syntax data of a full load; a case with a
+    // step after its step gives the output of that step with no database.
+    for problem in stored_item_problems(case) {
+        work.fail("stored_items", problem);
+    }
+    if !case.next.is_empty() && step.code == 0 {
+        for problem in next_step_problems(&mut work, case)? {
+            work.fail("next_step", problem);
+        }
     }
 
     // The run with no option, for a case with options.
@@ -1920,6 +2074,7 @@ fn load_cases() -> Vec<Case> {
 // rule+ R87.6-1
 // rule+ R88.7-1
 // rule+ R89.6-1
+// rule+ R91.3-1 R91.7-1
 #[test]
 fn each_case_gives_its_expected_text_and_keeps_the_properties() {
     let start = std::time::Instant::now();
@@ -1993,6 +2148,8 @@ fn each_case_gives_its_expected_text_and_keeps_the_properties() {
     println!("no accepted step, so no check of the fact positions, for {} case(s): {}", no_positions.len(), no_positions.join(", "));
     println!("property 15 (the index): {} record folder(s), {} pair(s) of folders", INDEX_FOLDERS.load(Ordering::SeqCst), INDEX_PAIRS.load(Ordering::SeqCst));
     println!("property 15 (the stored path, R89.6-1): {} compare(s) of a stored path and a full path", STORED_CHECKS.load(Ordering::SeqCst));
+    println!("property 15 (the stored items, R91.3-1): {} file(s) from the store, {} step(s) after a step", ITEM_FILES.load(Ordering::SeqCst), NEXT_STEPS.load(Ordering::SeqCst));
+    println!("property 15 (an empty database, R91.7-1): {} command(s) with an empty database", EMPTY_CHECKS.load(Ordering::SeqCst));
     assert!(problems.is_empty(), "{} problem(s) in the case set:\n{}", problems.len(), problems.join("\n"));
 }
 

@@ -10373,9 +10373,9 @@ The phases of a warm step that read each body, and their inputs (the profile of 
 
 Rule index: no rule: the subsection lists the work that is left, with its cause.
 
-- **P1 for each body.** The calls of the opaque inputs for each record (`note`, `names`, `body`, `callee`, `layout`), the joint rule, the N0 compare, the flow graphs, and the unit lines still read each body. The result of `callee` for one record depends on the lists that `names` got from each record of the same item, and `Opaque::apply` reads the lists of `note` for each body with a text edit; a key for each body needs these dependencies first. **Decided by Claude:** this batch stores the construction (the largest part, a function of the two trees), and it does not change the per-record passes.
-- **P2 (an equal body is not decoded).** Each record is still decoded from the index (R88.2-1): the passes of the item above read the small members of each record.
-- **P3 (the syntax data of each file by its blob hash).** Not done: it needs the loader in two parts (88.5). The new tree of a step is parsed in full.
+- **P1 for each body.** The calls of the opaque inputs for each record (`note`, `names`, `body`, `callee`, `layout`), the joint rule, the N0 compare, the flow graphs, and the unit lines still read each body. The result of `callee` for one record depends on the lists that `names` got from each record of the same item, and `Opaque::apply` reads the lists of `note` for each body with a text edit; a key for each body needs these dependencies first. **Decided by Claude:** this batch stores the construction (the largest part, a function of the two trees), and it does not change the per-record passes. (Batch 14h, design 91: not done; 91.1 has the dependence of each phase, and 91.9 the cause.)
+- **P2 (an equal body is not decoded).** Each record is still decoded from the index (R88.2-1): the passes of the item above read the small members of each record. (Batch 14h, design 91: not done, 91.9.)
+- **P3 (the syntax data of each file by its blob hash).** Not done: it needs the loader in two parts (88.5). The new tree of a step is parsed in full. (Batch 14h, design 91, does this: R91.2-1.)
 - **The search for a derived identity** is out of scope (a later batch removes it). Its core checks get the gains of 89.1 and 89.3, as each core check.
 
 ### 89.3 Each piece of work one time in a process
@@ -10467,15 +10467,15 @@ Rule index: no rule: the subsection has the decisions, the limits, and the open 
 
 - The target of the brief (a warm step in 2 s plus the time of the bodies and the files that change) is met only by the small crates (89.8). The time that is left is in the per-record passes (89.2), the N0 compare, the flow graphs, the read of the records, and the search for a derived identity (out of scope).
 - A step after a step computes the construction of the opaque inputs again: the pair of trees is new. Only a check of the same pair (a warm step, `status`, `verify`, `review`) takes it from the store.
-- The store keeps up to 8 constructions for each pair of workspaces, also of pairs that no stored step has; only `cache --clean` removes the constructions of another binary (open question below).
+- The store keeps up to 8 constructions for each pair of workspaces, also of pairs that no stored step has; only `cache --clean` removes the constructions of another binary (open question below). (Batch 14h, design 91: the clean also removes the constructions of a pair that no stored step has, R91.4-1; and the clean of this batch removed each construction, a defect that R91.4-1 corrects.)
 - The memory of a warm step is lower than in batch 14f, but not at the value before batch 14f (89.8): the decoded records with the digests and the paths of the index, and the decode in parallel threads, stay.
 - `madvise` with the value 4 (`MADV_DONTNEED`) is the value of Linux and of the BSD systems; on a system with another value the call does nothing wrong (the pages are a read-only map of a file) but it can give no memory back.
 - The stored path equals the full path on the case set and on the 7 training pull requests at the level of the output (R89.6-1), and by the unit tests at the level of each answer of the opaque inputs (R89.1-1).
 
 **Open questions for the user.**
 
-- Should a later batch give the calls of the opaque inputs for each record a key for each body (it needs the dependence of a result on the other records of its item, 89.2)?
-- Should the clean also remove the constructions of the opaque inputs of the pairs of trees that no stored step has?
+- Should a later batch give the calls of the opaque inputs for each record a key for each body (it needs the dependence of a result on the other records of its item, 89.2)? (Batch 14h, design 91: the dependence table of 91.1; not done, 91.9.)
+- Should the clean also remove the constructions of the opaque inputs of the pairs of trees that no stored step has? (Batch 14h, design 91: yes, decided by Claude on the request of the brief, R91.4-1.)
 
 ## 90. Batch 15a: the map of the diff: the MIR alignment, its projection onto the tree, and the one fact
 
@@ -10650,3 +10650,159 @@ The "not mapped" nodes that stay are syntax-only nodes that the matcher of today
 The first run of M9 passed each test: no case has a rename entry with a node (the syntax diff under the rename map has no edit of the name). The unit test of the rename branch was added for it. The mutation check ran before three later fixes (the anchor of the uses in the one map, the rule of test code for each node of test code, one order of the entries in a tag); it did not run again.
 
 **The three numbers.** Rules with an identity: +18 (626 → 644: 23 new, R90.1-1 to R90.8-3; 5 removed: R50.2-2, R54.6-1, R54.6-2, R79.6-1, R79.6-2). Rows of `docs/name-lists.md`: 0 (103 lines before and after; `tests/names.rs` passes). Code paths that decide by a name of a crate or a symbol of the user: 0 (the map reads the kinds of the edits and of the items, the categories and the parts of the facts of Semilla, and the counts of the MIR alignment).
+
+## 91. Batch 14h: the speed of a step, part 4 (the result of an item, the syntax data of a file, the split of the build)
+
+Date: 2026-11-27. The decisions of the user:
+
+> 2026-11-24: "a full check/review of a given step is a couple of seconds when cached".
+> 2026-11-27: "We should have a way to avoid parsing manually and instead store and reuse the compiler info".
+
+**This batch changes no output.** Each output of a step stays equal byte for byte, but for the time values and the timing lines of `SEMILLA_TIMING`. The records of the driver do not change; the driver writes a timing line only when Semilla asks for it (R91.5-1). The search for a derived identity (`identity::derive`) does not change (a later batch removes it). Code: `crates/semilla-syntax/src/load.rs` (the loader in two parts), `crates/semilla-syntax/src/stored.rs` (the stored part of a file), `crates/semilla/src/recstore.rs` (the kind of an item result, the store of the parts of the files, the clean), `crates/semilla/src/app.rs` (`App::workspace`, `App::store_live`), `crates/semilla-mir/src/main.rs` (the timing line of the driver), `crates/semilla-normal/src/cargo.rs` and `crates/semilla/src/oracle.rs` (the split of a build), `crates/semilla/tests/cases.rs` (property 15, part 3).
+
+### 91.1 The dependence of the result of an item (Q1)
+
+Rule index: the identities are below.
+
+The phases that a new pair of trees computes in full, the inputs of the result of one item (the records of the item on the two sides, and each input outside the item that the phase reads), and the state after this batch. "Global" means: the phase reads a structure that it makes from each item of the two trees, and the batch has no record of the part of the structure that one item reads.
+
+| Phase | Inputs of the result of one item | Inputs outside the item | State after 14h |
+|---|---|---|---|
+| the syntax data of a file (the loader) | the text of the file | the path of the file, the module path, the test state, the folder of the child modules, the edition, the crate, the answer "the file exists" of each file that a `mod` line looks for, the parser (the binary) | **stored for each file** (R91.2-1) |
+| the construction of the opaque inputs (14g) | each item of the two workspaces | the answers of the rule of the build configuration (the stored queries), the binary | stored for each pair of workspaces (R89.1-1); the key now has the pair of trees (R91.4-1) |
+| the calls of the opaque inputs for each record (`note`, `names`, `body`, `callee`, `layout`) | the name, the span, the type list (`adts`), and the names of the expanded code of each record of the item; the syntax item at the span | global: the construction (the hard and the soft names, the opaque types, the items under `cfg`, the modules and the glob imports, the macro words); the lists of `names` from each record of the same item (a new list clears the memo of `callee`); the configuration and the mode of the joint rule | computed (91.6) |
+| the marks (the opaque set and the stop set of each side) | the answer of `callee` and `layout` for each record | the answers of the other records (a set over all bodies) | computed |
+| the N0 compare (`semilla_normal::compare_with`) | the N0 records of the name on the two sides (the digests of the index, R88.3-1) | the keys of the rename map that can match a path of the text (R88.3-2); the marks of each callee; the added items; the pairs of lifetime names and of generic parameters (global over the names of the two trees); the use of targets (each record has a target) | computed (in memory for one process, R86.1) |
+| the joint rule (`Joint::settle`) | the compare result of the body in each mode | the truths of each checked configuration (the units and their `cfg` values); the atoms of the cover; the claims with a property; the selections | computed |
+| `Opaque::apply` (the notes of a body) | the lists of `note` of the item, the text edits of the body | global: the construction; the rename map | computed |
+| the flow graphs (`flow::apply`) | the graph pairs of the records of a changed body | the texts of the files of the two trees (the places, the MIR map), the edits of the step, the rename map | computed for each changed body |
+| the unit lines and the expanded items (`read_made`, the expansions, the name record) | the first line of each record file (one unit) | the other units of the folder (the lists join in the order of the files) | read one time in a process (R89.3-2); a new process reads the files again |
+| the claims of the intent files (`intent::check`) | the equal-MIR result of each changed body, the claims of the intent files | the answers of the oracle (the intent crate, R78), the rename map, the name record (the qualified path of a template, R87.2-1) | computed |
+| the gate of the claim templates | the text of each template | the two crates (the build of the intent crate), the toolchain | stored for each step by the existing key (R87) |
+| the index of a record file (14f) | each line of the file | the state of the file (its size and times) | stored for each file (R88.2-2); a new build of a unit indexes the file again |
+
+1. [R91.1-1] **The stored result of one item is an entry of the kind `r` (item) with the key text `PHASE DIGESTS… BINARY`**: the name of the phase, the digest of each input of the item (the first 16 bytes of SHA-256, as hexadecimal), and the identity of the Semilla binary (the code of the phase). Each phase has its format key; a read checks the format key and the key text (R88.4-1). The writes of the item results of one load are one transaction. One mechanism serves each phase: a new phase names its inputs and its format. This batch has one phase of this kind (R91.2-1). Tests: `the_key_of_a_file_part_has_the_text_the_context_and_the_binary` (positive), `another_text_another_context_or_another_format_gives_no_stored_result` (negative; `recstore.rs`). The tests of R88.4-2 (a stop in the middle of a write) and R88.4-3 (two processes) write and read the kind `r` too.
+
+| Entry | Key text | Format key | Payload |
+|---|---|---|---|
+| the syntax data of one file (R91.2-1) | `file-syntax TEXT CONTEXT BINARY`: the digest of the content of the file, the digest of its context (the path, the module path, the test state, the folder of the child modules from the root, the edition, the crate), the identity of the binary | `semilla-file-syntax-1` | the reason of a parse error, or: the inner attributes (texts and display texts), the events of the load in order (the items of the file in the stored form of R88.5-1, and each child load: the file, the module path, the test state, "an attribute names the file", the macro call of the `mod` line), and each probe (a path from the root and the answer "the file exists") |
+| a construction of the opaque inputs (R89.1-1, changed) | `opaque DIGEST BINARY OLD:NEW SLOT`: the pair of trees of the step is new | `semilla-opaque-1` | as in 89.1 |
+
+### 91.2 The syntax data of each file (Q3)
+
+Rule index: the identities are below.
+
+1. [R91.2-1] **The loader has two parts: the load of one file, and the link of the workspace; a file with a stored part for its content and its context is not parsed.** The load of one file is a function of its text and of its context: the parse, the items with their paths, the inner attributes, and the `mod` lines. The link reads the targets, finds the file of each `mod` line, and joins the files in the order of the load. The part of a file records each event in order (the items of the file, and each load of a child file), and each probe of a `mod` line: the path of a file that the line looks for, and the answer "the file exists". A stored part is used only if each probe gives its answer now (the folder of the tree is not a part of the key). The parts of the parsed files of one load are one write. The key has the content of the file (its digest, not the git blob hash: the loader reads the text from the folder of the tree), the context, and the identity of the binary (the version of the parser and of the loader). The stored workspace of a tree (R88.5-1) stays: a tree with a stored workspace reads no part. Tests: `the_parts_of_the_files_from_the_store_give_the_workspace_of_a_parse` (positive: each kind of `mod` line, a file that does not parse, inner attributes, a module of a macro input; the stored form of the workspace from the parts is the stored form of a full load; a new tree with one edit parses one file), `a_part_with_another_probe_answer_or_another_context_is_not_used` (negative: a module file that moves from `a.rs` to `a/mod.rs`, another crate, another edition; `load.rs`).
+
+### 91.3 The stored path equals the full path (property 15, part 3)
+
+Rule index: the identities are below.
+
+1. [R91.3-1; no negative case: the property compares results; the unit tests of R91.2-1 find a wrong part] **On each case of the case set, the result of each item from the store equals the result of the full computation.** Property 15, part 3, of the case runner: the old tree, then the new tree, then the tree of the step after the step (if the case has one), each loaded with the parts of the trees before it in a store in memory, give the stored form of a full load of each tree. A case with the side `next` (the files of a step after the step of the case) runs the step after the step in a copy with the database of the step before, and in a copy with no database: the two outputs are equal. The new cases `store91/next_callee`, `next_renamed_name`, `next_type`, `next_macro`, and `next_configuration` change in the step after the step a callee, a module name, a type, a macro, and the default features. The check is a part of the test only; the product has no switch for it. A script runs the same compare on the 7 training pull requests (step N+1 with the database of step N, and with no database). Tests: `each_case_gives_its_expected_text_and_keeps_the_properties` (positive, `tests/cases.rs`).
+
+### 91.4 The clean of the stored results of a pair of trees (Q7)
+
+Rule index: the identities are below.
+
+1. [R91.4-1] **`semilla cache --clean` also removes each stored result of a pair of trees that no stored step has, and the syntax data of each file whose content no file of a tree of a stored step has.** The store of the phase results knows the pair of trees of the step (`BodyOracle::phase_store(step)`), and a construction of the opaque inputs has the pair in its key. The clean reads the stored steps of the session: the pair of each step, and the digest of the content of each Rust file of its trees. Each entry of another binary goes too (R89.4-2). The output of the command does not change. **A defect of batch 14g that this rule corrects:** the key of a stored construction ends with the slot, not with the identity of the binary, so the clean of R89.4-2 removed each construction, also of this binary (its test had a key with no slot). The clean reads the words of the key now. Tests: `the_clean_removes_the_results_of_a_pair_that_no_stored_step_has` (positive), `the_clean_keeps_the_results_that_a_stored_step_can_use` (negative; `recstore.rs`); `the_key_of_a_phase_result_has_each_input_and_the_binary` has another pair too.
+
+### 91.5 The split of the build (Q5)
+
+Rule index: the identities are below.
+
+1. [R91.5-1] **With the timing lines on, the driver writes one timing line for each member crate that it compiles, and Semilla adds the split of each build to its timing lines.** Semilla gives the driver the variable `SEMILLA_DRIVER_TIMING` (a file in the folder of the temporary files of the build: the sandbox lets the build write there) only with `SEMILLA_TIMING`. The driver appends one line for each compile in wrapper mode: the record file name, the start and the end (the time of the system), the time in rustc before the driver (the parse, the expansion, and the analysis, less the time of the driver after the expansion), the time of the driver (the lists after the expansion, and the records after the analysis), and the time in rustc after the driver (the metadata for the dependent crates). Cargo does not track the variable, so it changes no build and no record. After the build, Semilla reads the lines and removes the file, and it prints `the split of cargo check …: the compiles of N member crates T s (rustc before the driver …, the driver …, rustc after the driver …), the dependencies and cargo …`: the compiles of the members are the union of their times (a parallel build counts one time), and the rest of the time of the cargo command is the build of the dependencies and the work of cargo. The totals of the process have the parts (`the builds: …`). This batch does not change how the build runs. Tests: `the_split_of_a_build_joins_the_compiles_of_the_members` (positive), `a_line_of_another_form_does_not_count` (negative; `cargo.rs`); `a_step_with_the_timing_lines_has_the_split_of_its_build` (positive), `a_step_with_no_timing_lines_gives_the_driver_no_file` (negative; `tests/store88.rs`).
+
+### 91.6 The timing lines (Q6)
+
+Rule index: the identities are below.
+
+1. [R91.6-1] **The counts of each stored kind: items from the store and items computed.** The syntax data of a file: "files from the store" and "files parsed" of the line of the new work (R88.6-1) count the files from the stored workspace of a tree and from the parts of the files, and the files that the loader parsed. A construction of the opaque inputs: "opaque inputs from the store" and "opaque inputs computed" (R89.5-1). The load of a tree has the phases "the load of the files of a tree", "the git entries of a tree", and "the write of the syntax data of a tree". Tests: `a_new_tree_takes_the_files_that_do_not_change_from_the_store` (positive), `a_new_tree_parses_each_file_with_a_new_content` (negative; `tests/store88.rs`).
+
+### 91.7 The gap of batch 14g (mutation M2)
+
+Rule index: the identities are below.
+
+1. [R91.7-1; no negative case: the property holds on each case; the mutation check of 91.9 shows that a stored construction with no check of its answers fails it] **A command with an empty database takes no construction of the opaque inputs from the store.** In one process, a construction with the same answers comes from memory (R61.15-2); a construction in the store that the command wrote itself is for other answers of the rule. Property 15 of the case runner: the `verify` with no database of part 2 (R89.6-1) runs with the timing lines (stderr only), and its count "opaque inputs from the store" is 0. Before, property 15, part 2, compared outputs only, and a stored construction with other answers changed no output (89.8). Tests: `each_case_gives_its_expected_text_and_keeps_the_properties` (positive, `tests/cases.rs`).
+
+### 91.8 The results
+
+Rule index: no rule: the subsection has the results of the measures.
+
+**The measures ran on BASE (4f93f16) with the change of this batch, before its rebase on batch 15a** (the binaries of the measures: `semilla` a946a80d, driver e925ed17). After the rebase, the case set and the full test suite ran again on the rebased tree (below); the first full run found a name list of `load.rs` under a new function name (the test of `names.rs`), and the function has its old name again (no change of the code of the function).
+
+**The outputs.** On each of the 7 training pull requests, the 6 outputs of this batch (a cold step, a warm step, `status --verbose`, `verify --json`, `review --md` and its Markdown file) are equal to the outputs of BASE (4f93f16, batch 14g), with the time values masked: 42 of 42. The output of step N+1 of the 3 pull requests of Q5 is equal to the output of BASE: 3 of 3. The stored path of R91.3-1 on the 7 pull requests (step N+1 with the database of step N, and with no database): equal on 7 of 7 (step N+1 takes 96 to 222 files from the store and parses 1 file). A cache folder of BASE: the binary of this batch (with the driver of BASE) gives the output of BASE on `pr-hashbrown-693` and `pr-uuid-932`; its first run parses the files of the first tree (38 and 43 files: the second tree takes 36 and 37 files from the parts of the first one), the second run parses no file. The case set: after the rebase on batch 15a, 692 cases (687 of 15a and the 5 new cases): each expected text is equal (0 written; the expected texts of 15a do not change), with the 2 known failures of before; property 15: 1467 record folders and 1690 pairs (the index), 685 compares of a stored path and a full path (part 2), 162 files from the store and 5 steps after a step (part 3, R91.3-1), and 519 commands with an empty database (R91.7-1). The last full test suite (the rebased tree, CPUs 0 to 5): 1383 passed, 0 failed.
+
+**The times.** Each pair (BASE, then this batch) ran one after the other on the CPUs 0 to 5; the other CPUs had the work of another batch. Warm: the median of three warm steps (each in a fresh clone with the cache of one cold step); cold: one step. Wall time and CPU time in seconds, the peak memory in MB (the largest process), the cache folder in MB. The time of the search for a derived identity (out of scope) is in its own column. The first pair of `pr-uuid-932` ended at a load of 12.0; the row has the pair again (the first pair: warm 1.67 → 1.65, cold 43.3 → 40.6).
+
+| PR | warm wall BASE → 91 (load) | warm CPU | warm memory (before 14f) | cold wall | cold CPU | cold memory | cache | derived identity (last warm) |
+|---|---|---|---|---|---|---|---|---|
+| `pr-bitflags-465` | 1.07 → 1.08 (10.82 to 8.74) | 1.28 → 1.26 | 286 → 287 (261) | 16.0 → 12.5 | 35.9 → 28.2 | 414 → 414 | 315 → 315 | 0.00 → 0.00 |
+| `pr-hashbrown-693` | 2.29 → 2.70 (8.74 to 5.93) | 2.45 → 2.89 | 420 → 420 (403) | 14.1 → 14.8 | 24.2 → 27.3 | 473 → 473 | 300 → 300 | 0.00 → 0.00 |
+| `pr-indexmap-424` | 3.32 → 4.30 (5.93 to 5.08) | 3.56 → 4.59 | 479 → 479 (454) | 20.7 → 20.1 | 35.5 → 34.5 | 548 → 547 | 431 → 431 | 0.73 → 0.99 |
+| `pr-itertools-1086` | 4.29 → 4.28 (5.08 to 9.40) | 5.02 → 5.02 | 774 → 749 (661) | 43.2 → 44.3 | 96.3 → 97.5 | 762 → 807 | 688 → 688 | 0.00 → 0.00 |
+| `pr-num-traits-334` | 5.10 → 5.25 (9.40 to 10.16) | 5.69 → 5.84 | 655 → 655 (606) | 33.4 → 33.5 | 41.8 → 42.0 | 671 → 692 | 540 → 540 | 0.00 → 0.00 |
+| `pr-uuid-932` | 1.32 → 1.36 (7.0 to 6.2) | 1.49 → 1.49 | 324 → 322 (284) | 41.4 → 29.9 | 112.0 → 81.1 | 500 → 500 | 661 → 661 | 0.00 → 0.00 |
+| `pr-winnow-891` | 11.33 → 11.26 (11.93 to 11.46) | 12.32 → 12.35 | 1383 → 1368 (1380) | 90.6 → 90.6 | 281.3 → 280.3 | 1404 → 1512 | 1750 → 1750 | 3.28 → 3.30 |
+
+The warm step does the work of BASE (this batch changes no part of it): the differences of the medians (`pr-hashbrown-693` +0.4 s, `pr-indexmap-424` +1.0 s) are the noise of this machine: the first warm step of each one has the time of BASE (2.28 s, 3.34 s), and each phase of the slower runs is slower by the same part. The cold step is faster when the two trees share files (`pr-bitflags-465` −3.5 s, `pr-uuid-932` −11.5 s). The peak memory of a cold step is higher on 3 pull requests (`itertools` +45 MB, `num-traits` +21 MB, `winnow` +108 MB); the cause is not measured (the parts of the parsed files wait in memory for one write).
+
+**The counts of the new work** (R91.6-1): a cold step parses each file of the first tree and takes the files of the second tree with the same content and context from the parts: files parsed / from the store, BASE → this batch: `bitflags` 97/0 → 52/45, `hashbrown` 74/0 → 38/36, `indexmap` 68/0 → 39/29, `itertools` 148/0 → 78/70, `num-traits` 40/0 → 23/17, `uuid` 80/0 → 43/37, `winnow` 212/0 → 139/95. A warm step parses no file (each tree from its stored workspace), in BASE and in this batch. Step N+1 parses 1 file and takes 96 to 222 files from the store. The constructions of the opaque inputs: as BASE (cold: 2 computed, 1 for `itertools`; warm: each from the store).
+
+**A step after a step** (step N is the change of the pull request, step N+1 adds a local in one function; the median of three runs of each binary). Seconds of step N+1; the split comes from the timing lines of the driver (R91.5-1, this batch only; BASE has no split of `cargo check`):
+
+| PR (load of the pair) | wall | write of the tree | `cargo metadata` | `cargo check`: the compiles of the members (rustc before the driver / the driver / rustc after the driver, sums over the crates) | the dependencies and cargo | gate of the templates | build code test | own work of Semilla |
+|---|---|---|---|---|---|---|---|---|
+| `pr-hashbrown-693` BASE (11.5 to 7.2) | 12.04 | 0.00 | 0.01 | 3.62 (no split) | – | 1.10 | 0.64 | 6.75 |
+| `pr-hashbrown-693` 91 (7.2 to 8.4) | 11.27 | 0.00 | 0.01 | 3.10: 11 crates 3.01 (1.05 / 4.81 / 0.21) | 0.09 | 1.05 | 1.02 | 5.77 |
+| `pr-indexmap-424` BASE (5.9 to 2.8) | 10.58 | 0.00 | 0.01 | 2.80 (no split) | – | 1.88 | 0.40 | 5.50 (derived identity 0.70) |
+| `pr-indexmap-424` 91 (2.8 to 3.9) | 11.23 | 0.00 | 0.01 | 2.85: 12 crates 2.77 (0.93 / 4.35 / 0.17) | 0.06 | 1.92 | 0.39 | 6.06 (derived identity 0.72) |
+| `pr-itertools-1086` BASE (6.5 to 3.1) | 15.66 | 0.00 | 0.01 | 7.95 (no split) | – | 1.30 | 0.42 | 6.01 |
+| `pr-itertools-1086` 91 (3.1 to 7.0) | 15.57 | 0.00 | 0.01 | 8.29: 25 crates 8.12 (1.99 / 14.75 / 0.38) | 0.16 | 1.33 | 0.17 | 5.81 |
+
+The first pairs of `pr-indexmap-424` (load 8.4 to 15.4) and `pr-itertools-1086` (the start at load 15.4) were not valid; the table has the runs again at a lower load. The own work is the wall time less the other columns; the time of the gate and of the build code test is rustc and cargo. The step N+1 output of each binary is equal (3 of 3).
+
+**What is left in step N+1** (this batch, the timing lines of one run). `pr-hashbrown-693`: the load of the new tree 0.38 s (the parse of 1 file and the parts of 36 files 0.11 s, the write of the stored workspace 0.25 s); the check of the new pair 2.43 s (the core check 1.59 s with the two constructions of the opaque inputs 0.69 s, the index of the new record folder 0.25 s, the flow graphs 0.13 s); the check of step N again for the stored result of the session (design 37.21) 1.59 s; the rest (git, the session, the output, the start of the process) about 1 s. `pr-itertools-1086`: the load 0.07 s; the check of the new pair 2.63 s (the core check 1.43 s with the construction 0.47 s, the index 0.55 s, the database 0.40 s); the check of step N again 1.88 s; the rest about 1.2 s. `pr-indexmap-424`: the load 0.23 s; the check of the new pair 1.92 s (the core check 1.18 s with the constructions 0.49 s, the index 0.28 s); the check of step N again 2.32 s, of which the search for a derived identity 0.71 s. **The driver** is the largest part of `cargo check` in step N+1: 4.3 s to 14.8 s of time of the driver (a sum over the member crates, in parallel) against 0.9 s to 2.0 s of rustc before it; the dependencies and cargo take 0.06 s to 0.16 s.
+
+**The mutation check.** Eleven changes, each one undone; a test fails for each one: a file key with no parser version (`the_key_of_a_file_part_has_the_text_the_context_and_the_binary`), a stored part with no check of its probes and a context with no edition (`a_part_with_another_probe_answer_or_another_context_is_not_used`), the items of a child file in the part of the parent and a replay with no inner attributes (`the_parts_of_the_files_from_the_store_give_the_workspace_of_a_parse`), a construction key with no pair of trees (`the_key_of_a_phase_result_has_each_input_and_the_binary`), a clean that keeps the constructions of a pair that no stored step has and a clean that leaves the parts of the files (`the_clean_removes_the_results_of_a_pair_that_no_stored_step_has`), a split with the sum of the member compiles and a split that counts a line of another form (the two tests of `cargo.rs`), a part from the store that counts as a parsed file (`a_new_tree_takes_the_files_that_do_not_change_from_the_store`). The gap of 14g (M2: a stored construction with no check of its answers): property R91.7-1 fails on 3 cases of the group `compiled` (`two_targets_one_name`, `two_targets_other_change`, `two_targets_test_change`).
+
+**The build of Semilla** (a release build from a copy of the tree into an empty target folder, CPUs 0 to 5): BASE 104.8 s wall, 516 s user (load 9.9 to 8.4); this batch 122.4 s wall, 604 s user (load 12.5 at the end, from the work of another batch on the other CPUs). The batch adds no crate.
+
+### 91.9 Decisions, limits, and open questions
+
+Rule index: no rule: the subsection has the decisions, the limits, and the open questions.
+
+**Decided by Claude.**
+
+- The key of the part of a file has the digest of its content (SHA-256 of the text that the loader reads), not the git blob hash: the loader reads the text from the folder of the tree, and the digest is of the bytes that it parses.
+- The context goes into the key, and the part has the full paths of its items: a file in another module path, crate, or edition gets its own part (a module that moves parses again). A loader with no context in the first part needs paths with no module, a larger change of each reader of an item.
+- The folder of the tree is not a part of the key: the probes of the `mod` lines decide (a file that comes or goes makes the part of the file with the `mod` line not usable).
+- The stored workspace of a tree (R88.5-1) stays: a warm step and the tree of the step before read it in one read.
+- The parts of the files of one load are one write transaction.
+- The key of a construction of the opaque inputs has the pair of trees of the step, so the clean finds the constructions of a pair that no stored step has. Two pairs with the same workspaces compute their own construction (rare: the workspaces of a pair have the items of its two trees).
+- The live inputs of the clean are the stored steps of the session of the repository (as the clean of the build code cache): the pairs of trees, and the content of each Rust file of their trees (the clean loads the workspace of each tree, from the store or with a parse).
+- The driver writes its timing lines into a file in the folder of the temporary files of the build, not to stderr: cargo shows the stderr of rustc, and the sandbox lets the build write only the target folder and the records folder. The queries of the compiler that the driver asks for (the MIR of each body) count as the time of the driver.
+- The split of `cargo check`: the compiles of the member crates are the union of their times; the rest of the cargo command is "the dependencies and cargo" (a fresh dependency costs the check of its fingerprint).
+- The property of R91.7-1 runs on the `verify` with no database of part 2 (an accepted step): it adds no run of Semilla.
+- The 5 new cases got their first expected texts with `SEMILLA_CASES_WRITE=1 SEMILLA_CASES=store91/` (only the new cases, before the rebase on batch 15a). After the rebase, their texts came from the output of the runner against a placeholder text (the lines with `+`), with no write. No other expected text changed.
+
+**Not done (the parts of the brief that this batch does not do).**
+
+- **Q1 for the phases of the core check.** The calls of the opaque inputs for each record, the marks, the N0 compare, the joint rule, `Opaque::apply`, the flow graphs, the unit lines, the expanded items, and the claims of the intent files stay computed (91.1). Each of them reads a global structure: the construction of the opaque inputs (a function of each item of the two trees), the marks (a set over all bodies), or the lists of `names` of each record of an item. A key with the digest of the global structure changes with each new pair of trees, so it gives no reuse; a key with the parts that one item reads needs a record of each read of the construction (the hard names, the opaque types, the items under `cfg`, the glob imports that the item sees). The batch has no such record. The construction itself has no split for each side: its sets (the shadow names, the modules, the glob sources) join the two trees before each item reads them.
+- **Q2 (an equal body is not decoded).** Each record is still decoded from the index (R88.2-1): the passes of the core check read the small members of each record.
+- **The check of the step before in a step after a step.** `semilla step` stores the result of the session (design 37.21): the check of the change set of two steps checks step N again (a new process has no result of the check of step N). A stored result of the check of one step needs a stored form of each type of the outcome (the edits, the comparisons, the node pairs, the verdicts, the answers of the intent check); 15a changes these types now.
+
+**Limits.**
+
+- The target of the brief is not met: the own work of Semilla in step N+1 is 5.8 s to 6.1 s (the target: 1 s plus the items that change), and a warm step is 1.1 s to 11.3 s (met by `pr-bitflags-465` and `pr-uuid-932` only, as in batch 14g). 91.8 has what is left by phase; the largest parts are the check of the new pair, the check of step N again, and the driver.
+- The database syncs before its file grows (`SafeNoSync`): in a step that comes less than about 30 s after a step that wrote much data, the write of the stored workspace of the new tree waits for the sync (`fsync` of 0.4 s to 1.2 s in step N+1 of `pr-hashbrown-693`, from a trace of the system calls). A step of an agent after a pause has less data to sync.
+- The cache folder grows by the parts of the parsed files (one part for each new content of a file); `cache --clean` removes the parts that no tree of a stored step has.
+- A construction of the opaque inputs serves only its pair of trees.
+- Q4: the memory of a warm step does not change (91.8): it stays above the value before batch 14f on 6 of 7 pull requests (+17 MB to +88 MB; the decoded records with the digests and the paths of the index). The peak of step N+1 is the same in the two binaries (544 MB to 980 MB, the largest process of the build). The peak of a cold step grows by 21 MB to 108 MB on 3 pull requests (91.8).
+- The time of the driver is the largest part of `cargo check` in step N+1 (91.8): the driver writes the records of each body of each compiled unit. This batch does not change how the build runs.
+
+**Open questions for the user.**
+
+- Should the database open with `UtterlyNoSync`, or with a larger growth step, so that a write does not wait for the sync before the file grows? `UtterlyNoSync` can lose the database (not only the last transactions) at a stop of the machine.
+- Should a later batch give the outcome of the check of one step a stored form, so that a step after a step does not check the step before again?
+- Should a later batch give the construction of the opaque inputs a record of the parts that each item reads (the condition for a key of each item of the core check)?
+- Should the driver write the records of only the units and the bodies that change (the largest part of the build in a step after a step)?
