@@ -5058,7 +5058,7 @@ Decided by Claude:
 2. **The claim does not say that each place of the old form changed.** A place that keeps the old form has no edit, so Semilla has no fact for it. If no edit matches, the message tells the count of the places with the old form.
 3. **The order.** Semilla checks the `same` facts first, then the `change` facts, each in the order of the command. An edit belongs to the first agent fact that covers it. A second fact that covers only this edit still holds, and its places say "below a different fact of the agent".
 4. [R54.3-4] **The claim `rewrite-pattern` is gone for a new step** (exit code 2: "the claim `rewrite-pattern` is gone: state the pattern as a fact of the step, `--same 'rewrite FROM => TO'`"). A stored session or a stored plan that has the claim still reads and keeps the old check (`STORED_CLAIMS`). A site of a `rewrite` fact below such a claim gets a note.
-5. **`extract` and `inline`** give the message "the kind `extract` has no check yet (a later batch adds it). Give no fact for it: Semilla shows each edit of it as a fact, and the gap list names the items" (exit code 2). 48.8 has the open design question.
+5. **`extract` and `inline`** give the message "the kind `extract` has no check yet (a later batch adds it). Give no fact for it: Semilla shows each edit of it as a fact, and the gap list names the items" (exit code 2). 48.8 has the open design question. (Changed by design 94, R94.6-1: `extract BODY CALLEE` and `inline BODY CALLEE` are the short forms of `#[extract]` and `#[inlined]`, with the check of R94.1-1 and R94.2-1; the message goes.)
 
 ### 54.4 The gap list (B)
 
@@ -10520,7 +10520,7 @@ The owner rule of design 40.3 gives each element that differs the smallest chang
 
 Rule index: the identities are below.
 
-1. [R90.3-1] **One record for an entry of the map: the fact of the step** (`report::Fact`), with the new fields `kind` (one kind of 90.2, or "not mapped"), `nodes` (the numbers `nI` of its changed nodes), `source` (the statements that give it: `a1` a fact of the agent, `i2` a claim whose anchor maps a node; empty: Semilla), `check` (the rule and what holds), `syntax_only`, and `not_stated`. The category, the compare result, the affected bodies, the equivalence lines, the control-flow lines of the fact (`control flow:`, design 60), the expansions, the spotlight, and each other value of today stay on the same record. A fact of the agent (`AgentFact`) is the statement: its check result and its lines stay, and it names its entries. An entry with more than one node has the kind of its strongest node (type change, replace, add, delete, not mapped, rename, move, same code). Tests: `an_option_and_its_intent_statement_give_the_same_entry_and_the_same_result` (positive: the source `a1`; negative: no statement, the source Semilla).
+1. [R90.3-1] **One record for an entry of the map: the fact of the step** (`report::Fact`), with the new fields `kind` (one kind of 90.2, or "not mapped"), `nodes` (the numbers `nI` of its changed nodes), `source` (the statements that give it: `a1` a fact of the agent, `i2` a claim whose anchor maps a node; empty: Semilla), `check` (the rule and what holds), `syntax_only`, and `not_stated`. The category, the compare result, the affected bodies, the equivalence lines, the control-flow lines of the fact (`control flow:`, design 60), the expansions, the spotlight, and each other value of today stay on the same record. A fact of the agent (`AgentFact`) is the statement: its check result and its lines stay, and it names its entries. An entry with more than one node has the kind of its strongest node (type change, replace, add, delete, not mapped, rename, move, same code; design 94: extract, inline, and reorder come after "not mapped"). Tests: `an_option_and_its_intent_statement_give_the_same_entry_and_the_same_result` (positive: the source `a1`; negative: no statement, the source Semilla).
 2. [R90.3-2] **An entry with no changed node keeps its fact of today**: a file edit (a file is not a node of a tree: "add", "delete", or "replace"), the compiled code of a body with no edit at its place ("replace"), a line of the public API ("rename", "move", "add", "delete" by its category), a new layout ("same code": equal tokens). Only an entry with a node or a file edit counts as a real edit in the coverage line. Tests: the case `map90/refactor_layout` (positive), `map90/edit_literal` (negative).
 
 ### 90.4 One path for the statements of the agent
@@ -10585,7 +10585,7 @@ Rule index: no rule: the subsection lists the limits.
 
 - The check of a pair (R90.8-2) is a run of the core check of the full step, not of the bodies that the pair touches only. (Changed by design 92, R92.2-1, R92.2-2.)
 - No test makes a pair of the matcher fail its check: the template of R90.8-3 for such a pair has no test of its own (the hint that fails has one). (Changed by design 92: the case `map92/pair_fails_check`.)
-- The kinds "extract", "inline", and "reorder", the statements of section 7 of the draft, and the control-flow map of section 8 are batches 15b and 15c. A moved statement keeps the kind "move" of its fact of today; an extracted or an inlined variable keeps its fact of today.
+- The kinds "extract", "inline", and "reorder", the statements of section 7 of the draft, and the control-flow map of section 8 are batches 15b and 15c. A moved statement keeps the kind "move" of its fact of today; an extracted or an inlined variable keeps its fact of today. (Changed by design 94: the kinds `extract`, `inline`, `reorder` and the statements `#[extract]`, `#[inlined]`; a statement with a new place in its block is a `reorder`, R94.4-1; an extracted or an inlined variable is an `extract` or an `inline`, R94.3-1.)
 - A node of a body with no element data (a body from a macro, a record of an earlier driver) is "not mapped".
 - A node of test code that no checked configuration compiles has no MIR: it is syntax only.
 - The claims of `--claim` keep their own record (`ClaimResult`): a node that such a claim explains names the claim as its entry.
@@ -10862,7 +10862,7 @@ Rule index: the identities are below.
 
 Rule index: the identities are below.
 
-1. [R92.7-1] **An entry with nodes of more than one kind splits into one entry for each kind** (after the rules of one change, R92.6-1). The fact keeps the nodes of its strongest kind (type change, replace, add, delete, not mapped, rename, move, same code), its text, and its lines below (the bodies, the spotlight); each other kind gets a new fact with the texts of its nodes (`CHANGE NODE `AT`: `OLD` → `NEW``), their lines, the category and the compare result of the fact, and the check "split by kind (R92.7-1)". So each node is in exactly one entry, and each entry shows its true kind. Tests: `an_entry_with_nodes_of_two_kinds_splits_into_one_entry_for_each_kind` (positive and negative), the case `map92/use_line_two_kinds` (positive: a removed and an added `use` line of one fact give one entry of one kind).
+1. [R92.7-1] **An entry with nodes of more than one kind splits into one entry for each kind** (after the rules of one change, R92.6-1). The fact keeps the nodes of its strongest kind (type change, replace, add, delete, not mapped, rename, move, same code; design 94: extract, inline, and reorder come after "not mapped"), its text, and its lines below (the bodies, the spotlight); each other kind gets a new fact with the texts of its nodes (`CHANGE NODE `AT`: `OLD` → `NEW``), their lines, the category and the compare result of the fact, and the check "split by kind (R92.7-1)". So each node is in exactly one entry, and each entry shows its true kind. Tests: `an_entry_with_nodes_of_two_kinds_splits_into_one_entry_for_each_kind` (positive and negative), the case `map92/use_line_two_kinds` (positive: a removed and an added `use` line of one fact give one entry of one kind).
 
 ### 92.8 The review shows the sections (N8)
 
@@ -10970,3 +10970,198 @@ Rule index: no rule: the subsection has the open questions.
 - Should rule (a) of R92.6-1 also join the facts of a symbol link (a changed signature and the changed calls in other bodies)?
 - Should the fact that keeps the strongest kind after a split (R92.7-1) get a text of its own nodes only?
 - The constructor of a changed tuple struct or variant is now a body of the entry of its field (R92.6-1): its spotlight "an indirect change that Semilla cannot explain" goes, and two cases of the case set (`adverse/o_tuple_field_order`, `compiled/expand_one_owner_line`) change from rejected to accepted. Is that the wanted meaning?
+
+## 94. Batch 15b: the map of the diff: the transformations extract, inline, and reorder
+
+Date: 2026-11-27. The decisions of the user (draft 4 of the intent language, section 5): "extract: a region of a body becomes a new function, closure, or variable; the MIR of the new callee, put in at the call, equals the MIR of the old region"; "inline: the reverse of extract"; "reorder: the same parts in another order (statements, arms, fields, items)". The user rule M8 of design 90 applies: "We shouldn't need to search for it because we derive the entities from the hints for most of the diff".
+
+**The general rule.** A transformation is an entry of the map that its check explains fully, or a transformation plus the real edits that are left. An extract or an inline of a function is checked on the MIR: the canonical MIR of the callee goes in at its call, and the alignment of design 90 runs again with the other version of the body. A new order of the same parts is checked on the MIR with one map of the parts. When the data is not sure, the node is a real edit, never the reverse. The map never changes a compare result or a proof result: an extract keeps the compare result of its body (`code different`) and gets the kind `extract`.
+
+This section changes parts of section 54.3 (decision 5: the message "the kind `extract` has no check yet" goes, R94.6-1), of section 90 (the limit of 90.10 on the kinds extract, inline, and reorder; the order of the kinds of R90.3-1), and of section 92 (the strongest kind of R92.7-1 has the new kinds after "not mapped"), each one marked there.
+
+### 94.1 Extract of a function or a method (O1)
+
+Rule index: the identities are below.
+
+1. [R94.1-1] **A region of an old body that becomes a new callee is one entry "extract".** The candidates come from the data of the step, with no search over maps (`semilla_normal::transform`): a call of a changed body (an element that differs) to a direct local callee that the step adds, or that is in the two trees with an equal body. Each candidate gets one check (at most 8 for each body pair): the canonical N0 text of the callee goes in at the call (`transform::inline`: the parameters become the operands of the call or new locals, the return place becomes the local of the result, `return` becomes a jump to the return block of the call, the unwind edges go to the unwind action of the call), the rules 3, 3b, and 3c of the normal form of the driver run at the seams (a jump over a block with only a `goto`, the merge of a block with its only predecessor, the forward of a copy into the local of the result in one block), a shared or mutable reborrow `_r = &(*_p)` of an argument whose only uses are derefs is the place `*_p`, and the element alignment of design 40.3 runs again with the other version of the body (`elements::diff_keyed`). The elements of the callee take the place of the call in the order of the alignment, then their own order. The candidate holds when an element that differed before the check is equal after it and at least half of the element places of the callee are equal. Then the nodes that own the call (the region), each other changed node of the body whose elements the check explains, and the node of the new callee are one entry with the kind `extract` (R92.6-1 joins their facts). A public callee gives the mark "the callee is public: a different crate can call it". Tests: the unit test `the_callee_put_in_at_the_call_aligns_with_the_old_region` (positive and negative), the cases `map94/extract_fn`, `map94/extract_method` (positive), `map94/extract_closure` (negative).
+2. [R94.1-2] **The code that the check does not explain is one real edit of its own.** Each element of the callee that differs after the check, and each element that differs and that no other node of the body owns, is in it; an element that an other node of the body owns is the edit of that node, which keeps its kind and its entry. So no element that differs is lost, and none is in two entries. It is a real edit with no node: "the code of the extract of `F` that the MIR does not explain: `OLD` → `NEW`", with their lines, the check "R94.1-2, N MIR element place(s) that differ after the callee is put in at the call", the kind `replace` (or `add`, `delete` for one side only), and the compare result `code different`. The extract entry says "explains N element place(s); M element place(s) differ: a real edit of its own". Each other changed node of the body keeps its kind. Tests: the case `map94/extract_operand_change` (positive), the case `map94/extract_fn` (negative).
+3. [R94.1-3] **Two candidates that explain a place of one region are a tie: no pair, a note, and a template of each.** The note: "`B` → `C1`, `B` → `C2` show(s) as real edits: a tie of 2 candidates of an extract for one region of `B` (R94.1-3); no statement decides it, and Semilla does not use the order", and one note for each candidate with the template `#[extract(before::B, into = after::C)] fn b_into_c() {}` (`#[inlined(after::B, from = before::C)]` for an inline), which the gate of R87.1-1 checks as it is. A statement of the agent decides the tie (R94.6-1). Tests: the unit tests `two_candidates_of_one_region_are_a_tie` (positive and negative) and `the_template_of_each_candidate_is_a_statement_with_the_two_paths`, the case `map94/extract_tie` (positive), the case `map94/extract_tie_stated` (negative).
+
+### 94.2 Inline (O2)
+
+Rule index: the identities are below.
+
+1. [R94.2-1] **A call that becomes the code of its callee is one entry "inline".** The check of R94.1-1 with the trees exchanged: a call of the old body (an element that differs) to a callee that the step removes or that does not change, the old callee in at the old call, and the alignment with the new body. The node of the call and the node of the removed callee are one entry; an old callee that stays in the new tree has no node. The code left is a real edit of its own (R94.1-2). Tests: the unit test `the_old_callee_put_in_at_the_old_call_aligns_with_the_new_code` (positive and negative), the cases `map94/inline_fn_stays`, `map94/inline_fn_goes` (positive).
+
+### 94.3 Extract and inline of a variable (O3)
+
+Rule index: the identities are below.
+
+1. [R94.3-1] **An extracted or an inlined variable with equal MIR is an "extract" or an "inline".** The syntax diff marks the parts of the variable (design 41: the new `let` and its uses, `Refactor::Extract`, `Refactor::Inline`). The check: the MIR of the body is equal (the normal form forwards the copy and move chains of a local, rule 3c of the driver), or equal under one map of the locals and of the runs of blocks, or it differs only in the order of independent parts (R94.4-2), or the node owns no element that differs and each element that differs has an other owner (an other edit of the body, design 41.7). Before, such a node had the kind `move` of the pair rule R90.2-5. Tests: the cases `map94/extract_variable`, `map94/inline_variable` (positive), the case `map94/extract_variable_effect` (negative).
+2. [R94.3-2] **A variable whose value is now evaluated at the other side of a part that it depends on is a real edit with the mark "the order can matter".** The new order check of R94.4-3 gives the cause: "the place where the value is evaluated moves: two parts with an effect each (a call, a drop, or a write through a reference): `v.push(1)` and `v.len()`". A node that owns an element that differs, in a body whose MIR is not equal and is not a new order of the same parts (an evaluation more or less), is a `replace` with the check "an extracted variable: the MIR is not equal after the normal form, and it is not a new order of the same parts". The nodes of one variable (its `let` and its uses in one item) have one result: a node that is a real edit makes each node of the variable one (`transforms::one_variable`). Tests: the unit test `a_transformation_with_the_mark_of_the_order_is_a_real_edit` (positive and negative), the cases `map94/extract_variable_effect`, `map94/inline_variable_effect` (positive), the case `map94/extract_variable` (negative).
+
+### 94.4 Reorder (O4)
+
+Rule index: the identities are below.
+
+The order check of a body pair (`transform::permutation`): the two N0 texts have the same elements under one map of the locals (the arguments and the return local map to themselves, with equal types) and one map of the runs of blocks (a run is a block and the block of its normal successor that has no other predecessor: the success edge of an `assert`, the return edge of a call, a `goto`). A target of a terminator maps by its run; a `switchInt` on values maps each value to its target in each order of the values; the two operands of a symmetric operation map in either order (design 47, G1). Each pair of elements of one run whose order changes is checked for a dependence (Decided by Claude, conservative): a place that one part writes and the other part reads or writes (a borrow counts as both); two parts with an effect each (a call, a drop, a write through a reference); two parts that each can panic (a call, an `assert`, a drop); a part that can panic and a part with an effect or a read through a reference; a jump. No solver runs. The order check reads at most 3000 elements and compares at most 2 000 000 pairs of one body (above the limit, only the pairs of the moved elements).
+
+1. [R94.4-1] **"reorder; the compiled code is the same".** The same parts in another order with equal MIR under the map: a statement with a new place in its block (a moved statement whose old and new places have one parent) or an arm of a `match`, in a body whose MIR is equal or has no pair of elements whose order changes; the fields of a struct with names or the variants of an enum in another order, when no `#[repr]`, no derive and no attribute macro reads the order (R65.3-3, `facts::order_reader`), and no body of the step reads it (each body names a field by its name, the printer of design 5e); the items of a module or an impl with a new place and equal tokens (the layout fact of design 55.5). The fields of a tuple struct have no names: their reorder stays a type change. Tests: the cases `map94/reorder_fields`, `map94/reorder_arms_disjoint`, `map94/reorder_module_items`, the unit test `a_switch_on_values_in_another_order_is_a_new_order` (positive); the cases `map94/reorder_fields_derived_ord`, `map94/reorder_arms_overlap` (negative).
+2. [R94.4-2] **"reorder; the parts are independent".** The MIR differs only in the order of parts with no dependence. Tests: the unit test `two_statements_with_no_effect_and_no_panic_are_independent`, the case `map94/reorder_independent` (positive); the unit test `two_statements_that_each_can_panic_depend_on_each_other`, the case `map94/reorder_dependent` (negative).
+3. [R94.4-3] **"reorder; the order can matter": a real edit, with the cause.** A part depends on a part that it passes; two arms whose patterns can both match one value (Decided by Claude: two patterns are disjoint only as two different literals, or two variants of one enum with different names, for each pair of their alternatives; a binding, a wildcard, and a range can match each value); a `#[repr]` of a reordered type ("fixes the layout"); a derive or an attribute macro that reads the order, and each body of the step whose MIR reads it (a derived `Debug`, `PartialEq`, `Ord`, a cast of a discriminant): "the MIR of 3 body(ies) reads the order of the fields: …"; the variants of a public enum with no explicit discriminant (the values change, and a different crate can read them with `as`); an item with a new order to an item that can give a macro (the fact `macro scope` of design 54.2). An entry of a body with no edit of its own whose MIR the new order of the members of a type changes is a real edit with the cause "the new order of the members of `T` (fN) changes the MIR of `B`: it reads the order". Tests: the unit tests `two_statements_that_each_can_panic_depend_on_each_other`, `two_arm_patterns_are_disjoint_only_for_different_literals_or_different_variants` (positive and negative), the cases `map94/reorder_dependent`, `map94/reorder_fields_derived_ord`, `map94/reorder_fields_repr_c`, `map94/reorder_arms_overlap` (positive); the unit test `two_statements_with_no_effect_and_no_panic_are_independent`, the case `map94/reorder_independent` (negative).
+
+A statement that moves to another block keeps the kind `move`.
+
+### 94.5 A call that is not its inlined body
+
+Rule index: the identities are below.
+
+1. [R94.5-1] **The check puts in no callee whose call is not the same as its code in place.** Each case has a rule, and the candidate gets the cause (a note when the callee is added or removed: "`B` → `C` is no extract: the callee cannot go in at the call: CAUSE (R94.5-1)"):
+   - `#[track_caller]` on the callee or on the body: the caller location is a value that the call gives, and the code in place does not (the syntax tree gives the attribute; the inliner of the driver has the same rule);
+   - the generic arguments of the call: a call with generic arguments, a trait method, and a call whose function type is not the signature of the callee (after the lifetimes go: a late-bound lifetime is no generic argument) give no check. The text of a generic callee has its parameters, not the arguments of the call;
+   - the drops and the cleanup path: an unwind edge of the callee (`unwind continue`, `resume`) goes to the unwind action of the call (`unwind continue` or a cleanup block); a call with an other unwind action (`unwind unreachable`, `unwind terminate`) gives no check. A drop at a different place after the check is an element that differs (R94.1-2);
+   - a recursive callee (it calls itself or the body) gives no check;
+   - the order of evaluation of the arguments: the operands of the call are elements of the caller before the callee code; a parameter that the callee writes or borrows gets a new local with a copy, and a caller local with a borrow is never read in place of a parameter. An order that differs from the old code is an element that differs;
+   - a call with no normal return, a result in a place that is not a local, and a result local that the caller borrows or passes to the call give no check.
+   Tests: the unit test `a_call_that_is_not_its_inlined_body_gives_no_check` (positive and negative), the cases `map94/track_caller_callee`, `map94/generic_callee` (positive).
+
+### 94.6 The statements `#[extract]` and `#[inlined]` (O5, O6)
+
+Rule index: the identities are below.
+
+1. [R94.6-1] **A statement names the pair of an extract or an inline, and its check is the check of that pair.** The forms: `#[extract(before::B, into = after::C)]` (a region of the old body `B` is the new callee `C`) and `#[inlined(after::B, from = before::C)]` (the new body `B` has the code of the old callee `C`). Each path has its version prefix, as the paths of `#[rename]` do, and rustc resolves each path in the intent compile (the attributes of `semilla-intent-macros`). The options `--same 'extract B C'` and `--same 'inline B C'` are their short forms (R90.4-1). A statement is an anchor of the map: Semilla checks the candidate that it names, also in a tie, and looks for no other candidate of the body. A statement that holds is the source of the entry ("✓ a1 same: extract `B` into `C` (holds: the MIR of `C` put in at the call explains N element place(s) of the old body (R94.6-1))"). A statement whose check fails is false (the step is rejected), with the cause and the elements that differ ("the elements that differ: old `a * 3`, new `a ^ b`"), never a silent drop. The message "the kind `extract` has no check yet" of 54.3 (decision 5) goes. Tests: the cases `map94/statement_extract_holds`, `map94/extract_tie_stated` (positive), the case `map94/statement_extract_fails` and the unit test `a_rewrite_claim_with_no_site_is_false` (negative).
+
+**Decided by Claude.** The statement of an inline is `#[inlined]`, not `#[inline]`: `inline` is an attribute of the Rust language, and rustc gives the error E0659 ("`inline` is ambiguous") for a macro with this name. The kind of the entry stays `inline`.
+
+### 94.7 The check of `#[rename]` and `#[moved]` (O7)
+
+Rule index: no rule: the subsection gives the result of the reading of the code; no code changes.
+
+The check of a pair reads the compiler identity and the MIR: rustc resolves the two paths of a statement in the intent compile (R78.1-3); the name records of design 70 pair the items that keep their path; the check of the step with the claims of the pairs (R92.2-1) needs each body with a text edit to be equal at N0 or N1 under the rename map, and lets only a derived body of a claimed type differ (design 22.4, `identity_step`). Two parts read only the syntax tree, and each one has no compiled data to read: the forced edits outside a body (a path in a `use` line or in a signature: design 50, `check_rename`; no MIR exists for them), and the `cfg` conditions on the path of a moved item (batch 5x, part B: one checked configuration does not compile the other conditions). So no part moves.
+
+### 94.8 Closures (O8)
+
+Rule index: no rule: the subsection gives a limit.
+
+A region that becomes a closure, and a closure call that is inlined, stay real edits. The cause: in MIR, a closure call is a call of the trait method `Fn::call` (or `FnMut::call_mut`, `FnOnce::call_once`) of the closure type, with the arguments in one tuple, and the closure body reads each capture through its environment (`(*_1).0`); the inline of this batch puts in only a direct call of a function item with no generic arguments. A check of a closure needs a map of the captures to the places of the body and of the tuple of the arguments to the parameters (batch 15b2 adds the closure form of `#[rewrite]`). The case `map94/extract_closure` shows the limit.
+
+### 94.9 The output
+
+Rule index: no rule: the subsection lists the forms of the output.
+
+- The kinds `extract`, `inline`, and `reorder` are transformations: the section "transformations". `◆ f1 extract (Semilla; R94.1-1, the MIR of `depot::part` put in at the call is the MIR of the old code (3 element place(s) explained); 2 nodes; one change (R92.6-1)): changed expression `a * 3 + b` → `part(a, b)` at `depot::total/S0/init`; added `depot::part` [semantics · code different]`.
+- The mark `the order can matter` after the kind makes a transformation a real edit (`Fact::order`, R94.3-2, R94.4-3): `◆ f1 reorder, the order can matter (Semilla; R94.4-3, two parts that each can panic: `a * 2` and `b * 3`): moved statement …`. It has the line "not stated" (R92.5-1).
+- The entry of the code left (R94.1-2) is in the section "real edits", with the part `transformation`.
+- The notes of a tie (R94.1-3) and of a callee that cannot go in (R94.5-1) are notes of the step.
+- `semilla expand --step N` lists each node with its new kind. `verify --json` has the new kinds (`extract`, `inline`, `reorder`) and the field `order`. The MCP tools and the help of `--same` have the new forms.
+
+### 94.10 Decided by Claude
+
+Rule index: no rule: the subsection lists the choices of this batch.
+
+- **The inline of the check works on the canonical text, not in the driver.** The brief asks for the inliner of `semilla-mir`. That inliner runs in the driver on the body of rustc, and the driver does not know the pairs of the step (each tree builds alone). A use of it needs a new output of the driver (a second text of each body with a call of a local function) and a change of the record format, which batch 14i changes now. So the check has a text inline (`semilla_normal::transform::inline`) with the conditions of the driver inliner (R94.5-1) and the rules 3, 3b, 3c of the normal form at the seams. No record and no output of the driver change.
+- The candidate holds when it explains an element, at least half of the element places of the callee are equal, and each element of the callee that differs has an element of the same form on the other side; else the edits stay real edits (no transformation for a callee with new code, for example a getter `self.total ^ 7` in place of a field read).
+- The order of the alignment of the check is the order of the run (a reverse postorder of the blocks), not the order of the source places of design 40.3: the code of a callee runs at its call, and a call can be a part of a larger expression.
+- A place of the forward of rule 3c is a local or a field or a downcast of a place (`transform::place_local`): an rvalue, a constant, a deref, and an index are no place.
+- One candidate for each call: two extracts in one body are two candidates, and each node gets the kind of the candidate whose call it owns.
+- The nodes of one variable get the strongest result of the variable: an extract whose use is a real edit is no transformation at its `let` (one change, one entry).
+- The reborrow chain of an argument (`_r = &(*_p)` with only derefs of `_r`, and no write of `_p`) is the place `*_p`: the two pointers have one address.
+- The default `repr` of a type is not a fixed layout: code that reads the layout of such a type (a transmute) reads a layout that the compiler can change in each build, and no MIR text shows it. Each `#[repr(…)]` of the type gives "the order can matter".
+- The dependence rules of 94.4 are conservative: each call is an effect that can panic, also a call of a function that the effect summary of R64.3-1 knows as pure.
+- Two arm patterns are disjoint only as different literals or as variants of one enum with different names. A moved arm is checked against the arms between its two places.
+- A moved statement or arm whose body has no new order of the same parts keeps its kind of today (`replace`): the step changes more than the order.
+- An item with a new order to an item that can give a macro (the fact `macro scope`) is a "reorder" with the mark "the order can matter".
+- The statement of an inline is `#[inlined]` (94.6).
+
+### 94.11 Limits
+
+Rule index: no rule: the subsection lists the limits.
+
+- A closure (94.8).
+- A generic callee, a trait method, and a method of a trait object give no check (R94.5-1): an extract of a generic helper stays real edits.
+- A callee whose result goes to a place that is not a local, a parameter that the callee writes (it gets a copy: the old code has no such copy, so the elements differ), and a callee with more than one `return` (the forward of the result runs only for one write) give real edits.
+- Each check aligns the source order of design 40.3: a callee whose elements are in an order that the old region does not have (an argument computed in the call) can explain less than all.
+- The check reads one text for each body and side: a body with two different texts in two targets, or with no element data, gets no check.
+- A node that the projection leaves "not mapped" gets no template of `#[extract]`: a transformation that holds maps its nodes, and a candidate that does not hold has no statement that holds.
+- A new order of fields with the default `repr` does not check code that reads the layout (a transmute) (94.10).
+- The order check of 94.4 and the check of a candidate read the MIR of one checked configuration at a time; a candidate holds only if it holds in each configuration with element data (`ElementDiff::merge`).
+- The order check reads the whole body: a moved statement or arm in a body with an other change keeps its kind of today (the MIR is not a new order of the same parts). An extracted variable in such a body is an "extract" only if its nodes own no element that differs.
+- The training set has no extract and no inline that the check finds (94.12), so the check of a candidate on code of the ecosystem has only the cases of the case set.
+
+### 94.12 The results
+
+Rule index: no rule: the subsection has the results of the measures.
+
+**The case set** (`SEMILLA_CASES_WRITE=1`, then a compare with the texts of BASE `c74475f3`): 727 cases (703 of BASE and 24 new in `map94/`). 46 expected texts of BASE change, each one of these kinds:
+
+| Kind of change | Cases |
+|---|---|
+| items with equal tokens at a new place: "same code" → "reorder" (R94.4-1) | 9 |
+| an item with a new order to an item that can give a macro: "replace" → "reorder, the order can matter" (R94.4-3) | 5 |
+| a new order of the fields or the variants of a type: "type change" → "reorder, the order can matter" (a derive, a `#[repr]`, an attribute macro, a body that reads the order, the variants of a public enum; R94.4-3) | 8 |
+| the same, with no reader of the order: "type change" → "reorder" (R94.4-1) | 2 |
+| a moved statement or arm in its block: "replace" → "reorder, the order can matter" (R94.4-3) | 3 |
+| an extracted or an inlined variable: "move" (R90.2-5) → "extract" or "inline" (R94.3-1) | 3 |
+| the same, with MIR that changes more than the order: "move" → "replace" (R94.3-2) | 3 |
+| an extract or an inline of a function: "add" plus "replace" → "extract" (with the code left as a "replace", R94.1-2), "replace" → "inline" | 3 |
+| a field read that becomes a call of a getter with equal MIR (`c.total` → `c.total()`): "replace" → "extract"; an other edit of the body stays a "replace" | 6 |
+| the message of `--same 'extract …'` and of an unknown kind of `--same` (R94.6-1) | 2 |
+| the getter of two cases of the gap list becomes `self.total ^ 7`, so that their edits stay real edits and the cases keep their rules (the input changes, the expected text does not) | 2 |
+
+The changed lines of each text are the heads of these entries, their lines "not stated", and the coverage line. For each kind, Claude read each changed text in full (5 or more of each kind with 5 or more cases). Each property of 90.7 holds in each case (complete, checked, minimal, stable); the 17 cases with `refactor: yes` (11 of them in `map94`) have 0 real edits.
+
+The review of the case set found three defects of the first version of the check, each one fixed and tested: the forward of rule 3c took an rvalue with one local for a place (`_3 = BitXor(_2, 7)`: the `^` of a getter went away, and the extract claimed equal code; `a_callee_with_new_code_is_no_extract`, `a_place_is_a_local_a_field_or_a_downcast_of_a_place`); the code left had only the elements of the callee and of the nodes of the call (an element that no node owned was lost); the order of the source put a larger expression before the code of the callee in it (the case `map94/extract_method`), so the check now aligns in the order of the run.
+
+**The training set** (no intent file; a fresh copy, `step "the change"`, an empty cache; the release binaries of BASE `c74475f3` and of this batch; the counts of the step output):
+
+| PR | BASE: nodes, entries, real edits, not mapped, syntax only | This batch: nodes, entries, extract, inline, reorder, real edits, not mapped, syntax only |
+|---|---|---|
+| bitflags | 12, 23, 7, 0, 1 | 12, 23, 0, 0, 0, 7, 0, 1 |
+| hashbrown | 29, 25, 10, 0, 10 | 29, 25, 0, 0, 0, 10, 0, 10 |
+| indexmap | 217, 153, 128, 0, 17 | 217, 153, 0, 0, 0, 128, 0, 17 |
+| itertools | 37, 16, 11, 0, 5 | 37, 16, 0, 0, 0, 11, 0, 5 |
+| num-traits | 117, 116, 51, 0, 64 | 117, 116, 0, 0, 0, 51, 0, 64 |
+| uuid | 124, 93, 38, 0, 54 | 124, 93, 0, 0, 1, 38, 0, 54 |
+| winnow | 289, 252, 161, 11, 77 | 289, 252, 0, 0, 1, 161, 11, 77 |
+
+The two entries of design 94 are the layout entry of items with equal tokens at a new place (`src/external/serde_support.rs` of uuid: 3 items; `src/stream/mod.rs` of winnow: 2 items), before "same code", now "reorder; the compiled code is the same" (R94.4-1). Both are correct: the items keep their tokens, and no item that can give a macro is between them (the fact `macro scope` would have it). The training set has no extract and no inline that the check finds: the step of each PR has no call of a changed body to an added or an unchanged local callee whose MIR is the old code. The exit codes are the same (1 for bitflags, num-traits, uuid, and winnow: a spotlight that needs a reason).
+
+**The time of a step** (three pairs in alternation, BASE then this batch, CPUs 6 to 11, a fresh copy and an empty cache for each run, the release binaries of the final tree; the load of the minute before each run is in parentheses; batch 14i ran on CPUs 0 to 5 at the same time): indexmap 25.99 (11.90), 27.18 (12.91), 27.59 (13.29) s → 25.78 (11.13), 26.57 (12.73), 22.77 (10.99) s (median 27.18 → 25.78 s); winnow 87.84 (11.72), 75.04 (9.21), 80.59 (8.33) s → 87.84 (12.14), 84.69 (10.89), 72.56 (6.82) s (median 80.59 → 84.69 s; the builds of the two trees are about 63 s of each run, and their time varies with the load). **The time of the new phase** (the checks of design 94 in `semilla_normal::compare_with`, measured with a temporary time line in a binary that is the final binary with one more line): indexmap 0.0202, 0.0194, 0.0172 s (median 0.0194 s); winnow 0.0029, 0.0028, 0.0022 s (median 0.0028 s). The target (under 0.3 s) holds. The compare of the configurations at N0 (with the new phase): indexmap 0.14 to 0.15 s → 0.13 to 0.17 s; winnow 0.17 to 0.23 s → 0.17 to 0.23 s.
+
+**The tests.** `cargo build`, then `cargo test --workspace --no-fail-fast` (no `SEMILLA_MIR_DRIVER`, CPUs 6 to 11, `--offline`) on the final tree: 1404 tests, 1404 passed, 0 failed (new: 9 in `semilla-normal/src/transform/tests.rs`, 3 in `semilla-verify/src/tests94.rs`, 24 cases in `map94/`). The tests of the old forms changed to the new ones: the message of `extract` and `inline` (`agent.rs`, `tests.rs`, `tests90.rs`, `e2e.rs`), the list of the forms of `--same` (`e2e.rs`), the getter of the fixture of the facts of `e2e.rs` (`self.total ^ 7`, so that its edits stay real edits), and the kinds of the case runner (`cases.rs`: `extract`, `inline`, `reorder`, the mark "the order can matter", the rules of design 94). The rule index has the sections 48 to 94 (`rules.rs`).
+
+**The mutation check** (one change at a time, each undone; the tests of the rule; on the final tree). Each one fails a test:
+
+| Change | Failed test |
+|---|---|
+| M1 R94.1-1: an extract with one other operand is equal | `the_callee_put_in_at_the_call_aligns_with_the_old_region` |
+| M2 R94.1-1: each candidate holds | the same unit test, the case `map94/statement_extract_fails` |
+| M3 R94.1-2: no entry of the code left | the case `map94/extract_operand_change` |
+| M4 R94.1-3: no tie | `two_candidates_of_one_region_are_a_tie`, the case `map94/extract_tie` |
+| M5 R94.2-1: an inline is an extract | the case `map94/inline_fn_stays` |
+| M6 R94.3-1: a variable with equal MIR has the mark of the order | the case `map94/extract_variable` |
+| M7 R94.3-2, R94.4-3: no dependence (an effect between the parts is ignored) | `two_statements_that_each_can_panic_depend_on_each_other`, the cases `map94/extract_variable_effect`, `map94/reorder_dependent` |
+| M8 R94.4-1: the members map by their index, not by their name | the case `map94/reorder_fields` |
+| M9 R94.4-3: no `#[repr]` | the case `map94/reorder_fields_repr_c` |
+| M10 R94.4-3: each two arm patterns are disjoint | `two_arm_patterns_are_disjoint_only_for_different_literals_or_different_variants`, the case `map94/reorder_arms_overlap` |
+| M11 R94.5-1: no `#[track_caller]` | the case `map94/track_caller_callee` |
+| M12 R94.5-1: no check of the type of the call (a generic callee goes in) | `a_call_that_is_not_its_inlined_body_gives_no_check` |
+| M13 R94.5-1: a callee that calls itself goes in | the same unit test |
+| M14 R94.6-1: no statement is read | the case `map94/extract_tie_stated` |
+| M15 R94.6-1: a statement whose check fails holds | the case `map94/statement_extract_fails` |
+| M16 R94.4-1: items at a new place stay "same code" | the case `map94/reorder_module_items` |
+| M17 R94.4-2: independent parts are not a reorder | the case `map94/reorder_independent` |
+| M18 R94.1-1: a callee with new code holds (no rule of the form) | `a_callee_with_new_code_is_no_extract` |
+| M19 R94.1-1: a text with one local is a place (an rvalue goes forward) | `a_place_is_a_local_a_field_or_a_downcast_of_a_place` |
+
+**The three numbers.** Rules with an identity: +11 (669 → 680 identities in the design: R94.1-1, R94.1-2, R94.1-3, R94.2-1, R94.3-1, R94.3-2, R94.4-1, R94.4-2, R94.4-3, R94.5-1, R94.6-1; none removed). Rows of `docs/name-lists.md`: +2 (103 → 105 rows: `const BORROWS`, the texts of a borrow in the canonical text of the driver, a tool fact; `fn class "return"`, the terminators that jump, a language fact). Code paths that decide by a name of a crate or a symbol of the user: 0 (the rules read the canonical MIR text, the element places, the syntax tree, the attribute `#[track_caller]` of the language, and the def path of a reordered type of the step).
+
+### 94.13 Open questions for the user
+
+Rule index: no rule: the subsection has the open questions.
+
+- Is the name `#[inlined]` good, or does the user want another name for the statement of an inline (`inline` is an attribute of Rust)?
+- Should the check of an extract use the inliner of the driver (a new output of the driver for each body with a local call, after batch 14i), in place of the text inline?
+- Should a dependence of 94.4 read the effect summary of R64.3-1 (a call of a pure function is no effect), so that more reorders are "independent"?
+- Should the entry of the code that an extract does not explain (R94.1-2) have a node of its own (the syntax diff has no node for an operand inside an added function)?
+- Should a reorder of the fields of a type with the default `repr` be "the order can matter" when a body of the crate has `unsafe` code?

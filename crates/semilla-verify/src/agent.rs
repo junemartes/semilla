@@ -15,11 +15,8 @@ use crate::identity::Candidate;
 use crate::paths::Index;
 use crate::{StepInput, StepOutcome};
 
-/// The message for a kind of `same` claim that has no check yet.
-const LATER: &str = "has no check yet (a later batch adds it). Give no fact for it: Semilla shows each edit of it as a fact, and the gap list names the items";
-
 /// The forms of a `same` claim.
-const SAME_FORMS: &str = "the forms are `rename OLD NEW`, `move FROM TO`, and `rewrite FROM => TO`";
+const SAME_FORMS: &str = "the forms are `rename OLD NEW`, `move FROM TO`, `rewrite FROM => TO`, `extract BODY CALLEE`, and `inline BODY CALLEE`";
 
 /// One parsed `same` claim.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,6 +24,12 @@ enum Same {
     Rename(String, String),
     Move(String, String),
     Rewrite(String, String),
+    /// [R94.6-1] `extract BODY CALLEE`: a region of the old body `BODY` is the new callee
+    /// `CALLEE` (the short form of `#[extract(before::BODY, into = after::CALLEE)]`).
+    Extract(String, String),
+    /// [R94.6-1] `inline BODY CALLEE`: the new body `BODY` has the code of the old callee
+    /// `CALLEE` (the short form of `#[inlined(after::BODY, from = before::CALLEE)]`).
+    Inline(String, String),
 }
 
 /// Parses the text of a `--same` option.
@@ -79,9 +82,31 @@ fn parse_same(text: &str) -> Result<Same, String> {
             }
             Ok(Same::Rewrite(from, to))
         }
-        "extract" | "inline" => Err(format!("`--same '{text}'`: the kind `{kind}` {LATER}")),
+        "extract" => sides(false).map(|(body, callee)| Same::Extract(body, callee)).ok_or_else(|| format!("`--same '{text}'`: write `extract BODY CALLEE` (the old body and the new callee)")),
+        "inline" => sides(false).map(|(body, callee)| Same::Inline(body, callee)).ok_or_else(|| format!("`--same '{text}'`: write `inline BODY CALLEE` (the new body and the old callee)")),
         _ => Err(format!("`--same '{text}'`: `{kind}` is not a kind of a `same` fact; {SAME_FORMS}")),
     }
+}
+
+/// [R94.6-1] The check of a statement `#[extract]` or `#[inlined]` (and of its short form): the
+/// check of the pair that it names holds (R94.1-1, R94.2-1), and the entry of the pair is below
+/// the statement. A statement whose check fails is false with the elements that differ.
+fn transformation(check: &Check, plan: &crate::transforms::Plan, inline: bool, body: &str, callee: &str, result: &mut AgentFact) -> Vec<usize> {
+    let word = if inline { "inline" } else { "extract" };
+    result.text = format!("{word} `{body}` {} `{callee}`", if inline { "from" } else { "into" });
+    let key = (inline, body.to_string(), callee.to_string());
+    if let Some(cause) = plan.failed.get(&key) {
+        result.result = format!("false: the check of the {word} does not hold ({}): {cause}", crate::transforms::RULE_STATEMENT);
+        return Vec::new();
+    }
+    let Some(applied) = plan.applied.iter().find(|applied| (applied.inline, &applied.body, &applied.callee) == (inline, &key.1, &key.2)) else {
+        result.result = format!("false: Semilla has no {word} `{body}` → `{callee}` in the map ({})", crate::transforms::RULE_STATEMENT);
+        return Vec::new();
+    };
+    result.holds = true;
+    let left = if applied.left == 0 { String::new() } else { format!("; {} element place(s) differ: a real edit of its own", applied.left) };
+    result.result = format!("holds: the MIR of `{callee}` put in at the call explains {} element place(s) of the {} body{left} ({})", applied.explained, if inline { "new" } else { "old" }, crate::transforms::RULE_STATEMENT);
+    (0..check.units.len()).filter(|unit| check.units[*unit].edit.is_some_and(|edit| applied.edits.contains(&edit))).collect()
 }
 
 /// The text of an option value for a shell: in single quote marks.
@@ -1122,7 +1147,8 @@ fn bench_file(file: &str) -> bool {
 /// Checks the facts of the agent of a step, sets the origin of each fact, and makes the gap
 /// list (design 54). The pass is the last pass of a step check.
 pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
-    let StepOutcome { report, edits, fact_of, renames, stated_causes, explained, .. } = outcome;
+    let StepOutcome { report, edits, fact_of, renames, stated_causes, explained, transforms, .. } = outcome;
+    let transforms = &*transforms;
     let explained = &*explained;
     // The units: each edit of a fact, and the place of each fact with no edit.
     let mut units: Vec<Unit> = Vec::new();
@@ -1154,6 +1180,8 @@ pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
                 result.text = format!("rewrite `{from}` => `{to}`");
                 check.rewrite(&from, &to, &mut result)
             }
+            Ok(Same::Extract(body, callee)) => transformation(&check, transforms, false, &body, &callee, &mut result),
+            Ok(Same::Inline(body, callee)) => transformation(&check, transforms, true, &body, &callee, &mut result),
             Err(error) => {
                 result.result = format!("false: {error}");
                 Vec::new()
@@ -1427,8 +1455,10 @@ mod tests {
         // The negative cases: each one has a message for the agent.
         assert!(parse_same("rename depot (lib \"list\")::old new").unwrap_err().contains("rename OLD NEW"));
         assert!(parse_same("rename a").unwrap_err().contains("rename OLD NEW"));
-        assert!(parse_same("extract f g").unwrap_err().contains("has no check yet"));
-        assert!(parse_same("inline f").unwrap_err().contains("has no check yet"));
+        // [R94.6-1] The short forms of `#[extract]` and `#[inlined]` (design 94).
+        assert_eq!(parse_same("extract f g"), Ok(Same::Extract("f".into(), "g".into())));
+        assert_eq!(parse_same("inline f g"), Ok(Same::Inline("f".into(), "g".into())));
+        assert!(parse_same("inline f").unwrap_err().contains("inline BODY CALLEE"));
         assert!(parse_same("swap a b").unwrap_err().contains("is not a kind"));
         assert!(parse_same("rewrite $c.inner").unwrap_err().contains("FROM => TO"));
         assert!(parse_same("rewrite $c => $c.raw()").unwrap_err().contains("only a variable"));

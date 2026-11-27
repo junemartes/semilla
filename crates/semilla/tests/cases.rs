@@ -1026,7 +1026,7 @@ fn map_counts(line: &str) -> Option<[usize; 5]> {
 }
 
 /// The kinds of the entries of the map (design 90).
-const ENTRY_KINDS: &[&str] = &["same code", "rename", "move", "replace", "add", "delete", "type change", "not mapped"];
+const ENTRY_KINDS: &[&str] = &["same code", "rename", "move", "replace", "add", "delete", "type change", "not mapped", "extract", "inline", "reorder"];
 
 /// Property 15 (R90.7-1, R90.7-2, R90.7-3; before: R79.1-1): the map of the diff never hides an
 /// edit. The full text of the step (`semilla expand --step 0`) has the coverage line and one line
@@ -1049,9 +1049,11 @@ fn map_problems(work: &mut Work, folder: &Path, output: &str, state: &str, refac
         let rest = &line["◆ ".len()..];
         let Some((id, rest)) = rest.split_once(' ') else { continue };
         entries.insert(id.to_string());
-        let kind = ENTRY_KINDS.iter().find(|kind| rest.starts_with(&format!("{kind} (")) || rest.starts_with(&format!("{kind}, syntax only (")));
-        // [R92.4-1] [R92.3-1] The rules of design 92 check an entry too.
-        let checked = rest.split_once("): ").is_some_and(|(head, _)| head.contains("; R90.") || head.contains("; R92."));
+        // [R94.3-2] [R94.4-3] A transformation whose parts depend on each other has the mark
+        // "the order can matter" after its kind.
+        let kind = ENTRY_KINDS.iter().find(|kind| rest.starts_with(&format!("{kind} (")) || rest.starts_with(&format!("{kind}, syntax only (")) || rest.starts_with(&format!("{kind}, the order can matter (")));
+        // [R92.4-1] [R92.3-1] [R94.1-1] The rules of designs 92 and 94 check an entry too.
+        let checked = rest.split_once("): ").is_some_and(|(head, _)| head.contains("; R90.") || head.contains("; R92.") || head.contains("; R94."));
         if kind.is_none() || !checked {
             problems.push(format!("{state}: the entry `{}` has no kind, no source, or no check", line.chars().take(120).collect::<String>()));
         }

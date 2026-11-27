@@ -24,7 +24,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::E`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `depot::E`: `Low, High` → `High, Low`; the discriminant values of the variants with no explicit value change [declaration · code different]
+  ◆ f1 reorder, the order can matter (Semilla; R94.4-3, the MIR of 2 body(ies) reads the order of the variants: `<depot::E as std::cmp::PartialEq>::eq`, `<depot::E as std::cmp::PartialOrd>::partial_cmp`): member order of `depot::E`: `Low, High` → `High, Low`; the discriminant values of the variants with no explicit value change [declaration · code different]
       not stated (src/lib.rs:4, src/lib.rs:-3); to state it: --change 'depot::E=TEXT'
       affected bodies: <depot::E as std::cmp::PartialEq>::eq, <depot::E as std::cmp::PartialOrd>::partial_cmp
       through: `depot::E` (2 bodies)
@@ -34,5 +34,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::E=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::E=the reason of the test'
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `depot::E`: `Low, High` → `High, Low`; the discriminant values of the variants with no explicit value change [declaration · code different]
+◆ f1 reorder, the order can matter (Semilla; R94.4-3, the MIR of 2 body(ies) reads the order of the variants: `<depot::E as std::cmp::PartialEq>::eq`, `<depot::E as std::cmp::PartialOrd>::partial_cmp`): member order of `depot::E`: `Low, High` → `High, Low`; the discriminant values of the variants with no explicit value change [declaration · code different]
     lines: src/lib.rs:4, src/lib.rs:-3

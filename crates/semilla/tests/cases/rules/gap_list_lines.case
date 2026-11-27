@@ -24,7 +24,7 @@ edition = "2021"
 pub fn far() -> u32 { 1 }
 pub struct Cart { pub total: u32, pub items: Vec<u32> }
 impl Cart {
-    pub fn total(&self) -> u32 { self.total }
+    pub fn total(&self) -> u32 { self.total ^ 7 }
     pub fn count(&self) -> usize { self.items.len() }
 }
 pub fn a(c: &Cart) -> u32 { c.total + 1 }
@@ -46,7 +46,7 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 pub fn far() -> u32 { 2 }
 pub struct Cart { pub total: u32, pub items: Vec<u32> }
 impl Cart {
-    pub fn total(&self) -> u32 { self.total }
+    pub fn total(&self) -> u32 { self.total ^ 7 }
     pub fn count(&self) -> usize { self.items.len() }
 }
 pub fn a(c: &Cart) -> u32 { c.total() + 1 }

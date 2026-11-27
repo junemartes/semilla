@@ -41,11 +41,21 @@ pub struct NodeKind {
     pub rule: &'static str,
     /// What the check found.
     pub check: String,
+    /// [R94.3-2] [R94.4-3] The cause of the mark "the order can matter" (design 94).
+    pub order: Option<String>,
 }
 
 impl NodeKind {
     fn new(kind: EntryKind, syntax_only: bool, rule: &'static str, check: String) -> NodeKind {
-        NodeKind { kind, syntax_only, rule, check }
+        NodeKind { kind, syntax_only, rule, check, order: None }
+    }
+}
+
+/// [R94.1-1] The kind of a node from the transformations of the step (design 94), else `found`.
+fn transformed(outcome: &StepOutcome, index: usize, found: NodeKind) -> NodeKind {
+    match outcome.transforms.nodes.get(&index) {
+        Some(kind) if !found.syntax_only => kind.clone(),
+        _ => found,
     }
 }
 
@@ -170,7 +180,7 @@ pub(crate) fn nodes(outcome: &StepOutcome, trees: [&Workspace; 2], map: &mut Ast
     for (place, (entry, index)) in map.entries.iter_mut().zip(indices).enumerate() {
         let edit = &outcome.edits[*index];
         let fact = outcome.fact_of.get(*index).copied().flatten().and_then(|fact| outcome.report.facts.get(fact));
-        let found = no_partner(claimed(node_kind(edit, outcome.report.node_mir.get(index), fact, trees), entry, edit, trees), entry, edit);
+        let found = transformed(outcome, *index, no_partner(claimed(node_kind(edit, outcome.report.node_mir.get(index), fact, trees), entry, edit, trees), entry, edit));
         entry.entry = match (fact, outcome.owners.get(*index).copied().flatten()) {
             (Some(fact), _) => fact.id.clone(),
             (None, Some(claim)) => outcome.report.claims.get(claim).map(|claim| claim.claim.clone()).unwrap_or_default(),
@@ -266,9 +276,12 @@ fn priority(kind: EntryKind) -> u8 {
         EntryKind::Add => 2,
         EntryKind::Delete => 3,
         EntryKind::NotMapped => 4,
-        EntryKind::Rename => 5,
-        EntryKind::Move => 6,
-        EntryKind::SameCode => 7,
+        EntryKind::Extract => 5,
+        EntryKind::Inline => 6,
+        EntryKind::Reorder => 7,
+        EntryKind::Rename => 8,
+        EntryKind::Move => 9,
+        EntryKind::SameCode => 10,
     }
 }
 
@@ -281,7 +294,7 @@ fn node_kinds(outcome: &StepOutcome, trees: [&Workspace; 2], map: &AstMap, indic
         .map(|(entry, index)| {
             let edit = &outcome.edits[*index];
             let fact = outcome.fact_of.get(*index).copied().flatten().and_then(|fact| outcome.report.facts.get(fact));
-            let found = claimed(node_kind(edit, outcome.report.node_mir.get(index), fact, trees), entry, edit, trees);
+            let found = transformed(outcome, *index, claimed(node_kind(edit, outcome.report.node_mir.get(index), fact, trees), entry, edit, trees));
             // [R92.3-1] A syntax-only node with no partner: the projection gave its kind and who
             // reaches it.
             if entry.rule == RULE_NO_PARTNER {
@@ -322,6 +335,14 @@ pub(crate) fn shape(outcome: &mut StepOutcome, trees: [&Workspace; 2], map: &mut
             at = parent[at];
         }
         at
+    }
+    // [R94.1-1] The node of a callee and the nodes of its call make one entry (design 94).
+    for (a, b) in outcome.transforms.joins.clone() {
+        let (Some(x), Some(y)) = (fact_at(&outcome.fact_of, a), fact_at(&outcome.fact_of, b)) else { continue };
+        let (x, y) = (root(&mut parent, x), root(&mut parent, y));
+        if x != y {
+            parent[x.max(y)] = x.min(y);
+        }
     }
     for (place, index) in indices.iter().enumerate() {
         let (Some(mir), Some(own)) = (outcome.report.node_mir.get(index), fact_at(&outcome.fact_of, *index)) else { continue };
@@ -408,6 +429,12 @@ pub(crate) fn shape(outcome: &mut StepOutcome, trees: [&Workspace; 2], map: &mut
                 outcome.fact_of[indices[place]] = Some(at);
             }
         }
+    }
+    // [R94.1-2] The code that a transformation does not explain: a real edit of its own.
+    for left in outcome.transforms.left.clone() {
+        let fact = crate::transforms::left_fact(trees, &left, next_id);
+        next_id += 1;
+        outcome.report.facts.push(fact);
     }
     // The entry of each node after the changes.
     for (entry, index) in map.entries.iter_mut().zip(indices) {
@@ -570,6 +597,9 @@ pub(crate) fn entries(outcome: &mut StepOutcome, trees: [&Workspace; 2]) {
     }
     let agents = outcome.report.agent_facts.clone();
     let explained = outcome.explained.clone();
+    // [R94.4-3] The types whose members get a new order, and the bodies that the order changes.
+    let reordered = crate::transforms::reordered_types(outcome);
+    let changed_bodies: Vec<(String, String, String)> = reordered.iter().flat_map(|(ty, id)| crate::transforms::changed_by(outcome, ty).into_iter().map(move |body| (body.name.clone(), ty.clone(), id.clone()))).collect();
     for (fact_index, fact) in outcome.report.facts.iter_mut().enumerate() {
         let nodes = &held[fact_index];
         fact.nodes = nodes.iter().map(|(number, ..)| *number).collect();
@@ -580,11 +610,24 @@ pub(crate) fn entries(outcome: &mut StepOutcome, trees: [&Workspace; 2]) {
                 let more = if nodes.len() > 1 { format!("; {} nodes", nodes.len()) } else { String::new() };
                 (found.kind, nodes.iter().all(|(_, found, _)| found.syntax_only), format!("{}, {}{more}{shaped}", found.rule, found.check))
             }
+            // [R94.1-2] The entry of the code that a transformation does not explain keeps its
+            // kind and its check.
+            None if fact.part == "transformation" && fact.kind.is_some() => (fact.kind.unwrap_or(EntryKind::Replace), false, fact.check.clone()),
             None => no_node_kind(fact, files[fact_index]),
         };
         fact.kind = Some(kind);
         fact.syntax_only = syntax_only;
         fact.check = check;
+        // [R94.3-2] [R94.4-3] A transformation whose parts depend on each other.
+        fact.order = nodes.iter().find_map(|(_, found, _)| found.order.clone().filter(|_| found.kind == kind));
+        if fact.order.is_none() && nodes.is_empty() {
+            fact.order = no_node_order(fact, &reordered, &changed_bodies);
+            if let Some(cause) = &fact.order
+                && fact.no_edit()
+            {
+                fact.check = format!("{}, {cause}", crate::transforms::RULE_ORDER);
+            }
+        }
         // [R90.3-1] The source: the facts of the agent that state the entry, and the claims
         // whose anchors map its nodes.
         let mut source: Vec<String> = Vec::new();
@@ -610,6 +653,21 @@ pub(crate) fn entries(outcome: &mut StepOutcome, trees: [&Workspace; 2]) {
     }
 }
 
+/// [R94.4-3] The mark "the order can matter" of an entry with no node: an item with a new order
+/// to an item that can give a macro (design 54.2), and the compiled code of a body with no edit
+/// whose MIR a new order of the members of a type changes (a derived `Ord`, `Debug`, a read of
+/// a discriminant).
+fn no_node_order(fact: &Fact, reordered: &[(String, String)], changed: &[(String, String, String)]) -> Option<String> {
+    if fact.part == "macro scope" {
+        return Some("an item gets a new order to an item that can give a macro: a macro call can get a different definition (design 54.2)".into());
+    }
+    let _ = reordered;
+    changed.iter().find(|(body, _, _)| fact.affected.contains(body)).map(|(body, ty, id)| {
+        let id = if id.is_empty() { String::new() } else { format!(" ({id})") };
+        format!("the new order of the members of `{ty}`{id} changes the MIR of `{body}`: it reads the order")
+    })
+}
+
 /// [R90.3-2] The kind of an entry with no changed node: a file edit, the compiled code of a body
 /// with no edit at its place, or a line of the public API. The entry keeps its fact of today.
 fn no_node_kind(fact: &Fact, file: Option<EditKind>) -> (EntryKind, bool, String) {
@@ -622,6 +680,10 @@ fn no_node_kind(fact: &Fact, file: Option<EditKind>) -> (EntryKind, bool, String
         (None, Category::Move) => EntryKind::Move,
         (None, Category::Added) => EntryKind::Add,
         (None, Category::Removed) => EntryKind::Delete,
+        // [R94.4-1] Items at a new place in their module: the same items in another order.
+        (None, Category::Layout) if fact.description.contains("at a new place") => EntryKind::Reorder,
+        // [R94.4-3] An item with a new order to an item that can give a macro.
+        (None, Category::Macro) if fact.part == "macro scope" => EntryKind::Reorder,
         // A new layout: the tokens are equal.
         (None, Category::Layout) => EntryKind::SameCode,
         (None, _) => EntryKind::Replace,
@@ -635,6 +697,8 @@ fn no_node_kind(fact: &Fact, file: Option<EditKind>) -> (EntryKind, bool, String
         (None, EntryKind::Rename | EntryKind::Move) if no_edit => format!("{RULE_NO_EDIT}, a line of the public API of a pair; the pair check holds ({RULE_PAIR})"),
         (None, EntryKind::Rename | EntryKind::Move) => format!("{RULE_PAIR}, the pair check holds"),
         (None, EntryKind::SameCode) => "R90.3-2, equal tokens (a new layout)".to_string(),
+        (None, EntryKind::Reorder) if fact.part == "macro scope" => format!("{}, the items in another order", crate::transforms::RULE_ORDER),
+        (None, EntryKind::Reorder) => format!("{}, the items in another order with equal tokens; the compiled code is the same", crate::transforms::RULE_SAME_ORDER),
         (None, _) if no_edit => format!("{RULE_NO_EDIT}, no node and no changed line of its own"),
         (None, _) => "R90.3-2, no changed node (the fact of today)".to_string(),
     };

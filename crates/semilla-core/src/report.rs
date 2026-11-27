@@ -278,6 +278,11 @@ pub struct NodeMir {
     /// [R92.6-1] The other nodes (by the index of their edit) that own an element of this node
     /// by its place: the nodes come from one change (design 92).
     pub shared: std::collections::BTreeSet<usize>,
+    /// [R94.1-1] The token places of the elements that differ that the node owns: old (0) and
+    /// new (1) (design 94).
+    pub places: [std::collections::BTreeSet<(String, usize, usize)>; 2],
+    /// [R94.1-1] The bodies of the elements that the node owns (design 94).
+    pub bodies: std::collections::BTreeSet<String>,
 }
 
 /// The control flow graph diff of a step (design 60, part C).
@@ -1341,6 +1346,11 @@ pub struct Fact {
     /// [R90.5-2] True for a real edit that no statement of the agent names. The step passes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub not_stated: bool,
+    /// [R94.3-2] [R94.4-3] The cause of the mark "the order can matter" (design 94): a
+    /// transformation (an extracted or an inlined variable, a new order of parts) whose parts
+    /// depend on each other. Such an entry is a real edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<String>,
 }
 
 /// [R90.2-1] The kind of an entry of the map of the diff (design 90).
@@ -1364,6 +1374,14 @@ pub enum EntryKind {
     TypeChange,
     /// The alignment has no unique answer for the node (R90.6-1).
     NotMapped,
+    /// [R94.1-1] [R94.3-1] A region of a body becomes a new function or a new variable: the MIR
+    /// of the callee put in at the call is the MIR of the old region (design 94).
+    Extract,
+    /// [R94.2-1] [R94.3-1] The reverse of an extract: a call or a variable becomes its code.
+    Inline,
+    /// [R94.4-1] [R94.4-2] The same parts in another order: statements, arms, fields, variants,
+    /// items.
+    Reorder,
 }
 
 impl EntryKind {
@@ -1378,6 +1396,9 @@ impl EntryKind {
             EntryKind::Delete => "delete",
             EntryKind::TypeChange => "type change",
             EntryKind::NotMapped => "not mapped",
+            EntryKind::Extract => "extract",
+            EntryKind::Inline => "inline",
+            EntryKind::Reorder => "reorder",
         }
     }
 
@@ -1408,7 +1429,9 @@ impl Fact {
             2
         } else if self.syntax_only {
             4
-        } else if kind.is_real() {
+        } else if kind.is_real() || self.order.is_some() {
+            // [R94.3-2] [R94.4-3] A transformation whose parts depend on each other is a real
+            // edit.
             0
         } else {
             3
@@ -1438,7 +1461,9 @@ impl Fact {
         let kind = self.kind?;
         let source = if self.source.is_empty() { "Semilla".to_string() } else { self.source.join(", ") };
         let syntax = if self.syntax_only && kind != EntryKind::NotMapped { ", syntax only" } else { "" };
-        Some(format!("{}{syntax} ({source}; {})", kind.name(), self.check))
+        // [R94.3-2] [R94.4-3] The mark of a transformation whose parts depend on each other.
+        let order = if self.order.is_some() { ", the order can matter" } else { "" };
+        Some(format!("{}{order}{syntax} ({source}; {})", kind.name(), self.check))
     }
 }
 
@@ -1454,7 +1479,7 @@ impl StepReport {
     pub fn not_stated_line(&self, fact: &Fact) -> Option<String> {
         let kind = fact.kind?;
         let in_gap = self.gaps.iter().any(|gap| gap.facts.contains(&fact.id));
-        let open = matches!(kind, EntryKind::Replace | EntryKind::Add | EntryKind::Delete | EntryKind::TypeChange | EntryKind::NotMapped) && !fact.no_edit();
+        let open = (matches!(kind, EntryKind::Replace | EntryKind::Add | EntryKind::Delete | EntryKind::TypeChange | EntryKind::NotMapped) || fact.order.is_some()) && !fact.no_edit();
         if !(fact.not_stated || (in_gap && open)) {
             return None;
         }

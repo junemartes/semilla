@@ -1,6 +1,6 @@
 option: --same
 option: extract limit cap
-exit: 2
+exit: 1
 same_facts_as_no_option: yes
 === both Cargo.toml
 [package]
@@ -48,8 +48,30 @@ pub mod conf { pub fn depth() -> u32 { 4 } }
 #[cfg(test)]
 mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
-exit: 2
-=== stderr
-error: `--same 'extract limit cap'`: the kind `extract` has no check yet (a later batch adds it). Give no fact for it: Semilla shows each edit of it as a fact, and the gap list names the items
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  ✗ fact a1 of the agent is false: `--same 'extract limit cap'`
+
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✗ a1 same: extract `limit` into `cap` (false: the check of the extract does not hold (R94.6-1): the step has no changed body `limit` with a call of `cap` that the check can read)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::limit` (src/lib.rs:11): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::limit`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `20` at `depot::limit/tail` [semantics · code different]
+      not stated (src/lib.rs:11, src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 20'
+      affected bodies: depot::limit
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::limit (src/lib.rs:11): same graph (the edit keeps the control flow); MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
+run again (without the false fact): semilla step 'the change'
 === positions
-none: the runner has no accepted step for this case
+the step is not accepted; the positions are from: semilla step 'the change'
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `20` at `depot::limit/tail` [semantics · code different]
+    lines: src/lib.rs:11, src/lib.rs:-11

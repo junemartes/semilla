@@ -112,9 +112,11 @@ enum Command {
         #[arg(long = "claim")]
         claims: Vec<String>,
         /// A fact of the agent: an exact change that keeps the form. `rename OLD NEW`,
-        /// `move FROM TO`, or `rewrite FROM => TO` (a pattern of the syntax tree; `$name` is a
-        /// variable for one expression). Semilla checks it against the syntax tree. A false
-        /// fact rejects the step.
+        /// `move FROM TO`, `rewrite FROM => TO` (a pattern of the syntax tree; `$name` is a
+        /// variable for one expression), `extract BODY CALLEE` (a region of the old body is the
+        /// new callee), or `inline BODY CALLEE` (the new body has the code of the old callee;
+        /// design 94: Semilla puts the MIR of the callee in at the call). A false fact rejects
+        /// the step.
         #[arg(long = "same")]
         same: Vec<String>,
         /// A fact of the agent: the behavior of existing code changes on purpose.
@@ -188,7 +190,8 @@ enum Command {
         /// commit. A reason that belongs to no fact stores nothing.
         #[arg(long = "reason")]
         reasons: Vec<String>,
-        /// `rename OLD NEW`, `move FROM TO`, or `rewrite FROM => TO` (see `semilla step --help`).
+        /// `rename OLD NEW`, `move FROM TO`, `rewrite FROM => TO`, `extract BODY CALLEE`, or
+        /// `inline BODY CALLEE` (see `semilla step --help`).
         #[arg(long = "same")]
         same: Vec<String>,
         /// `ITEM[,ITEM]=TEXT` (see `semilla step --help`).

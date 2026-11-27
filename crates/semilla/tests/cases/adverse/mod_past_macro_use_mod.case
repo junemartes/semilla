@@ -35,11 +35,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::a=TEXT'
   real edits:
   item `depot::a`:
-  ◆ f1 replace (Semilla; R90.3-2, no changed node (the fact of today)): moved `depot::a` past 1 item that can give a macro: `depot::mac`; a macro has a textual scope: a macro call in `depot::a` can have a new meaning [macro · no code]
+  ◆ f1 reorder, the order can matter (Semilla; R94.4-3, the items in another order): moved `depot::a` past 1 item that can give a macro: `depot::mac`; a macro has a textual scope: a macro call in `depot::a` can have a new meaning [macro · no code]
       not stated (src/lib.rs:3, src/lib.rs:-1); to state it: --change 'depot::a=TEXT'
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.3-2, no changed node (the fact of today)): moved `depot::a` past 1 item that can give a macro: `depot::mac`; a macro has a textual scope: a macro call in `depot::a` can have a new meaning [macro · no code]
+◆ f1 reorder, the order can matter (Semilla; R94.4-3, the items in another order): moved `depot::a` past 1 item that can give a macro: `depot::mac`; a macro has a textual scope: a macro call in `depot::a` can have a new meaning [macro · no code]
     lines: src/lib.rs:3, src/lib.rs:-1

@@ -51,6 +51,6 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
 exit: 2
 === stderr
-error: `--same 'refactor limit cap'`: `refactor` is not a kind of a `same` fact; the forms are `rename OLD NEW`, `move FROM TO`, and `rewrite FROM => TO`
+error: `--same 'refactor limit cap'`: `refactor` is not a kind of a `same` fact; the forms are `rename OLD NEW`, `move FROM TO`, `rewrite FROM => TO`, `extract BODY CALLEE`, and `inline BODY CALLEE`
 === positions
 none: the runner has no accepted step for this case

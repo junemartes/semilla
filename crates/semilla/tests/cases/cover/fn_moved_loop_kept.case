@@ -96,7 +96,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       note: lines 10, 15; the cause: the edits of this body at src/lib.rs:6, src/lib.rs:11, src/lib.rs:12, src/lib.rs:-13 (the step changes no other input of the body)
   transformations:
   file `src/lib.rs`:
-  ◆ f7 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 5 changed lines with equal tokens; 4 changed lines of 2 items with equal tokens at a new place [layout · no code]
+  ◆ f7 reorder (Semilla; R94.4-1, the items in another order with equal tokens; the compiled code is the same): layout of `src/lib.rs`: 5 changed lines with equal tokens; 4 changed lines of 2 items with equal tokens at a new place [layout · no code]
   syntax only:
   item `depot::probe`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): removed comment `// an old comment` [docs · no code]
@@ -118,7 +118,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     lines: src/lib.rs:-13-16
 ◆ f6 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::probe` changes with no edit at its place: `dir`, `dirs()`, `result.dirs.push(dir)` [indirect · code different]
     no position
-◆ f7 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 5 changed lines with equal tokens; 4 changed lines of 2 items with equal tokens at a new place [layout · no code]
+◆ f7 reorder (Semilla; R94.4-1, the items in another order with equal tokens; the compiled code is the same): layout of `src/lib.rs`: 5 changed lines with equal tokens; 4 changed lines of 2 items with equal tokens at a new place [layout · no code]
     lines: src/lib.rs:17, src/lib.rs:20-23, src/lib.rs:-3-6
 ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): removed comment `// an old comment` [docs · no code]
     lines: src/lib.rs:-11

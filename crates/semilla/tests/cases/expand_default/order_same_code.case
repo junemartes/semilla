@@ -54,12 +54,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop::Item`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `shop::Item`: `a, b` → `b, a` [declaration · no compare]
+  ◆ f1 reorder, the order can matter (Semilla; R94.4-3, an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Marker`): the code that it makes reads the members in order): member order of `shop::Item`: `a, b` → `b, a` [declaration · no compare]
       not stated (shop/src/lib.rs:4, shop/src/lib.rs:-3); to state it: --change 'shop::Item=TEXT'
       note: no compare: the MIR bodies do not show each effect of a member order; the member order needs no reason: each macro of the type (`Marker`) makes the same code in the two versions (the expansion records, R65.9-1)
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `shop::Item`: `a, b` → `b, a` [declaration · no compare]
+◆ f1 reorder, the order can matter (Semilla; R94.4-3, an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Marker`): the code that it makes reads the members in order): member order of `shop::Item`: `a, b` → `b, a` [declaration · no compare]
     lines: shop/src/lib.rs:4, shop/src/lib.rs:-3

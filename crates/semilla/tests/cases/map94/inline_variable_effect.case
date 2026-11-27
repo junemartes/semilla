@@ -1,0 +1,52 @@
+note: an inlined variable whose value is now evaluated after a call with an effect: a real edit, the order can matter
+rule+: R94.3-2
+must_match: ◆ f\d+ inline, the order can matter \(Semilla; R94\.3-2
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(v: &mut Vec<u32>, a: u32) -> usize {
+    let s = v.len() + a as usize;
+    v.push(1);
+    keep(s)
+}
+
+fn keep(x: usize) -> usize {
+    x
+}
+=== new src/lib.rs
+pub fn total(v: &mut Vec<u32>, a: u32) -> usize {
+    v.push(1);
+    keep(v.len() + a as usize)
+}
+
+fn keep(x: usize) -> usize {
+    x
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(mut v_before: Vec<u32>, mut v_after: Vec<u32>, a: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::total`:
+  ◆ f1 inline, the order can matter (Semilla; R94.3-2, the place where the value is evaluated moves: two parts with an effect each (a call, a drop, or a write through a reference): `v.len()` and `v.push(1)`; 2 nodes): inlined variable `s` = `v.len() + a as usize` (1 use) at `depot::total/S0` [move · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-2, src/lib.rs:-4); to state it: --change 'depot::total=TEXT'
+      ! the compiled code changes: depot::total
+      control flow: + arrow check `overflow: v.len() + a as usize` (src/lib.rs:3) → call `keep` (src/lib.rs:3) (ok)
+      control flow: − arrow entry (src/lib.rs:-1) → call `Vec::<u32>::len` (src/lib.rs:-2)
+      equivalence: MIR changes
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:1): graph changes: +3 arrows, −3 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 inline, the order can matter (Semilla; R94.3-2, the place where the value is evaluated moves: two parts with an effect each (a call, a drop, or a write through a reference): `v.len()` and `v.push(1)`; 2 nodes): inlined variable `s` = `v.len() + a as usize` (1 use) at `depot::total/S0` [move · code different]
+    lines: src/lib.rs:3, src/lib.rs:-2, src/lib.rs:-4

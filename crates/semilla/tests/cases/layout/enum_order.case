@@ -55,12 +55,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::Mode`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `depot::Mode`: `Idle, Busy, Done` → `Busy, Idle, Done`; the discriminant values of the variants with no explicit value change [declaration · no compare]
+  ◆ f1 reorder, the order can matter (Semilla; R94.4-3, the discriminant values of the variants change (no explicit value), and a different crate can read them (`as`)): member order of `depot::Mode`: `Idle, Busy, Done` → `Busy, Idle, Done`; the discriminant values of the variants with no explicit value change [declaration · no compare]
       not stated (src/lib.rs:1, src/lib.rs:-1); to state it: --change 'depot::Mode=TEXT'
       note: no compare: the MIR bodies do not show each effect of a member order
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `depot::Mode`: `Idle, Busy, Done` → `Busy, Idle, Done`; the discriminant values of the variants with no explicit value change [declaration · no compare]
+◆ f1 reorder, the order can matter (Semilla; R94.4-3, the discriminant values of the variants change (no explicit value), and a different crate can read them (`as`)): member order of `depot::Mode`: `Idle, Busy, Done` → `Busy, Idle, Done`; the discriminant values of the variants with no explicit value change [declaration · no compare]
     lines: src/lib.rs:1, src/lib.rs:-1

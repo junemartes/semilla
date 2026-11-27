@@ -7921,7 +7921,7 @@ fn cache_clean_removes_the_folder_of_the_build_check() {
 
 // Batch 9b (design 54): the facts of the agent, the gap list, and the full text.
 
-const FACTS_BASE: &str = "pub struct Cart {\n    pub total: u32,\n    pub count: u32,\n}\nimpl Cart {\n    pub fn total(&self) -> u32 {\n        self.total\n    }\n}\npub fn a(c: &Cart) -> u32 {\n    c.total + 1\n}\npub fn b(c: &Cart) -> u32 {\n    c.total + 2\n}\npub fn d(c: &Cart, e: &Cart) -> u32 {\n    b(c) + e.total\n}\npub fn idle(x: u32) -> u32 {\n    x\n}\npub fn tail(x: u32) {\n    drop(x)\n}\npub mod inner {\n    pub fn a(x: u32) -> u32 {\n        x + 1\n    }\n}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n        assert_eq!(super::inner::a(1), 2);\n    }\n}\n";
+const FACTS_BASE: &str = "pub struct Cart {\n    pub total: u32,\n    pub count: u32,\n}\nimpl Cart {\n    pub fn total(&self) -> u32 {\n        self.total ^ 7\n    }\n}\npub fn a(c: &Cart) -> u32 {\n    c.total + 1\n}\npub fn b(c: &Cart) -> u32 {\n    c.total + 2\n}\npub fn d(c: &Cart, e: &Cart) -> u32 {\n    b(c) + e.total\n}\npub fn idle(x: u32) -> u32 {\n    x\n}\npub fn tail(x: u32) {\n    drop(x)\n}\npub mod inner {\n    pub fn a(x: u32) -> u32 {\n        x + 1\n    }\n}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n        assert_eq!(super::inner::a(1), 2);\n    }\n}\n";
 
 const LONG_LET: &str = "let scaled_total_with_a_long_name = x.wrapping_mul(31).wrapping_add(17).wrapping_mul(5).rotate_left(3) ^ 0x5bd1e995;";
 
@@ -8067,7 +8067,7 @@ fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     assert!(out.contains("      Semilla sees no edit in `shop_core::facts::Cart`\n"), "{out}");
     assert_eq!(session_steps(repo)[0], step);
     // A form that is not valid, a step that does not exist, and a command with no fact: exit code 2.
-    for (args, cause) in [(&["fact", "--same", "swap a b"][..], "the forms are `rename OLD NEW`, `move FROM TO`, and `rewrite FROM => TO`"), (&["fact", "--step", "4", "--change", "inner=x"][..], "step 4"), (&["fact"][..], "--same")] {
+    for (args, cause) in [(&["fact", "--same", "swap a b"][..], "the forms are `rename OLD NEW`, `move FROM TO`, `rewrite FROM => TO`, `extract BODY CALLEE`, and `inline BODY CALLEE`"), (&["fact", "--step", "4", "--change", "inner=x"][..], "step 4"), (&["fact"][..], "--same")] {
         let (code, out) = tree_mode(repo, args);
         assert!(code == Some(2) && out.contains(cause), "{args:?}: {code:?} {out}");
     }
@@ -8134,8 +8134,11 @@ fn a_false_fact_of_the_agent_rejects_the_step_and_hides_no_edit() {
     let (code, out) = tree_mode(repo, &["step", "use the method", "--change", "a=the fee"]);
     assert_eq!(code, Some(1), "{out}");
     assert!(out.contains("      `a` names 2 items: give more of the path\n      candidates: `shop_core::facts::a`, `shop_core::facts::inner::a`\n"), "{out}");
-    // The kinds of a later batch and a bad form stop before the check, with the exit code 2.
-    for (option, cause) in [("extract shop_core::facts::a shop_core::facts::helper", "the kind `extract` has no check yet (a later batch adds it)"), ("inline shop_core::facts::a", "the kind `inline` has no check yet (a later batch adds it)"), ("rewrite $a.total", "FROM => TO")] {
+    // [R94.6-1] A statement `extract` that names no pair of the step is false (the exit code
+    // 1). A bad form stops before the check, with the exit code 2.
+    let (code, out) = tree_mode(repo, &["step", "use the method", "--same", "extract shop_core::facts::a shop_core::facts::helper"]);
+    assert!(code == Some(1) && out.contains("the check of the extract does not hold (R94.6-1)"), "{code:?} {out}");
+    for (option, cause) in [("inline shop_core::facts::a", "write `inline BODY CALLEE`"), ("rewrite $a.total", "FROM => TO")] {
         let (code, out) = tree_mode(repo, &["step", "use the method", "--same", option]);
         assert!(code == Some(2) && out.contains(cause), "{option}: {code:?} {out}");
     }

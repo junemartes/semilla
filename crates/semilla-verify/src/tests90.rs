@@ -133,7 +133,10 @@ fn each_option_is_a_short_form_of_an_intent_statement_and_reads_on_its_path() {
     // A path that the parser of the intent language does not read keeps the text of the option
     // (its check and its error message stay).
     assert_eq!(intent::read_option("same", "rename <A as B>::f g"), ("rename <A as B>::f g".to_string(), false));
-    assert_eq!(intent::option_statement("same", "inline a b"), None);
+    // [R94.6-1] `inline` and `extract` are short forms of the statements of design 94.
+    assert_eq!(intent::option_statement("same", "inline a b").as_deref(), Some("#[inlined(after::a, from = before::b)]\nfn statement() {}\n"));
+    assert_eq!(intent::option_statement("same", "extract a b").as_deref(), Some("#[extract(before::a, into = after::b)]\nfn statement() {}\n"));
+    assert_eq!(intent::option_statement("same", "swap a b"), None);
 }
 
 /// The facts of the agent and the entries of a report, with no number of a fact.

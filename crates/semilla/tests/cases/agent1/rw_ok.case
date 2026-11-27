@@ -64,10 +64,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::a` (src/lib.rs:6): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
     MIR changes with no claim: `depot::b` (src/lib.rs:7): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
-  changed nodes: 2 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
-  real edits:
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
   item `depot::a`:
-  ◆ f1 replace (a1; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+  ◆ f1 extract (a1; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained); 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
       in: depot::a, depot::b
       affected bodies: depot::a, depot::b
       control flow: + call `Cart::total` (src/lib.rs:6): return → check `overflow: c.total() + 1`
@@ -83,5 +83,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (a1; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+◆ f1 extract (a1; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained); 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
     lines: src/lib.rs:6-7, src/lib.rs:-6-7

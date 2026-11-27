@@ -78,6 +78,12 @@ claim_attributes! {
     moved => Versions::Both;
     /// `#[rewrite(A, B)]`: a hint for the pairing (text patterns, not paths).
     rewrite => Versions::None;
+    /// `#[extract(before::BODY, into = after::CALLEE)]`: a region of the old body is the new
+    /// callee (design 94).
+    extract => Versions::Written;
+    /// `#[inlined(after::BODY, from = before::CALLEE)]`: the new body has the code of the old
+    /// callee (design 94). `inline` is an attribute of the language, so the name is `inlined`.
+    inlined => Versions::Written;
 }
 
 fn claim(kind: &str, versions: Versions, attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -87,10 +93,13 @@ fn claim(kind: &str, versions: Versions, attr: TokenStream, item: TokenStream) -
     for (index, arg) in args.iter().enumerate() {
         // `rename(A, B)` and `moved(A, B)`: the first path is old, the second path is new.
         let versions = match (kind, index) {
-            ("rename" | "moved", 0) => Versions::Before,
-            ("rename" | "moved", _) => Versions::After,
+            ("rename" | "moved" | "extract", 0) | ("inlined", 1) => Versions::Before,
+            ("rename" | "moved" | "extract", _) | ("inlined", _) => Versions::After,
             _ => versions,
         };
+        // The second path of `extract` (`into = PATH`) and of `inlined` (`from = PATH`).
+        let named = matches!((kind, arg.first()), ("extract", Some(TokenTree::Ident(ident))) if ident.to_string() == "into") || matches!((kind, arg.first()), ("inlined", Some(TokenTree::Ident(ident))) if ident.to_string() == "from");
+        let arg = if named && matches!(arg.get(1), Some(TokenTree::Punct(p)) if p.as_char() == '=') { &arg[2..] } else { &arg[..] };
         scope_code(kind, versions, arg, &mut body);
     }
     let mut out: Vec<TokenTree> = item.into_iter().collect();

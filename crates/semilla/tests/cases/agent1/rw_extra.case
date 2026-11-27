@@ -60,28 +60,32 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
       places: depot::a/tail/lhs, depot::b/tail/lhs
-      a part of: f1 (2 of 3 places)
+      entries, in the list below: f1
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::a` (src/lib.rs:6): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
     MIR changes with no claim: `depot::b` (src/lib.rs:7): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
-  changed nodes: 3 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
+  item `depot::b`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `depot::b/tail/rhs` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::b=TEXT'; if it does not change, --same 'rewrite 2 => 3'
+      affected bodies: depot::b (with 1 other edit of this body)
+      control flow: + call `Cart::total` (src/lib.rs:7): return → check `overflow: c.total() * 3`
+      control flow: ~ check `overflow: c.total * 2` → `overflow: c.total() * 3` (src/lib.rs:-7, src/lib.rs:7)
+      control flow: + arrow entry (src/lib.rs:7) → call `Cart::total` (src/lib.rs:7)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes alone; the body: MIR changes
+  transformations:
   item `depot::a`:
-  ◆ f1 replace (a1; R90.2-2, 2 changed MIR elements; 3 nodes; one change (R92.6-1)): 2 site(s): changed expression `c.total` → `c.total()`; changed literal `2` → `3` at `depot::b/tail/rhs` [semantics · code different]
-      not stated (src/lib.rs:6-7, src/lib.rs:-6-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::b=TEXT'; if it does not change, --same 'rewrite 2 => 3'
+  ◆ f1 extract (a1; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained); 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
       in: depot::a, depot::b
       affected bodies: depot::a, depot::b
       control flow: + call `Cart::total` (src/lib.rs:6): return → check `overflow: c.total() + 1`
       control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-6, src/lib.rs:6)
       control flow: + arrow entry (src/lib.rs:6) → call `Cart::total` (src/lib.rs:6)
       control flow: … 5 more (semilla expand --step 0)
-      control flow: + call `Cart::total` (src/lib.rs:7): return → check `overflow: c.total() * 3`
-      control flow: ~ check `overflow: c.total * 2` → `overflow: c.total() * 3` (src/lib.rs:-7, src/lib.rs:7)
-      control flow: + arrow entry (src/lib.rs:7) → call `Cart::total` (src/lib.rs:7)
-      control flow: … 1 more (semilla expand --step 0)
       equivalence: `depot::a`: MIR changes
       equivalence: `depot::b`: MIR changes alone; the body: MIR changes
-      equivalence: MIR changes alone; the body: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
     depot::a (src/lib.rs:6): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow; MIR changes
@@ -89,5 +93,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (a1; R90.2-2, 2 changed MIR elements; 3 nodes; one change (R92.6-1)): 2 site(s): changed expression `c.total` → `c.total()`; changed literal `2` → `3` at `depot::b/tail/rhs` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `depot::b/tail/rhs` [semantics · code different]
+    lines: src/lib.rs:7, src/lib.rs:-7
+◆ f1 extract (a1; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained); 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
     lines: src/lib.rs:6-7, src/lib.rs:-6-7

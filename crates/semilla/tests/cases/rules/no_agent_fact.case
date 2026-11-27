@@ -63,11 +63,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::a` (src/lib.rs:6): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
     MIR changes with no claim: `depot::b` (src/lib.rs:7): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
     MIR changes with no claim: `depot::limit` (src/lib.rs:11): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
-  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
+  item `depot::limit`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
+      not stated (src/lib.rs:11, src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
+      affected bodies: depot::limit
+      equivalence: MIR changes
+  transformations:
   item `depot::a`:
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
-      not stated (src/lib.rs:6-7, src/lib.rs:-6-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::a,depot::b=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()' (one statement for 2 places: f1)
+  ◆ f1 extract (Semilla; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained); 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
       in: depot::a, depot::b
       affected bodies: depot::a, depot::b
       control flow: + call `Cart::total` (src/lib.rs:6): return → check `overflow: c.total() + 1`
@@ -76,11 +81,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 5 more (semilla expand --step 0)
       equivalence: `depot::a`: MIR changes
       equivalence: `depot::b`: MIR changes
-  item `depot::limit`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
-      not stated (src/lib.rs:11, src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
-      affected bodies: depot::limit
-      equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 3 bodies
     depot::a (src/lib.rs:6): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow; MIR changes
@@ -89,7 +89,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
-    lines: src/lib.rs:6-7, src/lib.rs:-6-7
 ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
     lines: src/lib.rs:11, src/lib.rs:-11
+◆ f1 extract (Semilla; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained); 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+    lines: src/lib.rs:6-7, src/lib.rs:-6-7

@@ -58,6 +58,9 @@ pub const KINDS: &[Kind] = &[
     Kind { name: "rename", scope: Scope::Two, body: Body::Empty, later: None },
     Kind { name: "moved", scope: Scope::Two, body: Body::Empty, later: None },
     Kind { name: "rewrite", scope: Scope::Two, body: Body::Empty, later: None },
+    // [R94.6-1] The statements of design 94: an anchor of the map for an extract and an inline.
+    Kind { name: "extract", scope: Scope::Two, body: Body::Empty, later: None },
+    Kind { name: "inlined", scope: Scope::Two, body: Body::Empty, later: None },
 ];
 
 /// The options of each claim attribute (`loop_relation` has `at` too).
@@ -211,6 +214,20 @@ pub fn check(path: &str, text: &str) -> (Vec<Head>, Vec<Finding>) {
                                 head.except = names;
                             }
                             "at" if kind.name == "loop_relation" => {}
+                            // [R94.6-1] The second path of `extract` (`into = …`) and of
+                            // `inlined` (`from = …`) is a part of the scope.
+                            "into" if kind.name == "extract" => {
+                                let at = usize::from(range.start()) + arg.len() - arg.trim_start_matches(|c: char| c != '=').len() + 1;
+                                let (line, column) = lines.at(text, at);
+                                head.scope.push(value.to_string());
+                                head.scope_at.push((line, column, at, usize::from(range.end())));
+                            }
+                            "from" if kind.name == "inlined" => {
+                                let at = usize::from(range.start()) + arg.len() - arg.trim_start_matches(|c: char| c != '=').len() + 1;
+                                let (line, column) = lines.at(text, at);
+                                head.scope.push(value.to_string());
+                                head.scope_at.push((line, column, at, usize::from(range.end())));
+                            }
                             other => {
                                 let best = OPTIONS.iter().min_by_key(|option| crate::distance_of(other, option)).copied().unwrap_or("reason");
                                 add("S0107", true, key_range, format!("`#[{}]` has no option `{other}`; the options are `cfg = \"…\"`, `reason = \"…\"`, `except = [NAME, …]`", kind.name), Some((usize::from(key_range.start()), usize::from(key_range.end()), best.to_string())));
@@ -476,8 +493,8 @@ pub fn scope_links(kind: &str, index: usize, scope: &str) -> Vec<String> {
         return vec![path];
     }
     let versions: &[&str] = match (kind, index) {
-        ("rename" | "moved", 0) | ("removed", _) => &["before"],
-        ("rename" | "moved", _) | ("new", _) => &["after"],
+        ("rename" | "moved" | "extract", 0) | ("inlined", 1) | ("removed", _) => &["before"],
+        ("rename" | "moved" | "extract", _) | ("inlined", _) | ("new", _) => &["after"],
         ("invariant" | "relation" | "contract", _) => &[],
         _ => &["before", "after"],
     };
@@ -530,6 +547,8 @@ pub fn as_file(path: &str, text: &str) -> crate::File {
             "rename" => crate::ClaimKind::Rename,
             "moved" => crate::ClaimKind::Moved,
             "rewrite" => crate::ClaimKind::Rewrite,
+            "extract" => crate::ClaimKind::Extract,
+            "inlined" => crate::ClaimKind::Inlined,
             _ => crate::ClaimKind::Later,
         };
         let body = (!head.empty_body).then(|| crate::Expr { kind: crate::ExprKind::Other("a body that rustc checks (design 78)".into()), place: place.clone(), text: String::new() });
@@ -538,7 +557,7 @@ pub fn as_file(path: &str, text: &str) -> crate::File {
         let options = crate::Options { cfg: head.cfg.clone(), reason: head.reason.clone(), except: head.except.clone() };
         let attribute = head.kind.clone();
         let targets: Vec<crate::Target> = head.scope.iter().map(|scope| crate::Target::Text(record_text(scope), place.clone())).collect();
-        if matches!(kind, crate::ClaimKind::Rename | crate::ClaimKind::Moved | crate::ClaimKind::Rewrite) || kind == crate::ClaimKind::Later {
+        if matches!(kind, crate::ClaimKind::Rename | crate::ClaimKind::Moved | crate::ClaimKind::Rewrite | crate::ClaimKind::Extract | crate::ClaimKind::Inlined) || kind == crate::ClaimKind::Later {
             file.items.push(crate::Item::Claim(crate::Claim { kind, attribute, targets, options, func, place }));
         } else {
             for target in targets {

@@ -188,11 +188,62 @@ pub struct ElementDiff {
     /// removed code.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed: Vec<(Place, Place)>,
+    /// [R94.1-1] [R94.2-1] The checks of the candidates of an extract or an inline of the body
+    /// pair (design 94): a callee put in at its call, then the alignment again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transforms: Vec<crate::transform::Transform>,
+    /// [R94.4-2] The new order of the same parts of the body pair, when the change is only a new
+    /// order (design 94). `None`: the change is more than a new order, or no data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reorder: Option<crate::transform::Reorder>,
 }
 
 impl ElementDiff {
+    /// True for the diff of a body that is equal (no element differs, and no check of design 94).
+    fn is_empty(&self) -> bool {
+        self.old.is_empty() && self.new.is_empty() && !self.other && self.transforms.is_empty() && self.reorder.is_none()
+    }
+
     /// Adds the elements of a different diff (an other target or configuration).
+    /// [R94.1-1] A check of design 94 holds only if it holds in each diff with elements: the
+    /// lists keep the candidates of both diffs, and a candidate holds if it holds in each.
     pub fn merge(&mut self, other: ElementDiff) {
+        if self.is_empty() {
+            self.transforms = other.transforms.clone();
+            self.reorder = other.reorder.clone();
+        } else if !other.is_empty() {
+            self.transforms.retain(|known| other.transforms.iter().any(|found| (found.kind, &found.callee, &found.call) == (known.kind, &known.callee, &known.call)));
+            for known in self.transforms.iter_mut() {
+                if let Some(found) = other.transforms.iter().find(|found| (found.kind, &found.callee, &found.call) == (known.kind, &known.callee, &known.call)) {
+                    known.holds &= found.holds;
+                    known.equal &= found.equal;
+                    known.tie |= found.tie;
+                    known.explained = known.explained.min(found.explained);
+                    known.refused = known.refused.take().or_else(|| found.refused.clone());
+                    for side in 0..2 {
+                        known.left[side].extend(found.left[side].iter().cloned());
+                        unique(&mut known.left[side]);
+                    }
+                }
+            }
+            self.reorder = match (self.reorder.take(), other.reorder.clone()) {
+                (Some(mut known), Some(found)) => {
+                    known.flips = known.flips.max(found.flips);
+                    for dependent in found.dependent {
+                        if !known.dependent.contains(&dependent) {
+                            known.dependent.push(dependent);
+                        }
+                    }
+                    for place in found.moved {
+                        if !known.moved.contains(&place) {
+                            known.moved.push(place);
+                        }
+                    }
+                    Some(known)
+                }
+                _ => None,
+            };
+        }
         self.old.extend(other.old);
         self.new.extend(other.new);
         unique(&mut self.old);
@@ -512,7 +563,7 @@ fn unprojected(text: &str, changed: &BTreeSet<usize>) -> (String, Vec<(usize, Op
 
 /// The operations whose operands the printer sorts (see the driver, `print.rs`, `binary`): the
 /// order of the operands has no effect.
-const SYMMETRIC: &[&str] = &["Add(", "Mul(", "BitAnd(", "BitOr(", "BitXor(", "Eq(", "Ne(", "AddUnchecked(", "MulUnchecked(", "CheckedAdd(", "CheckedMul("];
+pub(crate) const SYMMETRIC: &[&str] = &["Add(", "Mul(", "BitAnd(", "BitOr(", "BitXor(", "Eq(", "Ne(", "AddUnchecked(", "MulUnchecked(", "CheckedAdd(", "CheckedMul("];
 
 /// The text of an element with the two locals of each symmetric operation in the order of their
 /// numbers. This is the tie rule of the printer (design 47, G1), for a text that the verifier
@@ -553,7 +604,7 @@ const MOST_CELLS: usize = 4_000_000;
 /// The pairs of the longest common subsequence of two key lists, with a weight: a pair with
 /// `anchored` counts two times (the two places have the same length and the same offset from
 /// the start or from the end of the body). The common start and end with anchored pairs align first.
-fn align(old: &[String], new: &[String], anchored: impl Fn(usize, usize) -> bool) -> Vec<(usize, usize)> {
+pub(crate) fn align(old: &[String], new: &[String], anchored: impl Fn(usize, usize) -> bool) -> Vec<(usize, usize)> {
     let start = (0..old.len().min(new.len())).take_while(|&i| old[i] == new[i] && anchored(i, i)).count();
     let end = (0..(old.len() - start).min(new.len() - start)).take_while(|&k| old[old.len() - 1 - k] == new[new.len() - 1 - k] && anchored(old.len() - 1 - k, new.len() - 1 - k)).count();
     let mut pairs: Vec<(usize, usize)> = (0..start).map(|i| (i, i)).collect();
@@ -619,7 +670,7 @@ fn fold_copies(parsed: &Parsed, keys: &mut [(String, Vec<Number>)], args: usize)
 }
 
 /// The place of an element for its order: the outermost macro call, else its tokens.
-fn place_of(ranges: &(Option<Place>, Option<Place>)) -> Option<&Place> {
+pub(crate) fn place_of(ranges: &(Option<Place>, Option<Place>)) -> Option<&Place> {
     ranges.1.as_ref().or(ranges.0.as_ref())
 }
 
@@ -715,6 +766,19 @@ pub fn diff_cached(old: (&str, &RecordElements), new: (&str, &RecordElements)) -
 /// Compares two canonical texts with their element ranges. `None` if the ranges do not fit the
 /// texts (an old record, or a text with a line that is not an element).
 pub fn diff(old: (&str, &RecordElements), new: (&str, &RecordElements)) -> Option<ElementDiff> {
+    diff_keyed(old, new, [None, None])
+}
+
+/// [R94.1-1] The key of the order of one element in [`diff_keyed`] (design 94): a text, then a
+/// list of number pairs, compared in this order. The check of design 94 gives each element the
+/// place of its block in the run of the body and its place in the block.
+pub type OrderKey = (String, Vec<(usize, usize)>);
+
+/// [R94.1-1] [`diff`] with the order of the elements of a side from the keys of `order` (one key
+/// for each element, in the order of the text), in place of the order of the source places. The
+/// places of the output stay the places of the ranges. A side with keys has no anchored pairs
+/// (the offsets of its places are not the offsets of one body).
+pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), order: [Option<&[OrderKey]>; 2]) -> Option<ElementDiff> {
     let no_symbols = old.1.v == 0 || new.1.v == 0;
     let (old_record, new_record) = (old.1, new.1);
     let symbols = [old.1.symbols().unwrap_or_default(), new.1.symbols().unwrap_or_default()];
@@ -736,10 +800,28 @@ pub fn diff(old: (&str, &RecordElements), new: (&str, &RecordElements)) -> Optio
     // Step 2: the order of the source, and the weighted alignment.
     let block_of = |parsed: &Parsed| -> Vec<usize> { parsed.elements.iter().map(|(_, block)| *block).collect() };
     let (old_blocks, new_blocks) = (block_of(&old), block_of(&new));
-    let old_order = source_order(&old_blocks, &old_ranges, &old_folded);
-    let new_order = source_order(&new_blocks, &new_ranges, &new_folded);
+    let keyed = |keys: &[OrderKey], folded: &[Option<usize>]| -> Option<Vec<usize>> {
+        if keys.len() != folded.len() {
+            return None;
+        }
+        let mut list: Vec<(&OrderKey, usize)> = (0..keys.len()).filter(|index| folded[*index].is_none()).map(|index| (&keys[index], index)).collect();
+        list.sort();
+        Some(list.into_iter().map(|(_, index)| index).collect())
+    };
+    let old_order = match order[0] {
+        Some(keys) => keyed(keys, &old_folded)?,
+        None => source_order(&old_blocks, &old_ranges, &old_folded),
+    };
+    let new_order = match order[1] {
+        Some(keys) => keyed(keys, &new_folded)?,
+        None => source_order(&new_blocks, &new_ranges, &new_folded),
+    };
     let (old_bounds, new_bounds) = (bounds(&old_ranges), bounds(&new_ranges));
+    let free = order.iter().all(Option::is_none);
     let anchored = |a: usize, b: usize| -> bool {
+        if !free {
+            return false;
+        }
         let (Some(x), Some(y), Some((file_a, start_a, end_a)), Some((file_b, start_b, end_b))) = (place_of(&old_ranges[a]), place_of(&new_ranges[b]), &old_bounds, &new_bounds) else { return false };
         let same_length = x.end - x.start == y.end - y.start;
         x.file == *file_a && y.file == *file_b && same_length && (x.start.checked_sub(*start_a) == y.start.checked_sub(*start_b) || end_a.checked_sub(x.end) == end_b.checked_sub(y.end))
@@ -885,6 +967,8 @@ pub fn diff(old: (&str, &RecordElements), new: (&str, &RecordElements)) -> Optio
         evaluated: old_record.c || new_record.c,
         own: [&old_record, &new_record].iter().enumerate().filter_map(|(side, record)| Some((side, record_symbol(&record.f, record.s.get(record.o? as usize)?)?))).collect(),
         pairs: partner.iter().enumerate().filter_map(|(a, b)| Some((old_ranges[a].0.clone()?, new_ranges[(*b)?].0.clone()?))).collect(),
+        transforms: Vec::new(),
+        reorder: None,
     };
     unique(&mut out.old);
     unique(&mut out.new);

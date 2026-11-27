@@ -24,7 +24,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::f`:
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): moved statement `v.push(1)` from `depot::f/S0` to `depot::f/S1` [semantics · code different]
+  ◆ f1 reorder, the order can matter (Semilla; R94.4-3, two parts with an effect each (a call, a drop, or a write through a reference): `v.push(1)` and `v.clear()`): moved statement `v.push(1)` from `depot::f/S0` to `depot::f/S1` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::f=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::f
       control flow: − arrow entry (src/lib.rs:-1) → call `Vec::<u32>::push` (src/lib.rs:-2)
@@ -35,5 +35,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): moved statement `v.push(1)` from `depot::f/S0` to `depot::f/S1` [semantics · code different]
+◆ f1 reorder, the order can matter (Semilla; R94.4-3, two parts with an effect each (a call, a drop, or a write through a reference): `v.push(1)` and `v.clear()`): moved statement `v.push(1)` from `depot::f/S0` to `depot::f/S1` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:-2

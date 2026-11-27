@@ -1,0 +1,59 @@
+note: a call with generic arguments: the check puts in no generic callee: no extract, and a note
+rule+: R94.5-1
+must_not_match: ◆ f\d+ extract
+must_match: is no extract: the callee cannot go in at the call: a call with generic arguments
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = a.max(b);
+    s + 1
+}
+=== new src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = part(a, b);
+    s + 1
+}
+
+fn part<T: Ord>(a: T, b: T) -> T {
+    a.max(b)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+    MIR changes with no claim: `depot::part` (src/lib.rs:6): an added body: `#[new(depot::part)] fn part_new() -> bool { … }`
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+    MIR changes with no claim: `depot::part` (no place): no result of the equivalence check; the template of `depot::part` covers its item `depot::part`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::part`:
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::part` [added · code different]
+      not stated (src/lib.rs:5-8); to state it: --change 'depot::part=TEXT'
+      affected bodies: depot::part
+      control flow: + graph of `depot::part`: 3 points, 2 arrows (semilla expand --step 0)
+  item `depot::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `a.max(b)` → `part(a, b)` at `depot::total/S0/init` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a.max($b) => part($a, $b)'
+      affected bodies: depot::total
+      control flow: ~ call `impls::<impl Ord for u32>::max` → `part::<u32>` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: MIR changes
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 3 bodies
+    depot::part (src/lib.rs:6): graph added: 3 points, 2 arrows
+    depot::total (src/lib.rs:1): same structure: 1 changed call target; MIR changes
+    depot::part (no place): + instance part::<u32>
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  note: `depot::total` → `depot::part` is no extract: the callee cannot go in at the call: a call with generic arguments: the check puts in no generic callee (the text of the callee has its parameters, not the arguments of the call) (R94.5-1)
+
+=== positions
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::part` [added · code different]
+    lines: src/lib.rs:5-8
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `a.max(b)` → `part(a, b)` at `depot::total/S0/init` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

@@ -1,0 +1,62 @@
+note: an extract that also changes one operand: one entry "extract" and one real edit for the operand
+rule+: R94.1-2
+must_match: ◆ f\d+ extract \(Semilla; R94\.1-1
+must_match: ◆ f\d+ replace \(Semilla; R94\.1-2, 2 MIR element place\(s\)
+must_match: `a \* 3` → `a \* 4`
+must_match: ; 1 real edits \(
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = a * 3 + b;
+    s + 1
+}
+=== new src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = part(a, b);
+    s + 1
+}
+
+fn part(a: u32, b: u32) -> u32 {
+    a * 4 + b
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::part` (src/lib.rs:6): an added body: `#[new(depot::part)] fn part_new(a: u32, b: u32) -> bool { let new = after::depot::part(a, b); true }`
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::total=TEXT'
+  real edits:
+  item `depot::total`:
+  ◆ f2 replace (Semilla; R94.1-2, 2 MIR element place(s) that differ after the callee is put in at the call): the code of the extract of `depot::part` that the MIR does not explain: `a * 3` → `a * 4` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-2); to state it: --change 'depot::total=TEXT' (one statement for 2 places: f1, f2)
+      affected bodies: depot::total
+  transformations:
+  item `depot::total`:
+  ◆ f1 extract (Semilla; R94.1-1, the MIR of `depot::part` put in at the call explains 2 element place(s); 2 element place(s) differ: a real edit of its own (R94.1-2); 2 nodes; one change (R92.6-1)): changed expression `a * 3 + b` → `part(a, b)` at `depot::total/S0/init`; added `depot::part` [semantics · code different]
+      affected bodies: depot::total, depot::part
+      control flow: + call `part` (src/lib.rs:2): return → check `overflow: s + 1`
+      control flow: − check `overflow: a * 3` (src/lib.rs:-2): ok → check `overflow: a * 3 + b`, fail → panic `overflow`
+      control flow: − check `overflow: a * 3 + b` (src/lib.rs:-2): ok → check `overflow: s + 1`, fail → panic `overflow`
+      control flow: … 3 more (semilla expand --step 0)
+      control flow: + graph of `depot::part`: 6 points, 5 arrows (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::part (src/lib.rs:6): graph added: 6 points, 5 arrows
+    depot::total (src/lib.rs:1): graph changes: +1 call, −2 checks, −2 panics, +2 arrows, −5 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 replace (Semilla; R94.1-2, 2 MIR element place(s) that differ after the callee is put in at the call): the code of the extract of `depot::part` that the MIR does not explain: `a * 3` → `a * 4` [semantics · code different]
+    lines: src/lib.rs:7, src/lib.rs:-2
+◆ f1 extract (Semilla; R94.1-1, the MIR of `depot::part` put in at the call explains 2 element place(s); 2 element place(s) differ: a real edit of its own (R94.1-2); 2 nodes; one change (R92.6-1)): changed expression `a * 3 + b` → `part(a, b)` at `depot::total/S0/init`; added `depot::part` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:5-8, src/lib.rs:-2

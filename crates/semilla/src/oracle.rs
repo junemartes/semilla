@@ -1264,7 +1264,32 @@ fn mir_diff(diff: semilla_normal::elements::ElementDiff) -> semilla_verify::MirD
     let element = |element: semilla_normal::elements::Element| semilla_verify::MirElement { tokens: place(element.tokens), call: place(element.call), targets: element.targets, exit: element.exit, glue: element.glue, jump: element.jump, symbols: element.symbols.into_iter().map(symbol).collect(), sources: element.sources.into_iter().map(|group| semilla_verify::MirGroup { follows: group.follows, sources: group.sources.into_iter().map(source).collect() }).collect() };
     let pairs = diff.pairs.into_iter().map(|(old, new)| ((old.file, old.start, old.end), (new.file, new.start, new.end))).collect();
     let changed = diff.changed.into_iter().map(|(old, new)| ((old.file, old.start, old.end), (new.file, new.start, new.end))).collect();
-    semilla_verify::MirDiff { changed, old: diff.old.into_iter().map(element).collect(), new: diff.new.into_iter().map(element).collect(), other: diff.other, pairs, no_symbols: diff.no_symbols, evaluated: diff.evaluated, own: diff.own.into_iter().map(|(side, own)| (side, symbol(own))).collect() }
+    // [R94.1-1] [R94.4-2] The checks of design 94.
+    let at = |place: semilla_normal::elements::Place| (place.file, place.start, place.end);
+    let transforms = diff
+        .transforms
+        .into_iter()
+        .map(|found| {
+            let [old, new] = found.left;
+            semilla_verify::MirTransform {
+                inline: found.kind == semilla_normal::transform::Kind::Inline,
+                callee: found.callee,
+                call: found.call.map(at),
+                refused: found.refused,
+                holds: found.holds,
+                tie: found.tie,
+                explained: found.explained,
+                callee_places: found.callee_places,
+                callee_equal: found.callee_equal,
+                region: found.region.into_iter().map(at).collect(),
+                callee_at: found.callee_at.into_iter().map(at).collect(),
+                left: [old.into_iter().map(element).collect(), new.into_iter().map(element).collect()],
+                equal: found.equal,
+            }
+        })
+        .collect();
+    let reorder = diff.reorder.map(|found| semilla_verify::MirReorder { flips: found.flips, dependent: found.dependent.into_iter().map(|(a, b, cause)| (a.map(at), b.map(at), cause)).collect(), moved: found.moved.into_iter().map(at).collect() });
+    semilla_verify::MirDiff { changed, old: diff.old.into_iter().map(element).collect(), new: diff.new.into_iter().map(element).collect(), other: diff.other, pairs, no_symbols: diff.no_symbols, evaluated: diff.evaluated, own: diff.own.into_iter().map(|(side, own)| (side, symbol(own))).collect(), transforms, reorder }
 }
 
 /// The graphs of a body in one configuration, in the form of the verifier (design 60). The
