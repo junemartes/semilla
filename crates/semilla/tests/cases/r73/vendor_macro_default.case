@@ -51,7 +51,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `shop::price` (shop/src/lib.rs:1): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(v: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
+    MIR changes with no claim: `shop::price` (shop/src/lib.rs:1): no template: error[S0112]: the scope path `after::shop::price` names no item of the version
   other facts, filled in by Semilla:
   ◆ f1 derived: vendor/depot/src/lib.rs: changed [file · code different]
       affected bodies: shop::price

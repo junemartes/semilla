@@ -1,0 +1,60 @@
+note: a type of another crate by its short name: the second form of the gate (R87.1-2); a type with no path that the intent crate resolves: the gate drops the form (R87.1-1)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+use std::cmp::Ordering;
+use std::collections::HashMap;
+pub fn rank(o: Ordering) -> u32 { o as u32 }
+pub fn count(m: &HashMap<u32, u32>) -> usize { m.len() }
+=== new src/lib.rs
+use std::cmp::Ordering;
+use std::collections::HashMap;
+pub fn rank(o: Ordering) -> u32 { o as u32 + 1 }
+pub fn count(m: &HashMap<u32, u32>) -> usize { m.len() + 1 }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::count` (src/lib.rs:4): the full compare: `#[same(depot::count)] fn count_same() {}`; a difference: `#[different(depot::count)] fn count_different() -> bool { … }`
+    MIR changes with no claim: `depot::rank` (src/lib.rs:3): the full compare: `#[same(depot::rank)] fn rank_same() {}`; a difference: `#[change(depot::rank)] fn rank_change(o: core::cmp::Ordering) -> bool { … }` or `#[different(depot::rank)] fn rank_different() -> bool { … }`
+  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed expression `m.len()` → `m.len() + 1` (f1)
+      in: depot::count
+      lines: src/lib.rs:4, src/lib.rs:-4
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::count=TEXT'; if it does not change, --same 'rewrite $a.len() => $a.len() + 1'
+  ? 1 place: changed expression `o as u32` → `o as u32 + 1` (f2)
+      in: depot::rank
+      lines: src/lib.rs:3, src/lib.rs:-3
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::rank=TEXT'; if it does not change, --same 'rewrite $a as u32 => $a as u32 + 1'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `m.len()` → `m.len() + 1` at `depot::count/tail` [semantics · code different]
+      affected bodies: depot::count
+      control flow: + check `overflow: m.len() + 1` (src/lib.rs:4): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:4)
+      control flow: + arrow call `HashMap::<u32, u32>::len` (src/lib.rs:4) → check `overflow: m.len() + 1` (src/lib.rs:4) (return)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes
+  ◆ f2 derived: changed expression `o as u32` → `o as u32 + 1` at `depot::rank/tail` [semantics · code different]
+      affected bodies: depot::rank
+      control flow: + check `overflow: o as u32 + 1` (src/lib.rs:3): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:3)
+      control flow: + arrow entry (src/lib.rs:3) → check `overflow: o as u32 + 1` (src/lib.rs:3)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::count (src/lib.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    depot::rank (src/lib.rs:3): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed expression `m.len()` → `m.len() + 1` at `depot::count/tail` [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:-4
+◆ f2 derived: changed expression `o as u32` → `o as u32 + 1` at `depot::rank/tail` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-3

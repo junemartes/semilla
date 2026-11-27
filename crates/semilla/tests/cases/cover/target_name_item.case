@@ -40,7 +40,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `list::first` (tests/list.rs:3): the same MIR text; a changed callee: `list::first::{closure#0}`; no template: test, bench, or example code (the intent crate links the libraries only, design 78)
-    MIR changes with no claim: `list::first::{closure#0} #[test]` (tests/list.rs:2): the same MIR text; a changed callee: `list::first`, `list::first::{closure#0}`; the full compare: `#[same(list::first)] fn first_same() {}`; a difference: `#[change(list::first)] fn first_change() -> bool { … }` or `#[different(list::first)] fn first_different() -> bool { … }`
+    MIR changes with no claim: `list::first::{closure#0} #[test]` (tests/list.rs:2): the same MIR text; a changed callee: `list::first`, `list::first::{closure#0}`; the template of `list::first` covers its item `depot (test "list")::first`
   tests and benches, filled in by Semilla:
   ◆ f1 derived: 2 site(s): changed literal `1` → `2` [semantics · code different]
       in: depot (test "list")::first (2)

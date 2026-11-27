@@ -26,7 +26,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `depot::limit` (src/lib.rs:5): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
+    MIR changes with no claim: `depot::limit` (src/lib.rs:5): no template: error[S0112]: the scope path `after::depot::limit` names no item of the version
   other facts, filled in by Semilla:
   ◆ f1 derived: attributes of `depot::limit`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute · code different]
       ! the compiled code changes: depot::limit

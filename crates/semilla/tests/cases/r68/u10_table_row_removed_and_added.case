@@ -32,7 +32,7 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `shop::build` (src/lib.rs:1): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::build` (src/lib.rs:1): the full compare: `#[same(shop::build)] fn build_same() {}`; a difference: `#[change(shop::build)] fn build_change(mut out_before: Vec<(u32, &str)>, mut out_after: Vec<(u32, &str)>) -> bool { … }` or `#[different(shop::build)] fn build_different() -> bool { … }` [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f1, f2)
       in: shop::build

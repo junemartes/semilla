@@ -37,7 +37,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::all` (src/lib.rs:11): the full compare: `#[same(shop::all)] fn all_same() {}`; a difference: `#[change(shop::all)] fn all_change() -> bool { … }` or `#[different(shop::all)] fn all_different() -> bool { … }`
-    MIR changes with no claim: `dyn shop::Speak` (no place): no result of the equivalence check; the full compare: `#[same(dyn shop::Speak)] fn speak_same() {}`; a difference: `#[change(dyn shop::Speak)] fn speak_change() -> bool { … }` or `#[different(dyn shop::Speak)] fn speak_different() -> bool { … }`
+    MIR changes with no claim: `dyn shop::Speak` (no place): no result of the equivalence check; no template: `dyn shop::Speak` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed method_call: `talk(&Dog)` → `talk(&Dog).wrapping_add(talk(&Cat))` (f1)
       in: shop::all

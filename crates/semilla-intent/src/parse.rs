@@ -602,10 +602,67 @@ fn expr(conv: &Conv, e: &ast::Expr) -> Result<Expr, Error> {
 /// cause: a generic parameter, `Self`, `impl …`, `dyn …`, or a name that no type of the crate
 /// has. A lifetime has no meaning in a claim, so the template has none.
 pub fn same_template(path: &str, old_signature: &str, new_signature: &str, type_path: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
-    let read = |signature: &str| read_signature(path, signature, type_path);
-    let old = read(old_signature)?;
-    let new = read(new_signature)?;
-    same_body(path, &old, &new)
+    let names = by_name(path, type_path);
+    same_template_named(path, (old_signature, &names), (new_signature, &names))
+}
+
+/// [R87.2-1] What a written type path of a signature names, for a template (design 87).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Named {
+    /// The path that the claim writes, with the version prefix `before::` for a type of a
+    /// member crate (`before::shop::Cart`), or the path of a type of another crate.
+    Path(String),
+    /// The written path as it is (a primitive type, a type of the prelude).
+    Written,
+    /// The path names no type that a claim can name: the cause.
+    Gap(String),
+}
+
+/// [R87.2-1] The names of one signature for a template (design 87): the source of each path of
+/// the template. The check of the intent files resolves the same names (the compiler data of
+/// the two trees), so the template takes each path from here, never from the text of a record
+/// name.
+pub struct Names<'a> {
+    /// The answer for each written type path of the signature: the text of the path, and its
+    /// byte range in the signature text.
+    pub path: Box<dyn Fn(&str, usize, usize) -> Named + 'a>,
+    /// The claim type of the receiver (`before::shop::Cart`), or the cause why it has none.
+    pub receiver: Result<String, String>,
+    /// The call path of the item in a version (`before::shop::Cart::len`), or the cause.
+    pub call: Box<dyn Fn(&str) -> Result<String, String> + 'a>,
+    /// The generic parameters of the impl block of the item (a method of `impl<K, V> T<K, V>`).
+    pub generic: Vec<String>,
+}
+
+/// The names of the earlier form: a type of the crate by its name, the receiver from the path
+/// of the item, and the call `VERSION::PATH`.
+fn by_name<'a>(path: &'a str, type_path: &'a dyn Fn(&str) -> Option<String>) -> Names<'a> {
+    let owner = path.rsplit_once("::").map(|(owner, _)| owner).unwrap_or(path);
+    Names {
+        path: Box::new(move |written: &str, _: usize, _: usize| match type_path(written).filter(|_| !written.contains("::")) {
+            Some(found) => Named::Path(format!("before::{found}")),
+            None => Named::Written,
+        }),
+        receiver: Ok(format!("before::{owner}")),
+        call: Box::new(move |version: &str| Ok(format!("{version}::{path}"))),
+        generic: Vec::new(),
+    }
+}
+
+/// [R87.2-1] The generic parameters (types and constants) of the first impl block of a text.
+pub fn impl_generics(text: &str) -> Vec<String> {
+    let parse = ast::SourceFile::parse(text, Edition::Edition2024);
+    let Some(block) = parse.tree().syntax().descendants().find_map(ast::Impl::cast) else { return Vec::new() };
+    block.generic_param_list().into_iter().flat_map(|list| list.type_or_const_params()).filter_map(|param| param.name().map(|name| name.text().to_string())).collect()
+}
+
+/// [R87.2-1] The template of a `same` claim for two signatures, with the names of each version
+/// (design 87). `path` is the scope path of the item.
+pub fn same_template_named(path: &str, (old_signature, old_names): (&str, &Names), (new_signature, new_names): (&str, &Names)) -> Result<String, String> {
+    let old = read_signature(old_signature, old_names)?;
+    let new = read_signature(new_signature, new_names)?;
+    let calls = ((old_names.call)("before")?, (new_names.call)("after")?);
+    same_body(path, &old, &new, &calls)
 }
 
 /// The name, the parameters (the name and the claim type of each), and the claim type of the
@@ -619,26 +676,32 @@ struct Sig {
 }
 
 /// [R77.3-4] Reads a signature for a template: a type that a claim cannot name gives the cause.
-fn read_signature(path: &str, signature: &str, type_path: &dyn Fn(&str) -> Option<String>) -> Result<Sig, String> {
+fn read_signature(signature: &str, names: &Names) -> Result<Sig, String> {
     {
         let parse = ast::SourceFile::parse(&format!("{signature} {{}}"), Edition::Edition2024);
         let function = parse.tree().syntax().descendants().find_map(ast::Fn::cast).ok_or_else(|| format!("the signature `{signature}` does not parse"))?;
         let name = function.name().map(|name| name.text().to_string()).ok_or_else(|| "the signature has no name".to_string())?;
-        let generics: Vec<String> = function.generic_param_list().into_iter().flat_map(|list| list.type_or_const_params()).filter_map(|param| param.name().map(|name| name.text().to_string())).collect();
+        let mut generics: Vec<String> = function.generic_param_list().into_iter().flat_map(|list| list.type_or_const_params()).filter_map(|param| param.name().map(|name| name.text().to_string())).collect();
+        generics.extend(names.generic.iter().cloned());
+        let type_path = &*names.path;
         let list = function.param_list().ok_or_else(|| "the signature has no parameters".to_string())?;
         let ty_text = |ty: &ast::Type, what: &str| -> Result<String, String> { claim_type(ty, &generics, type_path).map_err(|cause| format!("the type `{}` of {what} has no form in a claim ({cause})", compact(&ty.syntax().text().to_string()))) };
         let mut params = Vec::new();
         let mut places = Vec::new();
         // [R69.5-3] The receiver of a method is a value of the type of the `impl` block.
         if let Some(receiver) = list.self_param() {
-            let owner = path.rsplit_once("::").map(|(owner, _)| owner).unwrap_or(path);
+            // [R87.2-1] The type of the impl block, from the names of the item.
+            if receiver.ty().is_some() {
+                return Err("the receiver has a type of its own (`self: …`)".into());
+            }
+            let owner = names.receiver.clone().map_err(|cause| format!("the receiver has no form in a claim ({cause})"))?;
             let reference = if receiver.amp_token().is_some() { "&" } else { "" };
             // [R82.3-2] `&mut self`: a value of the claim that the call takes as `&mut`.
             if receiver.mut_token().is_some() && receiver.amp_token().is_some() {
                 places.push("this".to_string());
-                params.push(("this".to_string(), format!("before::{owner}")));
+                params.push(("this".to_string(), owner));
             } else {
-                params.push(("this".to_string(), format!("{reference}before::{owner}")));
+                params.push(("this".to_string(), format!("{reference}{owner}")));
             }
         }
         for param in list.params() {
@@ -671,7 +734,7 @@ fn read_signature(path: &str, signature: &str, type_path: &dyn Fn(&str) -> Optio
 }
 
 /// The template of a `same` claim for two signatures (R77.3-4, R78.1-5).
-fn same_body(path: &str, old: &Sig, new: &Sig) -> Result<String, String> {
+fn same_body(path: &str, old: &Sig, new: &Sig, (old_path, new_path): &(String, String)) -> Result<String, String> {
     // [R78.1-5] Rustc checks a template: an old function takes old values and a new function
     // takes new values, so a parameter of a type of the workspace (also the receiver) is one
     // parameter of each version, and `same` relates the two.
@@ -721,7 +784,7 @@ fn same_body(path: &str, old: &Sig, new: &Sig) -> Result<String, String> {
             }
         }
     }
-    let (old_call, new_call) = (format!("before::{path}({})", old_args.join(", ")), format!("after::{path}({})", new_args.join(", ")));
+    let (old_call, new_call) = (format!("{old_path}({})", old_args.join(", ")), format!("{new_path}({})", new_args.join(", ")));
     let same_type = old.ret == new.ret && !old.ret.contains("before::");
     // [R82.3-2] With a place: the two calls, the two results, and the values of the places after
     // the calls.
@@ -746,15 +809,22 @@ fn same_body(path: &str, old: &Sig, new: &Sig) -> Result<String, String> {
 /// version; the agent writes the property in place of `true`. Rustc accepts the template as it
 /// is (each name is a real name of the version).
 pub fn version_template(kind: &str, path: &str, signature: &str, type_path: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
+    version_template_named(kind, path, signature, &by_name(path, type_path))
+}
+
+/// [R87.2-1] The template of a claim on a function of one version, with the names of the
+/// version (design 87).
+pub fn version_template_named(kind: &str, path: &str, signature: &str, names: &Names) -> Result<String, String> {
     let version = if kind == "removed" { "before" } else { "after" };
-    let sig = read_signature(path, signature, type_path)?;
+    let sig = read_signature(signature, names)?;
+    let call = (names.call)(version)?;
     // [R82.3-2] A place (`&mut self`, a `&mut T` parameter) is a value of the claim that the
     // call takes as `&mut`.
     let place = |name: &String| sig.places.contains(name);
     let params: Vec<String> = sig.params.iter().map(|(name, ty)| format!("{}{name}: {}", if place(name) { "mut " } else { "" }, ty.replace("before::", &format!("{version}::")))).collect();
     let args: Vec<String> = sig.params.iter().map(|(name, _)| if place(name) { format!("&mut {name}") } else { name.clone() }).collect();
     let value = if kind == "removed" { "old" } else { "new" };
-    Ok(format!("#[{kind}({path})] fn {}_{kind}({}) -> bool {{ let {value} = {version}::{path}({}); true }}", sig.name, params.join(", "), args.join(", ")))
+    Ok(format!("#[{kind}({path})] fn {}_{kind}({}) -> bool {{ let {value} = {call}({}); true }}", sig.name, params.join(", "), args.join(", ")))
 }
 
 /// [R79.5-1] The template of a claim on a type: a `#[relation]` of the two versions that reads
@@ -796,7 +866,7 @@ fn compact(text: &str) -> String {
 /// [R77.3-4] The text of a type of a signature in a claim: a lifetime goes away, a type of the
 /// crate gets its path with the prefix `before::`, and a type that a claim cannot name gives the
 /// cause.
-fn claim_type(ty: &ast::Type, generics: &[String], type_path: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
+fn claim_type(ty: &ast::Type, generics: &[String], type_path: &dyn Fn(&str, usize, usize) -> Named) -> Result<String, String> {
     Ok(match ty {
         ast::Type::RefType(reference) => {
             let inner = reference.ty().ok_or_else(|| "a reference with no type".to_string())?;
@@ -831,11 +901,14 @@ fn claim_type(ty: &ast::Type, generics: &[String], type_path: &dyn Fn(&str) -> O
                 }
             }
             let tail = if args.is_empty() { String::new() } else { format!("<{}>", args.join(", ")) };
-            // A type of the crate (the items of the old version) gets its path with the version
-            // prefix; each other type (a primitive type, a type of another crate) keeps its path.
-            match type_path(&name).filter(|_| segments.len() == 1) {
-                Some(found) => format!("before::{found}{tail}"),
-                None => format!("{}{tail}", segments.iter().map(|segment| segment.name_ref().map(|name| name.text().to_string()).unwrap_or_default()).collect::<Vec<_>>().join("::")),
+            // [R87.2-1] The names of the item give the path: a type of a member crate gets its
+            // path with the version prefix; a primitive type keeps its path.
+            let written = segments.iter().map(|segment| segment.name_ref().map(|name| name.text().to_string()).unwrap_or_default()).collect::<Vec<_>>().join("::");
+            let range = last.name_ref().map(|name| name.syntax().text_range()).unwrap_or(path.syntax().text_range());
+            match type_path(&written, usize::from(range.start()), usize::from(range.end())) {
+                Named::Path(found) => format!("{found}{tail}"),
+                Named::Written => format!("{written}{tail}"),
+                Named::Gap(cause) => return Err(cause),
             }
         }
         ast::Type::ImplTraitType(_) => return Err("`impl …`".into()),

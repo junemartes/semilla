@@ -19,7 +19,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The names of the checks. A line `known_failure: NAME: CAUSE` of a case names one of them.
-const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit", "full_text", "ast_map"];
+const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit", "full_text", "ast_map", "templates"];
 
 /// A spotlight line of `semilla step` with no reason, in the form of a tag after the commit
 /// (design 62): `✗ spotlight…: TEXT; it needs a reason: --reason '…'` gives
@@ -961,6 +961,47 @@ fn full_text_problems(work: &mut Work, folder: &Path, output: &str, state: &str)
     Ok(problems)
 }
 
+/// [R87.6-1] The claim templates of a full text: each piece in back quotes that starts with `#[`
+/// of a line "MIR changes with no claim", and each template line of the AST map. One text is
+/// one template (the nodes of one item share their template).
+fn templates_of(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let mut add = |template: &str| {
+            if !found.iter().any(|known| known == template) {
+                found.push(template.to_string());
+            }
+        };
+        if line.contains("MIR changes with no claim: ") {
+            for piece in line.split('`').filter(|piece| piece.starts_with("#[")) {
+                add(piece);
+            }
+        }
+        if let Some(template) = line.trim_start().strip_prefix("template: #[") {
+            add(&format!("#[{template}"));
+        }
+    }
+    found
+}
+
+/// Property 16 (R87.6-1, design 87): each template that the step prints passes `semilla intent
+/// check` with `true` in place of each `…`, all in one intent file (the full text of the step).
+fn template_problems(work: &mut Work, folder: &Path, state: &str) -> Result<Vec<String>, String> {
+    let run = work.semilla(folder, &["expand".to_string(), "--step".to_string(), "0".to_string()])?;
+    let found = templates_of(&run.stdout);
+    if found.is_empty() {
+        return Ok(Vec::new());
+    }
+    let file = folder.join("templates.rs");
+    let text = format!("use semilla_intent::prelude::*;\n\n{}\n", found.iter().map(|template| template.replace('…', "true")).collect::<Vec<_>>().join("\n"));
+    std::fs::write(&file, &text).map_err(|error| error.to_string())?;
+    let check = work.semilla(folder, &["intent".to_string(), "check".to_string(), file.display().to_string()])?;
+    if check.code != 0 {
+        return Ok(vec![format!("{state}: the {} template(s) of the step do not pass `semilla intent check`:\n{}\n{}", found.len(), text, check.all().lines().filter(|line| line.starts_with("error") || line.contains("-->")).take(12).collect::<Vec<_>>().join("\n"))]);
+    }
+    Ok(Vec::new())
+}
+
 /// The counts of a line `AST changes: N mapped by claims, M mapped by Semilla, K not mapped`.
 fn ast_counts(line: &str) -> Option<[usize; 3]> {
     let rest = line.trim_start().strip_prefix("AST changes: ")?;
@@ -1331,6 +1372,12 @@ fn check(case: &Case) -> Result<Outcome, String> {
         for problem in ast_problems(&mut work, &first, &output, state)? {
             work.fail("ast_map", problem);
         }
+        // Property 16 (R87.6-1): each printed template passes the check of the intent files.
+        if step.code == 0 {
+            for problem in template_problems(&mut work, &first, state)? {
+                work.fail("templates", problem);
+            }
+        }
     }
 
     // Property 3: a second run in a new copy gives the same result.
@@ -1669,6 +1716,7 @@ fn load_cases() -> Vec<Case> {
 // rule+ R62.3-1
 // rule+ R44.1-1 R51.3-4 R55-1 R55.2-1 R55.3-4 R55.4-1 R55.4-3 R55.8-1 R57.4-1 R57.4-2 R57.4-3 R57.4-4 R60.4-6
 // rule- R57.4-2
+// rule+ R87.6-1
 #[test]
 fn each_case_gives_its_expected_text_and_keeps_the_properties() {
     let start = std::time::Instant::now();

@@ -25,7 +25,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `dyn std::fmt::Debug` (no place): no result of the equivalence check; the full compare: `#[same(dyn std::fmt::Debug)] fn debug_same() {}`; a difference: `#[change(dyn std::fmt::Debug)] fn debug_change() -> bool { … }` or `#[different(dyn std::fmt::Debug)] fn debug_different() -> bool { … }`
+    MIR changes with no claim: `dyn std::fmt::Debug` (no place): no result of the equivalence check; no template: `dyn std::fmt::Debug` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
   declarations, filled in by Semilla:
   ◆ f1 derived: member order of `depot::P`: `a, b` → `b, a` [declaration · code different]
       affected bodies: <depot::P as std::fmt::Debug>::fmt

@@ -1,0 +1,41 @@
+note: a function with a parameter of an instance of a generic type keeps the arguments (R87.2-1)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Shelf<V> { pub items: Vec<V> }
+pub fn count(s: &Shelf<u8>) -> usize { s.items.len() }
+=== new src/lib.rs
+pub struct Shelf<V> { pub items: Vec<V> }
+pub fn count(s: &Shelf<u8>) -> usize { s.items.len() + 1 }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::count` (src/lib.rs:2): the full compare: `#[same(depot::count)] fn count_same() {}`; a difference: `#[change(depot::count)] fn count_change(s_before: &before::depot::Shelf<u8>, s_after: &after::depot::Shelf<u8>) -> bool { … }` or `#[different(depot::count)] fn count_different() -> bool { … }`
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed expression `s.items.len()` → `s.items.len() + 1` (f1)
+      in: depot::count
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::count=TEXT'; if it does not change, --same 'rewrite $a.len() => $a.len() + 1'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `s.items.len()` → `s.items.len() + 1` at `depot::count/tail` [semantics · code different]
+      affected bodies: depot::count
+      control flow: + check `overflow: s.items.len() + 1` (src/lib.rs:2): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:2)
+      control flow: + arrow call `Vec::<u8>::len` (src/lib.rs:2) → check `overflow: s.items.len() + 1` (src/lib.rs:2) (return)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::count (src/lib.rs:2): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed expression `s.items.len()` → `s.items.len() + 1` at `depot::count/tail` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

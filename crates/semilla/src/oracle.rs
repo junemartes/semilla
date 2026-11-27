@@ -1636,6 +1636,10 @@ impl NormalOracle {
 }
 
 impl BodyOracle for NormalOracle {
+    fn check_templates(&self, step: &Step, asks: &[semilla_verify::template::Ask]) -> Option<Vec<semilla_verify::template::Verdict>> {
+        self.gate_templates(step, asks)
+    }
+
     fn intent(&self, step: &Step, renames: &BTreeMap<String, String>, queries: &[semilla_verify::intent::Query]) -> Option<Vec<semilla_verify::intent::Answer>> {
         self.intent_claims(step, renames, queries)
     }

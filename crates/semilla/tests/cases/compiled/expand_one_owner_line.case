@@ -66,7 +66,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
-    MIR changes with no claim: `<shop::Meters as std::convert::From<u32>>::from` (src/lib.rs:4): the full compare: `#[same(<shop::Meters as std::convert::From<u32>>::from)] fn from_same() {}`; a difference: `#[change(<shop::Meters as std::convert::From<u32>>::from)] fn from_change() -> bool { … }` or `#[different(<shop::Meters as std::convert::From<u32>>::from)] fn from_different() -> bool { … }`
+    MIR changes with no claim: `<shop::Meters as std::convert::From<u32>>::from` (src/lib.rs:4): no template: the step pairs `<shop::Meters as core::convert::From<u32>>::from` with `<shop::Meters as core::convert::From<u64>>::from` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
     MIR changes with no claim: `<shop::Meters as std::convert::From<u64>>::from` (src/lib.rs:4): the template of `<shop::Meters as std::convert::From<u32>>::from` covers its item `shop::<Meters as From>::from`
   declarations, filled in by Semilla:
   ◆ f1 derived: type `u32` → `u64` in 2 places: parameter `v` of `shop::<Meters as From>::from`, `shop::Meters.0` (the public API can change: a different crate can use the item) [declaration · code different]

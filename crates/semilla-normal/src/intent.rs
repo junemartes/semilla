@@ -368,6 +368,11 @@ pub struct Link {
     /// its `pub` functions and methods; a trait: the methods of its impls in the two trees).
     #[serde(default)]
     pub members: Vec<Member>,
+    /// [R87.2-1] For a type-relative path: each item of that name of the type (its inherent
+    /// impls and its trait impls), with the facade. A qualified path `<T as Trait>::item` names
+    /// one of them.
+    #[serde(default)]
+    pub also: Vec<String>,
 }
 
 /// [R80.3-1] One item of a scope: the record name with the facade, and for a method the type of

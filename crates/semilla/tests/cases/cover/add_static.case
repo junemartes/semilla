@@ -28,7 +28,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `depot::NAME` (src/lib.rs:8): the full compare: `#[same(depot::NAME)] fn name_same() {}`; a difference: `#[change(depot::NAME)] fn name_change() -> bool { … }` or `#[different(depot::NAME)] fn name_different() -> bool { … }`
+    MIR changes with no claim: `depot::NAME` (src/lib.rs:8): no template: error[S0112]: the scope path `before::depot::NAME` names no item of the version
   new and removed items, filled in by Semilla:
   ◆ f1 derived: added `depot::NAME` (the public API changes: a different crate can now use the item) [added · code different]
       affected bodies: depot::NAME

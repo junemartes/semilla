@@ -75,9 +75,9 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
-    MIR changes with no claim: `shop::Cart::double` (shop/src/lib.rs:5): the full compare: `#[same(shop::Cart::double)] fn double_same() {}`; a difference: `#[change(shop::Cart::double)] fn double_change(this_before: &before::shop::Cart, this_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::Cart::double)] fn double_different() -> bool { … }`
-    MIR changes with no claim: `shop::Cart::half` (shop/src/lib.rs:5): the full compare: `#[same(shop::Cart::half)] fn half_same() {}`; a difference: `#[change(shop::Cart::half)] fn half_change(this_before: &before::shop::Cart, this_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::Cart::half)] fn half_different() -> bool { … }`
-    MIR changes with no claim: `shop::Cart::total` (shop/src/lib.rs:5): the full compare: `#[same(shop::Cart::total)] fn total_same() {}`; a difference: `#[change(shop::Cart::total)] fn total_change(this_before: &before::shop::Cart, this_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::Cart::total)] fn total_different() -> bool { … }`
+    MIR changes with no claim: `shop::Cart::double` (shop/src/lib.rs:5): no template: the name record has no definition at the place of the item (code that a macro makes)
+    MIR changes with no claim: `shop::Cart::half` (shop/src/lib.rs:5): no template: the name record has no definition at the place of the item (code that a macro makes)
+    MIR changes with no claim: `shop::Cart::total` (shop/src/lib.rs:5): no template: the name record has no definition at the place of the item (code that a macro makes)
   not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `2` → `4` (f1)
       in: shop::Cart::double

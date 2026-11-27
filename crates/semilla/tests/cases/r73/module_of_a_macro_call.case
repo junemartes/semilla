@@ -34,7 +34,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::float::at` (src/float.rs:5): the full compare: `#[same(shop::float::at)] fn at_same() {}`; a difference: `#[change(shop::float::at)] fn at_change() -> bool { … }` or `#[different(shop::float::at)] fn at_different() -> bool { … }`
-    MIR changes with no claim: `shop::float::first` (src/float.rs:1): the full compare: `#[same(shop::float::first)] fn first_same() {}`; a difference: `#[change(shop::float::first)] fn first_change() -> bool { … }` or `#[different(shop::float::first)] fn first_different() -> bool { … }`
+    MIR changes with no claim: `shop::float::first` (src/float.rs:1): no template: error[S0112]: the scope path `before::shop::float::first` names no item of the version
   other facts, filled in by Semilla:
   ◆ f1 derived: src/float.rs: changed [file · code different]
       affected bodies: shop::float::at, shop::float::first

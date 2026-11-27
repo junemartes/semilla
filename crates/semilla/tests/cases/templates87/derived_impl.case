@@ -1,0 +1,33 @@
+note: a derived impl gets the qualified path of its definition in the name record (R87.2-1)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+#[derive(Clone, PartialEq)]
+pub struct Bag { pub n: u32 }
+=== new src/lib.rs
+#[derive(Clone, PartialEq)]
+pub struct Bag { pub n: u64 }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `<depot::Bag as std::clone::Clone>::clone` (src/lib.rs:1): the full compare: `#[same(<depot::Bag as core::clone::Clone>::clone)] fn clone_same() {}`; a difference: `#[change(<depot::Bag as core::clone::Clone>::clone)] fn clone_change() -> bool { … }` or `#[different(<depot::Bag as core::clone::Clone>::clone)] fn clone_different() -> bool { … }`
+  declarations, filled in by Semilla:
+  ◆ f1 derived: type of `depot::Bag.n`: `u32` → `u64` (the public API can change: a different crate can use the item) [declaration · code different]
+      affected bodies: <depot::Bag as std::clone::Clone>::clone, <depot::Bag as std::cmp::PartialEq>::eq
+      through: `depot::Bag` (2 bodies), `depot::Bag.n` (2 bodies)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    <depot::Bag as std::clone::Clone>::clone (src/lib.rs:1): graph changes: +1 call, −1 call, +2 arrows, −2 arrows; no edit in the body; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: type of `depot::Bag.n`: `u32` → `u64` (the public API can change: a different crate can use the item) [declaration · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

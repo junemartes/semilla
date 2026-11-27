@@ -1,0 +1,43 @@
+note: a method of a trait impl gets the qualified path from the name record (R87.2-1)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Bag { pub n: u32 }
+pub trait Weigh { fn weigh(&self) -> u32; }
+impl Weigh for Bag { fn weigh(&self) -> u32 { self.n } }
+=== new src/lib.rs
+pub struct Bag { pub n: u32 }
+pub trait Weigh { fn weigh(&self) -> u32; }
+impl Weigh for Bag { fn weigh(&self) -> u32 { self.n + 1 } }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `<depot::Bag as depot::Weigh>::weigh` (src/lib.rs:3): the full compare: `#[same(<depot::Bag as depot::Weigh>::weigh)] fn weigh_same() {}`; a difference: `#[change(<depot::Bag as depot::Weigh>::weigh)] fn weigh_change() -> bool { … }` or `#[different(<depot::Bag as depot::Weigh>::weigh)] fn weigh_different() -> bool { … }`
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed expression `self.n` → `self.n + 1` (f1)
+      in: depot::<Bag as Weigh>::weigh
+      lines: src/lib.rs:3, src/lib.rs:-3
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::<Bag as Weigh>::weigh=TEXT'; if it does not change, --same 'rewrite $a.n => $a.n + 1'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `self.n` → `self.n + 1` at `depot::<Bag as Weigh>::weigh/tail` [semantics · code different]
+      affected bodies: depot::<Bag as Weigh>::weigh
+      control flow: + check `overflow: self.n + 1` (src/lib.rs:3): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:3)
+      control flow: + arrow entry (src/lib.rs:3) → check `overflow: self.n + 1` (src/lib.rs:3)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    <depot::Bag as depot::Weigh>::weigh (src/lib.rs:3): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed expression `self.n` → `self.n + 1` at `depot::<Bag as Weigh>::weigh/tail` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-3

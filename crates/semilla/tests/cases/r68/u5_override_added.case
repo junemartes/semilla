@@ -47,7 +47,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
         control flow: + graph of `<shop::Dog as shop::Speak>::name`: 2 points, 1 arrow (semilla expand --step 0)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `<shop::Dog as shop::Speak>::name` (src/lib.rs:10): an added body: `#[new(<shop::Dog as shop::Speak>::name)] fn name_new(this: &after::<shop::Dog as shop::Speak>) -> bool { let new = after::<shop::Dog as shop::Speak>::name(this); true }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `<shop::Dog as shop::Speak>::name` (src/lib.rs:10): an added body: `#[new(<shop::Dog as shop::Speak>::name)] fn name_new() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
   not stated: 0 item(s)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body

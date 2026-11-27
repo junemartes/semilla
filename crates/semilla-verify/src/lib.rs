@@ -40,6 +40,7 @@ pub mod made;
 pub mod mirmap;
 mod opaque;
 pub mod sites;
+pub mod template;
 pub use opaque::{KnownTrait, KNOWN_TRAITS};
 mod srcconfig;
 mod uncompiled;
@@ -459,6 +460,14 @@ pub trait BodyOracle {
         None
     }
 
+    /// [R87.1-1] The gate of the claim templates of a step (design 87): the check of
+    /// `semilla intent check` on the templates, with `true` in place of each `…`, in one intent
+    /// file. One verdict for each template: the form that the check accepts, or the first error.
+    /// `None`: the oracle has no compiled trees.
+    fn check_templates(&self, _step: &Step, _asks: &[template::Ask]) -> Option<Vec<template::Verdict>> {
+        None
+    }
+
     fn equivalence(&self, _step: &Step, _renames: &BTreeMap<String, String>, queries: &[equiv::Query]) -> Vec<Option<equiv::Answer>> {
         vec![None; queries.len()]
     }
@@ -649,6 +658,8 @@ pub struct StepOutcome {
     /// [R79.7-1] The items (in the names of the two trees) with a node of the AST diff that is
     /// not mapped: the coverage shows the fact next to the proof result (it changes no result).
     pub not_mapped: BTreeSet<String>,
+    /// [R87.1-1] The templates of the step that wait for the gate (design 87).
+    pub templates: template::Pending,
 }
 
 /// Checks one step with the old protocol: an edit with no claim and no type-level fact is
@@ -747,6 +758,7 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
         twin_notes(twin_moves, &mut plain.report);
         semilla_core::timing::phase("the AST map", || astmap::apply(input, bodies, &mut plain));
         semilla_core::timing::phase("the claims of the intent files", || intent::check(input, bodies, &mut plain));
+        semilla_core::timing::phase("the gate of the claim templates", || template::gate(input, bodies, &mut plain));
         agent::apply(input, &mut plain);
         intent::apply(input, bodies, &mut plain);
         tags::apply(input, &mut plain);
@@ -768,6 +780,7 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
     twin_notes(twin_moves, &mut outcome.report);
     semilla_core::timing::phase("the AST map", || astmap::apply(input, bodies, &mut outcome));
     semilla_core::timing::phase("the claims of the intent files", || intent::check(input, bodies, &mut outcome));
+    semilla_core::timing::phase("the gate of the claim templates", || template::gate(input, bodies, &mut outcome));
     agent::apply(input, &mut outcome);
     intent::apply(input, bodies, &mut outcome);
     tags::apply(input, &mut outcome);
@@ -1922,7 +1935,7 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     // to `facts`. The report shows each distinct error one time, complete.
     let mut seen = std::collections::BTreeSet::new();
     report.errors.retain(|error| seen.insert(error.clone()));
-    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections, node_pairs: body_maps.pairs, verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new() }
+    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections, node_pairs: body_maps.pairs, verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new(), templates: Default::default() }
 }
 
 /// Sets the compare result of each fact (design 35, "Decided by Claude").
@@ -3480,7 +3493,7 @@ pub fn verify_changeset_cached(
             }
             Err(error) => {
                 let step_report = StepReport { step: step.index, intent: step.intent.clone(), errors: vec![format!("{error:#}")], ..Default::default() };
-                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new(), node_pairs: BTreeMap::new(), verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new() });
+                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new(), node_pairs: BTreeMap::new(), verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new(), templates: Default::default() });
             }
         }
     }

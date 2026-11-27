@@ -19,6 +19,7 @@ mod app;
 mod background;
 mod buildcheck;
 mod buildcode;
+mod gate;
 mod git;
 mod intentcrate;
 mod mcp;
@@ -102,7 +103,9 @@ enum Command {
         /// (`#[same(ITEM)]`, `#[change(ITEM)]`, `#[different(ITEM)]`, `#[rename(A, B)]`,
         /// `#[moved(A, B)]`, `#[rewrite(A, B)]`). The step stores the text of the file.
         /// `semilla intent check FILE` checks the references and the types first. A false claim
-        /// rejects the step.
+        /// rejects the step. Each claim template of the step output passes that check (design
+        /// 87): a template that the check rejects is `no template: CAUSE`. A body with a
+        /// `#[new]` or `#[removed]` claim is "with a claim that is checked later".
         #[arg(long = "intent")]
         intent_files: Vec<PathBuf>,
         /// A tag of the agent: a name for a part of the step. `PLACE[,PLACE]=NAME`. A place is
