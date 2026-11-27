@@ -29,25 +29,27 @@ table!(
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f2 derived: changed macro call `table!( A = 1, )` → `table!( A = 2, )` (makes items that Semilla cannot list) [declaration]
-      ✗ spotlight: the macro call `table!( A = 2, )` makes items that Semilla cannot list; it needs a reason: --reason 'depot::table!#0=…'
+  ◆ f2 derived: changed macro call `table!( A = 1, )` → `table!( A = 2, )` (made: `pub const A`; makes no item in the checked configurations) [declaration · no compare]
+      expansion: `table!( A = 1, )` at `depot::table!#0` (src/lib.rs:-6): expansion removed: made `depot::A`
+      note: no compare: no checked configuration compiles `depot::table!#0`
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:5), so Semilla did not compare the edit; it needs a reason: --reason 'depot::table!#0=…'
   other facts, filled in by Semilla:
-  ◆ f1 derived: attributes of `depot::table!#0`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute]
-      ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::table!#0=…'
+  ◆ f1 derived: attributes of `depot::table!#0`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute · no compare]
+      note: no compare: no checked configuration compiles `depot::table!#0`
+      ✗ spotlight: a changed `cfg` attribute (`cfg`); inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:5), so Semilla did not compare the edit; it needs a reason: --reason 'depot::table!#0=…'
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  expansions: 1 removed
+    `table!( A = 1, )` at `depot::table!#0` (src/lib.rs:-6): expansion removed: `macro_rules! table` (src/lib.rs:1): made `depot::A`; the step removes the call or its input
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::table!#0
 run again: semilla step 'the change' --reason 'depot::table!#0=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::table!#0=the reason of the test'
-◆ f2 derived: changed macro call `table!( A = 1, )` → `table!( A = 2, )` (makes items that Semilla cannot list) [declaration]
+◆ f2 derived: changed macro call `table!( A = 1, )` → `table!( A = 2, )` (made: `pub const A`; makes no item in the checked configurations) [declaration · no compare]
     lines: src/lib.rs:7, src/lib.rs:-7
-◆ f1 derived: attributes of `depot::table!#0`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute]
+◆ f1 derived: attributes of `depot::table!#0`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute · no compare]
     lines: src/lib.rs:5, src/lib.rs:-5

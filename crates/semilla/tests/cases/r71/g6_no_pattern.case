@@ -1,6 +1,5 @@
 note: batch 11c, G6: an undecided line whose edit has no pattern (a removed statement and a new statement) keeps the general words
 rule-: R71.3-1
-option: --compiled
 must_match: if it does not change, a `--same` fact \(rename, move, or rewrite\) that explains the edit
 === both Cargo.toml
 [package]
@@ -19,7 +18,7 @@ pub fn scale(x: f64) -> f64 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 3 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states

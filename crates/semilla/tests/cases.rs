@@ -2,8 +2,9 @@
 //!
 //! Each file `tests/cases/GROUP/NAME.case` is one small change: the files of the old tree, the
 //! files of the new tree, the options of `semilla step`, the checks of the case, and the
-//! expected text of the step. The runner makes the two trees, runs the step with
-//! `SEMILLA_NO_CHECK`, and compares the full result with the expected text. Then it checks the
+//! expected text of the step. The runner makes the two trees, runs the step (one mode, design
+//! 83: the build, the MIR, and the build check), and compares the full result with the expected
+//! text. Then it checks the
 //! properties that hold for each change: the cover, no empty change, the same result each
 //! time, the tags, the facts of the agent, the reader, the comments with no edit, and the map
 //! of the AST pass (each changed node in exactly one entry, R79.1-1).
@@ -18,7 +19,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The names of the checks. A line `known_failure: NAME: CAUSE` of a case names one of them.
-const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit", "default_mode", "full_text", "ast_map"];
+const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit", "full_text", "ast_map"];
 
 /// A spotlight line of `semilla step` with no reason, in the form of a tag after the commit
 /// (design 62): `✗ spotlight…: TEXT; it needs a reason: --reason '…'` gives
@@ -48,9 +49,6 @@ struct Case {
     /// fact never gets "equivalent".
     different: Vec<String>,
     same_facts: bool,
-    /// `build_check: on` (batch 10n2): the runs of the case have the build check (and so the
-    /// expansion records of the default mode, R65.8-1). Else each run has `SEMILLA_NO_CHECK`.
-    build_check: bool,
     /// The known failures: the name of the check and the cause.
     known: Vec<(String, String)>,
     old: BTreeMap<String, Vec<u8>>,
@@ -85,7 +83,7 @@ fn base64(text: &str) -> Result<Vec<u8>, String> {
 
 impl Case {
     fn parse(id: &str, file: &Path, text: &str) -> Result<Case, String> {
-        let mut case = Case { id: id.to_string(), file: file.to_path_buf(), options: Vec::new(), exit: None, must_match: Vec::new(), must_not_match: Vec::new(), different: Vec::new(), same_facts: false, build_check: false, known: Vec::new(), old: BTreeMap::new(), new: BTreeMap::new(), head: String::new(), expected: None };
+        let mut case = Case { id: id.to_string(), file: file.to_path_buf(), options: Vec::new(), exit: None, must_match: Vec::new(), must_not_match: Vec::new(), different: Vec::new(), same_facts: false, known: Vec::new(), old: BTreeMap::new(), new: BTreeMap::new(), head: String::new(), expected: None };
         const EXPECTED: &str = "=== expected\n";
         let (head, expected) = match text.find(&format!("\n{EXPECTED}")) {
             Some(at) => (&text[..at + 1], Some(text[at + 1 + EXPECTED.len()..].to_string())),
@@ -141,7 +139,6 @@ impl Case {
                     "must_not_match" => case.must_not_match.push(value.to_string()),
                     "different" => case.different.push(value.to_string()),
                     "same_facts_as_no_option" if value == "yes" => case.same_facts = true,
-                    "build_check" if value == "on" => case.build_check = true,
                     "known_failure" => {
                         let (check, cause) = value.split_once(": ").ok_or(format!("the known failure `{value}` has no cause"))?;
                         if !CHECKS.contains(&check) || cause.trim().is_empty() {
@@ -471,10 +468,10 @@ fn normal(text: &str, folder: &Path) -> String {
             at = stop;
         }
     }
-    // The time of a build check (a case with `build_check: on`) changes with each run.
+    // The time of a build check changes with each run: `build check: RESULT (1.2 s)`.
     out.lines()
-        .map(|line| match line.strip_prefix("build check: passes (").and_then(|rest| rest.strip_suffix(" s)")) {
-            Some(time) if time.parse::<f64>().is_ok() => "build check: passes (<TIME>)".to_string(),
+        .map(|line| match line.strip_prefix("build check: ").and_then(|rest| rest.strip_suffix(" s)")).and_then(|rest| rest.rsplit_once(" (")) {
+            Some((result, time)) if time.parse::<f64>().is_ok() => format!("build check: {result} (<TIME>)"),
             _ => line.to_string(),
         })
         .collect::<Vec<_>>()
@@ -902,33 +899,6 @@ fn equal_token_problems(output: &str, old: &BTreeMap<String, Vec<u8>>, new: &BTr
     problems
 }
 
-/// The words of a compare result (R50.1-1): no output of the default mode has one.
-const COMPARE_WORDS: &[&str] = &["code equal", "code different", "no compare", "no code", "pending", "not checked"];
-
-/// Property 13 (R50.1-1, batch 11c): the lines of an output of the default mode that have a
-/// compare result word. A word in a code text (between backquotes) or in a text in quote marks
-/// (the text of the agent) is not a result.
-fn default_mode_problems(text: &str) -> Vec<String> {
-    let mut problems = Vec::new();
-    for line in text.lines() {
-        let mut plain = String::new();
-        let (mut code, mut quote, mut escape) = (false, false, false);
-        for c in line.chars() {
-            match c {
-                '`' if !quote => code = !code,
-                '\\' if quote && !escape => escape = true,
-                '"' if !code && !escape => quote = !quote,
-                _ if code || quote => escape = false,
-                _ => plain.push(c),
-            }
-        }
-        if let Some(word) = COMPARE_WORDS.iter().find(|word| plain.contains(*word)) {
-            problems.push(format!("the default mode has the compare result word `{word}`: {}", line.trim()));
-        }
-    }
-    problems
-}
-
 /// The full-text commands of an output (R76.1-1): each `semilla expand …`, to the end of the
 /// command (a backquote, a parenthesis, a semicolon, or the end of the line), and each
 /// `semilla status … --verbose` (a pointer of the form before batch 12b, also in a line of a
@@ -1196,8 +1166,6 @@ struct Work {
     /// The failed checks: the name and the message.
     failed: Vec<(&'static str, String)>,
     runs: usize,
-    /// True: the runs have the build check (`build_check: on`).
-    check: bool,
 }
 
 impl Work {
@@ -1215,10 +1183,11 @@ impl Work {
     fn semilla(&mut self, folder: &Path, args: &[String]) -> Result<Run, String> {
         let mut command = Command::new(env!("CARGO_BIN_EXE_semilla"));
         command.current_dir(folder.join("repo")).args(args);
-        // The default mode (design 50): no compiled check. The build check is off, unless the
-        // case asks for it (`build_check: on`).
-        command.env_remove("SEMILLA_MIR_DRIVER").env_remove("SEMILLA_COMPILED").env_remove("SEMILLA_OWN_LINE_DIFF");
-        command.env("SEMILLA_CACHE_DIR", folder.join("cache")).env("SEMILLA_NO_CHECK", if self.check { "0" } else { "1" });
+        // One mode (design 83): each step builds the two trees, has their MIR, and runs the
+        // build check. A removed variable of the mode in the environment of the test would be an
+        // error, so the runner removes it.
+        command.env_remove("SEMILLA_MIR_DRIVER").env_remove("SEMILLA_COMPILED").env_remove("SEMILLA_NO_CHECK").env_remove("SEMILLA_OWN_LINE_DIFF");
+        command.env("SEMILLA_CACHE_DIR", folder.join("cache"));
         git_env(&mut command);
         let output = command.output().map_err(|error| format!("semilla does not start: {error}"))?;
         self.runs += 1;
@@ -1294,7 +1263,7 @@ struct Outcome {
 
 fn check(case: &Case) -> Result<Outcome, String> {
     let temp = tempfile::Builder::new().prefix("semilla-case-").tempdir().map_err(|error| format!("no temporary folder: {error}"))?;
-    let mut work = Work { folder: temp.path().to_path_buf(), failed: Vec::new(), runs: 0, check: case.build_check };
+    let mut work = Work { folder: temp.path().to_path_buf(), failed: Vec::new(), runs: 0 };
     // The old tree is the commit. The new tree is the working tree.
     let template = work.folder.join("template");
     let put = |files: &BTreeMap<String, Vec<u8>>| -> Result<(), String> {
@@ -1412,12 +1381,6 @@ fn check(case: &Case) -> Result<Outcome, String> {
                 work.fail("full_text", problem);
             }
         }
-        // Property 13 (R50.1-1) for the output of the tag of the default mode.
-        if !case.options.iter().any(|option| option == "--compiled") {
-            for problem in default_mode_problems(&tagged.all()) {
-                work.fail("default_mode", format!("the tag after the commit: {problem}"));
-            }
-        }
         let base = plain.as_ref().unwrap_or(&step);
         // The one text that differs on purpose (R62.3-1): a spotlight with no reason is an open
         // item in the tag, not a cause to run the step again.
@@ -1443,15 +1406,6 @@ fn check(case: &Case) -> Result<Outcome, String> {
     // the new tree (design 58.11).
     for problem in comment_problems(&output, &case.old, &case.new) {
         work.fail("comments", problem);
-    }
-
-    // Property 13 (R50.1-1): no output of the default mode has a compare result word. The
-    // reader outputs (`status --verbose`, the Markdown review) have the same check below.
-    let default_mode = !case.options.iter().any(|option| option == "--compiled");
-    if default_mode {
-        for problem in default_mode_problems(&output) {
-            work.fail("default_mode", problem);
-        }
     }
 
     // Property 5: a rejected step is not stored, and a false fact of the agent removes no fact
@@ -1633,13 +1587,6 @@ fn check(case: &Case) -> Result<Outcome, String> {
         let report = folder.join("review.md");
         let review = work.semilla(folder, &["review".to_string(), "--md".to_string(), report.to_string_lossy().to_string()])?;
         let markdown = no_escape(&std::fs::read_to_string(&report).unwrap_or_default());
-        if default_mode {
-            for (name, text) in [("`status --verbose`", &status.stdout), ("the Markdown review", &markdown)] {
-                for problem in default_mode_problems(text) {
-                    work.fail("default_mode", format!("{name}: {problem}"));
-                }
-            }
-        }
         let status_lines: BTreeSet<&str> = status.stdout.lines().map(str::trim).collect();
         for fact in facts(&run.all()) {
             if !status_lines.contains(fact.head.as_str()) {
@@ -1879,21 +1826,6 @@ fn the_eighth_property_finds_a_token_that_the_other_item_does_not_have() {
 // rule+ R58.11-1
 // rule- R58.11-1
 // rule- R60.4-6
-// Property 13: a compare result word in an output of the default mode is a problem; a word in a
-// code text or in a text of the agent is not.
-// rule+ R50.1-1
-// rule- R50.1-1
-#[test]
-fn the_thirteenth_property_finds_a_compare_result_word_of_the_default_mode() {
-    assert_eq!(default_mode_problems("  ◆ f1 derived: changed literal `1` → `2` [semantics]\n  expansion: the text is too large for the fact rules (over 50 kB): …").len(), 0);
-    assert_eq!(default_mode_problems("  ! build check: not checked: the check did not build the changed code").len(), 1);
-    assert_eq!(default_mode_problems("  expansion: no compare (a text over 50 kB): `a` → `b`").len(), 1);
-    assert_eq!(default_mode_problems("  ◆ f1 derived: changed literal `1` → `2` [semantics · code different]").len(), 1);
-    // A word in code or in the words of the agent is text.
-    assert_eq!(default_mode_problems("  ◆ f1 derived: changed literal `\"not checked\"` → `\"pending\"` at `shop::f/tail` [semantics]").len(), 0);
-    assert_eq!(default_mode_problems("step 0  \"keep the pending list\"").len(), 0);
-}
-
 #[test]
 fn the_ninth_property_finds_a_changed_point_with_no_line() {
     let good = "step 0\n  control flow: 1 body\n    demo::f (src/lib.rs:3): graph changes: +1 branch, +3 arrows, −1 arrow\n        graph changes: +1 branch, +3 arrows, −1 arrow\n          + branch `x > 3` (src/lib.rs:4)\n          + arrow entry (src/lib.rs:3) → branch `x > 3` (src/lib.rs:4)\n          + arrow branch `x > 3` (src/lib.rs:4) → return (src/lib.rs:6) (true)\n          + arrow branch `x > 3` (src/lib.rs:4) → call `demo::g` (src/lib.rs:5) (false)\n          − arrow entry (src/lib.rs:-3) → call `demo::g` (src/lib.rs:-4)\n";

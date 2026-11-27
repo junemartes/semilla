@@ -1,6 +1,5 @@
 note: `expect` is a call, not a macro; `format!` does not lead to a panic, so it keeps its points
 rule-: R60.2-12
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -15,7 +14,7 @@ pub fn show(x: u32) -> String { format!("{x}") }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
   not stated: 2 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states

@@ -72,7 +72,8 @@ enum Command {
     /// Check and store one step: `semilla step "<intent>" [--group T] [--claim '…'] [--reason 'ANCHOR=TEXT']`.
     ///
     /// The first argument is always the intent. `step` has no subcommand (batch 5g): each word is
-    /// a valid intent, also `edit` or `end`.
+    /// a valid intent, also `edit` or `end`. Each step builds the two trees and has their MIR
+    /// (design 83). The build is also the build check: a step that does not build is not stored.
     #[command(display_order = 1)]
     Step {
         /// The intent of the step.
@@ -99,8 +100,8 @@ enum Command {
         /// example `.semilla/intent/step.rs`. Each claim is a function with an attribute
         /// (`#[same(ITEM)]`, `#[change(ITEM)]`, `#[different(ITEM)]`, `#[rename(A, B)]`,
         /// `#[moved(A, B)]`, `#[rewrite(A, B)]`). The step stores the text of the file.
-        /// `semilla intent check FILE` checks the references and the types first. A property
-        /// claim needs `--compiled`. A false claim rejects the step.
+        /// `semilla intent check FILE` checks the references and the types first. A false claim
+        /// rejects the step.
         #[arg(long = "intent")]
         intent_files: Vec<PathBuf>,
         /// A tag of the agent: a name for a part of the step. `PLACE[,PLACE]=NAME`. A place is
@@ -128,20 +129,14 @@ enum Command {
         /// Also print the change tree.
         #[arg(long)]
         tree: bool,
-        /// Also run the compiled check for this step: a build, a compare of the compiled code
-        /// (MIR), and a compare result on each fact (`code equal`, `code different`, `no compare`,
-        /// `no code`). The default makes the facts from the syntax tree only. The variable
-        /// `SEMILLA_COMPILED=1` gives the same. A property claim turns it on.
-        #[arg(long)]
+        /// A removed option (design 83): each step builds the two trees and has their MIR.
+        #[arg(long, hide = true)]
         compiled: bool,
-        /// Do not run the build check of the step (`cargo check` on the new tree). The step
-        /// record keeps "build check: not run", and the review shows it. Use it for a step of
-        /// work in progress, or on a machine that cannot build the project. The variable
-        /// `SEMILLA_NO_CHECK=1` gives the same.
-        #[arg(long = "no-check")]
+        /// A removed option (design 83): each step runs the build check.
+        #[arg(long = "no-check", hide = true)]
         no_check: bool,
-        /// Only with `--compiled`: run phase 1 now, and the compiled check in the background (for
-        /// a large project). Without `--compiled` it has no effect.
+        /// Run phase 1 now, and the compare of the compiled code (phase 2) in the background (for
+        /// a large project).
         #[arg(long)]
         fast: bool,
     },
@@ -238,10 +233,9 @@ enum Command {
         #[arg(long)]
         full: bool,
     },
-    /// Show the check of the session, or of a tagged commit. Phase 1 runs again. Phase 2 runs
-    /// only for a step with the compiled check (`step --compiled`): it comes only from a check
-    /// on this machine (else it starts now), and with a commit the command waits for it (at
-    /// most 600 seconds). A change set with no compiled step starts no build.
+    /// Show the check of the session, or of a tagged commit. Phase 1 runs again. Phase 2 comes
+    /// only from a check on this machine (else it starts now), and with a commit the command
+    /// waits for it (at most 600 seconds). An empty change set starts no build.
     #[command(display_order = 4)]
     Status {
         commit: Option<String>,
@@ -381,8 +375,7 @@ enum Command {
     /// (old protocol, for the replay) Print the change tree.
     #[command(hide = true)]
     Show,
-    /// After `git commit`: the final check with the result and the git note (default HEAD). Only a
-    /// step with the compiled check (`step --compiled`) gets a build and phase 2.
+    /// After `git commit`: the final check with the result and the git note (default HEAD).
     ///
     /// A commit with no change set of the agent gets a tag after the commit (design 62): one step
     /// from the tree of the first parent to the tree of the commit, with the facts of `semilla
@@ -394,11 +387,11 @@ enum Command {
     Tag {
         /// A commit (default HEAD), or a range `A..B`.
         commit: Option<String>,
-        /// A tag after the commit: also run the compiled check (as `semilla step --compiled`).
-        #[arg(long)]
+        /// A removed option (design 83).
+        #[arg(long, hide = true)]
         compiled: bool,
-        /// A tag after the commit: do not run the build check (as `semilla step --no-check`).
-        #[arg(long = "no-check")]
+        /// A removed option (design 83).
+        #[arg(long = "no-check", hide = true)]
         no_check: bool,
         /// A tag after the commit: make the note of a commit again. The facts, the tags, and the
         /// reasons of the agent stay; the output names each one that does not hold.
@@ -433,7 +426,7 @@ enum IntentAction {
     /// the meaning of the attributes. The default files: each `.rs` file of
     /// `.semilla/intent/`. The default step: the working tree against `HEAD`. The command
     /// builds the two trees only if the cache has no build of them. It runs no claim check:
-    /// `semilla step --intent FILE --compiled` gives the results.
+    /// `semilla step --intent FILE` gives the results.
     Check {
         /// The intent files.
         files: Vec<PathBuf>,
@@ -487,8 +480,8 @@ enum ReplayAction {
         /// Also run phase 2 now (the MIR checks), and wait for it.
         #[arg(long)]
         full: bool,
-        /// Do not run the build check of each step (as `semilla step --no-check`).
-        #[arg(long = "no-check")]
+        /// A removed option (design 83).
+        #[arg(long = "no-check", hide = true)]
         no_check: bool,
     },
     /// Copy a part of the target into the working tree: `FILE`, `FILE:LINE`, `FILE:START-END`
@@ -506,8 +499,8 @@ enum StepAction {
     Begin { intent: String },
     /// End the open step.
     End {
-        /// Do not run the build check of the step (as `semilla step --no-check`).
-        #[arg(long = "no-check")]
+        /// A removed option (design 83).
+        #[arg(long = "no-check", hide = true)]
         no_check: bool,
     },
     /// Open the last step again, to fix its claims.
@@ -606,6 +599,31 @@ fn is_reviewer_command(command: &Command) -> bool {
 /// The line for the option `--trust-build-code`, which is gone (design 28.3).
 const OLD_OPTION_LINE: &str = "The option --trust-build-code is gone: the command runs changed build code in the sandbox by default. Remove the option.";
 
+/// [R83.1-1] The error line of a removed option or variable of the mode (design 83), or `None`.
+/// Each step builds the two trees and has their MIR, and each step runs the build check.
+fn removed_option(command: &Command) -> Option<String> {
+    let set = |name: &str| std::env::var(name).is_ok_and(|value| !value.is_empty() && value != "0");
+    let (compiled, no_check) = match command {
+        Command::Step { compiled, no_check, .. } | Command::Tag { compiled, no_check, .. } => (*compiled, *no_check),
+        Command::Replay { action: ReplayAction::Apply { no_check, .. } } | Command::OldStep { action: StepAction::End { no_check } } => (false, *no_check),
+        _ => (false, false),
+    };
+    let line = |what: &str, why: &str| Some(format!("{what} is gone (design 83): {why}. Remove it."));
+    const MIR: &str = "Semilla has one mode, and each step builds the two trees and has their MIR";
+    const CHECK: &str = "each step runs the build check, and a step that does not build is not stored";
+    if compiled {
+        line("the option `--compiled`", MIR)
+    } else if no_check {
+        line("the option `--no-check`", CHECK)
+    } else if set("SEMILLA_COMPILED") {
+        line("the variable `SEMILLA_COMPILED`", MIR)
+    } else if set("SEMILLA_NO_CHECK") {
+        line("the variable `SEMILLA_NO_CHECK`", CHECK)
+    } else {
+        None
+    }
+}
+
 /// True if the command line has the old option.
 fn has_old_option(command: &Command) -> bool {
     matches!(command, Command::Status { trust_build_code: true, .. } | Command::Review { trust_build_code: true, .. } | Command::Ui { trust_build_code: true, .. } | Command::Verify { trust_build_code: true, .. })
@@ -631,6 +649,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
     let dir = cli.repo.clone().unwrap_or(std::env::current_dir()?);
     store::set_fresh(cli.fresh);
     safe_path(&dir);
+    // [R83.1-1] A removed option of the mode is one error line, before each other work.
+    if let Some(line) = removed_option(&cli.command) {
+        anyhow::bail!("{line}");
+    }
     if matches!(cli.command, Command::Mcp) {
         mcp::serve(&dir)?;
         return Ok(ExitCode::SUCCESS);
@@ -663,11 +685,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 println!("wrote the draft plan to {}; check each step and claim, then run `semilla replay apply`", file.display());
             }
         }
-        Command::Replay { action: ReplayAction::Apply { plan, full, no_check } } => {
+        Command::Replay { action: ReplayAction::Apply { plan, full, .. } } => {
             let plan = plan.unwrap_or_else(|| app.repo.state_dir().join("plan.json"));
             let text = std::fs::read_to_string(&plan).with_context(|| format!("read {}", plan.display()))?;
             let plan: plan::Plan = serde_json::from_str(&text).with_context(|| format!("{} is not a valid plan", plan.display()))?;
-            let applied = app.replay_apply(&plan, full, no_check)?;
+            let applied = app.replay_apply(&plan, full)?;
             print!("{}", applied.text);
             return Ok(if applied.ok { ExitCode::SUCCESS } else { ExitCode::from(1) });
         }
@@ -679,21 +701,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Replay { action: ReplayAction::End } => println!("{}", app.replay_end()?),
         Command::Replay { action: ReplayAction::Abort } => println!("{}", app.replay_abort()?),
-        Command::Step { intent, group, claims, same, change, intent_files, tag, reasons, tree, compiled, no_check, fast } => {
+        Command::Step { intent, group, claims, same, change, intent_files, tag, reasons, tree, fast, .. } => {
             let intent = intent.context("give the intent: `semilla step \"<intent>\"`")?;
             let intent_files = app.read_intent_files(&intent_files)?;
-            let request = onestep::StepRequest { intent, group, claims, reasons, same, change, intent_files, tags: tag, tree, fast, compiled, no_check };
+            let request = onestep::StepRequest { intent, group, claims, reasons, same, change, intent_files, tags: tag, tree, fast };
             let (text, stored) = app.step_once(&request)?;
             print!("{text}");
             // Design 37.22: the build code cache keeps the entries of the stored steps and the
             // newest other entries. A failure of the clean is not a failure of the step.
-            // A step with no compiled check made no entry (design 50). The build check has its
-            // own folder (design 53).
-            if app.uses_cargo() {
-                let started = std::time::Instant::now();
-                let _ = app.clean_build_code(app::BUILD_CODE_KEEP);
-                timing("clean the build code cache", started);
-            }
+            // The build check has its own folder (design 53).
+            let started = std::time::Instant::now();
+            let _ = app.clean_build_code(app::BUILD_CODE_KEEP);
+            timing("clean the build code cache", started);
             if !stored {
                 // A return runs `Drop`: it removes the temporary cache folder of `--fresh`.
                 return Ok(ExitCode::from(1));
@@ -713,7 +732,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Undo => println!("{}", app.undo()?),
         Command::OldStep { action: StepAction::Begin { intent } } => println!("{}", app.step_begin(&intent)?),
-        Command::OldStep { action: StepAction::End { no_check } } => println!("{}", app.step_end(no_check)?),
+        Command::OldStep { action: StepAction::End { .. } } => println!("{}", app.step_end()?),
         Command::OldStep { action: StepAction::Reopen } => println!("{}", app.step_reopen()?),
         Command::OldStep { action: StepAction::Edit { intent } } => println!("{}", app.step_edit(intent.as_deref())?),
         Command::OldStep { action: StepAction::Drop } => println!("{}", app.step_drop()?),
@@ -775,9 +794,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             // check, or a review stored it. Then the command checks nothing again.
             let data = match app.stored_ui_data(&key, &set) {
                 Some(data) => data,
-                // Design 50: a change set with no compiled step has no background check. The
-                // trees give the review data now.
-                None if !app::compiled_set(&set) => app.ui_data_for(&set, (key != "session").then_some(key.as_str()))?,
+                // An empty change set has no background check. The trees give the review data
+                // now.
+                None if set.steps.is_empty() => app.ui_data_for(&set, (key != "session").then_some(key.as_str()))?,
                 None => {
                     // A result of an older state or of an other mode (design 28) is not the
                     // result of this command: the check runs again.
@@ -912,8 +931,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         }
         Command::Show => println!("{}", app.check(None, false)?.tree.render()),
-        Command::Tag { commit, compiled, no_check, again } => {
-            let options = aftertag::TagOptions { compiled, no_check, again };
+        Command::Tag { commit, again, .. } => {
+            let options = aftertag::TagOptions { again };
             let (text, complete) = app.tag_command(commit.as_deref(), &options)?;
             println!("{}", text.trim_end_matches('\n'));
             if !complete {

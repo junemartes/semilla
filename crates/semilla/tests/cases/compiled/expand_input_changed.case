@@ -1,7 +1,6 @@
 note: a changed macro input owns the change of its own expansion; a changed macro that the call does not use owns nothing
 rule+: R73.2-1
 rule-: R73.2-1
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -22,7 +21,7 @@ pub fn g(v: u32) -> u32 { v }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
   not stated: 2 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states

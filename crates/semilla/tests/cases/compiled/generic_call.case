@@ -1,7 +1,6 @@
 note: a call in a generic body stays generic: the text keeps the parameter, so a new impl body does not change it
 rule-: R60.2-11
 rule-: R61.4-4
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -26,7 +25,7 @@ pub fn rated<T: Tax>(t: &T) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states

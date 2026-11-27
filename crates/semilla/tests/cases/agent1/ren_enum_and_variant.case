@@ -55,30 +55,34 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rename Mode State (holds: Semilla derives the rename from the syntax tree)
       places: depot::Mode, depot::State
-    ◆ f1 stated: renamed `depot::Mode` → `depot::State` [rename]
-    ◆ f3 stated: public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename]
+    ◆ f1 stated: renamed `depot::Mode` → `depot::State` [rename · code equal]
+        control flow: + arrow branch `m` (src/lib.rs:16) → return (src/lib.rs:16) (depot::State::Rest)
+        control flow: + arrow branch `m` (src/lib.rs:16) → return (src/lib.rs:16) (depot::State::Busy)
+        control flow: − arrow branch `m` (src/lib.rs:-16) → return (src/lib.rs:-16) (depot::Mode::Idle)
+        control flow: … 1 more (semilla expand --step 0)
+    ◆ f3 stated: public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename · no code]
   ✓ a2 same: rename Mode::Idle State::Rest (holds: Semilla derives the rename from the syntax tree)
       places: depot::Mode::Idle, depot::State::Rest
-    ◆ f2 stated: renamed `depot::Mode::Idle` → `depot::State::Rest` [rename]
-    ◆ f4 stated: public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename]
+    ◆ f2 stated: renamed `depot::Mode::Idle` → `depot::State::Rest` [rename · code equal]
+    ◆ f4 stated: public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename · no code]
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::mode_name (src/lib.rs:16): graph changes: +2 arrows, −2 arrows; no edit in the body; equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: renamed `depot::Mode` → `depot::State` [rename]
+◆ f1 stated: renamed `depot::Mode` → `depot::State` [rename · code equal]
     lines: src/lib.rs:15-16, src/lib.rs:-15-16
-◆ f3 stated: public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename]
+◆ f3 stated: public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename · no code]
     no position
-◆ f2 stated: renamed `depot::Mode::Idle` → `depot::State::Rest` [rename]
+◆ f2 stated: renamed `depot::Mode::Idle` → `depot::State::Rest` [rename · code equal]
     no position
-◆ f4 stated: public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename]
+◆ f4 stated: public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename · no code]
     no position

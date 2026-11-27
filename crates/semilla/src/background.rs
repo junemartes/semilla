@@ -35,7 +35,7 @@ pub struct Job {
     pub changeset: Option<ChangeSet>,
     /// The mode of the command that asked for the check (design 28). A job of a command with
     /// `--no-build-code` runs no build code that the change set changes. A job file with no
-    /// mode has the default mode.
+    /// mode has the default build code mode.
     #[serde(default)]
     pub mode: crate::buildcode::Mode,
 }

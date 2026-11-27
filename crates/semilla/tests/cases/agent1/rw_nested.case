@@ -52,22 +52,34 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
       places: depot::both/tail/lhs/args[0]/lhs, depot::both/tail/rhs
-    ◆ f1 stated: changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics]
-    ◆ f2 stated: changed expression `d.total` → `d.total()` at `depot::both/tail/rhs` [semantics]
+    ◆ f1 stated: changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
+        affected bodies: depot::both (with 1 other edit of this body)
+        control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: c.total() + 1`
+        control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: wrap(c.total() + 1) + d.total()`
+        control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-8, src/lib.rs:8)
+        control flow: … 5 more (semilla expand --step 0)
+        equivalence: equivalent alone (proved by SMT after inlining `depot::Cart::total`, `depot::wrap`); the body: equivalent (proved by SMT after inlining `depot::Cart::total`, `depot::wrap`) (the same line for f2)
+    ◆ f2 stated: changed expression `d.total` → `d.total()` at `depot::both/tail/rhs` [semantics · code different]
+        affected bodies: depot::both (with 1 other edit of this body)
+        control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: c.total() + 1`
+        control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: wrap(c.total() + 1) + d.total()`
+        control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-8, src/lib.rs:8)
+        control flow: … 5 more (semilla expand --step 0)
+        equivalence: the same line as f1
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::both (src/lib.rs:8): graph changes: +2 calls, 2 changed checks, +4 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `depot::Cart::total`, `depot::wrap`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics]
+◆ f1 stated: changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:-8
-◆ f2 stated: changed expression `d.total` → `d.total()` at `depot::both/tail/rhs` [semantics]
+◆ f2 stated: changed expression `d.total` → `d.total()` at `depot::both/tail/rhs` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:-8

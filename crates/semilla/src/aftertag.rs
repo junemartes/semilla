@@ -17,10 +17,6 @@ use crate::app::{App, OpenItems};
 /// The options of a tag after the commit.
 #[derive(Clone, Debug, Default)]
 pub struct TagOptions {
-    /// Also run the compiled check (as `semilla step --compiled`).
-    pub compiled: bool,
-    /// Do not run the build check (as `semilla step --no-check`).
-    pub no_check: bool,
     /// Make the note of a commit again (rule R62.7-2).
     pub again: bool,
 }
@@ -57,8 +53,8 @@ impl App {
         }
         let rev = spec.unwrap_or("HEAD");
         if self.session_owns(spec)? {
-            if options.compiled || options.no_check || options.again {
-                bail!("the change set of the session has the steps of the agent for this commit; `--compiled`, `--no-check`, and `--again` are for a tag after the commit (each step keeps its own mode)");
+            if options.again {
+                bail!("the change set of the session has the steps of the agent for this commit; `--again` is for a tag after the commit");
             }
             return Ok((self.tag(rev)?, true));
         }
@@ -204,40 +200,31 @@ impl App {
         self.trusted_bases.borrow_mut().insert(before.clone());
         let subject = self.repo.subject(&commit).unwrap_or_default();
         let intent = if subject.trim().is_empty() { format!("commit {short}") } else { subject.trim().to_string() };
-        let compiled = options.compiled || crate::app::compiled_env();
         // Rule R62.7-2: `--again` keeps the facts, the tags, and the reasons of the agent. The
         // check below shows each one that does not hold.
         let (agent, tags, reasons) = kept.map(|step| (step.agent, step.tags, step.reasons)).unwrap_or_default();
-        let step = Step { index: 0, intent: intent.clone(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons, compiled, build_check: None, agent, tags };
+        let step = Step { index: 0, intent: intent.clone(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons, syntax_only: false, build_check: None, agent, tags };
         let after_commit = AfterCommit { merge: parents.len() > 1, ..Default::default() };
         let mut set = ChangeSet { base_tree: before.clone(), head_tree: after.clone(), steps: vec![step], after_commit: Some(after_commit), ..Default::default() };
         // The check of `semilla step` for the same two trees (rule R62.3-1).
-        // R65.8-1: a step of the default mode runs the build check first, so the syntax phase
-        // reads the expansion records of the two trees.
-        let early_build = if compiled { None } else { Some(self.build_check(crate::buildcheck::skip_cause(options.no_check), &before, &after, true)) };
-        if let Some(crate::buildcheck::Outcome::Stored { record, .. }) = &early_build {
-            set.steps[0].build_check = Some(record.clone());
-        }
-        let saved = self.no_bodies;
-        self.no_bodies = saved || !compiled;
         let mut result = self.check_step_of(&set, 0);
-        self.no_bodies = saved;
         // Rule R62.5-3: an error that stops the compiled check does not stop the tag. The step
-        // gets the facts of the syntax tree, and the error is an open item of the note.
-        if let (true, Err(error)) = (compiled, &result) {
+        // gets the facts of the syntax tree (a syntax-only check, R83.1-3), and the error is an
+        // open item of the note.
+        if let Err(error) = &result {
             let error = format!("{error:#}");
-            set.steps[0].compiled = false;
+            set.steps[0].syntax_only = true;
             set.after_commit.as_mut().unwrap().compiled_error = Some(error);
+            let saved = self.no_bodies;
+            self.no_bodies = true;
             result = self.check_step_of(&set, 0);
+            self.no_bodies = saved;
         }
         let result = result?;
-        let compiled = set.steps[0].compiled;
+        let compiled = !set.steps[0].syntax_only;
         let mut report = result.report;
         // The build check of `semilla step` (design 53). A failure is an open item (R62.5-2).
-        let build = match early_build {
-            Some(outcome) => outcome,
-            None => self.build_check(crate::buildcheck::skip_cause(options.no_check), &before, &after, false),
-        };
+        let build = self.build_check(&before, &after);
         let (record, build_text) = match build {
             crate::buildcheck::Outcome::Stored { record, lines } => (record, lines.iter().map(|line| format!("{line}\n")).collect::<String>()),
             crate::buildcheck::Outcome::Fails { text, record } => (record, text),
@@ -434,7 +421,10 @@ impl App {
                 stored.reasons.entry(key.clone()).or_insert_with(|| reason.clone());
             }
         }
-        let (intent, compiled) = (stored.intent.clone(), stored.compiled);
+        // R62.5-3: the compiled check of this note stopped, so the step has the facts of the
+        // syntax tree (a syntax-only check, R83.1-3).
+        stored.syntax_only = set.after_commit.as_ref().is_some_and(|after| after.compiled_error.is_some());
+        let (intent, compiled) = (stored.intent.clone(), !stored.syntax_only);
         let saved = self.no_bodies;
         self.no_bodies = saved || !compiled;
         let mut result = self.check_step_of(&set, index);

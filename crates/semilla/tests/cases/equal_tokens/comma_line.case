@@ -42,22 +42,27 @@ pub fn rules() -> Vec<Rule> {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `4` → `5` (f1)
       in: depot::rules
       lines: src/lib.rs:9, src/lib.rs:13, src/lib.rs:-9, src/lib.rs:-13
-      to state it: --change 'depot::rules=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::rules=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::rules=TEXT'; if it does not change, --same 'rewrite 4 => 5'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `4` → `5` at `depot::rules/tail/args[1]/fields[level]` [semantics]
+  ◆ f1 derived: changed literal `4` → `5` at `depot::rules/tail/args[1]/fields[level]` [semantics · code different]
+      affected bodies: depot::rules
+      control flow: ~ panic `vec![ Rule { name: 1, level: 2 }, Rule { name: 3, level: 4 }, ]` → `vec![ Rule { name: 1, level: 2, }, Rule { name: 3, level: 5, }, ]` (src/lib.rs:-6, src/lib.rs:6)
+      equivalence: not decided: a cast (BoxDerefTransmute)
+      expansion: `vec![ Rule { name: 1, level: 2, }, Rule { name: 3, level: 5, }, ]` at `depot::rules/tail` (src/lib.rs:6): expansion changed: changed literal `4` → `5` at `expansion/args[0]/args[1]/elems[1]/fields[level]` [semantics]
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::rules (src/lib.rs:5): same structure: 1 changed panic call (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a cast (BoxDerefTransmute))
+  expansions: 1 changed
+    `vec![ Rule { name: 1, level: 2, }, Rule { name: 3, level: 5, }, ]` at `depot::rules/tail` (src/lib.rs:6): expansion changed: `macro vec` (crate alloc): changed literal `4` → `5` at `expansion/args[0]/args[1]/elems[1]/fields[level]` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed literal `4` → `5` at `depot::rules/tail/args[1]/fields[level]` [semantics]
+◆ f1 derived: changed literal `4` → `5` at `depot::rules/tail/args[1]/fields[level]` [semantics · code different]
     lines: src/lib.rs:9, src/lib.rs:13, src/lib.rs:-9, src/lib.rs:-13

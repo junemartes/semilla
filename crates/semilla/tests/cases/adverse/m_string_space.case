@@ -44,7 +44,7 @@ pub const S: &str = "a  b";
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -54,15 +54,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::list::S=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::list::S=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: value of `depot::list::S` changed: "a b" → "a  b" (the public API can change: a different crate can use the item) [semantics]
-  ◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 14 lines keep their tokens [move]
+  ◆ f1 derived: value of `depot::list::S` changed: "a b" → "a  b" (the public API can change: a different crate can use the item) [semantics · code equal]
+      ! public API: the compare does not cover the code of a different crate
+  ◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 14 lines keep their tokens [move · no code]
   cover: each of the 30 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: value of `depot::list::S` changed: "a b" → "a  b" (the public API can change: a different crate can use the item) [semantics]
+◆ f1 derived: value of `depot::list::S` changed: "a b" → "a  b" (the public API can change: a different crate can use the item) [semantics · code equal]
     lines: src/list.rs:-15, src/list/mod.rs:15
-◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 14 lines keep their tokens [move]
+◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 14 lines keep their tokens [move · no code]
     lines: src/list.rs:-1-14, src/list/mod.rs:1-14

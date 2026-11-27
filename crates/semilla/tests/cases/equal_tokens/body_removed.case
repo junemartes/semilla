@@ -20,16 +20,18 @@ pub trait Price {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: body removed from `depot::Price::gross`: `{ self.net() + 2 }` [removed]
+  ◆ f1 derived: body removed from `depot::Price::gross`: `{ self.net() + 2 }` [removed · code different]
+      affected bodies: depot::Price::gross
+      control flow: − graph of `depot::Price::gross`: 5 points, 4 arrows (semilla expand --step 0)
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::Price::gross (src/lib.rs:3): graph removed: 5 points, 4 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: body removed from `depot::Price::gross`: `{ self.net() + 2 }` [removed]
+◆ f1 derived: body removed from `depot::Price::gross`: `{ self.net() + 2 }` [removed · code different]
     lines: src/lib.rs:3, src/lib.rs:-3-5

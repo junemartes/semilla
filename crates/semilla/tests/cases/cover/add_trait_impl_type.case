@@ -9,7 +9,8 @@ edition = "2021"
 pub fn first_item() -> u32 { 0 }
 
 pub struct Up(u32);
-impl Iterator for Up {
+pub trait Seq { fn next(&mut self) -> Option<u32>; }
+impl Seq for Up {
     fn next(&mut self) -> Option<u32> { None }
 }
 
@@ -20,7 +21,8 @@ pub fn last_item() -> u32 { 0 }
 pub fn first_item() -> u32 { 0 }
 
 pub struct Up(u32);
-impl Iterator for Up {
+pub trait Seq { type Item; fn next(&mut self) -> Option<u32>; }
+impl Seq for Up {
     /// The new doc.
     /// One more line.
     #[cfg(all())]
@@ -32,20 +34,22 @@ pub fn last_item() -> u32 { 0 }
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: added `depot::<Up as Iterator>::Item` (the public API changes: a different crate can now use the item) [added]
-      ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::<Up as Iterator>::Item`; it needs a reason: --reason 'depot::<Up as Iterator>::Item=…'
-  cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  ◆ f1 derived: added `depot::<Up as Seq>::Item` (the public API changes: a different crate can now use the item) [added · no code]
+      ! public API: the compare does not cover the code of a different crate
+      ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::<Up as Seq>::Item`; it needs a reason: --reason 'depot::<Up as Seq>::Item=…'
+  ◆ f2 derived: added `depot::Seq::Item` (the public API changes: a different crate can now use the item) [added · no code]
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 6 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-  ! spotlight: cfg attribute: depot::<Up as Iterator>::Item
-run again: semilla step 'the change' --reason 'depot::<Up as Iterator>::Item=<why>'
+  ! spotlight: cfg attribute: depot::<Up as Seq>::Item
+run again: semilla step 'the change' --reason 'depot::<Up as Seq>::Item=<why>'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::<Up as Iterator>::Item=the reason of the test'
-◆ f1 derived: added `depot::<Up as Iterator>::Item` (the public API changes: a different crate can now use the item) [added]
-    lines: src/lib.rs:7-10
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::<Up as Seq>::Item=the reason of the test'
+◆ f1 derived: added `depot::<Up as Seq>::Item` (the public API changes: a different crate can now use the item) [added · no code]
+    lines: src/lib.rs:8-11
+◆ f2 derived: added `depot::Seq::Item` (the public API changes: a different crate can now use the item) [added · no code]
+    lines: src/lib.rs:6, src/lib.rs:-6

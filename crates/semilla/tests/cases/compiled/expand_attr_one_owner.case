@@ -1,7 +1,6 @@
 note: batch 10c2, item 3: an attribute macro of a different crate (it makes a macro with a hash in its name) on an impl block that the step changes in three methods; the expansion line goes under one fact and names the other owners
 rule+: R63.9-7
 must_match: \(also the change of f2, f3\)
-option: --compiled
 === both Cargo.toml
 [workspace]
 members = ["shop", "depot_macros"]
@@ -72,7 +71,7 @@ impl Cart {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states

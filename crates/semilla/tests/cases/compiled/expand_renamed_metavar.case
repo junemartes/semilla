@@ -1,7 +1,6 @@
 note: defect 4 of batch 10c: a renamed metavariable gives an equal expansion: no changed check, and the fact of the definition has the proof line
 rule+: R63.2-5 R63.3-6
 rule-: R63.2-5 R63.3-1
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -18,7 +17,7 @@ pub fn sum(a: &[u32], b: u32) -> u32 { add!(a[0], b) }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:

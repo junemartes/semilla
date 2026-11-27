@@ -1,6 +1,5 @@
 note: batch 12b, G4: a closure that the compiler makes a coroutine (an `async` closure) has the graph of its coroutine bodies (the body and its by-move body); the two bodies with no place are the bodies that the driver cannot read (also before batch 12b)
 rule+: R76.2-1
-option: --compiled
 must_match: control flow: ~ check `overflow: x \+ 1` → `overflow: x \+ 2`
 must_not_match: graph not shown
 === both Cargo.toml
@@ -21,7 +20,7 @@ pub async fn apply(a: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

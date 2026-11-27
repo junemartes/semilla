@@ -107,14 +107,14 @@ pub fn guard(v: &mut Vec<u8>) -> usize {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rename Cart.total Cart.sum (holds: Semilla derives the rename from the syntax tree)
       places: depot::Cart.total, depot::Cart.sum
-    ◆ f1 stated: renamed `depot::Cart.total` → `depot::Cart.sum` [rename]
+    ◆ f1 stated: renamed `depot::Cart.total` → `depot::Cart.sum` [rename · code equal]
         note: 2 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)
-    ◆ f3 stated: public API: `depot::Cart.total` is now `depot::Cart.sum` (a different crate can no longer use the old path) [rename]
+    ◆ f3 stated: public API: `depot::Cart.total` is now `depot::Cart.sum` (a different crate can no longer use the old path) [rename · no code]
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `2` → `3` (f2)
@@ -123,16 +123,33 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::b=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::b=TEXT'
   other facts, filled in by Semilla:
-  ◆ f2 derived: changed literal `2` → `3` at `depot::b/tail/args[0]/rhs` [semantics]
+  ◆ f2 derived: changed literal `2` → `3` at `depot::b/tail/args[0]/rhs` [semantics · code different]
+      affected bodies: depot::b
+      control flow: ~ check `overflow: c.total * 2` → `overflow: c.sum * 3` (src/lib.rs:-31, src/lib.rs:31)
+      equivalence: different: for c = &Cart { 1 }: before returns 2, after returns 3 (suggested test `semilla_test_b_f1b98c`)
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::b (src/lib.rs:31): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for c = &Cart { 1 }: before returns 2, after returns 3; suggested test `semilla_test_b_f1b98c`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_b_f1b98c`: add it to `src/lib.rs`, in the module of `depot::b` (line 31); run it: `cargo test -p depot semilla_test_b_f1b98c`; also: `cargo test -p depot --release semilla_test_b_f1b98c`
+      #[cfg(test)]
+      mod semilla_test_b_f1b98c {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 2; the new version returns 3.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let c = crate::Cart { sum: 1 };
+              let got = crate::b(&c);
+              assert_eq!(got, 2);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: renamed `depot::Cart.total` → `depot::Cart.sum` [rename]
+◆ f1 stated: renamed `depot::Cart.total` → `depot::Cart.sum` [rename · code equal]
     lines: src/lib.rs:29-30, src/lib.rs:-29-30
-◆ f3 stated: public API: `depot::Cart.total` is now `depot::Cart.sum` (a different crate can no longer use the old path) [rename]
+◆ f3 stated: public API: `depot::Cart.total` is now `depot::Cart.sum` (a different crate can no longer use the old path) [rename · no code]
     no position
-◆ f2 derived: changed literal `2` → `3` at `depot::b/tail/args[0]/rhs` [semantics]
+◆ f2 derived: changed literal `2` → `3` at `depot::b/tail/args[0]/rhs` [semantics · code different]
     lines: src/lib.rs:31, src/lib.rs:-31

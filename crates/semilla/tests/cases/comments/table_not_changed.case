@@ -29,19 +29,17 @@ pub mod rules {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: moved `shop::tax` → `shop::rules::tax` [move]
-  ◆ f2 derived: public API: `shop::tax` is now `shop::rules::tax` (a different crate can no longer use the old path) [move]
+  ◆ f1 derived: moved `shop::tax` → `shop::rules::tax` [move · code equal]
+  ◆ f2 derived: public API: `shop::tax` is now `shop::rules::tax` (a different crate can no longer use the old path) [move · no code]
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: moved `shop::tax` → `shop::rules::tax` [move]
+◆ f1 derived: moved `shop::tax` → `shop::rules::tax` [move · code equal]
     lines: src/lib.rs:6-7, src/lib.rs:-3-4
-◆ f2 derived: public API: `shop::tax` is now `shop::rules::tax` (a different crate can no longer use the old path) [move]
+◆ f2 derived: public API: `shop::tax` is now `shop::rules::tax` (a different crate can no longer use the old path) [move · no code]
     no position

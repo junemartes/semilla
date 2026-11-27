@@ -54,20 +54,28 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
       places: depot::a/tail/lhs, depot::b/tail/lhs
-    ◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics]
+    ◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
         in: depot::a, depot::b
+        affected bodies: depot::a, depot::b
+        control flow: + call `Cart::total` (src/lib.rs:6): return → check `overflow: c.total() + 1`
+        control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-6, src/lib.rs:6)
+        control flow: + arrow entry (src/lib.rs:6) → call `Cart::total` (src/lib.rs:6)
+        control flow: … 5 more (semilla expand --step 0)
+        equivalence: `depot::a`: equivalent (proved by SMT after inlining `depot::Cart::total`)
+        equivalence: `depot::b`: equivalent (proved by SMT after inlining `depot::Cart::total`)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::a (src/lib.rs:6): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `depot::Cart::total`)
+    depot::b (src/lib.rs:7): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `depot::Cart::total`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics]
+◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
     lines: src/lib.rs:6-7, src/lib.rs:-6-7

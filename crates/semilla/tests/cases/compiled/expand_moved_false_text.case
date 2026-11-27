@@ -2,7 +2,6 @@ note: batch 10c2, R63.9-8 (a defect of the first fix): the definition changes `"
 rule-: R63.9-8 R65.1-4
 must_match: `m!\(\)` at `depot::f/tail` \(src/lib\.rs:6\): expansion changed: changed literal `"src/lib\.rs:5"` → `"src/lib\.rs:6"`
 must_not_match: only the context of the call changes
-option: --compiled
 === both Cargo.toml
 [package]
 name = "depot"
@@ -24,7 +23,7 @@ pub fn f() -> &'static str { m!() }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:

@@ -54,7 +54,7 @@ pub fn value() -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -64,15 +64,30 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::list::sub::value=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::list::sub::value=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `1` → `2` at `depot::list::sub::value/tail/rhs` [semantics]
-  ◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 2 items and 15 lines keep their tokens [move]
+  ◆ f1 derived: changed literal `1` → `2` at `depot::list::sub::value/tail/rhs` [semantics · code different]
+      affected bodies: depot::list::sub::value
+      equivalence: different: for each input: before returns 5, after returns 6 (suggested test `semilla_test_value_96d006`)
+  ◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 2 items and 15 lines keep their tokens [move · no code]
   cover: each of the 32 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::list::sub::value (src/list/sub.rs:1): same graph (the edit keeps the control flow); different (for each input: before returns 5, after returns 6; suggested test `semilla_test_value_96d006`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_value_96d006`: add it to `src/list/sub.rs`, in the module of `depot::list::sub::value` (line 1); run it: `cargo test -p depot semilla_test_value_96d006`; also: `cargo test -p depot --release semilla_test_value_96d006`
+      #[cfg(test)]
+      mod semilla_test_value_96d006 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 5; the new version returns 6.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let got = crate::list::sub::value();
+              assert_eq!(got, 5);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed literal `1` → `2` at `depot::list::sub::value/tail/rhs` [semantics]
+◆ f1 derived: changed literal `1` → `2` at `depot::list::sub::value/tail/rhs` [semantics · code different]
     lines: src/list/sub.rs:3, src/list/sub.rs:-3
-◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 2 items and 15 lines keep their tokens [move]
+◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 2 items and 15 lines keep their tokens [move · no code]
     lines: src/list.rs:-1-15, src/list/mod.rs:1-15

@@ -24,17 +24,15 @@ pub fn last_item() -> u32 { 0 }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: removed `use` line: `/// The new doc. /// One more line. #[cfg(all())] pub use std::fmt::Debug;` in `depot`: removed the public name `depot::Debug` (`std::fmt::Debug`) [import]
+  ◆ f1 derived: removed `use` line: `/// The new doc. /// One more line. #[cfg(all())] pub use std::fmt::Debug;` in `depot`: removed the public name `depot::Debug` (`std::fmt::Debug`) [import · code equal]
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::use#0
 
 === positions
-◆ f1 derived: removed `use` line: `/// The new doc. /// One more line. #[cfg(all())] pub use std::fmt::Debug;` in `depot`: removed the public name `depot::Debug` (`std::fmt::Debug`) [import]
+◆ f1 derived: removed `use` line: `/// The new doc. /// One more line. #[cfg(all())] pub use std::fmt::Debug;` in `depot`: removed the public name `depot::Debug` (`std::fmt::Debug`) [import · code equal]
     lines: src/lib.rs:-5-8

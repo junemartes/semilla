@@ -52,19 +52,19 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 change: `wrap2` "one more parameter" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
       places: depot::wrap2/sig/param[_y]
-    ◆ f1 stated: parameter of `depot::wrap2` added: `_y: u32` (the public API can change: a different crate can use the item) [declaration]
+    ◆ f1 stated: parameter of `depot::wrap2` added: `_y: u32` (the public API can change: a different crate can use the item) [declaration · code different]
+        affected bodies: depot::wrap2
+        ! public API: the compare does not cover the code of a different crate
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: parameter of `depot::wrap2` added: `_y: u32` (the public API can change: a different crate can use the item) [declaration]
+◆ f1 stated: parameter of `depot::wrap2` added: `_y: u32` (the public API can change: a different crate can use the item) [declaration · code different]
     lines: src/lib.rs:10, src/lib.rs:-10

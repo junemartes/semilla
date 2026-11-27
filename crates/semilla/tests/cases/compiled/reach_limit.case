@@ -1,6 +1,5 @@
 note: the walk stops at its depth limit and tells the count of the callers that it did not check; no such caller gets a result
 rule+: R61.10-7
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -39,7 +38,7 @@ pub fn c6(k: u8) -> u32 { c5(k).wrapping_add(1) }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

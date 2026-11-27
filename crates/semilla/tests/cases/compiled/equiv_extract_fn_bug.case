@@ -2,7 +2,6 @@ note: an extracted function with a changed bound is different, with an input
 different: changed call
 rule+: R61.4-2
 rule+: R61.4-6
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -25,7 +24,7 @@ pub fn cost(w: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

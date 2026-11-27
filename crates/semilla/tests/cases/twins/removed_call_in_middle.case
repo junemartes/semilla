@@ -25,21 +25,19 @@ pub mod a {
     table!(C = 3,);
 }
 === expected
-exit: 1
-rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: removed macro call `table!(B = 2,)` (made items that Semilla cannot list) [removed]
-      ✗ spotlight: the macro call `table!(B = 2,)` makes items that Semilla cannot list; it needs a reason: --reason 'depot::a::table!#1=…'
+  ◆ f1 derived: removed macro call `table!(B = 2,)` (made: `pub const B`) [removed · no code]
+      expansion: `table!(B = 2,)` at `depot::a::table!#1` (src/lib.rs:-6): expansion removed: made `depot::a::B`
   cover: each of the 1 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  expansions: 1 removed, 2 equal
+    `table!(B = 2,)` at `depot::a::table!#1` (src/lib.rs:-6): expansion removed: `macro_rules! table` (src/lib.rs:1): made `depot::a::B`; the step removes the call or its input
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'depot::a::table!#1=<why>'
+
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::a::table!#1=the reason of the test'
-◆ f1 derived: removed macro call `table!(B = 2,)` (made items that Semilla cannot list) [removed]
+◆ f1 derived: removed macro call `table!(B = 2,)` (made: `pub const B`) [removed · no code]
     lines: src/lib.rs:-6

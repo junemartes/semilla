@@ -1,6 +1,5 @@
 note: batch 10n2, part A: the negative cases of the order rule with the expansion records: `Debug` prints the fields in order, so its expansion changes and the spotlight stays with the expansion line; `#[repr(C)]` on a second type keeps its spotlight though its derive makes the same code
 rule-: R65.9-1
-build_check: on
 must_match: expansion: derived `Debug` of `shop::Item`: expansion changed
 must_match: spotlight: an order change in a type with `#\[repr\]`, a derive, or an attribute macro \(`depot::Marker`, `Debug`\)
 must_match: spotlight: an order change in a type with `#\[repr\]`, a derive, or an attribute macro \(`depot::Marker`\)
@@ -64,24 +63,28 @@ pub struct Packed {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
+  ◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration · code different]
+      affected bodies: <shop::Item as std::fmt::Debug>::fmt
+      through: `shop::Item` (1 body)
       expansion: derived `Debug` of `shop::Item`: expansion changed: changed literal `"a"` → `"b"` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[2]` [semantics]; changed expression `self.a` → `self.b` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[3]/operand` [semantics]; changed lite… (113 characters more; `semilla expand f1 --step 0` shows the full line) ….b` → `self.a` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[5]/operand/operand` [semantics]
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Marker`, `Debug`): the code that it makes reads the members in order; it needs a reason: --reason 'shop::Item=…'
-  ◆ f2 derived: member order of `shop::Packed`: `a, b` → `b, a` [declaration]
+  ◆ f2 derived: member order of `shop::Packed`: `a, b` → `b, a` [declaration · no compare]
+      note: no compare: the MIR bodies do not show each effect of a member order
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Marker`): the code that it makes reads the members in order; it needs a reason: --reason 'shop::Packed=…'
   cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    dyn std::fmt::Debug (no place): the candidates of a call through `dyn std::fmt::Debug`: +`&u8`, +`u32`, −`&u32`, −`u8`
   expansions: 1 changed, 3 equal
     derive `Debug` at `shop::Item` (shop/src/lib.rs:1): expansion changed: `derive Debug` (crate core): changed literal `"a"` → `"b"` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[2]` [semantics]; changed expression `self.a` → `self.b` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[3]… (179 characters more; `semilla expand --step 0` shows the full line) …as ::core::fmt::Debug>::fmt/tail/args[5]/operand/operand` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'shop::Item=<why>' --reason 'shop::Packed=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::Item=the reason of the test' --reason 'shop::Packed=the reason of the test'
-◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
+◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration · code different]
     lines: shop/src/lib.rs:4, shop/src/lib.rs:-3
-◆ f2 derived: member order of `shop::Packed`: `a, b` → `b, a` [declaration]
+◆ f2 derived: member order of `shop::Packed`: `a, b` → `b, a` [declaration · no compare]
     lines: shop/src/lib.rs:11, shop/src/lib.rs:-10

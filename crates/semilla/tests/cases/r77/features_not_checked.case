@@ -1,6 +1,5 @@
 note: batch 13a, test case "mutually exclusive features": the configuration with all features does not build, so no checked configuration enables `a` or `b`; one line names them (G6)
 rule+: R77.3-8
-option: --compiled
 must_match: ! features that no checked configuration enables: `shop/a`, `shop/b`; no result covers the code or the dependencies that they enable
 === both Cargo.toml
 [package]
@@ -26,7 +25,7 @@ pub fn base() -> u32 { 30 }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error: a and b
   ! features that no checked configuration enables: `shop/a`, `shop/b`; no result covers the code or the dependencies that they enable

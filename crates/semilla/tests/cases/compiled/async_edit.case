@@ -1,7 +1,6 @@
 note: an edit in an `async` body: the coroutine has the graph of its MIR before the coroutine transform (R76.2-1, before batch 12b R60.2-5: `graph not shown: coroutine`), so the step shows the added branch; an `async` body with no edit and an equal MIR text has no line
 rule+: R76.2-1
 rule-: R76.2-1
-option: --compiled
 === both Cargo.toml
 [package]
 name = "depot"
@@ -29,7 +28,7 @@ pub async fn keep(n: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

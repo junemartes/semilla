@@ -1,6 +1,5 @@
 note: batch 11e, the negative case of the owner by place: `add!` and `mkfn!` are in one changed file, and only the item of `add!` has a fact; the item of `mkfn!` has no fact at its lines, so it is no owner of the outer call (the owner is the item at the place of the definition, not each fact of its file)
 rule-: R73.2-1
-build_check: on
 must_match: from `macro_rules! add` \(src/lib\.rs:2\) through the inner call `add!\(4; 5\)`
 must_not_match: from `macro_rules! mkfn`|no changed definition
 === both Cargo.toml
@@ -25,11 +24,12 @@ mkfn!(plain, 4 + 5);
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro `add`: `macro_rules! add { ($a:expr; $b:expr) => { $a + $b } }` → `macro_rules! add { ($a:expr; $b:expr) => { $a * $b } }` [declaration]
+  ◆ f1 derived: changed macro `add`: `macro_rules! add { ($a:expr; $b:expr) => { $a + $b } }` → `macro_rules! add { ($a:expr; $b:expr) => { $a * $b } }` [declaration · code different]
+      affected bodies: depot::made
       expansion: `mkfn!(made, add!(4; 5))` at `depot::mkfn!#0` (src/lib.rs:5): expansion changed: changed operator `4 + 5` → `4 * 5` at `depot::made/tail` [semantics]
       expansion: `add!(4; 5)` at `depot::mkfn!#0` (src/lib.rs:5): expansion changed: changed operator `4 + 5` → `4 * 5` at `expansion` [semantics]
       comment above `depot::add!`, no edit in this step (src/lib.rs:1): `// The two macros.`
@@ -42,5 +42,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: changed macro `add`: `macro_rules! add { ($a:expr; $b:expr) => { $a + $b } }` → `macro_rules! add { ($a:expr; $b:expr) => { $a * $b } }` [declaration]
+◆ f1 derived: changed macro `add`: `macro_rules! add { ($a:expr; $b:expr) => { $a + $b } }` → `macro_rules! add { ($a:expr; $b:expr) => { $a * $b } }` [declaration · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

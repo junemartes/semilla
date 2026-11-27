@@ -20,10 +20,10 @@ impl T {
     pub fn a(&self) -> u32 { 2 }
 }
 === expected
-exit: 0
-accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+exit: 1
+rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `2` → `1` (f1)
@@ -34,19 +34,39 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: depot::T::a#1
       lines: src/lib.rs:5, src/lib.rs:-3-4
       to state it: --change 'depot::T::a#1=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::T::a#0=TEXT' --change 'depot::T::a#1=TEXT'
+  to state them, add these options to the command of the step: --change 'depot::T::a#0=TEXT' --change 'depot::T::a#1=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `2` → `1` at `depot::T::a#0/tail` [semantics]
-  ◆ f2 derived: changed literal `1` → `2` at `depot::T::a#1/tail` [semantics]
+  ◆ f2 derived: changed literal `1` → `2` at `depot::T::a#1/tail` [semantics · code different]
+      affected bodies: depot::T::a#1
+      equivalence: different: for self = &T: before returns 1, after returns 2 (suggested test `semilla_test_a_677618`)
+  ◆ f1 derived: changed literal `2` → `1` at `depot::T::a#0/tail` [semantics · no compare]
+      note: no compare: no checked configuration compiles `depot::T::a#0`
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:3), so Semilla did not compare the edit; it needs a reason: --reason 'depot::T::a#0/tail=…'
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::T::a (src/lib.rs:6): same graph (the edit keeps the control flow); different (for self = &T: before returns 1, after returns 2; suggested test `semilla_test_a_677618`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_a_677618`: add it to `src/lib.rs`, in the module of `depot::T::a` (line 4); run it: `cargo test -p depot semilla_test_a_677618`; also: `cargo test -p depot --release semilla_test_a_677618`
+      #[cfg(test)]
+      mod semilla_test_a_677618 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 2.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let arg1 = crate::T;
+              let got = crate::T::a(&arg1);
+              assert_eq!(got, 1);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: inactive code: depot::T::a#0/tail (no checked configuration compiles `depot::T::a#0`)
   note: twins: `depot::T::a#0` of the old tree and `depot::T::a#1` of the new tree are one pair (a pair by its identity); the facts name the pair `depot::T::a#1`
   note: twins: `depot::T::a#1` of the old tree and `depot::T::a#0` of the new tree are one pair (a pair by its identity); the facts name the pair `depot::T::a#0`
-
+run again: semilla step 'the change' --reason 'depot::T::a#0=<why>'
 === positions
-◆ f1 derived: changed literal `2` → `1` at `depot::T::a#0/tail` [semantics]
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::T::a#0=the reason of the test' --change 'depot::T::a#0=the text of the test' --change 'depot::T::a#1=the text of the test'
+◆ f1 stated: changed literal `2` → `1` at `depot::T::a#0/tail` [semantics · no compare]
     lines: src/lib.rs:4
-◆ f2 derived: changed literal `1` → `2` at `depot::T::a#1/tail` [semantics]
+◆ f2 stated: changed literal `1` → `2` at `depot::T::a#1/tail` [semantics · code different]
     lines: src/lib.rs:5, src/lib.rs:-3-4

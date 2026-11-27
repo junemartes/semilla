@@ -55,23 +55,34 @@ fn main() {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f1)
       in: depot (bin "tool")::main
       lines: checks/list_checks.rs:3, checks/list_checks.rs:-3, cmd/tool.rs:2, cmd/tool.rs:-2
-      to state it: --change 'depot (bin "tool")::main=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot (bin "tool")::main=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot (bin "tool")::main=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   other facts, filled in by Semilla:
-  ◆ f1 derived: 3 site(s): changed literal `1` → `2` [semantics]
+  ◆ f1 derived: 3 site(s): changed literal `1` → `2` [semantics · code different]
       in: depot (bin "tool")::main, depot (test "list")::first (2)
+      affected bodies: depot (bin "tool")::main, depot (test "list")::first
+      equivalence: `list::first`: not decided: a value of a type that the check does not model: fn first() { assert_eq!(depot::list::first(&[1])… (checks/list_checks.rs:-2)
+      equivalence: `list::first::{closure#0} #[test]`: not decided: a value of a type that the check does not model: fn first() { assert_eq!(depot::list::first(&[1])… (checks/list_checks.rs:-2)
+      equivalence: `tool::main`: not decided: an array
+      expansion: `assert_eq!(depot::list::first(&[2]), 2)` at `depot (test "list")::first/S0` (checks/list_checks.rs:3): expansion changed: 2 site(s): changed literal `1` → `2` [semantics]
+      reaches: 1 body, no public function: list::first::{closure#0} (semilla expand --step 0)
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 3 bodies
+    list::first (checks/list_checks.rs:2): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn first() { assert_eq!(depot::list::first(&[1])… (checks/list_checks.rs:-2))
+    list::first::{closure#0} #[test] (checks/list_checks.rs:1): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn first() { assert_eq!(depot::list::first(&[1])… (checks/list_checks.rs:-2))
+    tool::main (cmd/tool.rs:1): same graph (the edit keeps the control flow); not decided (an array)
+    reached bodies: 1
+      list::first::{closure#0} (checks/list_checks.rs:1): reached through list::first, not decided (a value of a type that the check does not model: fn first() { assert_eq!(depot::list::first(&[1])… (checks/list_checks.rs:-2))
+  expansions: 1 changed, 2 equal
+    `assert_eq!(depot::list::first(&[2]), 2)` at `depot (test "list")::first/S0` (checks/list_checks.rs:3): expansion changed: `macro assert_eq` (crate core): 2 site(s): changed literal `1` → `2` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: 3 site(s): changed literal `1` → `2` [semantics]
+◆ f1 derived: 3 site(s): changed literal `1` → `2` [semantics · code different]
     lines: checks/list_checks.rs:3, checks/list_checks.rs:-3, cmd/tool.rs:2, cmd/tool.rs:-2

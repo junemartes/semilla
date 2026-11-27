@@ -1,7 +1,6 @@
 note: an extracted variable in a loop body: the inductive check proves the two loops equivalent
 rule+: R61.11-1
 rule+: R61.11-3
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -31,7 +30,7 @@ pub fn total(n: u32, p: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:

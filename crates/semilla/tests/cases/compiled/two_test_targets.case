@@ -1,6 +1,5 @@
 note: two packages, each with a test target `integration`; a macro of each target reads the file that the step changes: each source body has its own check (design 61.14), and the fact of the file owns the two bodies and the two expansion lines (R63.9-6)
 rule+: R61.14-1 R73.2-1 R73.1-1
-option: --compiled
 === both Cargo.toml
 [package]
 name = "lexer"
@@ -76,7 +75,7 @@ two
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:

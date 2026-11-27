@@ -37,27 +37,26 @@ impl Slab {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f2 derived: added `depot::Slab::name#1` (a twin of `depot::Slab::name` under `cfg(not(unix))`) with the body: `{ #[cfg(debug_assertions)] { return "debug"; } "two" }` [added]
-      ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::Slab::name#1`; it needs a reason: --reason 'depot::Slab::name#1=…'
+  ◆ f2 derived: added `depot::Slab::name#1` (a twin of `depot::Slab::name` under `cfg(not(unix))`) with the body: `{ #[cfg(debug_assertions)] { return "debug"; } "two" }` [added · no compare]
+      note: no compare: no checked configuration compiles `depot::Slab::name#1`
+      ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::Slab::name#1`; inactive code: no checked configuration compiles the changed code (`#[cfg(not(unix))]` at src/lib.rs:11), so Semilla did not compare the edit; it needs a reason: --reason 'depot::Slab::name#1=…'
   other facts, filled in by Semilla:
-  ◆ f1 derived: attributes of `depot::Slab::name`: added `#[cfg(unix)]` [attribute]
+  ◆ f1 derived: attributes of `depot::Slab::name`: added `#[cfg(unix)]` [attribute · code equal]
       ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::Slab::name=…'
   cover: each of the 10 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::Slab::name
-  ! spotlight: cfg attribute: depot::Slab::name#1
+  ! spotlight: cfg attribute: depot::Slab::name#1 (the code has a `cfg` attribute that the compiler did not evaluate in the checked configuration)
+  ! spotlight: inactive code: depot::Slab::name#1 (no checked configuration compiles `depot::Slab::name#1`)
   note: twins: `depot::Slab::name` of the old tree and `depot::Slab::name#0` of the new tree are one pair (a pair by equal tokens); the facts name the pair `depot::Slab::name`
 run again: semilla step 'the change' --reason 'depot::Slab::name=<why>' --reason 'depot::Slab::name#1=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::Slab::name=the reason of the test' --reason 'depot::Slab::name#1=the reason of the test'
-◆ f2 derived: added `depot::Slab::name#1` (a twin of `depot::Slab::name` under `cfg(not(unix))`) with the body: `{ #[cfg(debug_assertions)] { return "debug"; } "two" }` [added]
+◆ f2 derived: added `depot::Slab::name#1` (a twin of `depot::Slab::name` under `cfg(not(unix))`) with the body: `{ #[cfg(debug_assertions)] { return "debug"; } "two" }` [added · no compare]
     lines: src/lib.rs:8-16
-◆ f1 derived: attributes of `depot::Slab::name`: added `#[cfg(unix)]` [attribute]
+◆ f1 derived: attributes of `depot::Slab::name`: added `#[cfg(unix)]` [attribute · code equal]
     lines: src/lib.rs:4

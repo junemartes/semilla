@@ -1,6 +1,5 @@
 note: batch 11e, the negative case of a read file: the file that `include!` reads does not change (its content hash is the same in the two trees), so it is no owner; the changed definition of `mkfn!` owns the line
 rule-: R73.1-1
-build_check: on
 must_match: from `macro_rules! mkfn` \(src/lib\.rs:1\)
 must_not_match: reads `src/rate\.in`|no changed definition
 === both Cargo.toml
@@ -21,11 +20,12 @@ mkfn!(rate, include!("rate.in"));
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro `mkfn`: `macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v } } }` → `macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v + 1 } } }` [declaration]
+  ◆ f1 derived: changed macro `mkfn`: `macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v } } }` → `macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v + 1 } } }` [declaration · code different]
+      affected bodies: shop::rate
       expansion: `mkfn!(rate, include!("rate.in"))` at `shop::mkfn!#0` (src/lib.rs:3): expansion changed: changed expression `10` → `10 + 1` at `shop::rate/tail` [semantics]
   cover: each of the 2 changed line(s) is in a fact
   expansions: 1 changed
@@ -33,5 +33,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro `mkfn`: `macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v } } }` → `macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v + 1 } } }` [declaration]
+◆ f1 derived: changed macro `mkfn`: `macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v } } }` → `macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v + 1 } } }` [declaration · code different]
     lines: src/lib.rs:1, src/lib.rs:-1

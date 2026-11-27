@@ -45,7 +45,6 @@ pub fn value() -> u32 {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
@@ -56,17 +55,32 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::modulo::value=TEXT'
   to state them, add these options to the command of the step: --change 'depot::modulo::value=TEXT'
   other facts, filled in by Semilla:
-  ◆ f2 derived: changed literal `1` → `2` at `depot::modulo::value/tail/rhs` [semantics]
-  ◆ f1 derived: docs/ñandú (`\u{f1}and\u{fa}`).md: changed [file]
+  ◆ f2 derived: changed literal `1` → `2` at `depot::modulo::value/tail/rhs` [semantics · code different]
+      affected bodies: depot::modulo::value
+      equivalence: different: for each input: before returns 5, after returns 6 (suggested test `semilla_test_value_c01230`)
+  ◆ f1 derived: docs/ñandú (`\u{f1}and\u{fa}`).md: changed [file · no code]
       ✗ spotlight: an identifier with characters outside ASCII: `ñandú` (`\u{f1}and\u{fa}`); it needs a reason: --reason 'docs/ñandú.md:=…'
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::modulo::value (src/módulo.rs:1): same graph (the edit keeps the control flow); different (for each input: before returns 5, after returns 6; suggested test `semilla_test_value_c01230`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_value_c01230`: add it to `src/módulo.rs`, in the module of `depot::modulo::value` (line 1); run it: `cargo test -p depot semilla_test_value_c01230`; also: `cargo test -p depot --release semilla_test_value_c01230`
+      #[cfg(test)]
+      mod semilla_test_value_c01230 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 5; the new version returns 6.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let got = crate::modulo::value();
+              assert_eq!(got, 5);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'docs/ñandú.md:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'docs/ñandú.md:=the reason of the test' --change 'depot::modulo::value=the text of the test'
-◆ f2 stated: changed literal `1` → `2` at `depot::modulo::value/tail/rhs` [semantics]
+◆ f2 stated: changed literal `1` → `2` at `depot::modulo::value/tail/rhs` [semantics · code different]
     lines: src/módulo.rs:3, src/módulo.rs:-3
-◆ f1 derived: docs/ñandú (`\u{f1}and\u{fa}`).md: changed [file]
+◆ f1 derived: docs/ñandú (`\u{f1}and\u{fa}`).md: changed [file · no code]
     lines: docs/ñandú.md:2, docs/ñandú.md:-2

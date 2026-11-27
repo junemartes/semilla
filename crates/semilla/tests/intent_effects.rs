@@ -18,8 +18,6 @@ fn semilla_env(repo: &Path, args: &[&str]) -> Output {
     command.current_dir(repo).args(args);
     command.env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"));
     command.env("SEMILLA_CACHE_DIR", repo.parent().unwrap().join("cache"));
-    command.env("SEMILLA_COMPILED", "0");
-    command.env("SEMILLA_NO_CHECK", "1");
     command.output().unwrap()
 }
 
@@ -133,7 +131,7 @@ fn no_call(x: u8) -> bool {
 fn a_relation_of_a_type_of_the_signature_is_the_check_of_the_item_and_never_equal_mir() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
-    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs", "--compiled"], 1);
+    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs"], 1);
     // R82.1-3 (positive): `push` has equal MIR in the two versions, but it forgets the cached
     // count: related places before the call give places after the call that do not correspond,
     // so it is false with an exact input. [R82.1-5] The proofs of `new` and `count` assume the
@@ -162,7 +160,7 @@ fn a_relation_of_a_type_of_the_signature_is_the_check_of_the_item_and_never_equa
 fn a_false_claim_mir_gets_the_test_of_its_calls_and_a_claim_with_no_call_gets_none() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
-    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs", "--compiled"], 1);
+    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs"], 1);
     // R82.3-1 (positive): the test of the false claim makes the value, calls `push` with
     // `&mut` of it, and asserts the old count after the calls; the step lists it.
     assert!(text.contains("suggested tests: ") && text.contains("fn calls_in_order() {"), "{text}");
@@ -195,7 +193,7 @@ fn templates(text: &str) -> Vec<String> {
 fn the_help_template_of_an_item_with_mut_gives_a_place_of_each_version() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", "intent!(\"Cache the count of a document\");\n");
-    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs"], 0);
     let found = templates(&text);
     // R82.3-2 (positive): `&mut self` and a `&mut` parameter are a value of each version that
     // the call takes as `&mut`; the claim compares the values after the calls.
@@ -213,7 +211,7 @@ fn the_help_template_of_an_item_with_mut_gives_a_place_of_each_version() {
     // relation, so the claim is false (R82.1-5).
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", &format!("#[relation(before::shop::Doc, after::shop::Doc)]\nfn doc(b: &before::shop::Doc, a: &after::shop::Doc) -> bool {{ a.lines == b.lines && a.n == b.lines.len() }}\n{clear}\n"));
-    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs", "--compiled"], 1);
+    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs"], 1);
     let line = claim_line(&text, "i2");
     assert!(line.contains("does not hold after `shop::Doc::push`") && line.contains("the proof alone: by SMT"), "{text}");
 }
@@ -255,7 +253,7 @@ fn a_proof_with_a_relation_holds_only_if_each_body_that_writes_the_type_keeps_it
     let extra = KEPT_NEW.replace("pub fn add(&mut self, x: u8)", "pub fn extra(&mut self) { self.lines.push(0); self.n += 1 }\n    pub fn add(&mut self, x: u8)");
     let (_dir, repo) = setup_with(KEPT_OLD, &extra);
     write(&repo, ".semilla/intent/pr.rs", KEPT_INTENT);
-    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs"], 0);
     for id in ["i2", "i3"] {
         let line = claim_line(&text, id);
         assert!(line.contains("claimed: proved if the relation `doc` holds; not checked: `shop::Doc::extra` (a body of one version only) for `doc`"), "{text}");
@@ -265,7 +263,7 @@ fn a_proof_with_a_relation_holds_only_if_each_body_that_writes_the_type_keeps_it
     // keeps the relation: the proofs stay plain proofs, and they explain their bodies.
     let (_dir, repo) = setup_with(KEPT_OLD, KEPT_NEW);
     write(&repo, ".semilla/intent/pr.rs", KEPT_INTENT);
-    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs"], 0);
     for id in ["i2", "i3"] {
         let line = claim_line(&text, id);
         assert!(line.contains("proved: related inputs give related outcomes") && line.contains("the relation `doc` holds after each body that makes or changes a value of its type: 2 checked"), "{text}");

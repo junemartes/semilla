@@ -1,6 +1,5 @@
 note: verification of batch 11b (R70.2-1, part c): the shape of a real crate: `src/block/mod.rs` selects one `Block` by `cfg` on the target; `lib.rs` has `use block::Block as SimdBlock;` and `pub type Block = usize;`. Each changed body uses the root `Block` (no `cfg`) and `SimdBlock` (the `sse2` block, which this configuration builds): no note "this body uses … which Semilla did not check"
 rule+: R70.2-1
-option: --compiled
 must_not_match: which Semilla did not check
 === both Cargo.toml
 [package]
@@ -162,7 +161,7 @@ impl Bits {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 7 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states

@@ -1,6 +1,5 @@
 note: batch 12b, G4: an `async` block inside a normal function is a nested body of the item: its graph change is a line of the fact of the edit, and the line of the function does not say that the edit keeps the control flow
 rule+: R76.2-1
-option: --compiled
 must_match: control flow: ~ check `overflow: a \+ 1` → `overflow: a \+ 2`
 must_match: shop::make::\{closure#0\} async move \{ a \+ 2 \} \(src/lib.rs:2\): same structure: 1 changed check
 must_not_match: shop::make \(src/lib.rs:1\): same graph \(the edit keeps the control flow\)
@@ -20,7 +19,7 @@ pub fn make(a: u32) -> impl std::future::Future<Output = u32> {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

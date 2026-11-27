@@ -21,7 +21,7 @@ pub fn helper(n: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -31,13 +31,34 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --same 'rewrite 2 => 3'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --same 'rewrite 2 => 3'
   other facts, filled in by Semilla:
-  ◆ f1 derived: 2 site(s): changed literal `2` → `3` [semantics]
+  ◆ f1 derived: 2 site(s): changed literal `2` → `3` [semantics · code different]
       in: depot (bin "depot")::util::helper, depot::util::helper
+      affected bodies: depot (bin "depot")::util::helper
+      control flow: ~ check `overflow: n * 2` → `overflow: n * 3` (src/util.rs:-2, src/util.rs:2)
+      equivalence: different: for n = 1: before returns 3, after returns 4 (suggested test `semilla_test_helper_3f55d3`)
+      reaches: 1 body, no public function: depot::main (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::util::helper (src/util.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for n = 1: before returns 3, after returns 4; suggested test `semilla_test_helper_3f55d3`)
+    reached bodies: 1
+      depot::main (src/main.rs:2): reached through depot::util::helper, not decided (an array)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_helper_3f55d3`: add it to `src/util.rs`, in the module of `depot::util::helper` (line 1); run it: `cargo test -p depot semilla_test_helper_3f55d3`; also: `cargo test -p depot --release semilla_test_helper_3f55d3`
+      #[cfg(test)]
+      mod semilla_test_helper_3f55d3 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 3; the new version returns 4.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let n = 1;
+              let got = crate::util::helper(n);
+              assert_eq!(got, 3);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: inactive code: depot::util::helper/S0/init/rhs (no checked configuration compiles `depot::util::helper`)
 
 === positions
-◆ f1 derived: 2 site(s): changed literal `2` → `3` [semantics]
+◆ f1 derived: 2 site(s): changed literal `2` → `3` [semantics · code different]
     lines: src/util.rs:2, src/util.rs:-2

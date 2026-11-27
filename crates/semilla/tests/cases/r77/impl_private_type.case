@@ -1,7 +1,7 @@
 note: batch 13a, test case "the public-API note on trait impls of a private type": a different crate can use a trait impl only if it can use the trait and the self type, so the impl for the private `Inner` has no note, and the impl for the public `Outer` keeps it
 rule+: R77.3-7
 rule-: R77.3-7
-must_match: trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` \[added\]
+must_match: trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` \[added · code different\]
 must_match: trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` \(the public API can change: a different crate can use the item\)
 === both Cargo.toml
 [package]
@@ -25,19 +25,27 @@ impl std::fmt::Display for Outer {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 4 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added]
-  ◆ f2 derived: trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added]
+  ◆ f1 derived: trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added · code different]
+      affected bodies: shop::<Inner as std::fmt::Display>::fmt
+      control flow: + graph of `<shop::Inner as std::fmt::Display>::fmt`: 4 points, 3 arrows (semilla expand --step 0)
+  ◆ f2 derived: trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added · code different]
+      affected bodies: shop::<Outer as std::fmt::Display>::fmt
+      control flow: + graph of `<shop::Outer as std::fmt::Display>::fmt`: 4 points, 3 arrows (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    <shop::Inner as std::fmt::Display>::fmt (src/lib.rs:5): graph added: 4 points, 3 arrows
+    <shop::Outer as std::fmt::Display>::fmt (src/lib.rs:8): graph added: 4 points, 3 arrows
+  expansions: 2 added
+    2 calls: expansion added: `macro write` (crate core): 1 line(s) of code; the step adds the call or its input: `shop::<Inner as std::fmt::Display>::fmt/tail`, `shop::<Outer as std::fmt::Display>::fmt/tail` (semilla expand --step 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added]
+◆ f1 derived: trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added · code different]
     lines: src/lib.rs:4-6
-◆ f2 derived: trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added]
+◆ f2 derived: trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added · code different]
     lines: src/lib.rs:7-9

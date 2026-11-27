@@ -3,6 +3,11 @@ rule-: R58.2-1 R58.4-2
 exit: 0
 must_not_match: in this step
 must_not_match: (?m)^\s*comments: 
+note: design 83: a step with only a docs edit has no changed body: no line `equivalence:` (R61.6-1), no line of a body in the step section (R61.6-2), and no expansion section (R63.3-7)
+rule-: R61.6-1 R61.6-2 R63.3-7
+must_not_match: equivalence
+must_not_match: control flow
+must_not_match: expansions:
 === both Cargo.toml
 [package]
 name = "shop"
@@ -23,16 +28,14 @@ pub fn price(x: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed docs `/// Gives the price with a tax of 10 percent.` → `/// Gives the price with a tax of 20 percent.` [docs]
+  ◆ f1 derived: changed docs `/// Gives the price with a tax of 10 percent.` → `/// Gives the price with a tax of 20 percent.` [docs · no code]
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed docs `/// Gives the price with a tax of 10 percent.` → `/// Gives the price with a tax of 20 percent.` [docs]
+◆ f1 derived: changed docs `/// Gives the price with a tax of 10 percent.` → `/// Gives the price with a tax of 20 percent.` [docs · no code]
     lines: src/lib.rs:2, src/lib.rs:-2

@@ -1,7 +1,6 @@
 note: batch 11e, test case 3: the initial value of a static with interior mutability (an atomic) changes; the check reads such a static from the world (R64.2), so its value is no constant of the record, but the reader `get` is on the edge of the read: it gets the line "reads a static whose initial value changes" and it is an affected body of the value fact; the reader of the static `TABLE` with no change and the body `other` get no line
 rule+: R73.2-1
 rule-: R73.2-1
-option: --compiled
 must_match: shop::get \(src/lib\.rs:6\): same graph; reads a static whose initial value changes: `shop::COUNT`
 must_match: affected bodies: shop::COUNT, shop::get
 must_not_match: shop::first \(|shop::other \(
@@ -47,7 +46,7 @@ pub fn other() -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

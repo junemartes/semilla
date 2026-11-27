@@ -1,6 +1,5 @@
 note: the points of `panic!`, `assert_eq!`, `unreachable!`, and `todo!` that lead only to a panic are one `panic` point with the text of the macro call
 rule+: R60.2-12
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -19,7 +18,7 @@ pub fn d(x: u32) -> u32 { if x > 9 { todo!() } x ^ 4 }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 4 not mapped (no intent file; the full text of the step lists each node)
   not stated: 4 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states

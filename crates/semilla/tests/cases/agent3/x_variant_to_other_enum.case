@@ -107,7 +107,6 @@ pub fn guard(v: &mut Vec<u8>) -> usize {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ fact a1 of the agent is false: `--same 'rename Mode::Idle Other::Rest'`
 
@@ -121,35 +120,49 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: removed match arm `Mode::Idle => "idle"` (f3)
       in: depot::mode_name
       lines: src/lib.rs:24, src/lib.rs:-23
-      to state it: --change 'depot::mode_name=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::mode_name=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   ? 1 place: changed path `Mode::Idle` → `Other::Rest` (f4)
       in: depot::start
       lines: src/lib.rs:25, src/lib.rs:-24
-      to state it: --change 'depot::start=TEXT'
-  to state them, add these options to the command of the step: --change 'depot::mode_name=TEXT' --change 'depot::start=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::start=TEXT'; if it does not change, --same 'rewrite Mode::Idle => Other::Rest'
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: variant `depot::Mode::Idle` removed: `Idle` (the public API can change: a different crate can use the item) [removed]
-  ◆ f5 derived: added `depot::Other` (the public API changes: a different crate can now use the item) [added]
+  ◆ f1 derived: variant `depot::Mode::Idle` removed: `Idle` (the public API can change: a different crate can use the item) [removed · code different]
+      affected bodies: depot::mode_name
+      through: `depot::Mode` (1 body), `depot::mode_name` (1 body)
+      ! public API: the compare does not cover the code of a different crate
+  ◆ f5 derived: added `depot::Other` (the public API changes: a different crate can now use the item) [added · no code]
+      ! public API: the compare does not cover the code of a different crate
   declarations, filled in by Semilla:
-  ◆ f2 derived: return type of `depot::start` `-> Mode` → `-> Other` (the public API can change: a different crate can use the item) [declaration]
+  ◆ f2 derived: return type of `depot::start` `-> Mode` → `-> Other` (the public API can change: a different crate can use the item) [declaration · code different]
+      affected bodies: depot::start (with 1 other edit of this body)
+      equivalence: equivalent alone (proved by equal MIR); the body: not decided: the return type changes
+      ! public API: the compare does not cover the code of a different crate
   other facts, filled in by Semilla:
-  ◆ f3 derived: removed match arm `Mode::Idle => "idle"` at `depot::mode_name/S0/arm[0].pat` [semantics]
-  ◆ f4 derived: changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics]
+  ◆ f3 derived: removed match arm `Mode::Idle => "idle"` at `depot::mode_name/S0/arm[0].pat` [semantics · code different]
+      affected bodies: depot::mode_name
+      control flow: − branch `m` (src/lib.rs:-23): depot::Mode::Idle → return, depot::Mode::Busy → return
+      control flow: + arrow entry (src/lib.rs:24) → return (src/lib.rs:24)
+      control flow: − arrow entry (src/lib.rs:-23) → branch `m` (src/lib.rs:-23)
+      equivalence: not decided: the parameters change
+  ◆ f4 derived: changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics · code different]
+      affected bodies: depot::start (with 1 other edit of this body)
+      equivalence: not decided alone: the variant with only this edit does not compile; the body: not decided: the return type changes
   cover: each of the 7 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::mode_name (src/lib.rs:24): graph changes: −1 branch, +1 arrow, −3 arrows; not decided (the parameters change)
+    depot::start (src/lib.rs:25): same graph (the edit keeps the control flow); not decided (the return type changes)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --change 'depot::mode_name=the text of the test' --change 'depot::start=the text of the test'
-◆ f3 stated: removed match arm `Mode::Idle => "idle"` at `depot::mode_name/S0/arm[0].pat` [semantics]
-    lines: src/lib.rs:24, src/lib.rs:-23
-◆ f2 stated: return type of `depot::start` `-> Mode` → `-> Other` (the public API can change: a different crate can use the item) [declaration]
-    lines: src/lib.rs:25, src/lib.rs:-24
-◆ f4 stated: changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics]
-    lines: src/lib.rs:25, src/lib.rs:-24
-◆ f1 derived: variant `depot::Mode::Idle` removed: `Idle` (the public API can change: a different crate can use the item) [removed]
+the step is not accepted; the positions are from: semilla step 'the change'
+◆ f1 derived: variant `depot::Mode::Idle` removed: `Idle` (the public API can change: a different crate can use the item) [removed · code different]
     lines: src/lib.rs:22, src/lib.rs:-22
-◆ f5 derived: added `depot::Other` (the public API changes: a different crate can now use the item) [added]
+◆ f5 derived: added `depot::Other` (the public API changes: a different crate can now use the item) [added · no code]
     lines: src/lib.rs:23
+◆ f2 derived: return type of `depot::start` `-> Mode` → `-> Other` (the public API can change: a different crate can use the item) [declaration · code different]
+    lines: src/lib.rs:25, src/lib.rs:-24
+◆ f3 derived: removed match arm `Mode::Idle => "idle"` at `depot::mode_name/S0/arm[0].pat` [semantics · code different]
+    lines: src/lib.rs:24, src/lib.rs:-23
+◆ f4 derived: changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics · code different]
+    lines: src/lib.rs:25, src/lib.rs:-24

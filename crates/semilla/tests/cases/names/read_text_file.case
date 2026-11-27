@@ -1,6 +1,6 @@
 note: batch 10n, part C (files): a `.txt` file that `include_str!` reads; the step changes only that file; the file is a build input, not an inert file (the old extension list `md`, `txt`, … called each `.txt` file inert)
-rule+: R65.3-4
-must_match: spotlight: a file that the code reads at build time \(in `src/lib\.rs`\)
+must_match: expansion changed: only the context of the call changes: the file `notes.txt`
+note: design 83: the expansion record of `include_str!` names the file, so the file owns the changed expansion (the text rule R65.3-4 of the default mode is gone)
 === both Cargo.toml
 [package]
 name = "shop"
@@ -15,21 +15,20 @@ open at nine
 === new notes.txt
 open at ten
 === expected
-exit: 1
-rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: notes.txt: changed [file]
-      ✗ spotlight: a file that the code reads at build time (in `src/lib.rs`): the build reads it, so its kind does not make it inert; it needs a reason: --reason 'notes.txt:=…'
+  ◆ f1 derived: notes.txt: changed [file · code different]
+      affected bodies: shop::notes
+      expansion: `include_str!("../notes.txt")` at `shop::notes/tail` (src/lib.rs:2): expansion changed: only the context of the call changes: the file `notes.txt` (`include_str!("../notes.txt")`); changed code `nine` → `ten`
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  expansions: 1 changed
+    `include_str!("../notes.txt")` at `shop::notes/tail` (src/lib.rs:2): expansion changed: `macro include_str` (crate core): only the context of the call changes: the file `notes.txt` (`include_str!("../notes.txt")`); changed code `nine` → `ten`; the code of the call reads `notes.txt`, which the step changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'notes.txt:=<why>'
+
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'notes.txt:=the reason of the test'
-◆ f1 derived: notes.txt: changed [file]
+◆ f1 derived: notes.txt: changed [file · code different]
     lines: notes.txt:1, notes.txt:-1

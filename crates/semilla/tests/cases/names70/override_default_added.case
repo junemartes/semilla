@@ -1,6 +1,5 @@
 note: batch 11b (R70.2-1, part e): the step gives the trait method a default body and removes the method of the impl (as in `uuid` #932): the record of the new tree says that the trait item has a default, so the impl now uses it: one semantics fact, not a removed item of the API
 rule+: R70.2-1
-build_check: on
 must_match: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`
 must_not_match: removed `shop::<Dog as Speak>::name`
 === both Cargo.toml
@@ -33,7 +32,7 @@ impl Speak for Dog {}
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -43,14 +42,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'shop::<Dog as Speak>::name=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::<Dog as Speak>::name=TEXT'
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: body added to `shop::Speak::name`: `{ 3 }` [added]
+  ◆ f1 derived: body added to `shop::Speak::name`: `{ 3 }` [added · code different]
+      affected bodies: shop::Speak::name
+      control flow: + graph of `shop::Speak::name`: 2 points, 1 arrow (semilla expand --step 0)
   other facts, filled in by Semilla:
-  ◆ f2 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 3 }` [semantics]
+  ◆ f2 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 3 }` [semantics · code different]
+      affected bodies: shop::<Dog as Speak>::name
+      control flow: − graph of `<shop::Dog as shop::Speak>::name`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 10 changed line(s) is in a fact
+  control flow: 2 bodies
+    <shop::Dog as shop::Speak>::name (src/lib.rs:8): graph removed: 2 points, 1 arrow
+    shop::Speak::name (src/lib.rs:2): graph added: 2 points, 1 arrow
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: body added to `shop::Speak::name`: `{ 3 }` [added]
+◆ f1 derived: body added to `shop::Speak::name`: `{ 3 }` [added · code different]
     lines: src/lib.rs:2-4, src/lib.rs:-2
-◆ f2 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 3 }` [semantics]
+◆ f2 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 3 }` [semantics · code different]
     lines: src/lib.rs:9, src/lib.rs:-7-11

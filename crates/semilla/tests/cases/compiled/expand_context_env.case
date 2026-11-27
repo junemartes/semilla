@@ -2,7 +2,6 @@ note: batch 10n, part A: a macro whose code has `env!("CARGO_PKG_DESCRIPTION")` 
 rule+: R65.1-2
 must_match: only the context of the call changes: the environment variable `CARGO_PKG_DESCRIPTION` \(`env!\("CARGO_PKG_DESCRIPTION"\)`\)
 must_match: only the context of the call changes: the environment variable `CARGO_PKG_HOMEPAGE` \(`option_env!\("CARGO_PKG_HOMEPAGE"\)`\)
-option: --compiled
 === old Cargo.toml
 [package]
 name = "shop"
@@ -52,9 +51,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     `env!("CARGO_PKG_DESCRIPTION")` from `about!()` at `shop::about/tail` (src/lib.rs:10): expansion changed: `macro env` (crate core): only the context of the call changes: the environment variable `CARGO_PKG_DESCRIPTION` (`env!("CARGO_PKG_DESCRIPTION")`); changed code `shop` → `small shop`; the context of the call changes
     `option_env!("CARGO_PKG_HOMEPAGE")` from `home!()` at `shop::home/tail` (src/lib.rs:14): expansion changed: `macro option_env` (crate core): only the context of the call changes: the environment variable `CARGO_PKG_HOMEPAGE` (`option_env!("CARGO_PKG_HOMEPAGE")`); changed code `` → `https://shop.example`; the context of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'Cargo.toml:package.description=<why>' --reason 'Cargo.toml:package.homepage=<why>' --compiled
+run again: semilla step 'the change' --reason 'Cargo.toml:package.description=<why>' --reason 'Cargo.toml:package.homepage=<why>'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'Cargo.toml:package.description=the reason of the test' --reason 'Cargo.toml:package.homepage=the reason of the test' --compiled
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'Cargo.toml:package.description=the reason of the test' --reason 'Cargo.toml:package.homepage=the reason of the test'
 ◆ f1 derived: Cargo.toml: package.description "a shop" → "a small shop" [manifest · code different]
     lines: Cargo.toml:5-6, Cargo.toml:-5
 ◆ f2 derived: Cargo.toml: package.homepage added ("https://shop.example") [manifest · code different]

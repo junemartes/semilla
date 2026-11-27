@@ -18,10 +18,6 @@
 //! The driver tells cargo that the output depends on `SEMILLA_MIR_LEVEL`, `SEMILLA_MIR_OUT`, and
 //! `SEMILLA_MIR_RUN`. Cargo compiles a crate again when one of them changes. A caller can set
 //! `SEMILLA_MIR_RUN` to a new value to get the records of all workspace crates again.
-//!
-//! The level `ex` (batch 10n2, design 65.8) writes only the unit record with the expansion of
-//! each macro call. It adds no rustc flag and changes no query, so the build is the build of a
-//! plain `cargo check`: the build check of the default mode uses it.
 
 #![feature(rustc_private)]
 
@@ -94,8 +90,6 @@ enum Level {
     N2,
     /// N2, and then bounded inlining of the crate's own functions (see `inline.rs`).
     N3,
-    /// Only the expansion records (R65.8-1): no body record, no rustc flag, no changed query.
-    Ex,
 }
 
 impl Level {
@@ -104,7 +98,6 @@ impl Level {
             "n0" => Some(Level::N0),
             "n2" => Some(Level::N2),
             "n3" => Some(Level::N3),
-            "ex" => Some(Level::Ex),
             _ => None,
         }
     }
@@ -114,7 +107,6 @@ impl Level {
             Level::N0 => "n0",
             Level::N2 => "n2",
             Level::N3 => "n3",
-            Level::Ex => "ex",
         }
     }
 
@@ -133,8 +125,6 @@ impl Level {
             // (`size_of::<usize>()`, a `cfg!` in a function of a dependency). N3 inlines the
             // functions of the workspace.
             Level::N2 | Level::N3 => &["-Zmir-opt-level=2", "-Copt-level=2", "-Zinline-mir=no"],
-            // The build of the build check: the flags of cargo only.
-            Level::Ex => &[],
         }
     }
 }
@@ -515,11 +505,8 @@ fn run_compiler(level: Level, rustc_args: &[String], output: Output, open: Optio
     full_args.extend(rustc_args.iter().cloned());
     full_args.extend(level.rustc_flags().iter().map(|flag| flag.to_string()));
     // A new opt-level changes the rustc defaults of the debug assertions and the overflow checks.
-    // Keep the values of the build that cargo asked for (from the profile of the tree). The
-    // level `ex` sets no opt-level, so the arguments of cargo stay as they are.
-    if level != Level::Ex {
-        full_args.extend(inherited_checks(rustc_args));
-    }
+    // Keep the values of the build that cargo asked for (from the profile of the tree).
+    full_args.extend(inherited_checks(rustc_args));
 
     let mut callbacks = Callbacks { level, output, open, error: None, made: None, expansions: None };
     let result = rustc_driver::catch_fatal_errors(|| {
@@ -551,15 +538,7 @@ struct Callbacks {
 
 impl rustc_driver::Callbacks for Callbacks {
     fn config(&mut self, config: &mut interface::Config) {
-        // The level `ex` changes no query: its build is the build of a plain `cargo check`. The
-        // plain compiler prints the short paths of the definitions in its messages (rustc sets
-        // the option `trimmed_def_paths` in its own callbacks), so the errors of the build check
-        // have the text of the compiler of the author.
-        if self.level == Level::Ex {
-            config.opts.trimmed_def_paths = true;
-        } else {
-            config::install(config);
-        }
+        config::install(config);
         if let Some(folders) = self.open.take() {
             open::install(config, folders);
         }
@@ -585,13 +564,11 @@ impl rustc_driver::Callbacks for Callbacks {
         open::open_adts(tcx);
         // [R78.1-3] The definitions of the scope paths, also when the type check finds errors.
         open::print_links(tcx);
-        // The list is large, and Semilla reads it only from the N0 records and from the records
-        // of the level `ex` (the build check of the default mode, R65.8-1).
+        // The list is large, and Semilla reads it only from the N0 records.
         if self.level == Level::N0 {
             self.made = guarded(|| made::collect(tcx));
         }
-        if matches!(self.level, Level::N0 | Level::Ex) {
-            // The records do not depend on the short paths of the messages (level `ex`).
+        if self.level == Level::N0 {
             self.expansions = guarded(|| rustc_middle::ty::print::with_no_trimmed_paths!(expand::collect(tcx)));
         }
         Compilation::Continue
@@ -613,8 +590,7 @@ impl rustc_driver::Callbacks for Callbacks {
                 path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default()
             }
         };
-        // The level `ex` has no body record: only the unit record with the expansions.
-        let records = if level == Level::Ex { Ok(Vec::new()) } else { rustc_public::rustc_internal::run(tcx, || collect(level, &target)) };
+        let records = rustc_public::rustc_internal::run(tcx, || collect(level, &target));
         let records = match records {
             Ok(records) => records,
             Err(error) => {
@@ -628,7 +604,7 @@ impl rustc_driver::Callbacks for Callbacks {
         unit.unit.made = self.made.take().and_then(|items| guarded(|| made::finish(tcx, items)));
         unit.unit.expansions = self.expansions.take();
         // R70.1-1: the name record, at the levels of the expansion records.
-        if matches!(level, Level::N0 | Level::Ex) {
+        if level == Level::N0 {
             unit.unit.names = guarded(|| names::collect(tcx));
         }
         if level == Level::N0 {

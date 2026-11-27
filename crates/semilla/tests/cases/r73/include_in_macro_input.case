@@ -1,7 +1,6 @@
 note: batch 11e, test case 7: the code that `include!` reads in the input of a macro call; the compiler gives the included tokens the span of the included file and no mark of the expansion, so the driver adds the file to the read files of the record; its file fact owns the changed expansion; before, the line said "no changed definition, no changed input of the call, and no changed file that its code reads"
 rule+: R73.1-1
-build_check: on
-must_match: ◆ f1 derived: src/rate\.in: changed \[file\]\n      expansion: `mkfn!\(rate, include!\("rate\.in"\)\)`
+must_match: ◆ f1 derived: src/rate\.in: changed \[file · code different\]\n(.*\n)*      expansion: `mkfn!\(rate, include!\("rate\.in"\)\)`
 must_match: the code of the call reads `src/rate\.in`, which the step changes
 must_not_match: no changed definition
 === both Cargo.toml
@@ -21,12 +20,12 @@ mkfn!(plain, 4 + 5);
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: src/rate.in: changed [file]
+  ◆ f1 derived: src/rate.in: changed [file · code different]
+      affected bodies: shop::rate
       expansion: `mkfn!(rate, include!("rate.in"))` at `shop::mkfn!#0` (src/lib.rs:3): expansion changed: changed literal `10` → `12` at `shop::rate/tail` [semantics]
       ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/rate.in:=…'
   cover: each of the 2 changed line(s) is in a fact
@@ -36,5 +35,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'src/rate.in:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/rate.in:=the reason of the test'
-◆ f1 derived: src/rate.in: changed [file]
+◆ f1 derived: src/rate.in: changed [file · code different]
     lines: src/rate.in:1, src/rate.in:-1

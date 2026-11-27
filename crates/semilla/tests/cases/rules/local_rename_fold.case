@@ -64,7 +64,7 @@ pub fn sum(c: &Cart) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -74,15 +74,36 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::sum=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::sum=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: `depot::sum`: renamed local `part` → `base`, 3 edit(s) [rename]
-  ◆ f2 derived: changed literal `2` → `3` at `depot::sum/tail/rhs/rhs` [semantics]
+  ◆ f2 derived: changed literal `2` → `3` at `depot::sum/tail/rhs/rhs` [semantics · code different]
+      affected bodies: depot::sum
+      control flow: ~ check `overflow: part * 2` → `overflow: base * 3` (src/lib.rs:-23, src/lib.rs:23)
+      control flow: ~ check `overflow: more + part * 2` → `overflow: more + base * 3` (src/lib.rs:-23, src/lib.rs:23)
+      equivalence: different alone: for c = &Cart { 1, [] }: before returns 4, after returns 5 (suggested test `semilla_test_sum_baa399`); the body: different: for c = &Cart { 1, [] }: before returns 4, after returns 5 (suggested test `semilla_test_sum_baa399`)
+  ◆ f1 derived: `depot::sum`: renamed local `part` → `base`, 3 edit(s) [rename · code equal]
+      control flow: ~ check `overflow: part * 2` → `overflow: base * 3` (src/lib.rs:-23, src/lib.rs:23)
+      control flow: ~ check `overflow: more + part * 2` → `overflow: more + base * 3` (src/lib.rs:-23, src/lib.rs:23)
+      equivalence: equivalent alone (proved by equal MIR); the body: different: for c = &Cart { 1, [] }: before returns 4, after returns 5 (suggested test `semilla_test_sum_baa399`)
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::sum (src/lib.rs:20): same structure: 2 changed checks (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for c = &Cart { 1, [] }: before returns 4, after returns 5; suggested test `semilla_test_sum_baa399`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_sum_baa399`: add it to `src/lib.rs`, in the module of `depot::sum` (line 20); run it: `cargo test -p depot semilla_test_sum_baa399`; also: `cargo test -p depot --release semilla_test_sum_baa399`
+      #[cfg(test)]
+      mod semilla_test_sum_baa399 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 4; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let c = crate::Cart { total: 1, items: vec![] };
+              let got = crate::sum(&c);
+              assert_eq!(got, 4);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: `depot::sum`: renamed local `part` → `base`, 3 edit(s) [rename]
-    lines: src/lib.rs:21-23, src/lib.rs:-21-23
-◆ f2 derived: changed literal `2` → `3` at `depot::sum/tail/rhs/rhs` [semantics]
+◆ f2 derived: changed literal `2` → `3` at `depot::sum/tail/rhs/rhs` [semantics · code different]
     lines: src/lib.rs:23, src/lib.rs:-23
+◆ f1 derived: `depot::sum`: renamed local `part` → `base`, 3 edit(s) [rename · code equal]
+    lines: src/lib.rs:21-23, src/lib.rs:-21-23

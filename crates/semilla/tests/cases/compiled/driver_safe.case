@@ -1,6 +1,5 @@
 note: the driver builds a dyn call, an intrinsic call, a projection of a generic parameter, a generic impl with an associated type, and an async fn (design 61.9, part 0)
 rule+: R61.9-1
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -161,7 +160,7 @@ pub fn run_later() -> impl Future<Output = u32> {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 7 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 7 item(s) with 7 place(s) that can change the behavior of existing code and that no fact of the agent states

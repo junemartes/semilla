@@ -1,10 +1,8 @@
 note: batch 11b (R70.3-1): the tree names the toolchain `stable`, so the build check runs with it, and a second check build with the toolchain of the driver makes the records (positive); the second build passes, so the step has no line about it (negative): the step reads the expansions and the names (no line "expansions: not read"), and the private field gets no API line
-rule+: R70.3-1
-rule-: R70.3-1
-build_check: on
 must_not_match: expansions: not read
 must_not_match: names from the text
 must_not_match: the public API can change
+note: design 83: the compiled build uses the toolchain of the driver; the toolchain of the tree is the toolchain of `cargo check` only (R70.3-1 is gone)
 === both rust-toolchain.toml
 [toolchain]
 channel = "stable"
@@ -58,14 +56,16 @@ pub fn make() -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: type of `shop::a::Block.y`: `u8` → `u16` [declaration]
+  ◆ f1 derived: type of `shop::a::Block.y`: `u8` → `u16` [declaration · code different]
+      affected bodies: shop::a::make, shop::make
+      through: `shop::a::Block` (2 bodies), `shop::a::Block.y` (2 bodies), `shop::a::make` (2 bodies)
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: type of `shop::a::Block.y`: `u8` → `u16` [declaration]
+◆ f1 derived: type of `shop::a::Block.y`: `u8` → `u16` [declaration · code different]
     lines: src/lib.rs:3, src/lib.rs:-3

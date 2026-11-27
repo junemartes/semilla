@@ -47,19 +47,21 @@ pub struct Item {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
+  ◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration · code different]
+      affected bodies: shop::Item::rows
+      through: `shop::Item` (1 body)
+      expansion: derived `depot::Rows` of `shop::Item`: expansion changed: changed literal `"a,b"` → `"b,a"` at `shop::Item::rows/tail` [semantics]
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Rows`): the code that it makes reads the members in order; it needs a reason: --reason 'shop::Item=…'
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  expansions: 1 changed, 1 equal
+    derive `depot::Rows` at `shop::Item` (shop/src/lib.rs:1): expansion changed: `derive depot::Rows` (depot/src/lib.rs:4): changed literal `"a,b"` → `"b,a"` at `shop::Item::rows/tail` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'shop::Item=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::Item=the reason of the test'
-◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
+◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration · code different]
     lines: shop/src/lib.rs:4, shop/src/lib.rs:-3

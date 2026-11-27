@@ -2,7 +2,6 @@ note: a call through `dyn` has the text of its operand and the mark `dyn`
 rule+: R60.2-9
 rule-: R61.3-3
 rule-: R61.4-2
-option: --compiled
 === both Cargo.toml
 [package]
 name = "depot"
@@ -27,7 +26,7 @@ pub fn talk(s: &dyn Speak) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states

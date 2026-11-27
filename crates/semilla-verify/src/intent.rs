@@ -54,21 +54,16 @@ pub struct Answer {
 
 /// [R69.5-1] The result of a claim with no answer of the oracle. The oracle answered the other
 /// claims: no answer for this one is a defect of Semilla, never a result that comes later. No
-/// answer at all in a compiled step: phase 1, and phase 2 gives the result. The default mode:
-/// the check needs `--compiled`.
-pub fn no_answer(answered: bool, compiled: bool) -> (IntentResult, &'static str) {
-    match (answered, compiled) {
-        (true, _) => (IntentResult::Claimed, NO_ANSWER),
-        (false, true) => (IntentResult::Pending, "the compiled check of the step gives the result (phase 2)"),
-        (false, false) => (IntentResult::Claimed, NEEDS_COMPILED),
+/// answer at all: phase 1, and phase 2 gives the result.
+pub fn no_answer(answered: bool) -> (IntentResult, &'static str) {
+    match answered {
+        true => (IntentResult::Claimed, NO_ANSWER),
+        false => (IntentResult::Pending, "the compiled check of the step gives the result (phase 2)"),
     }
 }
 
 /// [R69.5-1] The cause of a claim with no answer of the compiled check of its step.
 pub const NO_ANSWER: &str = "the compiled check gave no result for this claim (a defect of Semilla)";
-
-/// The cause of a property claim in the default mode.
-pub const NEEDS_COMPILED: &str = "the check needs `--compiled` (the default mode has no compiler data)";
 
 /// Parses the intent files of a step.
 pub fn parse_files(files: &[IntentFile]) -> Result<Vec<semilla_intent::File>, Vec<semilla_intent::Error>> {
@@ -401,7 +396,7 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
                                     (answer.result.unwrap_or(IntentResult::Claimed), answer.detail, answer.scope.into_iter().chain(answer.configs).collect(), answer.reads, answer.errors)
                                 }
                                 None => {
-                                    let (result, detail) = no_answer(answers.is_some(), input.step.compiled);
+                                    let (result, detail) = no_answer(answers.is_some());
                                     (result, detail.into(), Vec::new(), Vec::new(), Vec::new())
                                 }
                             };
@@ -626,7 +621,7 @@ pub fn semantic_lines(step: &semilla_core::StepReport, limit: Option<usize>) -> 
         lines.extend(crate::astmap::lines(map, limit, step.step));
     }
     if step.coverage.is_empty() {
-        let cause = if step.flow.is_some() { "no changed body" } else { "the coverage needs `--compiled` (the default mode has no compiler data)" };
+        let cause = if step.flow.is_some() { "no changed body" } else { "the coverage needs the compiled check of the step (phase 2)" };
         lines.push(format!("    changed bodies: {cause}"));
         return lines;
     }
@@ -683,13 +678,12 @@ mod tests {
         let asked = queries(std::slice::from_ref(&file), false);
         assert_eq!(asked.iter().map(|query| query.id.as_str()).collect::<Vec<_>>(), ["i2"]);
         // The oracle answered: a claim with no answer is never "pending".
-        assert_eq!(no_answer(true, true), (IntentResult::Claimed, NO_ANSWER));
+        assert_eq!(no_answer(true), (IntentResult::Claimed, NO_ANSWER));
     }
 
     // rule- R69.5-1
     #[test]
     fn phase_one_of_a_compiled_step_keeps_a_claim_pending() {
-        assert_eq!(no_answer(false, true).0, IntentResult::Pending);
-        assert_eq!(no_answer(false, false), (IntentResult::Claimed, NEEDS_COMPILED));
+        assert_eq!(no_answer(false).0, IntentResult::Pending);
     }
 }

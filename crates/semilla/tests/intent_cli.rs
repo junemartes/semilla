@@ -17,8 +17,6 @@ fn semilla_env(repo: &Path, args: &[&str]) -> Output {
     command.current_dir(repo).args(args);
     command.env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"));
     command.env("SEMILLA_CACHE_DIR", repo.parent().unwrap().join("cache"));
-    command.env("SEMILLA_COMPILED", "0");
-    command.env("SEMILLA_NO_CHECK", "1");
     command.output().unwrap()
 }
 
@@ -106,13 +104,14 @@ fn claim_line<'a>(text: &'a str, id: &str) -> &'a str {
 // rule+ R67.4-3
 // rule+ R77.4-1
 #[test]
-fn the_default_mode_shows_the_claims_and_checks_the_forms_of_same() {
+fn the_step_shows_the_claims_and_checks_the_forms_of_same() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/step.rs", INTENT);
     let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
     assert!(claim_line(&text, "i1").contains("shown"), "{text}");
+    // Design 83: each step compiles the claims, so no claim waits for an option.
     for id in ["i2", "i3", "i4", "i5", "i6", "i7", "i8"] {
-        assert!(claim_line(&text, id).contains("claimed: the check needs `--compiled`"), "{id}: {text}");
+        assert!(!claim_line(&text, id).contains("the check needs"), "{id}: {text}");
     }
     // [R77.4-1] A form of `--same` is a hint: its check holds, and it is not a claim.
     assert!(claim_line(&text, "i9").contains("hint: the check of `--same 'rename shop::sum shop::total'` holds") && claim_line(&text, "i9").contains("explains no body"), "{text}");
@@ -121,14 +120,14 @@ fn the_default_mode_shows_the_claims_and_checks_the_forms_of_same() {
     let status = run(&repo, &["status", "--verbose"], 0);
     assert!(status.contains("intent (7 claim(s), 1 hint(s)"), "{status}");
     let json = run(&repo, &["verify", "--json"], 0);
-    assert!(json.contains("\"intent_claims\"") && json.contains("\"result\": \"claimed\""), "{json}");
+    assert!(json.contains("\"intent_claims\"") && json.contains("\"result\": \"proved\""), "{json}");
 }
 
 // rule- R67.5-1
 #[test]
 fn a_step_with_no_intent_file_has_no_section_and_no_help() {
     let (_dir, repo) = setup();
-    let text = run(&repo, &["step", "strict parse", "--compiled"], 0);
+    let text = run(&repo, &["step", "strict parse"], 0);
     assert!(!text.contains("  intent ("), "{text}");
     assert!(!text.contains("intent help"), "{text}");
     let json = run(&repo, &["verify", "--json"], 0);
@@ -147,7 +146,7 @@ fn a_step_with_no_intent_file_has_no_section_and_no_help() {
 fn the_compiled_step_checks_each_claim() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/step.rs", INTENT);
-    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
     assert!(claim_line(&text, "i2").contains("proved: equivalent by equal MIR"), "{text}");
     assert!(claim_line(&text, "i3").contains("proved: by SMT"), "{text}");
     assert!(claim_line(&text, "i4").contains("proved"), "{text}");
@@ -195,7 +194,7 @@ fn each_template_of_the_help_is_a_claim_that_intent_check_accepts() {
     git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "cart"]);
     write(&repo, "src/lib.rs", new);
     write(&repo, ".semilla/intent/step.rs", "intent!(\"Add an extra mode\");\n");
-    let text = run(&repo, &["step", "extra mode", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "extra mode", "--intent", ".semilla/intent/step.rs"], 0);
     let found = templates(&text);
     assert!(found.iter().any(|template| template.starts_with("#[same(shop::Cart::total)] fn total(this_before: &before::shop::Cart, this_after: &after::shop::Cart, k: u32, extra: bool) -> bool")), "{text}");
     assert!(found.iter().any(|template| template.contains("let old = before::shop::first(c_before); let new = after::shop::first(c_after); true")), "{text}");
@@ -238,7 +237,7 @@ fn half_loop(x: i32) -> bool {
 }
 "#;
     write(&repo, ".semilla/intent/wrong.rs", wrong);
-    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/wrong.rs", "--compiled"], 1);
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/wrong.rs"], 1);
     assert!(text.starts_with("rejected:"), "{text}");
     assert!(claim_line(&text, "i1").contains("false") && claim_line(&text, "i1").contains("for x = 4"), "{text}");
     // No `cfg`: the claim is false in the release configuration.
@@ -297,7 +296,7 @@ fn one_version(b: &before::shop::Basket) -> bool {
 fn a_reference_error_rejects_the_step() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/bad.rs", "#[same(shop::pars)]\nfn item(x: u32) -> bool { true }\n");
-    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/bad.rs", "--compiled"], 1);
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/bad.rs"], 1);
     assert!(claim_line(&text, "i1").contains("error") && text.contains("`shop::parse`"), "{text}");
 }
 
@@ -306,9 +305,9 @@ fn a_reference_error_rejects_the_step() {
 fn a_later_step_checks_a_claim_of_an_earlier_step_again() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/step.rs", INTENT);
-    run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
     write(&repo, "src/lib.rs", &NEW.replace("pub fn half(x: i32) -> i32 { x >> 1 }", "pub fn half(x: i32) -> i32 { if x == 7 { 99 } else { x >> 1 } }"));
-    let text = run(&repo, &["step", "a special case", "--compiled"], 1);
+    let text = run(&repo, &["step", "a special case"], 1);
     let line = claim_line(&text, "s0.i4");
     assert!(line.contains("false") && line.contains("this step changes `shop::half`") && line.contains("for x = 7"), "{text}");
 }
@@ -318,9 +317,9 @@ fn a_later_step_checks_a_claim_of_an_earlier_step_again() {
 fn a_later_step_that_keeps_the_bodies_of_a_claim_does_not_check_it_again() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/step.rs", INTENT);
-    run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
     write(&repo, "src/lib.rs", &format!("{NEW}pub fn extra() -> u32 {{ 3 }}\n"));
-    let text = run(&repo, &["step", "an extra function", "--compiled"], 0);
+    let text = run(&repo, &["step", "an extra function"], 0);
     assert!(!text.contains("s0.i"), "{text}");
 }
 
@@ -329,7 +328,7 @@ fn a_later_step_that_keeps_the_bodies_of_a_claim_does_not_check_it_again() {
 fn fact_again_checks_the_stored_claims_and_fact_intent_replaces_a_file() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/step.rs", INTENT);
-    run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
     // The stored step keeps the text of the file: a change of the file on disk changes nothing.
     write(&repo, ".semilla/intent/step.rs", "#[same(shop::pars)]\nfn item(x: u32) -> bool { true }\n");
     let text = run(&repo, &["fact", "--again"], 0);
@@ -386,7 +385,7 @@ fn a_relation_before_a_claim_keeps_the_error_of_the_claim_in_the_step() {
     let check = run(&repo, &["intent", "check", ".semilla/intent/relation.rs"], 1);
     assert!(check.contains("error[E0609]: no field `items`"), "{check}");
     // The step finds the same error at the claim; it never shows "pending".
-    let step = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/relation.rs", "--compiled"], 1);
+    let step = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/relation.rs"], 1);
     assert!(claim_line(&step, "i1").contains("error") && claim_line(&step, "i1").contains("[E0609] no field `items`") && !step.contains("pending"), "{step}");
 }
 
@@ -409,7 +408,7 @@ fn setup_self_type() -> (common::TestDir, PathBuf) {
 #[test]
 fn the_help_names_the_changed_field_of_the_type_of_self() {
     let (_dir, repo) = setup_self_type();
-    let text = run(&repo, &["step", "widen x", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "widen x", "--intent", ".semilla/intent/step.rs"], 0);
     assert!(text.contains("intent help for `shop::Pt::get`") && text.contains("`fn get (& self) -> u64`: the type of `self` changes: `shop::Pt`: `x: u32` → `x: u64`"), "{text}");
     assert!(!text.contains("`fn get (& self) -> u64` → `fn get (& self) -> u64`"), "{text}");
     // The result is "not decided": the help gives a template for each case, and the receiver
@@ -423,7 +422,7 @@ fn the_help_names_the_changed_field_of_the_type_of_self() {
 fn the_help_of_two_different_signatures_names_the_two_signatures() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/step.rs", "intent!(\"strict parse\");\n");
-    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
     assert!(text.contains("`fn parse (x : u32) -> bool` → `fn parse (x : u32 , strict : bool) -> bool`") && !text.contains("the type of `self` changes"), "{text}");
 }
 
@@ -447,7 +446,7 @@ fn a_proved_claim_explains_its_bodies_and_the_step_shows_the_coverage() {
     let intent = INTENT.replace("#[same(shop::limit, except = [capacity])]\nfn limit_capacity() {}\n", "");
     write(&repo, ".semilla/intent/step.rs", &intent);
     // A step with a body that no claim explains passes (`shop::basket_n` is new).
-    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
     let section = semantic_section(&text);
     assert!(section.contains("    intent: \"Add a strict mode to `parse`\""), "{section}");
     assert!(section.contains("✓ changes: i4 `#[change(shop::half)] fn half(x: i32)` (explains `shop::half`)"), "{section}");
@@ -476,10 +475,10 @@ fn a_proved_claim_explains_its_bodies_and_the_step_shows_the_coverage() {
 fn status_shows_the_result_that_the_steps_stored_and_starts_no_worker() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/step.rs", "#[same(shop::report)]\nfn report() {}\n");
-    run(&repo, &["step", "first part", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    run(&repo, &["step", "first part", "--intent", ".semilla/intent/step.rs"], 0);
     // A second step: the change set has two steps, and the step stores the result of the set.
     write(&repo, "src/lib.rs", &format!("{NEW}pub fn extra() -> u32 {{ 7 }}\n"));
-    let text = run(&repo, &["step", "second part", "--compiled"], 0);
+    let text = run(&repo, &["step", "second part"], 0);
     assert!(text.starts_with("accepted:"), "{text}");
     let status = run(&repo, &["status", "--verbose"], 0);
     assert!(status.starts_with("session: ready\n"), "{status}");
@@ -493,21 +492,16 @@ fn a_claim_that_is_not_proved_explains_no_body() {
     let (_dir, repo) = setup();
     let intent = "intent!(\"Add a strict mode\");\n\n#[same(shop::limit, except = [capacity])]\nfn limit_capacity() {}\n";
     write(&repo, ".semilla/intent/step.rs", intent);
-    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
     let section = semantic_section(&text);
     assert!(section.contains("changed bodies: 0 explained by claims, 1 equivalent (Semilla), 4 not explained"), "{section}");
     assert!(section.contains("equivalent (Semilla): `shop::report`"), "{section}");
     assert!(section.contains("not explained: `shop::limit` (src/lib.rs:9): different"), "{section}");
     // A claimed claim explains nothing: the item stays in the gap list.
     assert!(text.contains("--change 'shop::limit=TEXT'"), "{text}");
-    // The default mode has no compiler data: the coverage needs `--compiled`.
-    let (_dir2, repo2) = setup();
-    write(&repo2, ".semilla/intent/step.rs", intent);
-    let text = run(&repo2, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
-    assert!(text.contains("changed bodies: the coverage needs `--compiled`"), "{text}");
     // A step with no intent file has no section.
     let (_dir3, repo3) = setup();
-    let text = run(&repo3, &["step", "strict parse", "--compiled"], 0);
+    let text = run(&repo3, &["step", "strict parse"], 0);
     assert!(!text.contains("semantic changes"), "{text}");
 }
 
@@ -517,7 +511,7 @@ fn a_proved_claim_and_a_result_of_semilla_that_disagree_explain_nothing() {
     let (_dir, repo) = setup();
     let intent = "#[change(shop::report)]\nfn report_changes(x: u32) -> bool {\n    x == 4294967295 || after::shop::report(x) == before::shop::report(x)\n}\n";
     write(&repo, ".semilla/intent/step.rs", intent);
-    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
     assert!(claim_line(&text, "i1").contains("proved"), "{text}");
     let section = semantic_section(&text);
     assert!(section.contains("✗ the result of Semilla and claim i1 disagree: a defect of Semilla: `shop::report` (src/lib.rs:6): Semilla: equivalent"), "{section}");
@@ -563,7 +557,7 @@ fn a_proved_claim_mir_explains_its_body_on_the_coverage_line_and_a_vacuous_one_e
     // No `use` line: each file has the prelude (R78.1-4).
     let intent = "#[change(shop::limit)]\nfn limit_panics(x: u32) -> bool {\n    panics(|| before::shop::limit(x)) == panics(|| after::shop::limit(x))\n}\n\n#[change(shop::half)]\nfn half_any(x: i32) -> bool {\n    let _ = before::shop::half(x);\n    let _ = after::shop::half(x);\n    true\n}\n";
     write(&repo, ".semilla/intent/step.rs", intent);
-    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
     let proved = claim_line(&text, "i1");
     assert!(proved.contains("proved") && proved.contains("(the claim MIR of rustc)"), "{text}");
     let section = semantic_section(&text);

@@ -1,6 +1,5 @@
 note: G2: `format!` → `alloc::format!` with the same input: the identity of a call is the definition of its macro (the record of the compiler), not the text of its path: no added and no removed expansion
 rule+: R72.1-1
-build_check: on
 must_not_match: expansion added
 must_not_match: expansion removed
 === both Cargo.toml
@@ -23,20 +22,22 @@ pub fn label(n: u32) -> alloc::string::String {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` (f1)
       in: shop::label
       lines: src/lib.rs:4, src/lib.rs:-4
-      to state it: --change 'shop::label=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::label=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::label=TEXT'; if it does not change, --same 'rewrite format!("n = {}", $a) => alloc::format!("n = {}", $a)'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` at `shop::label/tail` [semantics]
+  ◆ f1 derived: changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` at `shop::label/tail` [semantics · code equal]
+      equivalence: equivalent (proved by equal MIR)
   cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::label (src/lib.rs:3): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` at `shop::label/tail` [semantics]
+◆ f1 derived: changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` at `shop::label/tail` [semantics · code equal]
     lines: src/lib.rs:4, src/lib.rs:-4

@@ -54,23 +54,24 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(cap(), 10); } }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rename limit cap (holds: Semilla derives the rename from the syntax tree)
       places: depot::limit, depot::cap
-    ◆ f1 stated: renamed `depot::limit` → `depot::cap` [rename]
+    ◆ f1 stated: renamed `depot::limit` → `depot::cap` [rename · code equal]
+        expansion: `assert_eq!(cap(), 10)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: changed path `limit` → `cap` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/callee` [semantics]
         note: 1 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)
-    ◆ f2 stated: public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename]
+    ◆ f2 stated: public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  expansions: 1 changed, 1 equal
+    `assert_eq!(cap(), 10)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: `macro assert_eq` (crate core): changed path `limit` → `cap` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/callee` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: renamed `depot::limit` → `depot::cap` [rename]
+◆ f1 stated: renamed `depot::limit` → `depot::cap` [rename · code equal]
     lines: src/lib.rs:11-12, src/lib.rs:19, src/lib.rs:-11-12, src/lib.rs:-19
-◆ f2 stated: public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename]
+◆ f2 stated: public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
     no position

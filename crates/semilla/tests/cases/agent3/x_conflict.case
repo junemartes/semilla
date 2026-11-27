@@ -110,15 +110,14 @@ pub fn guard(v: &mut Vec<u8>) -> usize {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ fact a2 of the agent is false: `--same 'rename limit cap'`
 
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rename limit top (holds: Semilla derives the rename from the syntax tree)
       places: depot::limit, depot::top
-    ◆ f1 stated: renamed `depot::limit` → `depot::top` [rename]
-    ◆ f4 stated: public API: `depot::limit` is now `depot::top` (a different crate can no longer use the old path) [rename]
+    ◆ f1 stated: renamed `depot::limit` → `depot::top` [rename · code equal]
+    ◆ f4 stated: public API: `depot::limit` is now `depot::top` (a different crate can no longer use the old path) [rename · no code]
   ✗ a2 same: rename limit cap (false: Semilla derives no rename `limit` → `cap` from the syntax tree)
       the stated pair is no fact: a different fact states `depot::limit` → `depot::top`, and an item is in one pair only
       a fact that holds: `--same 'rename depot::limit depot::top'`
@@ -131,25 +130,31 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: changed path `limit` → `cap` (f2)
       in: depot::uses_limit
       lines: src/lib.rs:27, src/lib.rs:-26
-      to state it: --change 'depot::uses_limit=TEXT'
-  to state them, add these options to the command of the step: --change 'depot::uses_limit=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::uses_limit=TEXT'; if it does not change, --same 'rewrite limit => cap'
   new and removed items, filled in by Semilla:
-  ◆ f3 derived: added `depot::cap` (the public API changes: a different crate can now use the item) [added]
+  ◆ f3 derived: added `depot::cap` (the public API changes: a different crate can now use the item) [added · code different]
+      affected bodies: depot::cap
+      control flow: + graph of `depot::cap`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
   other facts, filled in by Semilla:
-  ◆ f2 derived: changed path `limit` → `cap` at `depot::uses_limit/tail/lhs/callee` [semantics]
+  ◆ f2 derived: changed path `limit` → `cap` at `depot::uses_limit/tail/lhs/callee` [semantics · code equal]
+      control flow: ~ call `top` → `cap` (src/lib.rs:-26, src/lib.rs:27)
+      control flow: ~ check `overflow: limit() + limit()` → `overflow: cap() + top()` (src/lib.rs:-26, src/lib.rs:27)
+      equivalence: equivalent (proved by SMT after inlining `depot::cap`, `depot::limit`, `depot::top`)
   cover: each of the 5 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::cap (src/lib.rs:25): graph added: 2 points, 1 arrow
+    depot::uses_limit (src/lib.rs:27): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `depot::cap`, `depot::limit`, `depot::top`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change' --same 'rename limit top'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --same 'rename limit top' --change 'depot::uses_limit=the text of the test'
-◆ f1 stated: renamed `depot::limit` → `depot::top` [rename]
+the step is not accepted; the positions are from: semilla step 'the change' --same 'rename limit top'
+◆ f1 stated: renamed `depot::limit` → `depot::top` [rename · code equal]
     lines: src/lib.rs:26, src/lib.rs:-25
-◆ f4 stated: public API: `depot::limit` is now `depot::top` (a different crate can no longer use the old path) [rename]
+◆ f4 stated: public API: `depot::limit` is now `depot::top` (a different crate can no longer use the old path) [rename · no code]
     no position
-◆ f2 stated: changed path `limit` → `cap` at `depot::uses_limit/tail/lhs/callee` [semantics]
-    lines: src/lib.rs:27, src/lib.rs:-26
-◆ f3 derived: added `depot::cap` (the public API changes: a different crate can now use the item) [added]
+◆ f3 derived: added `depot::cap` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:25
+◆ f2 derived: changed path `limit` → `cap` at `depot::uses_limit/tail/lhs/callee` [semantics · code equal]
+    lines: src/lib.rs:27, src/lib.rs:-26

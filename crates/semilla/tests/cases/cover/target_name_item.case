@@ -35,17 +35,27 @@ fn first() { assert_eq!(2, 2); }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   tests and benches, filled in by Semilla:
-  ◆ f1 derived: 2 site(s): changed literal `1` → `2` [semantics]
+  ◆ f1 derived: 2 site(s): changed literal `1` → `2` [semantics · code different]
       in: depot (test "list")::first (2)
+      affected bodies: depot (test "list")::first (with 1 other edit of this body)
+      equivalence: `list::first`: not decided: a value of a type that the check does not model: fn first() { assert_eq!(1, 1); } (tests/list.rs:-3)
+      equivalence: `list::first::{closure#0} #[test]`: not decided: a value of a type that the check does not model: fn first() { assert_eq!(1, 1); } (tests/list.rs:-3)
+      expansion: `assert_eq!(2, 2)` at `depot (test "list")::first/S0` (tests/list.rs:3): expansion changed: 2 site(s): changed literal `1` → `2` [semantics]
+      reaches: 1 body, no public function: list::first::{closure#0} (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    list::first (tests/list.rs:3): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn first() { assert_eq!(1, 1); } (tests/list.rs:-3))
+    list::first::{closure#0} #[test] (tests/list.rs:2): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn first() { assert_eq!(1, 1); } (tests/list.rs:-3))
+    reached bodies: 1
+      list::first::{closure#0} (tests/list.rs:2): reached through list::first, not decided (a value of a type that the check does not model: fn first() { assert_eq!(1, 1); } (tests/list.rs:-3))
+  expansions: 1 changed, 1 equal
+    `assert_eq!(2, 2)` at `depot (test "list")::first/S0` (tests/list.rs:3): expansion changed: `macro assert_eq` (crate core): 2 site(s): changed literal `1` → `2` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: 2 site(s): changed literal `1` → `2` [semantics]
+◆ f1 derived: 2 site(s): changed literal `1` → `2` [semantics · code different]
     lines: tests/list.rs:3, tests/list.rs:-3

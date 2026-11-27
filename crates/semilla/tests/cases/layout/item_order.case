@@ -49,7 +49,7 @@ pub fn limit() -> u32 { 10 }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -59,12 +59,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::limit=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::limit=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: moved `depot::limit` past 1 item that can give a macro: `depot::twice!`; a macro has a textual scope: a macro call in `depot::limit` can have a new meaning [macro]
+  ◆ f1 derived: moved `depot::limit` past 1 item that can give a macro: `depot::twice!`; a macro has a textual scope: a macro call in `depot::limit` can have a new meaning [macro · no code]
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: moved `depot::limit` past 1 item that can give a macro: `depot::twice!`; a macro has a textual scope: a macro call in `depot::limit` can have a new meaning [macro]
+◆ f1 derived: moved `depot::limit` past 1 item that can give a macro: `depot::twice!`; a macro has a textual scope: a macro call in `depot::limit` can have a new meaning [macro · no code]
     lines: src/lib.rs:20, src/lib.rs:-5

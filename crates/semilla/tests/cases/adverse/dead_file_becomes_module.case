@@ -38,23 +38,33 @@ pub fn dead() -> u32 { 2 }
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f2 derived: added `depot::unused` (the public API changes: a different crate can now use the item) [added]
+  ◆ f2 derived: added `depot::unused` (the public API changes: a different crate can now use the item) [added · code different]
+      affected bodies: depot::unused::dead
+      control flow: + graph of `depot::unused::dead`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
   other facts, filled in by Semilla:
-  ◆ f1 derived: src/unused.rs: changed [file]
+  ◆ f3 derived: src/unused.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
+      control flow: + graph of `depot::unused::dead`: 2 points, 1 arrow (semilla expand --step 0)
+      note: no compare: no checked configuration compiles `src/unused.rs`
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/unused.rs`), so Semilla did not compare the edit; it needs a reason: --reason 'src/unused.rs=…'
+  ◆ f1 derived: src/unused.rs: changed [file · no code]
+      control flow: + graph of `depot::unused::dead`: 2 points, 1 arrow (semilla expand --step 0)
       ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/unused.rs:=…'
   cover: each of the 3 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::unused::dead (src/unused.rs:1): graph added: 2 points, 1 arrow
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'src/unused.rs:=<why>'
+  ! spotlight: inactive code: src/unused.rs (no checked unit reads the file)
+run again: semilla step 'the change' --reason 'src/unused.rs:=<why>' --reason 'src/unused.rs=<why>'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/unused.rs:=the reason of the test'
-◆ f2 derived: added `depot::unused` (the public API changes: a different crate can now use the item) [added]
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/unused.rs:=the reason of the test' --reason 'src/unused.rs=the reason of the test'
+◆ f2 derived: added `depot::unused` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:6, src/unused.rs:1
-◆ f1 derived: src/unused.rs: changed [file]
+◆ f3 derived: src/unused.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
+    lines: src/unused.rs:1, src/unused.rs:-1
+◆ f1 derived: src/unused.rs: changed [file · no code]
     lines: src/unused.rs:1, src/unused.rs:-1

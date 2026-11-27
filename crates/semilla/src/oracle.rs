@@ -15,7 +15,6 @@ pub(crate) mod reach;
 
 #[path = "intent.rs"]
 mod intent;
-pub(crate) use intent::compiled_claims;
 
 #[path = "suggest.rs"]
 pub(crate) mod suggest;

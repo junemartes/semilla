@@ -1,6 +1,5 @@
 note: batch 11e, test case 1 with the compiled mode: the file fact of the path dependency owns the changed expansion and the body that holds the call (R63.9-5 by the place of the definition); before, the body got an indirect fact "an indirect change that Semilla cannot explain"
 rule+: R73.2-1
-option: --compiled
 must_match: affected bodies: shop::price\n      expansion: `depot::fee!\(v\)`
 must_not_match: indirect change that Semilla cannot explain|no changed definition
 === both Cargo.toml
@@ -75,8 +74,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   expansions: 1 changed
     `depot::fee!(v)` at `shop::price/tail` (shop/src/lib.rs:1): expansion changed: `macro_rules! depot::fee` (vendor/depot/src/lib.rs:2): changed literal `10` → `12` at `expansion/rhs` [semantics]; from `macro_rules! depot::fee` (vendor/depot/src/lib.rs:2)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'vendor/depot/src/lib.rs:=<why>' --compiled
+run again: semilla step 'the change' --reason 'vendor/depot/src/lib.rs:=<why>'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'vendor/depot/src/lib.rs:=the reason of the test' --compiled
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'vendor/depot/src/lib.rs:=the reason of the test'
 ◆ f1 derived: vendor/depot/src/lib.rs: changed [file · code different]
     lines: vendor/depot/src/lib.rs:2, vendor/depot/src/lib.rs:-2

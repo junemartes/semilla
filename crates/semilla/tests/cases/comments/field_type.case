@@ -29,20 +29,19 @@ pub struct Account {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: type of `shop::Account.balance`: `u32` → `u64` (the public API can change: a different crate can use the item) [declaration]
+  ◆ f1 derived: type of `shop::Account.balance`: `u32` → `u64` (the public API can change: a different crate can use the item) [declaration · code equal]
+      ! public API: the compare does not cover the code of a different crate
       docs of `shop::Account`, no edit in this step (src/lib.rs:1): `/// An account of a customer.`
       docs of `shop::Account.balance`, no edit in this step (src/lib.rs:3): `/// The balance in cents, at most 2^32.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 2 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: type of `shop::Account.balance`: `u32` → `u64` (the public API can change: a different crate can use the item) [declaration]
+◆ f1 derived: type of `shop::Account.balance`: `u32` → `u64` (the public API can change: a different crate can use the item) [declaration · code equal]
     lines: src/lib.rs:4, src/lib.rs:-4

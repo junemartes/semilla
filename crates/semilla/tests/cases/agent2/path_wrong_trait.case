@@ -110,7 +110,6 @@ pub fn guard(v: &mut Vec<u8>) -> usize {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ fact a1 of the agent is false: `--change '<Price as Debug>::fmt=more'`
 
@@ -122,17 +121,22 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: changed literal `"{}"` → `"${}"` (f1)
       in: depot::money::<Price as fmt::Display>::fmt
       lines: src/lib.rs:6, src/lib.rs:-6
-      to state it: --change 'depot::money::<Price as fmt::Display>::fmt=TEXT'
-  to state them, add these options to the command of the step: --change 'depot::money::<Price as fmt::Display>::fmt=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::money::<Price as fmt::Display>::fmt=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics]
+  ◆ f1 derived: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different]
+      affected bodies: depot::money::<Price as fmt::Display>::fmt
+      control flow: ~ construct `{}` (src/lib.rs:-6, src/lib.rs:6): callees −`Arguments::<'_>::new::<2, 1>` +`Arguments::<'_>::new::<4, 1>`
+      equivalence: not decided: an array
+      expansion: `write!(f, "${}", self.0)` at `depot::money::<Price as fmt::Display>::fmt/tail` (src/lib.rs:6): expansion changed: changed literal `"{0}"` → `"${0}"` at `expansion/args[0]/args[0]` [semantics]
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    <depot::money::Price as std::fmt::Display>::fmt (src/lib.rs:6): same structure: 1 changed `construct` point; not decided (an array)
+  expansions: 1 changed, 2 equal
+    `write!(f, "${}", self.0)` at `depot::money::<Price as fmt::Display>::fmt/tail` (src/lib.rs:6): expansion changed: `macro write` (crate core): changed literal `"{0}"` → `"${0}"` at `expansion/args[0]/args[0]` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --change 'depot::money::<Price as fmt::Display>::fmt=the text of the test'
-◆ f1 stated: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics]
+the step is not accepted; the positions are from: semilla step 'the change'
+◆ f1 derived: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different]
     lines: src/lib.rs:6, src/lib.rs:-6

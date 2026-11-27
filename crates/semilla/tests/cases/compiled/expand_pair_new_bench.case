@@ -4,7 +4,6 @@ rule-: R72.1-1
 must_not_match: \((tests|benches)/(load|heavy)\.rs:-?\d+\): expansion (added|removed)
 must_match: `ck!\(shop::one\(\)\)` at `shop \(bench "extra"\)::x/S0` \(benches/extra\.rs:5\): expansion added
 must_match: `base!\(\)` at `shop::one/tail` \(src/lib\.rs:3\): expansion changed
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -57,7 +56,7 @@ fn x() {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:

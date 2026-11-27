@@ -1,6 +1,5 @@
 note: U7, now a case of R71.2-1 (batch 11c): the one index check of a closure (two calls) becomes two checks in the body: one check moves, and one check is a new point (+1 check); a body with an unchanged closure and a new function with a closure have no move
 rule-: R71.2-1
-option: --compiled
 must_match: shop::pick \(src/lib.rs:1\): graph changes: \+1 check, \+1 panic, .*; moved in from `shop::pick::\{closure#0\}`: 1 check, 1 panic;
 must_not_match: shop::other \(src/lib.rs:[0-9]+\): .*moved
 must_not_match: shop::fresh \(src/lib.rs:[0-9]+\): .*moved
@@ -37,7 +36,7 @@ pub fn fresh(v: &[u32]) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 3 not mapped (no intent file; the full text of the step lists each node)
   not stated: 2 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states

@@ -2,8 +2,8 @@ note: a new item and a removed item give no comment line: their fact is the full
 rule+: R58.2-3
 rule-: R58.2-1
 exit: 0
-must_match: \[added\]
-must_match: \[removed\]
+must_match: \[added · 
+must_match: \[removed · 
 must_not_match: in this step
 must_not_match: (?m)^\s*comments: 
 === both Cargo.toml
@@ -26,19 +26,23 @@ pub struct Label { pub text: String }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: removed `shop::old_tax` (the public API changes: a different crate can no longer use the item) [removed]
-  ◆ f2 derived: added `shop::Label` (the public API changes: a different crate can now use the item) [added]
+  ◆ f1 derived: removed `shop::old_tax` (the public API changes: a different crate can no longer use the item) [removed · code different]
+      affected bodies: shop::old_tax
+      control flow: − graph of `shop::old_tax`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  ◆ f2 derived: added `shop::Label` (the public API changes: a different crate can now use the item) [added · no code]
+      ! public API: the compare does not cover the code of a different crate
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    shop::old_tax (src/lib.rs:5): graph removed: 2 points, 1 arrow
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: removed `shop::old_tax` (the public API changes: a different crate can no longer use the item) [removed]
+◆ f1 derived: removed `shop::old_tax` (the public API changes: a different crate can no longer use the item) [removed · code different]
     lines: src/lib.rs:-3-5
-◆ f2 derived: added `shop::Label` (the public API changes: a different crate can now use the item) [added]
+◆ f2 derived: added `shop::Label` (the public API changes: a different crate can now use the item) [added · no code]
     lines: src/lib.rs:3-5

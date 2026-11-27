@@ -62,22 +62,24 @@ pub fn beta(v: &[u32]) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed operator `*x > best` → `*x >= best` (f1)
       in: depot::beta
       lines: src/lib.rs:18-27, src/lib.rs:-9-18
-      to state it: --change 'depot::beta=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::beta=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::beta=TEXT'; if it does not change, --same 'rewrite $a > $b => $a >= $b'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics]
+  ◆ f1 derived: changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics · code different]
+      affected bodies: depot::beta
+      control flow: ~ branch `*x > best` → `*x >= best` (src/lib.rs:-12, src/lib.rs:22)
+      equivalence: not decided: a call that returns a reference (to a value): v (src/lib.rs:-11)
   cover: each of the 20 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::beta (src/lib.rs:19): same structure: 1 changed condition; not decided (a call that returns a reference (to a value): v (src/lib.rs:-11))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics]
+◆ f1 derived: changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics · code different]
     lines: src/lib.rs:18-27, src/lib.rs:-9-18

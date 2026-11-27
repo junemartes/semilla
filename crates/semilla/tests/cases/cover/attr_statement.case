@@ -31,22 +31,23 @@ pub fn last_item() -> u32 { 0 }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: change type annotation `let _b = 2;` → `#[cfg(all())] let _b = 2;` (f1)
       in: depot::run
       lines: src/lib.rs:7
-      to state it: --change 'depot::run=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::run=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
-  ◆ f1 derived: change type annotation `let _b = 2;` → `#[cfg(all())] let _b = 2;` at `depot::run/S1` [semantics]
+  ◆ f1 derived: change type annotation `let _b = 2;` → `#[cfg(all())] let _b = 2;` at `depot::run/S1` [semantics · code equal]
+      equivalence: equivalent (proved by equal MIR)
+      note: this body uses `#[cfg(all())]`, which Semilla did not check (`depot::run`)
   cover: each of the 1 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::run (src/lib.rs:5): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: change type annotation `let _b = 2;` → `#[cfg(all())] let _b = 2;` at `depot::run/S1` [semantics]
+◆ f1 derived: change type annotation `let _b = 2;` → `#[cfg(all())] let _b = 2;` at `depot::run/S1` [semantics · code equal]
     lines: src/lib.rs:7

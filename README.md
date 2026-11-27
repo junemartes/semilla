@@ -72,8 +72,8 @@ semilla fact --commit abc1234 --reason 'shop::host=only unix hosts run the shop'
 - The step of a commit has the facts, the categories, the spotlights, the notes, the build check, and the compiled result that `semilla step` gives for the same two trees. A root commit compares with the empty tree. A merge commit compares with its first parent.
 - The command changes no file of the working tree, not the index, not `HEAD`, not the branch, and not the session: it makes the trees from the git objects, and it writes only the git note. A dirty working tree is valid.
 - An open item does not stop the tag: the note is always stored. A spotlight with no reason shows as "open: no reason given", and a build that fails stores the errors of the compiler. The result line names each open item: `result: tagged after the commit · 1 step · 14 facts · 2 open spotlights`. The last lines give the exact `semilla fact --commit … --reason '…'` commands.
-- With `--compiled`, a configuration that does not build does not stop the others: the output names it with its first error, and each other configuration gives its results.
-- A commit with a note keeps it; `--again` makes it again. A commit with the steps of the agent keeps the `tag` of the first workflow. `--compiled` and `--no-check` work as for `step`.
+- A configuration that does not build does not stop the others: the output names it with its first error, and each other configuration gives its results.
+- A commit with a note keeps it; `--again` makes it again. A commit with the steps of the agent keeps the `tag` of the first workflow.
 
 The exit codes:
 

@@ -1,5 +1,5 @@
 note: Only the `;` after the call changes.
-exit: 1
+exit: 0
 === both Cargo.toml
 [package]
 name = "depot"
@@ -10,33 +10,40 @@ macro_rules! table {
     ($($(#[$m:meta])* $n:ident = $v:expr,)*) => { $($(#[$m])* pub const $n: u32 = $v;)* };
 }
 
-table! {
-    A = 1,
+pub fn make() {
+    table! {
+        A = 1,
+    }
 }
 === new src/lib.rs
 macro_rules! table {
     ($($(#[$m:meta])* $n:ident = $v:expr,)*) => { $($(#[$m])* pub const $n: u32 = $v;)* };
 }
 
-table! {
-    A = 1,
-};
+pub fn make() {
+    table! {
+        A = 1,
+    };
+}
 === expected
-exit: 1
-rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: replace macro input `table! { A = 1, }` → `table! { A = 1, };` (f1)
+      in: depot::make
+      lines: src/lib.rs:8, src/lib.rs:-8
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::make=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
-  ◆ f1 derived: src/lib.rs: changed [file]
-      ✗ spotlight: Semilla cannot parse this file: unexpected `;` (line 7, column 2), in the tree after the step; it needs a reason: --reason 'src/lib.rs:=…'
+  ◆ f1 derived: replace macro input `table! { A = 1, }` → `table! { A = 1, };` at `depot::make/S0` [macro · code equal]
+      equivalence: equivalent (proved by equal MIR)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::make (src/lib.rs:5): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'src/lib.rs:=<why>'
+
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/lib.rs:=the reason of the test'
-◆ f1 derived: src/lib.rs: changed [file]
-    lines: src/lib.rs:7, src/lib.rs:-7
+◆ f1 derived: replace macro input `table! { A = 1, }` → `table! { A = 1, };` at `depot::make/S0` [macro · code equal]
+    lines: src/lib.rs:8, src/lib.rs:-8

@@ -65,10 +65,8 @@ fn a_tree_with_no_record_uses_the_tokens() {
 fn the_line_of_the_names_shows_only_for_a_step_with_no_record() {
     let mut report = semilla_core::StepReport::default();
     assert!(report.expansion_section(false).iter().all(|line| !line.starts_with("names from the text")));
-    report.names_gap = Some("the build check did not run".into());
-    assert_eq!(report.expansion_section(false), ["names from the text: the build check did not run"]);
-    report.expansion_gap = Some("the build check did not run".into());
-    assert_eq!(report.expansion_section(false), ["expansions: not read: the build check did not run", "names from the text: the build check did not run"]);
+    report.names_gap = Some("the records of the compiler have no name record (a record of an earlier driver)".into());
+    assert_eq!(report.expansion_section(false), ["names from the text: the records of the compiler have no name record (a record of an earlier driver)"]);
 }
 
 const UNSAFE_WORDS: &str = "pub fn inc(n: u32) -> u32 {\n    // This is not unsafe.\n    let _ = \"unsafe\";\n    n + 2\n}\n";

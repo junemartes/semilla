@@ -1,6 +1,5 @@
 note: a changed start value of a loop with the same loop body: the entry states differ, so the loops are not equivalent
 rule-: R61.11-1
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -29,7 +28,7 @@ pub fn acc(n: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

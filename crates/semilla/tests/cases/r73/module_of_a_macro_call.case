@@ -1,7 +1,6 @@
 note: batch 11e, R73.1-1: the code of `load!()` loads the module file `src/float.rs` (no mark of the expansion on its tokens), so the file is a read file of the record of `load!()`; the call of `here!()` inside that file has its own source call in the file, so the file is not a read file of its record: the call only moves, and its line keeps the cause "the context of the call changes"
 rule+: R73.1-1
 rule-: R73.1-1
-build_check: on
 must_match: the code of the call reads `src/float\.rs`, which the step changes
 must_match: `here!\(\)` at `float \(no item\)` \(src/float\.rs:6\): expansion changed: `macro_rules! here` \(src/lib\.rs:1\): only the context of the call changes: the line of the call; the context of the call changes
 must_not_match: `here!\(\)` at [^\n]*the code of the call reads
@@ -30,21 +29,50 @@ pub fn at() -> u32 {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: src/float.rs: changed [file]
+  ◆ f1 derived: src/float.rs: changed [file · code different]
+      affected bodies: shop::float::at, shop::float::first
+      control flow: + graph of `shop::float::first`: 2 points, 1 arrow (semilla expand --step 0)
       expansion: `load!()` at `shop::load!#0` (src/lib.rs:4): expansion changed: changed literal `2u32` → `6u32` at `shop::float::at/tail/lhs` [semantics]; added `shop::float::first` (the public API changes: a different crate can now use the item) [added]
       ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/float.rs:=…'
+  ◆ f2 derived: the compiler reads this item from another file: `shop::float::at` (src/float.rs) [file · code different]
+      affected bodies: shop::float::at
+      control flow: + graph of `shop::float::first`: 2 points, 1 arrow (semilla expand --step 0)
+      ✗ spotlight: the compiler reads `shop::float::at` from `src/float.rs`, a file that Semilla does not parse; it needs a reason: --reason 'shop::float::at=…'
+  ◆ f3 derived: the compiler reads this item from another file: `shop::float::first` (src/float.rs) [file · code different]
+      affected bodies: shop::float::first
+      control flow: + graph of `shop::float::first`: 2 points, 1 arrow (semilla expand --step 0)
+      ✗ spotlight: the compiler reads `shop::float::first` from `src/float.rs`, a file that Semilla does not parse; it needs a reason: --reason 'shop::float::first=…'
   cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::float::at (src/float.rs:5): graph changes: +1 check, −1 check, +3 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for each input: before returns 2, after returns 6; suggested test `semilla_test_at_924514`)
+    shop::float::first (src/float.rs:1): graph added: 2 points, 1 arrow; no edit in the body
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_at_924514`: add it to `src/float.rs`, in the module of `shop::float::at` (line 1); run it: `cargo test -p shop semilla_test_at_924514`; also: `cargo test -p shop --release semilla_test_at_924514`
+      #[cfg(test)]
+      mod semilla_test_at_924514 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 2; the new version returns 6.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let got = crate::float::at();
+              assert_eq!(got, 2);
+          }
+      }
   expansions: 2 changed
     `here!()` at `float (no item)` (src/float.rs:6): expansion changed: `macro_rules! here` (src/lib.rs:1): only the context of the call changes: the line of the call; the context of the call changes
     `load!()` at `shop::load!#0` (src/lib.rs:4): expansion changed: `macro_rules! load` (src/lib.rs:2): changed literal `2u32` → `6u32` at `shop::float::at/tail/lhs` [semantics]; added `shop::float::first` (the public API changes: a different crate can now use the item) [added]; the code of the call reads `src/float.rs`, which the step changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'src/float.rs:=<why>'
+run again: semilla step 'the change' --reason 'src/float.rs:=<why>' --reason 'shop::float::at=<why>' --reason 'shop::float::first=<why>'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/float.rs:=the reason of the test'
-◆ f1 derived: src/float.rs: changed [file]
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/float.rs:=the reason of the test' --reason 'shop::float::at=the reason of the test' --reason 'shop::float::first=the reason of the test'
+◆ f1 derived: src/float.rs: changed [file · code different]
+    lines: src/float.rs:1-4
+◆ f2 derived: the compiler reads this item from another file: `shop::float::at` (src/float.rs) [file · code different]
+    lines: src/float.rs:1-4
+◆ f3 derived: the compiler reads this item from another file: `shop::float::first` (src/float.rs) [file · code different]
     lines: src/float.rs:1-4

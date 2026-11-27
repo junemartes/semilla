@@ -244,10 +244,6 @@ pub struct StepReport {
     /// driver that writes the graphs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow: Option<FlowReport>,
-    /// Why a step of the default mode has no expansion records (R65.8-2): one line of the step
-    /// section, `expansions: not read: CAUSE`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expansion_gap: Option<String>,
     /// Why the facts and the spotlights of a step take the names from the text (R70.1-1): the
     /// step has no name record of the compiler. One line of the step section, `names from the
     /// text: CAUSE`.
@@ -1754,10 +1750,6 @@ impl StepReport {
 
     /// The lines of [`StepReport::expansion_section`] without the line of the name record.
     fn expansion_lines(&self, full: bool) -> Vec<String> {
-        // R65.8-2: a step of the default mode with no expansion records says so in one line.
-        if let Some(gap) = &self.expansion_gap {
-            return vec![format!("expansions: not read: {gap}")];
-        }
         let Some(flow) = self.flow.as_ref().filter(|flow| !flow.expansions.is_empty()) else { return Vec::new() };
         let count = |word: &str| flow.expansions.iter().filter(|site| site.result == word).count();
         let mut parts = Vec::new();

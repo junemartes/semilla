@@ -42,28 +42,26 @@ pub fn larger(a: u32, b: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f3 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 10 lines keep their tokens [move]
-  ◆ f1 derived: changed docs `/// The larger one.` → `/// The largest one.` [docs]
-  ◆ f2 derived: changed docs `//! Tools for lists. //! A second line.` → `//! Tools for many lists. //! A second line.` [docs]
-  ◆ f4 derived: comment in `src/list.rs`: removed `// A plain comment.` [docs]
-  ◆ f5 derived: comment in `src/list/mod.rs`: added `// A changed comment.` [docs]
+  ◆ f1 derived: changed docs `/// The larger one.` → `/// The largest one.` [docs · no code]
+  ◆ f2 derived: changed docs `//! Tools for lists. //! A second line.` → `//! Tools for many lists. //! A second line.` [docs · no code]
+  ◆ f3 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 10 lines keep their tokens [move · no code]
+  ◆ f4 derived: comment in `src/list.rs`: removed `// A plain comment.` [docs · no code]
+  ◆ f5 derived: comment in `src/list/mod.rs`: added `// A changed comment.` [docs · no code]
   cover: each of the 28 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f3 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 10 lines keep their tokens [move]
-    lines: src/list.rs:-3, src/list.rs:-5-9, src/list.rs:-11-14, src/list/mod.rs:3, src/list/mod.rs:5-9, src/list/mod.rs:11-14
-◆ f1 derived: changed docs `/// The larger one.` → `/// The largest one.` [docs]
+◆ f1 derived: changed docs `/// The larger one.` → `/// The largest one.` [docs · no code]
     lines: src/list.rs:-10, src/list/mod.rs:10
-◆ f2 derived: changed docs `//! Tools for lists. //! A second line.` → `//! Tools for many lists. //! A second line.` [docs]
+◆ f2 derived: changed docs `//! Tools for lists. //! A second line.` → `//! Tools for many lists. //! A second line.` [docs · no code]
     lines: src/list.rs:-1-2, src/list/mod.rs:1-2
-◆ f4 derived: comment in `src/list.rs`: removed `// A plain comment.` [docs]
+◆ f3 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 10 lines keep their tokens [move · no code]
+    lines: src/list.rs:-3, src/list.rs:-5-9, src/list.rs:-11-14, src/list/mod.rs:3, src/list/mod.rs:5-9, src/list/mod.rs:11-14
+◆ f4 derived: comment in `src/list.rs`: removed `// A plain comment.` [docs · no code]
     lines: src/list.rs:-4
-◆ f5 derived: comment in `src/list/mod.rs`: added `// A changed comment.` [docs]
+◆ f5 derived: comment in `src/list/mod.rs`: added `// A changed comment.` [docs · no code]
     lines: src/list/mod.rs:4

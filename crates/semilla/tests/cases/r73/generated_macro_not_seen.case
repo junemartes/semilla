@@ -1,6 +1,5 @@
 note: batch 11e, R73.3-1: the build script writes a macro into `OUT_DIR`, and the crate reads it with `include!`; the step changes the build script, so the expansion of `rate!()` changes; the definition is in a file outside the tree and its record has no hash of it, so Semilla does not see this input: the line says "the cause is not known" and names it; before, the line said "no changed definition, no changed input of the call, and no changed file that its code reads"
 rule+: R73.3-1 R73.1-1
-build_check: on
 must_match: the cause is not known: Semilla does not see the definition of `rate` \(crate shop\): the record has no hash of it
 must_not_match: no changed definition
 === both Cargo.toml
@@ -28,12 +27,13 @@ pub fn price() -> u32 {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  ! build code changed in step 0: build.rs. It runs in the sandbox during each check, and it can change each result from step 0 on. Each result `code equal` and each verified claim that depends on it has the mark (with the build code of step 0).
 
   ! build code changed in this step; read this change first
-  ◆ f1 derived: build.rs: changed [build code]
-      ✗ spotlight: build script: this file is code of the build script of `shop`. Cargo runs it before each build of the package, and it can change the code and the result of the build; it needs a reason: --reason 'build.rs:=…'
+  ◆ f1 derived: build.rs: changed [build code · code different]
+      affected bodies: shop::price
+      ✗ spotlight: build script: this file is code of the build script of `shop`. Cargo runs it before each build of the package, and it can change the code and the result of the build; a build input: the MIR of 1 body changed with no edit of its text, and this change can reach its crate; it needs a reason: --reason 'build.rs:=…'
       diff:
         @@ line 3 @@
         -     std::fs::write(format!("{out}/mac.rs"), "macro_rules! rate { () => { 10 } }\n").unwrap();
@@ -47,5 +47,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'build.rs:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'build.rs:=the reason of the test'
-◆ f1 derived: build.rs: changed [build code]
+◆ f1 derived: build.rs: changed [build code · code different]
     lines: build.rs:3, build.rs:-3

@@ -24,24 +24,28 @@ pub fn assist(n: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: renamed `depot (bin "depot")::util::helper` → `depot (bin "depot")::util::assist` [rename]
+  ◆ f1 derived: renamed `depot (bin "depot")::util::helper` → `depot (bin "depot")::util::assist` [rename · code equal]
+      expansion: `println!("{}", util::assist(1))` at `depot (bin "depot")::main/S0` (src/main.rs:2): expansion changed: changed path `util::helper` → `util::assist` at `expansion/S0/body/S0/args[0]/args[1]/callee` [semantics]
       note: 1 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)
-  ◆ f2 derived: renamed `depot::util::helper` → `depot::util::assist` [rename]
-      note: 1 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)
-  ◆ f3 derived: public API: `depot::util::helper` is now `depot::util::assist` (a different crate can no longer use the old path) [rename]
+  ◆ f2 derived: renamed `depot::util::helper` → `depot::util::assist` [rename · no compare]
+      note: no compare: no checked configuration compiles `depot::util::assist`; 1 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)
+  ◆ f3 derived: public API: `depot (bin "depot")::util::helper` is now `depot (bin "depot")::util::assist` (a different crate can no longer use the old path) [rename · no code]
+  ◆ f4 derived: public API: `depot::util::helper` is now `depot::util::assist` (a different crate can no longer use the old path) [rename · no code]
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  expansions: 1 changed
+    `println!("{}", util::assist(1))` at `depot (bin "depot")::main/S0` (src/main.rs:2): expansion changed: `macro println` (crate std): changed path `util::helper` → `util::assist` at `expansion/S0/body/S0/args[0]/args[1]/callee` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: renamed `depot (bin "depot")::util::helper` → `depot (bin "depot")::util::assist` [rename]
+◆ f1 derived: renamed `depot (bin "depot")::util::helper` → `depot (bin "depot")::util::assist` [rename · code equal]
     lines: src/main.rs:2, src/main.rs:-2, src/util.rs:1, src/util.rs:-1
-◆ f2 derived: renamed `depot::util::helper` → `depot::util::assist` [rename]
+◆ f2 derived: renamed `depot::util::helper` → `depot::util::assist` [rename · no compare]
     no position
-◆ f3 derived: public API: `depot::util::helper` is now `depot::util::assist` (a different crate can no longer use the old path) [rename]
+◆ f3 derived: public API: `depot (bin "depot")::util::helper` is now `depot (bin "depot")::util::assist` (a different crate can no longer use the old path) [rename · no code]
+    no position
+◆ f4 derived: public API: `depot::util::helper` is now `depot::util::assist` (a different crate can no longer use the old path) [rename · no code]
     no position

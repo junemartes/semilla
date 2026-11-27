@@ -110,7 +110,6 @@ pub fn guard(v: &mut Vec<u8>) -> usize {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ fact a1 of the agent is false: `--same 'rewrite wrap(x) => wrap2(x)'`
 
@@ -124,18 +123,22 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 2 places: changed path `wrap` → `wrap2` (f1)
       in: depot::a, depot::b
       lines: src/lib.rs:30-31, src/lib.rs:-30-31
-      to state it: --same 'rewrite wrap => wrap2'
-  to state them, add these options to the command of the step: --same 'rewrite wrap => wrap2'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::a,depot::b=TEXT'; if it does not change, --same 'rewrite wrap => wrap2'
   other facts, filled in by Semilla:
-  ◆ f1 derived: 2 site(s): changed path `wrap` → `wrap2` [semantics]
+  ◆ f1 derived: 2 site(s): changed path `wrap` → `wrap2` [semantics · code equal]
       in: depot::a, depot::b
+      control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-30, src/lib.rs:30)
+      control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-31, src/lib.rs:31)
+      equivalence: `depot::a`: equivalent (proved by SMT after inlining `depot::wrap`, `depot::wrap2`)
+      equivalence: `depot::b`: equivalent (proved by SMT after inlining `depot::wrap`, `depot::wrap2`)
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::a (src/lib.rs:30): same structure: 1 changed call target; equivalent (proved by SMT after inlining `depot::wrap`, `depot::wrap2`)
+    depot::b (src/lib.rs:31): same structure: 1 changed call target; equivalent (proved by SMT after inlining `depot::wrap`, `depot::wrap2`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --same 'rewrite wrap => wrap2'
-◆ f1 stated: 2 site(s): changed path `wrap` → `wrap2` [semantics]
+the step is not accepted; the positions are from: semilla step 'the change'
+◆ f1 derived: 2 site(s): changed path `wrap` → `wrap2` [semantics · code equal]
     lines: src/lib.rs:30-31, src/lib.rs:-30-31

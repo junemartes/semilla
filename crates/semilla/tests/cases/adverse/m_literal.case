@@ -44,7 +44,7 @@ pub fn larger(a: u32, b: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -54,18 +54,39 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::list::larger=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::list::larger=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed expression `m` → `m + 1` at `depot::list::larger/tail` [semantics]
+  ◆ f1 derived: changed expression `m` → `m + 1` at `depot::list::larger/tail` [semantics · code different]
+      affected bodies: depot::list::larger
+      control flow: + check `overflow: m + 1` (src/list/mod.rs:13): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/list/mod.rs:13)
+      control flow: + arrow call `max::<u32>` (src/list/mod.rs:12) → check `overflow: m + 1` (src/list/mod.rs:13) (return)
+      equivalence: different: for a = 0, b = 0: before returns 0, after returns 1 (suggested test `semilla_test_larger_6259fb`)
       docs of `depot::list::larger`, no edit in this step (src/list/mod.rs:10): `/// The larger one.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  ◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move]
+  ◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move · no code]
+      control flow: − arrow call `max::<u32>` (src/list.rs:-12) → return (src/list.rs:-14) (return)
   cover: each of the 28 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::list::larger (src/list/mod.rs:11): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for a = 0, b = 0: before returns 0, after returns 1; suggested test `semilla_test_larger_6259fb`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_larger_6259fb`: add it to `src/list.rs`, in the module of `depot::list::larger` (line 11); run it: `cargo test -p depot semilla_test_larger_6259fb`; also: `cargo test -p depot --release semilla_test_larger_6259fb`
+      #[cfg(test)]
+      mod semilla_test_larger_6259fb {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 0; the new version returns 1.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let a = 0;
+              let b = 0;
+              let got = crate::list::larger(a, b);
+              assert_eq!(got, 0);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: changed expression `m` → `m + 1` at `depot::list::larger/tail` [semantics]
+◆ f1 derived: changed expression `m` → `m + 1` at `depot::list::larger/tail` [semantics · code different]
     lines: src/list.rs:-13, src/list/mod.rs:13
-◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move]
+◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move · no code]
     lines: src/list.rs:-1-12, src/list.rs:-14, src/list/mod.rs:1-12, src/list/mod.rs:14

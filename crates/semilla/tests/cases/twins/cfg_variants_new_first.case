@@ -38,20 +38,20 @@ pub fn sep() -> char {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: added `depot::sep#0` (the public API changes: a different crate can now use the item) [added]
-      ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::sep#0`; it needs a reason: --reason 'depot::sep#0=…'
+  ◆ f1 derived: added `depot::sep#0` (the public API changes: a different crate can now use the item) [added · no compare]
+      ! public API: the compare does not cover the code of a different crate
+      note: no compare: no checked configuration compiles `depot::sep#0`
+      ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::sep#0`; inactive code: no checked configuration compiles the changed code (`#[cfg(target_os = "none")]` at src/lib.rs:1), so Semilla did not compare the edit; it needs a reason: --reason 'depot::sep#0=…'
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::sep#0
+  ! spotlight: inactive code: depot::sep#0 (no checked configuration compiles `depot::sep#0`)
 run again: semilla step 'the change' --reason 'depot::sep#0=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::sep#0=the reason of the test'
-◆ f1 derived: added `depot::sep#0` (the public API changes: a different crate can now use the item) [added]
+◆ f1 derived: added `depot::sep#0` (the public API changes: a different crate can now use the item) [added · no compare]
     lines: src/lib.rs:1-4

@@ -52,19 +52,22 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rewrite `wrap($a)` => `wrap2($a)` (the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
       places: depot::both/tail/lhs/callee
-    ◆ f1 stated: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics]
+    ◆ f1 stated: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code equal]
+        control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-8, src/lib.rs:8)
+        control flow: ~ check `overflow: wrap(c.total + 1) + d.total` → `overflow: wrap2(c.total + 1) + d.total` (src/lib.rs:-8, src/lib.rs:8)
+        equivalence: equivalent (proved by SMT after inlining `depot::wrap`, `depot::wrap2`)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::both (src/lib.rs:8): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `depot::wrap`, `depot::wrap2`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics]
+◆ f1 stated: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code equal]
     lines: src/lib.rs:8, src/lib.rs:-8

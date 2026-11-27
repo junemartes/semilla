@@ -20,15 +20,14 @@ fn cache_dir(repo: &Path) -> PathBuf {
     repo.parent().unwrap().join("cache")
 }
 
-/// Runs semilla in the default mode with no build check. `env` can change both.
+/// Runs semilla (one mode, design 83: the build, the MIR, and the build check). `env` adds
+/// variables.
 fn semilla_env(repo: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     let root = workspace_root();
     let mut command = Command::new(env!("CARGO_BIN_EXE_semilla"));
     command.current_dir(repo).args(args);
     command.env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"));
     command.env("SEMILLA_CACHE_DIR", cache_dir(repo));
-    command.env("SEMILLA_COMPILED", "0");
-    command.env("SEMILLA_NO_CHECK", "1");
     command.envs(env.iter().copied());
     command.output().unwrap()
 }
@@ -125,7 +124,7 @@ fn one_commit_gets_one_step_and_the_reasons_come_later() {
     // The commit has no change set of the agent: one step from the first parent.
     let out = run(repo, &["tag"], 1);
     let first = out.lines().next().unwrap();
-    assert_eq!(first, "result: tagged after the commit · 1 step · 3 facts (1 with a spotlight) · 1 open spotlight", "{out}");
+    assert_eq!(first, "result: tagged after the commit · 1 step · 4 facts: 4 code different (1 with a spotlight) · 1 open spotlight", "{out}");
     assert!(out.contains(&format!("tagged {commit} after the commit: one step from the first parent {} to the commit \"skip small items\"", &base[..short.len()])), "{out}");
     assert!(out.contains("! spotlight: a new item with an attribute that can change the behavior: `cfg` on `shop::host`; open: no reason given"), "{out}");
     // The last lines: the exact command that adds the reason.
@@ -158,7 +157,7 @@ fn one_commit_gets_one_step_and_the_reasons_come_later() {
     write(repo, "src/cart.rs", "pub fn price(n: u32) -> u32 {\n    n * 3\n}\n\npub fn fee(n: u32) -> u32 {\n    n + 1\n}\n");
     commit_all(repo, "a new price");
     let out = run(repo, &["tag"], 0);
-    assert_eq!(out.lines().next().unwrap(), "result: tagged after the commit · 1 step · 1 fact", "{out}");
+    assert!(out.lines().next().unwrap().starts_with("result: tagged after the commit · 1 step · 1 fact: "), "{out}");
     assert!(!out.contains("--reason") && !out.contains("open spotlight"), "{out}");
 }
 
@@ -289,16 +288,15 @@ fn the_facts_of_a_tag_are_the_facts_of_a_step_and_the_work_stays() {
 
 // rule+ R62.5-2
 // rule- R62.5-2
-// rule+ R62.9-1
 #[test]
 fn a_build_that_fails_is_an_open_item_and_the_note_keeps_the_errors() {
     let dir = setup();
     let repo = &dir.path().join("repo");
-    let check = [("SEMILLA_NO_CHECK", "0")];
+    let check = [];
     write(repo, "src/cart.rs", "pub fn price(n: u32) -> u32 {\n    n * missing_rate()\n}\n\npub fn fee(n: u32) -> u32 {\n    n + 1\n}\n");
     let broken = commit_all(repo, "use a rate");
     let out = run_env(repo, &["tag"], &check, 1);
-    assert!(out.starts_with("result: tagged after the commit · 1 step · 1 fact · 1 build check that fails"), "{out}");
+    assert!(out.starts_with("result: tagged after the commit · 1 step · 1 fact: 1 no compare · 1 build check that fails · 1 error of the check"), "{out}");
     assert!(out.contains("✗ build check: fails") && out.contains("missing_rate"), "{out}");
     let set = note(repo, &broken);
     assert_eq!(set["steps"][0]["build_check"]["result"], "fails", "{set}");
@@ -308,15 +306,11 @@ fn a_build_that_fails_is_an_open_item_and_the_note_keeps_the_errors() {
     // The negative case: a commit that builds has the record `passes`.
     write(repo, "src/cart.rs", "pub fn price(n: u32) -> u32 {\n    n * 2\n}\n\npub fn fee(n: u32) -> u32 {\n    n + 1\n}\n");
     let fixed = commit_all(repo, "no rate");
-    let out = run_env(repo, &["tag"], &check, 0);
-    assert!(out.contains("build check: passes"), "{out}");
+    // Design 83: the compiled check needs the tree of the parent, and it does not build. The
+    // error of the check is an open item (R62.5-3); the build check passes.
+    let out = run_env(repo, &["tag"], &check, 1);
+    assert!(out.contains("build check: passes") && out.contains("1 error of the check") && !out.contains("build check that fails"), "{out}");
     assert_eq!(note(repo, &fixed)["steps"][0]["build_check"]["result"], "passes");
-    // Rule R62.9-1: `--no-check` works as for `semilla step`.
-    write(repo, "src/cart.rs", "pub fn price(n: u32) -> u32 {\n    n * 3\n}\n\npub fn fee(n: u32) -> u32 {\n    n + 1\n}\n");
-    let unchecked = commit_all(repo, "a price");
-    let out = run_env(repo, &["tag", "--no-check"], &check, 0);
-    assert!(out.contains("build check: not run (`--no-check`)"), "{out}");
-    assert_eq!(note(repo, &unchecked)["steps"][0]["build_check"]["result"], "not_run");
 }
 
 // rule+ R62.7-1
@@ -361,7 +355,6 @@ fn a_commit_with_a_note_keeps_it_and_again_makes_it_again() {
 
 // rule+ R62.8-1
 // rule- R62.8-1
-// rule- R62.9-1
 #[test]
 fn a_commit_with_the_steps_of_the_agent_keeps_the_tag_of_today() {
     let dir = setup();
@@ -370,8 +363,8 @@ fn a_commit_with_the_steps_of_the_agent_keeps_the_tag_of_today() {
     run(repo, &["step", "skip small items"], 0);
     let commit = commit_all(repo, "skip small items");
     // The options of a tag after the commit are not for a change set of the agent.
-    let text = fails(repo, &["tag", "--compiled"]);
-    assert!(text.contains("are for a tag after the commit"), "{text}");
+    let text = fails(repo, &["tag", "--again"]);
+    assert!(text.contains("`--again` is for a tag after the commit"), "{text}");
     let out = run(repo, &["tag"], 0);
     assert!(out.starts_with("result: accepted · 1 step · ") && out.contains(&format!("tagged {commit} with 1 steps; the change set is closed")), "{out}");
     let set = note(repo, &commit);
@@ -426,8 +419,6 @@ fn the_mcp_tools_tag_and_fact_take_a_commit() {
     let commit = commit_all(repo, "skip small items");
     let mut child = Command::new(env!("CARGO_BIN_EXE_semilla"))
         .env("SEMILLA_CACHE_DIR", cache_dir(repo))
-        .env("SEMILLA_COMPILED", "0")
-        .env("SEMILLA_NO_CHECK", "0")
         .current_dir(repo)
         .arg("mcp")
         .stdin(Stdio::piped())
@@ -445,9 +436,9 @@ fn the_mcp_tools_tag_and_fact_take_a_commit() {
         value["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string()
     };
     ask(serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}}));
-    let out = ask(serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "tag", "arguments": {"commit": format!("{start}..HEAD"), "no_check": true}}}));
+    let out = ask(serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "tag", "arguments": {"commit": format!("{start}..HEAD")}}}));
     assert!(out.starts_with("result: tagged after the commit · 1 commits · 1 step · ") || out.starts_with("result: tagged after the commit · 1 commit · 1 step · "), "{out}");
-    assert!(out.contains("build check: not run"), "{out}");
+    assert!(out.contains("build check: passes"), "{out}");
     let out = ask(serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "fact", "arguments": {"commit": commit, "reasons": {"shop::host": "only unix hosts"}}}}));
     assert!(out.contains("1 new reason(s)") && out.contains("no open item"), "{out}");
     drop(stdin);
@@ -467,7 +458,7 @@ fn a_configuration_that_does_not_build_does_not_stop_the_others() {
     // The step adds code of the feature `nightly` that does not compile, and changes `total`.
     write(repo, "src/lib.rs", &format!("pub mod cart;\n\n{TOTAL_V1}\n#[cfg(feature = \"nightly\")]\npub fn fast() -> u32 {{\n    missing_fast()\n}}\n"));
     let commit = commit_all(repo, "a nightly path");
-    let out = run(repo, &["tag", "--compiled"], 1);
+    let out = run(repo, &["tag"], 1);
     assert!(out.contains("configurations that do not build"), "{out}");
     assert!(out.contains("`dev`") && out.contains("`release`"), "{out}");
     assert!(out.contains("it does not build after the step"), "{out}");
@@ -478,7 +469,7 @@ fn a_configuration_that_does_not_build_does_not_stop_the_others() {
     // The negative case: `semilla step --compiled` on the same trees stops at the first
     // configuration that does not compile (the rule of today).
     git(repo, &["reset", "-q", "--soft", "HEAD^"]);
-    let out = semilla_env(repo, &["step", "a nightly path", "--compiled"], &[]);
+    let out = semilla_env(repo, &["step", "a nightly path"], &[]);
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     assert_ne!(out.status.code(), Some(0), "{text}");
     assert!(text.contains("does not compile in the configuration"), "{text}");

@@ -1,6 +1,5 @@
 note: the local of the macro and the parameter of the caller have the same name; a swap of the two operands changes the expansion (no false equal text)
 rule+: R63.2-4
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -17,7 +16,7 @@ pub fn f(x: i32) -> i32 { less!(x) }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:

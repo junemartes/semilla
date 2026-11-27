@@ -8,7 +8,7 @@ edition = "2021"
 
 pub fn first_item() -> u32 { 0 }
 
-pub trait Sides { const SIDES: u32; fn n(&self) -> u32; }
+pub trait Sides { const SIDES: u32 = 0; fn n(&self) -> u32; }
 pub struct Sq;
 impl Sides for Sq {
     fn n(&self) -> u32 { 4 }
@@ -20,7 +20,7 @@ pub fn last_item() -> u32 { 0 }
 
 pub fn first_item() -> u32 { 0 }
 
-pub trait Sides { const SIDES: u32; fn n(&self) -> u32; }
+pub trait Sides { const SIDES: u32 = 0; fn n(&self) -> u32; }
 pub struct Sq;
 impl Sides for Sq {
     /// The new doc.
@@ -34,20 +34,23 @@ pub fn last_item() -> u32 { 0 }
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: added `depot::<Sq as Sides>::SIDES` (the public API changes: a different crate can now use the item) [added]
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: edit, see f1 (f1)
+      in: depot::<Sq as Sides>::SIDES
+      lines: src/lib.rs:8-11
+      to state it: --change 'depot::<Sq as Sides>::SIDES=TEXT'
+  to state them, add these options to the command of the step: --change 'depot::<Sq as Sides>::SIDES=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: `depot::<Sq as Sides>::SIDES` now overrides the default body of `depot::Sides::SIDES`: `pub trait Sides { const SIDES: u32 = 0; fn n(&self) -> u32; }` → `/// The new doc. /// One more line. #[cfg(all())] const SIDES: u32 = 4;` [semantics · code equal]
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::<Sq as Sides>::SIDES`; it needs a reason: --reason 'depot::<Sq as Sides>::SIDES=…'
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::<Sq as Sides>::SIDES
 run again: semilla step 'the change' --reason 'depot::<Sq as Sides>::SIDES=<why>'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::<Sq as Sides>::SIDES=the reason of the test'
-◆ f1 derived: added `depot::<Sq as Sides>::SIDES` (the public API changes: a different crate can now use the item) [added]
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::<Sq as Sides>::SIDES=the reason of the test' --change 'depot::<Sq as Sides>::SIDES=the text of the test'
+◆ f1 stated: `depot::<Sq as Sides>::SIDES` now overrides the default body of `depot::Sides::SIDES`: `pub trait Sides { const SIDES: u32 = 0; fn n(&self) -> u32; }` → `/// The new doc. /// One more line. #[cfg(all())] const SIDES: u32 = 4;` [semantics · code equal]
     lines: src/lib.rs:8-11

@@ -30,25 +30,26 @@ pub trait Price {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `10` → `5` (f1)
       in: shop::Price::tax
       lines: src/lib.rs:6, src/lib.rs:-6
-      to state it: --change 'shop::Price::tax=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::Price::tax=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Price::tax=TEXT'; if it does not change, --same 'rewrite 10 => 5'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `10` → `5` at `shop::Price::tax/tail/rhs` [semantics]
+  ◆ f1 derived: changed literal `10` → `5` at `shop::Price::tax/tail/rhs` [semantics · code different]
+      affected bodies: shop::Price::tax
+      equivalence: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
       docs of `shop::Price::tax`, no edit in this step (src/lib.rs:4): `/// Gives the tax: 10 percent of the base.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    shop::Price::tax (src/lib.rs:5): same graph (the edit keeps the control flow); not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: changed literal `10` → `5` at `shop::Price::tax/tail/rhs` [semantics]
+◆ f1 derived: changed literal `10` → `5` at `shop::Price::tax/tail/rhs` [semantics · code different]
     lines: src/lib.rs:6, src/lib.rs:-6

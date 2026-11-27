@@ -1033,7 +1033,7 @@ pub const LINE_MAX: usize = 500;
 /// of the longest list of code names (items in backquotes, such as the inlined callees of a
 /// proof); items in the middle of the longest list with no result; characters in the middle of
 /// the longest text with no result. A cut that hides no part of a result stays as it was, so the
-/// lines with no result (the lines of the default mode) keep their text.
+/// lines with no result (the lines of phase 1 and of the syntax-only check) keep their text.
 pub fn fit_line(line: &str, command: &str) -> String {
     const HEAD: usize = 300;
     const TAIL: usize = 100;

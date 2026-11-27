@@ -51,7 +51,7 @@ fn claim(id: &str, op: &str, at: Option<&str>, args: serde_json::Value) -> Claim
 
 fn step(claims: Vec<Claim>) -> Step {
     // The tests of the compare results need a step with the compiled check (design 50).
-    Step { index: 0, intent: "test".into(), claims, tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), compiled: true, build_check: None, agent: Default::default(), tags: Vec::new() }
+    Step { index: 0, intent: "test".into(), claims, tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new() }
 }
 
 fn run(before: &str, after: &str, claims: Vec<Claim>, bodies: &[(&str, BodyStatus)], effect: Option<Effect>) -> StepReport {
@@ -701,14 +701,12 @@ fn the_claim_list_of_a_rejected_step_has_a_short_cause() {
     assert!(full.contains("  ✗ c7 empty: the claim explains no change"), "{full}");
 }
 
-// rule+ R65.3-4
-// rule- R65.3-4
 #[test]
 fn each_file_spotlight_text_fits_its_fact() {
     // Brief 5g, item 4: a mode change of a parsed `.rs` file had the text for Rust code that
     // Semilla does not parse.
     use crate::files::file_spotlight;
-    let why = |file: &str, note: &str, content_changed: bool, parsed: bool| file_spotlight(file, note, content_changed, parsed, file.ends_with(".rs"), None, || false, || None).unwrap_or_default();
+    let why = |file: &str, note: &str, content_changed: bool, parsed: bool| file_spotlight(file, note, content_changed, parsed, file.ends_with(".rs"), None, || false).unwrap_or_default();
     let (mode, link, submodule) = ("a file mode", "a symbolic link", "a submodule");
     let (unparsed, manifest, list) = ("Rust code that Semilla does not parse", "a manifest whose keys Semilla cannot compare", "not on the allow list of files");
     let texts = [mode, link, submodule, unparsed, manifest, list];
@@ -736,16 +734,10 @@ fn each_file_spotlight_text_fits_its_fact() {
         }
     }
     // A file on the allow list with no special note: no spotlight, but for a doc include.
-    assert_eq!(file_spotlight("README.md", "", true, false, false, None, || false, || None), None);
-    assert!(file_spotlight("README.md", "", true, false, false, None, || true, || None).is_some_and(|text| text.starts_with("a doc attribute includes this file")));
+    assert_eq!(file_spotlight("README.md", "", true, false, false, None, || false), None);
+    assert!(file_spotlight("README.md", "", true, false, false, None, || true).is_some_and(|text| text.starts_with("a doc attribute includes this file")));
     // A Rust file never goes without a text.
-    assert!(file_spotlight("src/lib.rs", "", true, true, true, None, || false, || None).is_some());
-    // R65.3-4: a file of an inert kind that the code reads at build time is not inert; the same
-    // file with no reader stays inert.
-    for file in ["notes.txt", "README.md", "logo.png"] {
-        assert!(file_spotlight(file, "", true, false, false, None, || false, || Some("src/lib.rs".into())).is_some_and(|text| text.starts_with("a file that the code reads at build time")), "{file}");
-        assert_eq!(file_spotlight(file, "", true, false, false, None, || false, || None), None, "{file}");
-    }
+    assert!(file_spotlight("src/lib.rs", "", true, true, true, None, || false).is_some());
 }
 
 #[test]
@@ -7848,12 +7840,12 @@ fn a_changed_type_in_a_pattern_is_no_new_name_of_a_local() {
 
 // ---- Batch 9a (design 50): the syntax tree model is the default ----
 
-/// A step check in the default mode (design 50): no compiled check and no body oracle.
+/// A syntax-only check (design 50; R83.1-3 since design 83): no compiler data and no body oracle.
 fn run_tree(before: &str, after: &str) -> StepReport {
     let (_d1, old) = load(before);
     let (_d2, new) = load(after);
     let mut step = step(Vec::new());
-    step.compiled = false;
+    step.syntax_only = true;
     verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report
 }
 
@@ -7865,7 +7857,10 @@ fn plain_texts(report: &StepReport) -> Vec<String> {
 const CONDITION: &str = "pub fn f(x: u32) -> u32 {\n    if x > 3 {\n        1\n    } else {\n        0\n    }\n}\n";
 
 /// Design 50: a fact of the default mode has no compare result, also not in the JSON form.
-// rule+ R49.3-5 R50.1-1
+/// Design 83: only the syntax-only check has such facts; a step of the author has a compare
+/// result on each fact.
+// rule+ R83.1-3
+// rule- R83.1-3
 #[test]
 fn a_fact_of_the_default_mode_has_no_compare_result() {
     let after = CONDITION.replace("x > 3", "x > 3 && x < 9");
@@ -8653,7 +8648,7 @@ fn yard_report(pairs: &[(&str, &str)]) -> StepReport {
     let (_d1, old) = load_with(&manifest, YARD);
     let (_d2, new) = load_with(&manifest, &swap(YARD, pairs));
     let mut step = step(Vec::new());
-    step.compiled = false;
+    step.syntax_only = true;
     verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report
 }
 
@@ -8797,7 +8792,7 @@ fn yard_rename_lines(both: &[(&str, &str)], only_after: &[(&str, &str)]) -> Vec<
     let (_d1, old) = load_with(&manifest, &before);
     let (_d2, new) = load_with(&manifest, &swap(&swap(&before, &YARD_RENAME), only_after));
     let mut run = step(Vec::new());
-    run.compiled = false;
+    run.syntax_only = true;
     report_lines(&verify_step_with(&StepInput { step: &run, before: &old, after: &new }, &NoOracle, &NoOracle, true).report)
 }
 
@@ -8966,7 +8961,7 @@ fn run_agent(before: &str, after: &str, same: &[&str], change: &[&str]) -> StepR
     let (_d1, old) = load(before);
     let (_d2, new) = load(after);
     let mut step = step(Vec::new());
-    step.compiled = false;
+    step.syntax_only = true;
     step.agent = semilla_core::AgentFacts { same: same.iter().map(|text| text.to_string()).collect(), change: change.iter().map(|text| text.to_string()).collect(), ..Default::default() };
     verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report
 }
@@ -9304,7 +9299,7 @@ fn run_agent_files(before: &[(&str, &str)], after: &[(&str, &str)], same: &[&str
     let (_d1, old) = load_files(before);
     let (_d2, new) = load_files(after);
     let mut step = step(Vec::new());
-    step.compiled = false;
+    step.syntax_only = true;
     step.agent = semilla_core::AgentFacts { same: same.iter().map(|text| text.to_string()).collect(), change: change.iter().map(|text| text.to_string()).collect(), ..Default::default() };
     verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report
 }
@@ -9914,7 +9909,7 @@ fn run_tagged(before: &[(&str, &str)], after: &[(&str, &str)], same: &[&str], ch
     let (_d1, old) = load_files(before);
     let (_d2, new) = load_files(after);
     let mut step = step(Vec::new());
-    step.compiled = false;
+    step.syntax_only = true;
     step.agent = semilla_core::AgentFacts { same: same.iter().map(|text| text.to_string()).collect(), change: change.iter().map(|text| text.to_string()).collect(), ..Default::default() };
     step.tags = tags.iter().map(|text| text.to_string()).collect();
     verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report

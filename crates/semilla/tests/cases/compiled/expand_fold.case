@@ -1,7 +1,6 @@
 note: four calls with the same change of their expansion fold into one line with the count
 rule+: R63.3-5 R63.3-7
 rule-: R63.3-5
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -26,7 +25,7 @@ pub fn e(w: u32) -> u32 { bump!(w * 2) }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:

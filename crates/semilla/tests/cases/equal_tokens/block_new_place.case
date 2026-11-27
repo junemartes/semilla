@@ -22,29 +22,32 @@ pub fn read(p: *const u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f2)
       in: depot::read
       lines: src/lib.rs:4, src/lib.rs:-5-6
-      to state it: --change 'depot::read=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::read=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::read=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   other facts, filled in by Semilla:
-  ◆ f1 derived: extracted variable `n` = `check(p)` (1 use) at `depot::read/S0` [move]
+  ◆ f2 derived: changed literal `1` → `2` at `depot::read/S0/body/tail/args[0]` [semantics · code different]
+      affected bodies: depot::read (with 1 other edit of this body)
+      equivalence: not decided alone: a cast (PointerExposeAddress): p as u32 (src/lib.rs:-1); the body: not decided: a cast (PointerExposeAddress): p as u32 (src/lib.rs:-1)
       ! unsafe code: the changed body has an `unsafe` block
-  ◆ f2 derived: changed literal `1` → `2` at `depot::read/S0/body/tail/args[0]` [semantics]
+  ◆ f1 derived: extracted variable `n` = `check(p)` (1 use) at `depot::read/S0` [move · code different]
+      ! the compiled code changes: depot::read (with 1 other edit of this body)
+      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: not decided: a cast (PointerExposeAddress): p as u32 (src/lib.rs:-1)
       ! unsafe code: the changed body has an `unsafe` block
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::read (src/lib.rs:2): same graph (the edit keeps the control flow); not decided (a cast (PointerExposeAddress): p as u32 (src/lib.rs:-1))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: unsafe code: depot::read/S1/body/tail/args[0]
   ! spotlight: unsafe code: depot::read/S1/body/tail/recv
 
 === positions
-◆ f1 derived: extracted variable `n` = `check(p)` (1 use) at `depot::read/S0` [move]
-    lines: src/lib.rs:3-4, src/lib.rs:-3-4
-◆ f2 derived: changed literal `1` → `2` at `depot::read/S0/body/tail/args[0]` [semantics]
+◆ f2 derived: changed literal `1` → `2` at `depot::read/S0/body/tail/args[0]` [semantics · code different]
     lines: src/lib.rs:4, src/lib.rs:-5-6
+◆ f1 derived: extracted variable `n` = `check(p)` (1 use) at `depot::read/S0` [move · code different]
+    lines: src/lib.rs:3-4, src/lib.rs:-3-4
