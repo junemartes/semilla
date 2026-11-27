@@ -921,37 +921,62 @@ pub static TRANSFORM_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::At
 /// The one N0 text of a name on a side, with its element ranges: `None` if the targets of the
 /// name have more than one text or no element data.
 fn one_text<'g>(side: &'g Side, name: &str) -> Option<(&'g str, &'g elements::RecordElements)> {
+    one_body(side, name).map(|(text, record, _)| (text, record))
+}
+
+/// [`one_text`] with the form of the equivalence check of the same record (R95.2-1).
+fn one_body<'g>(side: &'g Side, name: &str) -> Option<(&'g str, &'g elements::RecordElements, Option<&'g lazy::LazyText>)> {
     let group = side.group("n0", name)?;
     let texts: BTreeSet<&String> = group.texts.values().flatten().collect();
     let [text] = texts.into_iter().collect::<Vec<_>>()[..] else { return None };
     let target = group.texts.iter().find(|(_, list)| list.contains(text)).map(|(target, _)| target)?;
     let record = group.elements.get(target)?.first()?.as_deref()?;
-    Some((text.as_str(), record))
+    let form = group.forms.get(target).and_then(|list| list.first());
+    Some((text.as_str(), record, form))
 }
 
-/// The def paths of the direct calls of a canonical text: the text between ` {` and `}(`.
+/// The def paths of the direct calls of a canonical text (`transform::called_paths`).
 fn called_paths(text: &str) -> BTreeSet<&str> {
-    let mut out = BTreeSet::new();
-    let mut from = 0;
-    while let Some(found) = text[from..].find("}(") {
-        let end = from + found;
-        if let Some(start) = text[..end].rfind(" {") {
-            let path = &text[start + 2..end];
-            if !path.is_empty() && !path.contains([' ', '{', '}', '(', ')']) {
-                out.insert(path);
-            }
-        }
-        from = end + 2;
+    text.lines().flat_map(transform::called_paths).collect()
+}
+
+/// [R95.3-1] [R95.4-1] The body of a call text on a side, with the generic arguments of the
+/// call: the body with the name of the call text, else the one body whose name has the path of
+/// the call with the generic parameters in place of the arguments (`depot::part` for
+/// `depot::part::<u32>`, `<depot::Wrap<T> as depot::Tax>::rate` for `<depot::Wrap<u32> as
+/// depot::Tax>::rate`). `None`: no body, or two bodies fit.
+fn resolve_target(side: &Side, index: &std::cell::OnceCell<BTreeMap<String, Vec<String>>>, path: &str) -> Option<transform::Target> {
+    let bind = |name: &str| -> Option<transform::Target> {
+        let (text, _) = one_text(side, name)?;
+        let params = transform::generic_names(text);
+        let args = transform::bind_args(path, name, &params)?;
+        Some(transform::Target { path: path.to_string(), name: name.to_string(), args: if params.is_empty() { Vec::new() } else { args }, closure: false })
+    };
+    if side.names.contains_key(path) {
+        return bind(path);
     }
-    out
+    let index = index.get_or_init(|| {
+        let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for name in side.names.keys() {
+            out.entry(transform::skeleton(name)).or_default().push(name.clone());
+        }
+        out
+    });
+    let found: Vec<transform::Target> = index.get(&transform::skeleton(path))?.iter().filter_map(|name| bind(name)).collect();
+    match <[transform::Target; 1]>::try_from(found) {
+        Ok([one]) => Some(one),
+        Err(_) => None,
+    }
 }
 
 /// [R94.1-1] [R94.2-1] [R94.4-2] The checks of design 94 of each changed body pair with element
 /// data (the source bodies of one name, R61.14-1, get no check): an extract (a call of the new
 /// body to a callee that the step adds or that does not change), an inline (the reverse), and a
-/// new order of the same parts.
+/// new order of the same parts. [R95.3-1] [R95.4-1] A call of a generic callee or of a trait
+/// method that rustc resolves to an impl method of the workspace is a candidate too.
 fn transforms(before: &Side, after: &Side, results: &mut [BodyComparison]) {
     let equal: BTreeSet<String> = results.iter().filter(|result| result.place.is_none() && matches!(result.status, BodyStatus::Equal { .. })).map(|result| result.name.clone()).collect();
+    let indexes = [std::cell::OnceCell::new(), std::cell::OnceCell::new()];
     for result in results.iter_mut() {
         if result.place.is_some() || !matches!(result.status, BodyStatus::Different { .. }) {
             continue;
@@ -961,45 +986,43 @@ fn transforms(before: &Side, after: &Side, results: &mut [BodyComparison]) {
             continue;
         }
         let name = result.name.clone();
-        let (Some(old), Some(new)) = (one_text(before, &name), one_text(after, &name)) else { continue };
+        let (Some(old), Some(new)) = (one_body(before, &name), one_body(after, &name)) else { continue };
+        // [R95.2-1] The effect summary of each call of the two versions.
+        let facts = [old.2.and_then(|form| form.as_deref()).and_then(transform::call_facts), new.2.and_then(|form| form.as_deref()).and_then(transform::call_facts)];
+        let (old, new) = ((old.0, old.1), (new.0, new.1));
         let sides = [transform::Side { name: &name, text: old.0, record: old.1 }, transform::Side { name: &name, text: new.0, record: new.1 }];
         let mut found: Vec<transform::Transform> = Vec::new();
-        // [R94.5-1] A call with generic arguments of a callee that the step adds or removes: the
-        // check does not put a generic callee in (the text of the callee has its parameters, not
-        // the arguments of the call).
-        for (text, side, kind) in [(new.0, after, transform::Kind::Extract), (old.0, before, transform::Kind::Inline)] {
-            let other = if kind == transform::Kind::Extract { before } else { after };
+        for (text, kind) in [(new.0, transform::Kind::Extract), (old.0, transform::Kind::Inline)] {
+            let (at, other) = if kind == transform::Kind::Extract { (1, 0) } else { (0, 1) };
+            let trees = [before, after];
             for path in called_paths(text) {
-                let Some((base, _)) = path.split_once("::<") else { continue };
-                if base != name && side.names.contains_key(base) && !other.names.contains_key(base) {
-                    found.push(transform::Transform { kind, callee: base.to_string(), refused: Some("a call with generic arguments: the check puts in no generic callee (the text of the callee has its parameters, not the arguments of the call)".into()), ..Default::default() });
+                let Some(target) = resolve_target(trees[at], &indexes[at], path) else { continue };
+                // An extract: a callee that the step adds, or that does not change; an inline: a
+                // callee that the step removes, or that does not change.
+                let one_side = !trees[other].names.contains_key(&target.name);
+                if target.name == name || !(one_side || equal.contains(&target.name)) {
+                    continue;
+                }
+                if let Some((text, record)) = one_text(trees[at], &target.name) {
+                    found.extend(transform::check_target([&sides[0], &sides[1]], &transform::Side { name: &target.name, text, record }, &target, kind, diff, facts[at].as_ref()));
                 }
             }
-        }
-        // An extract: a callee of the new body that the step adds, or that does not change.
-        for path in called_paths(new.0) {
-            let added = !before.names.contains_key(path);
-            if path == name || !after.names.contains_key(path) || !(added || equal.contains(path)) {
-                continue;
-            }
-            if let Some((text, record)) = one_text(after, path) {
-                found.extend(transform::check([&sides[0], &sides[1]], &transform::Side { name: path, text, record }, transform::Kind::Extract, diff));
-            }
-        }
-        // An inline: a callee of the old body that the step removes, or that does not change.
-        for path in called_paths(old.0) {
-            let removed = !after.names.contains_key(path);
-            if path == name || !before.names.contains_key(path) || !(removed || equal.contains(path)) {
-                continue;
-            }
-            if let Some((text, record)) = one_text(before, path) {
-                found.extend(transform::check([&sides[0], &sides[1]], &transform::Side { name: path, text, record }, transform::Kind::Inline, diff));
+            // [R95.6-1] A closure that the body makes and calls: an extract into a closure that
+            // the step adds, or an inline of a closure that the step removes.
+            for closure in transform::closure_bodies(text) {
+                if trees[other].names.contains_key(&closure) && !equal.contains(&closure) {
+                    continue;
+                }
+                if let Some((text, record)) = one_text(trees[at], &closure) {
+                    let target = transform::Target { path: closure.clone(), name: closure.clone(), args: Vec::new(), closure: true };
+                    found.extend(transform::check_target([&sides[0], &sides[1]], &transform::Side { name: &closure, text, record }, &target, kind, diff, facts[at].as_ref()));
+                }
             }
         }
         transform::mark_ties(&mut found);
         found.truncate(transform::MOST_CANDIDATES);
         diff.transforms = found;
-        diff.reorder = transform::permutation(old, new);
+        diff.reorder = transform::permutation_with(old, new, [facts[0].as_ref(), facts[1].as_ref()], Some(diff));
     }
 }
 
@@ -1298,6 +1321,9 @@ struct Group {
     /// The control flow graph of each record, by target (at N0), with the rename map on the
     /// call texts (design 60).
     graphs: BTreeMap<String, Vec<Option<std::sync::Arc<graph::RecordGraph>>>>,
+    /// [R95.2-1] The form of the equivalence check of each record, by target (at N0): the
+    /// effect summary of each call (R64.3-1) and the body that rustc resolves it to.
+    forms: BTreeMap<String, Vec<lazy::LazyText>>,
     /// The source file of the N0 record of each target (design 61.14, R61.14-1).
     files: BTreeMap<String, String>,
     /// The build settings of the unit of each target, with no feature (R61.16-2).
@@ -1545,6 +1571,7 @@ impl Group {
             self.units.entry(target.clone()).or_insert_with(|| record.unit.clone());
             self.elements.entry(target.clone()).or_default().push(record.elements.clone());
             self.graphs.entry(target.clone()).or_default().push(record.graph.as_ref().map(|found| graph::renamed(found, renames)));
+            self.forms.entry(target.clone()).or_default().push(record.q.clone());
         }
         self.texts.entry(target.clone()).or_default().insert(renamed);
         self.callees.extend(record.callees.iter().map(|callee| paths::rename_cow(callee, renames).into_owned()));
@@ -1580,6 +1607,7 @@ impl Group {
             from_n2: self.from_n2,
             elements: keep(&self.elements, targets),
             graphs: keep(&self.graphs, targets),
+            forms: keep(&self.forms, targets),
             files: keep(&self.files, targets),
             units: keep(&self.units, targets),
             digests: self.digests.as_ref().map(|digests| keep(digests, targets)),

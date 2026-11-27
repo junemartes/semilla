@@ -229,6 +229,9 @@ pub struct MirTransform {
     pub left: [Vec<MirElement>; 2],
     /// True if nothing differs after the check.
     pub equal: bool,
+    /// [R95.3-1] [R95.4-1] [R95.5-1] [R95.5-2] [R95.6-1] The rules of design 95 that the check
+    /// used, the most specific first, each with a short text.
+    pub via: Vec<(String, String)>,
 }
 
 /// [R94.4-2] A new order of the same parts of a body pair (design 94).
@@ -241,6 +244,11 @@ pub struct MirReorder {
     pub dependent: Vec<(Option<MirPlace>, Option<MirPlace>, String)>,
     /// The old places of the elements whose order changes.
     pub moved: Vec<MirPlace>,
+    /// [R95.1-1] The places of the elements that are not a part of the new order (old 0, new 1):
+    /// the real edits of the body. Empty: the change is only a new order.
+    pub residue: [Vec<MirPlace>; 2],
+    /// [R95.2-1] The count of the calls of the moved parts whose effect summary has no effect.
+    pub pure_calls: usize,
 }
 
 /// One compile unit of a checked build, from the record of the compiler (batch 5t, part A).

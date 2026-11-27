@@ -1285,10 +1285,11 @@ fn mir_diff(diff: semilla_normal::elements::ElementDiff) -> semilla_verify::MirD
                 callee_at: found.callee_at.into_iter().map(at).collect(),
                 left: [old.into_iter().map(element).collect(), new.into_iter().map(element).collect()],
                 equal: found.equal,
+                via: found.via,
             }
         })
         .collect();
-    let reorder = diff.reorder.map(|found| semilla_verify::MirReorder { flips: found.flips, dependent: found.dependent.into_iter().map(|(a, b, cause)| (a.map(at), b.map(at), cause)).collect(), moved: found.moved.into_iter().map(at).collect() });
+    let reorder = diff.reorder.map(|found| semilla_verify::MirReorder { flips: found.flips, dependent: found.dependent.into_iter().map(|(a, b, cause)| (a.map(at), b.map(at), cause)).collect(), moved: found.moved.into_iter().map(at).collect(), residue: found.residue.map(|list| list.into_iter().map(at).collect()), pure_calls: found.pure_calls });
     semilla_verify::MirDiff { changed, old: diff.old.into_iter().map(element).collect(), new: diff.new.into_iter().map(element).collect(), other: diff.other, pairs, no_symbols: diff.no_symbols, evaluated: diff.evaluated, own: diff.own.into_iter().map(|(side, own)| (side, symbol(own))).collect(), transforms, reorder }
 }
 

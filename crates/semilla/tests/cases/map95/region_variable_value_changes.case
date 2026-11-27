@@ -1,0 +1,60 @@
+note: an extracted variable whose value reads a constant that the step changes: its elements are a real edit, so no extract
+rule-: R95.1-2
+must_not_match: ◆ f\d+ extract
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+const K: u32 = 3;
+
+fn keep(x: u32) -> u32 {
+    x.rotate_left(3)
+}
+
+pub fn total(a: u32, b: u32) -> u32 {
+    keep(a.wrapping_mul(K) ^ b)
+}
+=== new src/lib.rs
+const K: u32 = 4;
+
+fn keep(x: u32) -> u32 {
+    x.rotate_left(3)
+}
+
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = a.wrapping_mul(K) ^ b;
+    keep(s)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:7): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::K=TEXT'
+  real edits:
+  item `depot::K`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `depot::K` changed: 3 → 4 [semantics · code different]
+      not stated (src/lib.rs:1, src/lib.rs:-1); to state it: --change 'depot::K=TEXT'
+      affected bodies: depot::total
+      through: `depot::K` (1 body)
+  item `depot::total`:
+  ◆ f2 replace (Semilla; R94.3-2, an extracted variable: the MIR is not equal after the normal form, and it is not a new order of the same parts; 2 nodes): extracted variable `s` = `a.wrapping_mul(K) ^ b` (1 use) at `depot::total/S0` [move · code different]
+      not stated (src/lib.rs:8-9, src/lib.rs:-8); to state it: --change 'depot::total=TEXT'
+      ! the compiled code changes: depot::total
+      equivalence: MIR changes
+  cover: each of the 5 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:7): same graph (the edit keeps the control flow); MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `depot::K` changed: 3 → 4 [semantics · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1
+◆ f2 replace (Semilla; R94.3-2, an extracted variable: the MIR is not equal after the normal form, and it is not a new order of the same parts; 2 nodes): extracted variable `s` = `a.wrapping_mul(K) ^ b` (1 use) at `depot::total/S0` [move · code different]
+    lines: src/lib.rs:8-9, src/lib.rs:-8

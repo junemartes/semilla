@@ -1,0 +1,55 @@
+note: an extract of a callee with an early return
+rule+: R95.5-1
+refactor: yes
+must_match: ◆ f\d+ extract \(Semilla; R95\.5-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32) -> u32 {
+    let s = if a > 9 { 0 } else { a.wrapping_mul(2) };
+    s.wrapping_add(1)
+}
+=== new src/lib.rs
+pub fn total(a: u32) -> u32 {
+    let s = part(a);
+    s.wrapping_add(1)
+}
+
+fn part(a: u32) -> u32 {
+    if a > 9 {
+        return 0;
+    }
+    a.wrapping_mul(2)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::part` (src/lib.rs:6): an added body: `#[new(depot::part)] fn part_new(a: u32) -> bool { let new = after::depot::part(a); true }`
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::total`:
+  ◆ f1 extract (Semilla; R95.5-1, the MIR of `depot::part` put in at the call is the MIR of the old code (4 element place(s) explained); an early `return`: 2 way(s) out of the callee, 1 write(s) of `()` with no reader (R95.5-1); 2 nodes; one change (R92.6-1)): changed call: `if a > 9 { 0 } else { a.wrapping_mul(2) }` → `part(a)` at `depot::total/S0/init`; added `depot::part` [semantics · code different]
+      affected bodies: depot::total, depot::part
+      control flow: − branch `a > 9` (src/lib.rs:-2): false → call `num::<impl u32>::wrapping_mul`, true → call `num::<impl u32>::wrapping_add`
+      control flow: ~ call `num::<impl u32>::wrapping_mul` → `part` (src/lib.rs:-2, src/lib.rs:2)
+      control flow: + arrow entry (src/lib.rs:1) → call `part` (src/lib.rs:2)
+      control flow: … 1 more (semilla expand --step 0)
+      control flow: + graph of `depot::part`: 4 points, 4 arrows (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 9 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::part (src/lib.rs:6): graph added: 4 points, 4 arrows
+    depot::total (src/lib.rs:1): graph changes: −1 branch, 1 changed call target, +1 arrow, −3 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 extract (Semilla; R95.5-1, the MIR of `depot::part` put in at the call is the MIR of the old code (4 element place(s) explained); an early `return`: 2 way(s) out of the callee, 1 write(s) of `()` with no reader (R95.5-1); 2 nodes; one change (R92.6-1)): changed call: `if a > 9 { 0 } else { a.wrapping_mul(2) }` → `part(a)` at `depot::total/S0/init`; added `depot::part` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:5-11, src/lib.rs:-2

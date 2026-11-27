@@ -1,0 +1,58 @@
+note: an extracted variable in a body with an other edit: one extract entry, and the other edit stays a real edit
+rule+: R95.1-2
+must_match: ◆ f\d+ extract \(Semilla; R95\.1-2
+must_match: ◆ f\d+ replace .*changed literal `5` → `6`
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+fn keep(x: u32) -> u32 {
+    x.rotate_left(3)
+}
+
+pub fn total(a: u32, b: u32) -> u32 {
+    let t = a ^ 5;
+    keep(a.wrapping_mul(3) ^ b) ^ t
+}
+=== new src/lib.rs
+fn keep(x: u32) -> u32 {
+    x.rotate_left(3)
+}
+
+pub fn total(a: u32, b: u32) -> u32 {
+    let t = a ^ 6;
+    let s = a.wrapping_mul(3) ^ b;
+    keep(s) ^ t
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:5): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::total`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `5` → `6` at `depot::total/S0/init/rhs` [semantics · code different]
+      not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite 5 => 6'
+      affected bodies: depot::total (with 1 other edit of this body)
+      equivalence: MIR changes alone; the body: MIR changes
+  transformations:
+  item `depot::total`:
+  ◆ f1 extract (Semilla; R95.1-2, equal MIR after the normal form, under one map of the locals and the blocks; the check reads the region: the other edits of the body are real edits; 2 nodes): extracted variable `s` = `a.wrapping_mul(3) ^ b` (1 use) at `depot::total/S1` [move · code different]
+      ! the compiled code changes: depot::total (with 1 other edit of this body)
+      equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
+  cover: each of the 5 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:5): same graph (the edit keeps the control flow); MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `5` → `6` at `depot::total/S0/init/rhs` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6
+◆ f1 extract (Semilla; R95.1-2, equal MIR after the normal form, under one map of the locals and the blocks; the check reads the region: the other edits of the body are real edits; 2 nodes): extracted variable `s` = `a.wrapping_mul(3) ^ b` (1 use) at `depot::total/S1` [move · code different]
+    lines: src/lib.rs:7-8, src/lib.rs:-7

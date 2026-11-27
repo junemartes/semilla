@@ -1052,8 +1052,9 @@ fn map_problems(work: &mut Work, folder: &Path, output: &str, state: &str, refac
         // [R94.3-2] [R94.4-3] A transformation whose parts depend on each other has the mark
         // "the order can matter" after its kind.
         let kind = ENTRY_KINDS.iter().find(|kind| rest.starts_with(&format!("{kind} (")) || rest.starts_with(&format!("{kind}, syntax only (")) || rest.starts_with(&format!("{kind}, the order can matter (")));
-        // [R92.4-1] [R92.3-1] [R94.1-1] The rules of designs 92 and 94 check an entry too.
-        let checked = rest.split_once("): ").is_some_and(|(head, _)| head.contains("; R90.") || head.contains("; R92.") || head.contains("; R94."));
+        // [R92.4-1] [R92.3-1] [R94.1-1] [R95.1-1] The rules of designs 92, 94, and 95 check an
+        // entry too.
+        let checked = rest.split_once("): ").is_some_and(|(head, _)| head.contains("; R90.") || head.contains("; R92.") || head.contains("; R94.") || head.contains("; R95."));
         if kind.is_none() || !checked {
             problems.push(format!("{state}: the entry `{}` has no kind, no source, or no check", line.chars().take(120).collect::<String>()));
         }

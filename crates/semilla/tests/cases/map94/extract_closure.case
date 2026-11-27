@@ -1,6 +1,7 @@
-note: a region that becomes a closure stays real edits: the check puts no closure in at its call (a limit of design 94, O8)
-rule-: R94.1-1
-must_not_match: ◆ f\d+ extract
+note: a region that becomes a closure that the body calls: since design 95 one extract entry (R95.6-1; before, a limit of design 94, O8)
+rule+: R95.6-1
+refactor: yes
+must_match: ◆ f\d+ extract \(Semilla; R95\.6-1
 === both Cargo.toml
 [package]
 name = "depot"
@@ -26,26 +27,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
     MIR changes with no claim: `depot::total::{closure#0} |x: u32| x * 3 + b` (src/lib.rs:2): the template of `depot::total` covers its item `depot::total`
-  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  real edits:
+  changed nodes: 3 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
   item `depot::total`:
-  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): changed pattern `s` → `part` at `depot::total/S0/pat` [semantics · code different]
-      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite a * 3 + $a => |x: u32| x * 3 + $a', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f1, f2)
-      affected bodies: depot::total (with 2 other edits of this body)
-      control flow: moved check `overflow: a * 3` (src/lib.rs:-2) to `depot::total::{closure#0}`: ok → check `overflow: a * 3 + b`, fail → panic `overflow` (the same line for f2)
-      control flow: moved check `overflow: a * 3 + b` (src/lib.rs:-2) to `depot::total::{closure#0}`: ok → check `overflow: s + 1`, fail → panic `overflow` (the same line for f2)
-      control flow: moved panic `overflow` (src/lib.rs:-2) to `depot::total::{closure#0}`
-      control flow: … 2 more (semilla expand --step 0)
-      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
-  ◆ f2 replace (Semilla; R90.2-2, 5 changed MIR elements; 2 nodes; one change (R92.6-1)): changed expression `a * 3 + b` → `|x: u32| x * 3 + b` at `depot::total/S0/init`; added `let` `let s = part(a);` at `depot::total/S1` [semantics · code different]
-      not stated (src/lib.rs:2-3, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite a * 3 + $a => |x: u32| x * 3 + $a', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f1, f2)
+  ◆ f1 extract (Semilla; R95.6-1, the MIR of `depot::total::{closure#0}` put in at the call is the MIR of the old code (3 element place(s) explained); the closure with 1 capture(s), 1 by reference, called in the body (R95.6-1); 3 nodes; one change (R92.6-1)): changed pattern `s` → `part` at `depot::total/S0/pat`; changed expression `a * 3 + b` → `|x: u32| x * 3 + b` at `depot::total/S0/init`; added `let` `let s = part(a);` at `depot::total/S1` [semantics · code different]
       affected bodies: depot::total (with 1 other edit of this body)
-      control flow: the same line as f1
-      control flow: the same line as f1
+      control flow: moved check `overflow: a * 3` (src/lib.rs:-2) to `depot::total::{closure#0}`: ok → check `overflow: a * 3 + b`, fail → panic `overflow`
+      control flow: moved check `overflow: a * 3 + b` (src/lib.rs:-2) to `depot::total::{closure#0}`: ok → check `overflow: s + 1`, fail → panic `overflow`
       control flow: moved panic `overflow` (src/lib.rs:-2) to `depot::total::{closure#0}`
       control flow: … 2 more (semilla expand --step 0)
       control flow: + call `part` [closure] (src/lib.rs:3): return → check `overflow: s + 1`
       control flow: + arrow entry (src/lib.rs:1) → call `part` [closure] (src/lib.rs:3)
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
       equivalence: no result alone (the body has 3 edits; an edit of the fact adds or removes a node); the body: MIR changes
   cover: each of the 3 changed line(s) is in a fact
@@ -55,7 +48,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): changed pattern `s` → `part` at `depot::total/S0/pat` [semantics · code different]
-    lines: src/lib.rs:2, src/lib.rs:-2
-◆ f2 replace (Semilla; R90.2-2, 5 changed MIR elements; 2 nodes; one change (R92.6-1)): changed expression `a * 3 + b` → `|x: u32| x * 3 + b` at `depot::total/S0/init`; added `let` `let s = part(a);` at `depot::total/S1` [semantics · code different]
+◆ f1 extract (Semilla; R95.6-1, the MIR of `depot::total::{closure#0}` put in at the call is the MIR of the old code (3 element place(s) explained); the closure with 1 capture(s), 1 by reference, called in the body (R95.6-1); 3 nodes; one change (R92.6-1)): changed pattern `s` → `part` at `depot::total/S0/pat`; changed expression `a * 3 + b` → `|x: u32| x * 3 + b` at `depot::total/S0/init`; added `let` `let s = part(a);` at `depot::total/S1` [semantics · code different]
     lines: src/lib.rs:2-3, src/lib.rs:-2

@@ -1,0 +1,62 @@
+note: an extracted variable whose own value changes, in a body with an other edit: a real edit
+rule-: R95.1-2
+must_not_match: ◆ f\d+ extract
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+fn keep(x: u32) -> u32 {
+    x.rotate_left(3)
+}
+
+pub fn total(a: u32, b: u32) -> u32 {
+    let t = a ^ 5;
+    keep(a.wrapping_mul(3) ^ b) ^ t
+}
+=== new src/lib.rs
+fn keep(x: u32) -> u32 {
+    x.rotate_left(3)
+}
+
+pub fn total(a: u32, b: u32) -> u32 {
+    let t = a ^ 6;
+    let s = a.wrapping_mul(4) ^ b;
+    keep(s) ^ t
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:5): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `5` → `6` at `depot::total/S0/init/rhs` [semantics · code different]
+      not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite 5 => 6' --same 'rewrite a.wrapping_mul(3) ^ b => s', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f1, f2, f3)
+      affected bodies: depot::total (with 2 other edits of this body)
+      equivalence: MIR changes alone; the body: MIR changes
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added `let` `let s = a.wrapping_mul(4) ^ b;` at `depot::total/S1` [semantics · code different]
+      not stated (src/lib.rs:7); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite 5 => 6' --same 'rewrite a.wrapping_mul(3) ^ b => s', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f1, f2, f3)
+      affected bodies: depot::total (with 2 other edits of this body)
+      equivalence: no result alone (the body has 3 edits; an edit of the fact adds or removes a node); the body: MIR changes
+  ◆ f3 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `a.wrapping_mul(3) ^ b` → `s` at `depot::total/tail/lhs/args[0]` [semantics · code different]
+      not stated (src/lib.rs:8, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite 5 => 6' --same 'rewrite a.wrapping_mul(3) ^ b => s', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f1, f2, f3)
+      affected bodies: depot::total (with 2 other edits of this body)
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
+  cover: each of the 5 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:5): same graph (the edit keeps the control flow); MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `5` → `6` at `depot::total/S0/init/rhs` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added `let` `let s = a.wrapping_mul(4) ^ b;` at `depot::total/S1` [semantics · code different]
+    lines: src/lib.rs:7
+◆ f3 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `a.wrapping_mul(3) ^ b` → `s` at `depot::total/tail/lhs/args[0]` [semantics · code different]
+    lines: src/lib.rs:8, src/lib.rs:-7

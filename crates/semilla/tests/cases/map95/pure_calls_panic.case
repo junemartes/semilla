@@ -1,0 +1,60 @@
+note: two calls with no effect that each can panic: the order can matter (the summary keeps the panic)
+rule-: R95.2-1
+must_match: ◆ f\d+ reorder, the order can matter \(Semilla; R94\.4-3, two parts that each can panic
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+fn f(a: u32) -> u32 {
+    a * 7
+}
+
+fn g(b: u32) -> u32 {
+    b + 9
+}
+
+pub fn total(a: u32, b: u32) -> u32 {
+    let x = f(a);
+    let y = g(b);
+    x ^ y
+}
+=== new src/lib.rs
+fn f(a: u32) -> u32 {
+    a * 7
+}
+
+fn g(b: u32) -> u32 {
+    b + 9
+}
+
+pub fn total(a: u32, b: u32) -> u32 {
+    let y = g(b);
+    let x = f(a);
+    x ^ y
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:9): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::total`:
+  ◆ f1 reorder, the order can matter (Semilla; R94.4-3, two parts that each can panic: `f(a)` and `g(b)`): moved statement `let x = f(a);` from `depot::total/S0` to `depot::total/S1` [semantics · code different]
+      not stated (src/lib.rs:11, src/lib.rs:-10); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      affected bodies: depot::total
+      control flow: − arrow entry (src/lib.rs:-9) → call `f` (src/lib.rs:-10)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:9): graph changes: +3 arrows, −3 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 reorder, the order can matter (Semilla; R94.4-3, two parts that each can panic: `f(a)` and `g(b)`): moved statement `let x = f(a);` from `depot::total/S0` to `depot::total/S1` [semantics · code different]
+    lines: src/lib.rs:11, src/lib.rs:-10

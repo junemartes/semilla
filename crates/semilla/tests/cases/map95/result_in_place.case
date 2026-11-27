@@ -1,0 +1,48 @@
+note: an extract whose result goes to a place that is not a local: the value and its copy into the place are one write
+rule+: R95.5-3
+refactor: yes
+must_match: ◆ f\d+ extract \(Semilla; R95\.5-3, the MIR of `depot::part` put in at the call is the MIR of the old code
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(p: &mut u32, a: u32, b: u32) {
+    *p = a ^ b;
+}
+=== new src/lib.rs
+pub fn total(p: &mut u32, a: u32, b: u32) {
+    *p = part(a, b);
+}
+
+fn part(a: u32, b: u32) -> u32 {
+    a ^ b
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::part` (src/lib.rs:5): an added body: `#[new(depot::part)] fn part_new(a: u32, b: u32) -> bool { let new = after::depot::part(a, b); true }`
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(mut p_before: u32, mut p_after: u32, a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::total`:
+  ◆ f1 extract (Semilla; R95.5-3, the MIR of `depot::part` put in at the call is the MIR of the old code (1 element place(s) explained); 1 value(s) go to their place with no local (R95.5-3); 2 nodes; one change (R92.6-1)): changed expression `a ^ b` → `part(a, b)` at `depot::total/S0/rhs`; added `depot::part` [semantics · code different]
+      affected bodies: depot::total, depot::part
+      control flow: + call `part` (src/lib.rs:2): return → return
+      control flow: + arrow entry (src/lib.rs:1) → call `part` (src/lib.rs:2)
+      control flow: + graph of `depot::part`: 2 points, 1 arrow (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::part (src/lib.rs:5): graph added: 2 points, 1 arrow
+    depot::total (src/lib.rs:1): graph changes: +1 call, +2 arrows, −1 arrow; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 extract (Semilla; R95.5-3, the MIR of `depot::part` put in at the call is the MIR of the old code (1 element place(s) explained); 1 value(s) go to their place with no local (R95.5-3); 2 nodes; one change (R92.6-1)): changed expression `a ^ b` → `part(a, b)` at `depot::total/S0/rhs`; added `depot::part` [semantics · code different]
+    lines: src/lib.rs:2-6, src/lib.rs:-2

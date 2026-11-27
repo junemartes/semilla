@@ -43,10 +43,11 @@ fn the_callee_put_in_at_the_call_aligns_with_the_old_region() {
 // rule- R94.5-1
 #[test]
 fn a_call_that_is_not_its_inlined_body_gives_no_check() {
-    // A generic callee: the type of the call is not the signature of the callee.
+    // A callee whose signature is not the type of the call (design 95: a generic callee with no
+    // generic arguments of the call that fit).
     let generic = PART.replace("fn _(_1: u32, _2: u32) -> u32 {", "fn _(_1: T, _2: T) -> T {");
     let found = extract(&generic);
-    assert!(!found[0].holds && found[0].refused.as_deref().is_some_and(|cause| cause.contains("generic")), "{found:#?}");
+    assert!(!found[0].holds && found[0].refused.as_deref().is_some_and(|cause| cause.contains("not the signature")), "{found:#?}");
     // A recursive callee.
     let recursive = PART.replace("_0 = (_4.0: u32);\n        return;", "_0 = const fn(u32, u32) -> u32 {depot::part}(_1, _2) -> [return: bb3, unwind continue];\n    }\n    bb3: {\n        return;");
     let callee = record(PART_EL);
@@ -178,4 +179,127 @@ fn a_place_is_a_local_a_field_or_a_downcast_of_a_place() {
     assert_eq!(place_local("(*_1)"), None);
     assert_eq!(place_local("const u32 = 1"), None);
     assert_eq!(place_local("_3[_4]"), None);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Design 95.
+
+// rule+ R95.3-1
+// rule- R95.3-1
+#[test]
+fn the_generic_arguments_of_a_call_bind_the_parameters_of_the_callee() {
+    let params = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+    assert_eq!(bind_args("depot::part::<u32>", "depot::part", &params(&["T"])), Some(vec!["u32".to_string()]));
+    assert_eq!(bind_args("depot::Wrap::<u32>::get", "depot::Wrap::<T>::get", &params(&["T"])), Some(vec!["u32".to_string()]));
+    assert_eq!(bind_args("<depot::Wrap<(u8, u16)> as depot::Tax>::rate", "<depot::Wrap<T> as depot::Tax>::rate", &params(&["T"])), Some(vec!["(u8, u16)".to_string()]));
+    assert_eq!(bind_args("depot::Wrap::<u32>::map::<f64>", "depot::Wrap::<T>::map", &params(&["T", "U"])), Some(vec!["u32".to_string(), "f64".to_string()]));
+    assert_eq!(bind_args("depot::scaled::<4>", "depot::scaled", &params(&["N"])), Some(vec!["4".to_string()]));
+    assert_eq!(bind_args("depot::pair::<u8, u16>", "depot::pair", &params(&["A", "B"])), Some(vec!["u8".to_string(), "u16".to_string()]));
+    assert_eq!(skeleton("<depot::Wrap<u32> as depot::Tax>::rate"), "<depot::Wrap as depot::Tax>::rate");
+    assert_eq!(skeleton("depot::Wrap::<u32>::get"), "depot::Wrap::get");
+    // Negative: an other path, an other count of arguments, and two values of one parameter.
+    assert_eq!(bind_args("depot::other::<u32>", "depot::part", &params(&["T"])), None);
+    assert_eq!(bind_args("depot::part::<u32, u8>", "depot::part", &params(&["T"])), None);
+    assert_eq!(bind_args("<depot::Pair<u8, u16> as depot::Tax>::rate", "<depot::Pair<T, T> as depot::Tax>::rate", &params(&["T"])), None);
+}
+
+const GENERIC: &str = "fn _(_1: T, _2: T) -> T generics <T#0> {\n    let _0: T;\n    bb0: {\n        _0 = const fn(T, T) -> T {<T as std::cmp::Ord>::max}(_1, _2) -> [return: bb1, unwind: bb2];\n    }\n    bb1: {\n        return;\n    }\n    bb2: {\n        resume;\n    }\n}\n";
+const GENERIC_EL: &str = r#"{"n": 3, "f": ["src/lib.rs"], "r": [[0, 1, 0, 90, 98], [1, 1, 0, 100, 100], [2, 1, 0, 30, 100]], "v": 1}"#;
+
+// rule+ R95.3-1
+// rule- R95.3-1
+#[test]
+fn a_generic_callee_takes_the_arguments_of_the_call() {
+    let record = record(GENERIC_EL);
+    let text = parse_text(GENERIC, &record).expect("a text");
+    assert_eq!(text.generics, vec![("T".to_string(), 0)]);
+    let instance = substitute(&text, &["u32".to_string()]).expect("the instance");
+    let printed = instance.print();
+    // The trait method on the parameter type has the self type of the call; the cleanup block
+    // with only `resume` is `unwind continue`, as in the MIR of an instance.
+    assert!(printed.contains("fn _(_1: u32, _2: u32) -> u32 {") && printed.contains("{<u32 as std::cmp::Ord>::max}(_1, _2) -> [return: bb1, unwind continue]"), "{printed}");
+    // A const parameter takes the value of the call; a path, a field, and a string keep the name.
+    assert_eq!(replace_param("_2 = CheckedMul(_1, const usize = param N#0)", "N", 0, "4"), "_2 = CheckedMul(_1, const usize = 4)");
+    assert_eq!(replace_param("_3 = depot::T::new(const \"T\", (_1.T: u8), T)", "T", 0, "u32"), "_3 = depot::T::new(const \"T\", (_1.T: u8), u32)");
+    // Negative: a parameter with the name of a primitive type, and a count that does not fit.
+    let shadow = parse_text(&GENERIC.replace('T', "u8").replace("u8#0", "u8#0"), &record).expect("a text");
+    assert!(substitute(&shadow, &["u32".to_string()]).is_err());
+    assert!(substitute(&text, &["u32".to_string(), "u8".to_string()]).is_err());
+    // Negative: a drop of a value with a destructor stays; a drop of a scalar goes.
+    assert!(no_drop_glue("u32") && no_drop_glue("&std::string::String") && no_drop_glue("(u8, [bool; 4])") && no_drop_glue("*mut u8"));
+    assert!(!no_drop_glue("std::string::String") && !no_drop_glue("(u8, std::vec::Vec<u8>)") && !no_drop_glue("T"));
+}
+
+// rule+ R95.2-1
+// rule- R95.2-1
+#[test]
+fn a_call_whose_summary_has_no_effect_is_no_effect_part() {
+    let form = r#"{"a": 1, "l": [], "t": [], "f": ["src/lib.rs"], "b": [{"s": [], "t": {"k": {"Call": [{"p": "depot::f", "w": "depot::f", "e": {}}, [], {"l": 2}, 1, "C"]}, "r": [0, 10, 14]}}, {"s": [], "t": {"k": {"Call": [{"p": "depot::g", "w": "depot::g", "e": {"p": true}}, [], {"l": 3}, 2, "C"]}, "r": [0, 20, 24]}}, {"s": [], "t": {"k": {"Call": [{"p": "depot::h", "e": {"w": "a static that can change", "p": true}}, [], {"l": 4}, 3, "C"]}, "r": [0, 30, 34]}}, {"s": [], "t": {"k": {"Call": [{"p": "depot::k"}, [], {"l": 5}, 4, "C"]}, "r": [0, 40, 44]}}]}"#;
+    let facts = call_facts(form).expect("the facts");
+    let at = |start: usize, end: usize| Place { file: "src/lib.rs".into(), start, end };
+    assert_eq!(summary_at(Some(&facts), Some(&at(10, 14))), Some((true, false)));
+    assert_eq!(summary_at(Some(&facts), Some(&at(20, 24))), Some((true, true)));
+    assert_eq!(facts[&at(10, 14)][0].resolved.as_deref(), Some("depot::f"));
+    // Negative: an effect on the world, no summary, and no form at the place: an effect.
+    assert_eq!(summary_at(Some(&facts), Some(&at(30, 34))), Some((false, true)));
+    assert_eq!(summary_at(Some(&facts), Some(&at(40, 44))), None);
+    assert_eq!(summary_at(Some(&facts), Some(&at(50, 54))), None);
+    assert!(call_facts(r#"{"u": "no form: too large"}"#).is_none());
+    // A call with no effect and a `&mut` argument writes its target: an effect part.
+    let text = parse_text("fn _(_1: &mut u32) -> u32 {\n    let _0: u32;\n    bb0: {\n        _0 = const fn(&mut u32) -> u32 {depot::f}(_1) -> [return: bb1, unwind continue];\n    }\n    bb1: {\n        return;\n    }\n}\n", &record(r#"{"n": 2, "f": ["src/lib.rs"], "r": [[0, 1, 0, 10, 14], [1, 1, 0, 15, 15]], "v": 1}"#)).expect("a text");
+    let element = &text.blocks[0].1[0];
+    assert_eq!(effect_facts(&text, &element.text, Some(&facts), element.tokens.as_ref()), (true, true, false, false));
+}
+
+// rule- R95.4-1
+#[test]
+fn a_trait_call_that_the_records_do_not_resolve_gives_no_check() {
+    let (old, new) = (record(OLD_TOTAL_EL), record(NEW_TOTAL_EL));
+    let trait_call = NEW_TOTAL.replace("{depot::part}", "{<depot::Food as depot::Tax>::part}");
+    let before = elements::diff((OLD_TOTAL, &old), (&trait_call, &new)).unwrap();
+    let sides = [Side { name: "depot::total", text: OLD_TOTAL, record: &old }, Side { name: "depot::total", text: &trait_call, record: &new }];
+    let target = Target { path: "<depot::Food as depot::Tax>::part".into(), name: "<depot::Food as depot::Tax>::part".into(), args: Vec::new(), closure: false };
+    let callee = record(PART_EL);
+    let found = check_target([&sides[0], &sides[1]], &Side { name: &target.name, text: PART, record: &callee }, &target, Kind::Extract, &before, None);
+    assert!(found.iter().all(|found| !found.holds && found.refused.as_deref().is_some_and(|cause| cause.contains("do not resolve"))), "{found:#?}");
+    // A form that resolves the call to an other body: no check either.
+    let mut facts = CallFacts::new();
+    facts.insert(Place { file: "src/lib.rs".into(), start: 50, end: 60 }, vec![CallFact { summary: true, resolved: Some("<depot::Fuel as depot::Tax>::part".into()), ..Default::default() }]);
+    let found = check_target([&sides[0], &sides[1]], &Side { name: &target.name, text: PART, record: &callee }, &target, Kind::Extract, &before, Some(&facts));
+    assert!(found.iter().all(|found| !found.holds), "{found:#?}");
+}
+
+// rule+ R95.5-3
+// rule- R95.5-3
+#[test]
+fn a_value_that_goes_to_a_place_through_a_local_is_one_write() {
+    let one = "fn _(_1: &mut u32, _2: u32) -> () {\n    let _0: ();\n    let _3: u32;\n    bb0: {\n        _3 = BitXor(_2, const u32 = 7);\n        (*_1) = _3;\n        _0 = const ();\n        return;\n    }\n}\n";
+    let el = record(r#"{"n": 4, "f": ["src/lib.rs"], "r": [[0, 1, 0, 40, 46], [1, 1, 0, 30, 46], [2, 2, 0, 48, 48]], "v": 1}"#);
+    let mut text = parse_text(one, &el).expect("a text");
+    assert!(fold_into_place(&mut text, 3));
+    assert_eq!(text.blocks[0].1[0].text, "(*_1) = BitXor(_2, const u32 = 7)");
+    assert_eq!(text.blocks[0].1[0].tokens.as_ref().map(|place| place.start), Some(40));
+    // Negative: a second use of the local, and an element between the two.
+    let twice = one.replace("        _0 = const ();\n", "        _0 = const ();\n        (*_1) = _3;\n");
+    let el_twice = record(r#"{"n": 5, "f": ["src/lib.rs"], "r": [[0, 1, 0, 40, 46], [1, 1, 0, 30, 46], [2, 3, 0, 48, 48]], "v": 1}"#);
+    let mut text = parse_text(&twice, &el_twice).expect("a text");
+    assert!(!fold_into_place(&mut text, 3));
+    let between = one.replace("        (*_1) = _3;\n        _0 = const ();\n", "        _0 = const ();\n        (*_1) = _3;\n");
+    let mut text = parse_text(&between, &el).expect("a text");
+    assert!(!fold_into_place(&mut text, 3));
+}
+
+// rule+ R95.1-1
+// rule- R95.1-1
+#[test]
+fn a_residue_element_must_differ_in_the_map_of_the_body() {
+    let el = record(SWAP_EL);
+    let changed = swapped(SWAP_OLD).replace("_5 = CheckedAdd((_3.0: u32), (_4.0: u32))", "_5 = CheckedSub((_3.0: u32), (_4.0: u32))").replace("overflow Add((_3.0: u32), (_4.0: u32))", "overflow Sub((_3.0: u32), (_4.0: u32))");
+    let diff = elements::diff((SWAP_OLD, &el), (&changed, &el)).expect("a diff");
+    let found = permutation_with((SWAP_OLD, &el), (&changed, &el), [None, None], Some(&diff)).expect("a new order of the region");
+    assert!(found.flips > 0 && found.residue.iter().all(|list| !list.is_empty()), "{found:#?}");
+    // Negative: with no element that differs in the map, the residue does not fit: no new order.
+    assert!(permutation_with((SWAP_OLD, &el), (&changed, &el), [None, None], Some(&ElementDiff::default())).is_none());
+    // Negative: with no diff, the whole body must be a new order.
+    assert!(permutation((SWAP_OLD, &el), (&changed, &el)).is_none());
 }

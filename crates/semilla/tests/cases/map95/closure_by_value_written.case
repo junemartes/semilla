@@ -1,0 +1,54 @@
+note: a closure that captures a copy, and the body writes the place before the call: the closure has the old value, so no pure extract
+rule-: R95.6-1
+must_not_match: ◆ f\d+ extract \(Semilla; R95\.6-1, the MIR of `depot::total::\{closure#0\}` put in at the call is the MIR of the old code
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32, mut b: u32) -> u32 {
+    b = b.wrapping_add(1);
+    let s = a.wrapping_mul(3) ^ b;
+    s.rotate_left(1) ^ b
+}
+=== new src/lib.rs
+pub fn total(a: u32, mut b: u32) -> u32 {
+    let part = move |x: u32| x.wrapping_mul(3) ^ b;
+    b = b.wrapping_add(1);
+    let s = part(a);
+    s.rotate_left(1) ^ b
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+    MIR changes with no claim: `depot::total::{closure#0} move |x: u32| x.wrapping_mul(3) ^ b` (src/lib.rs:2): the template of `depot::total` covers its item `depot::total`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::total`:
+  ◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let part = move |x: u32| x.wrapping_mul(3) ^ b;` at `depot::total/S0` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a.wrapping_mul(3) ^ b => part($a)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
+      affected bodies: depot::total (with 1 other edit of this body)
+      control flow: + graph of `depot::total::{closure#0} move |x: u32| x.wrapping_mul(3) ^ b`: 3 points, 2 arrows (semilla expand --step 0)
+      equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
+  ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `a.wrapping_mul(3) ^ b` → `part(a)` at `depot::total/S1/init` [semantics · code different]
+      not stated (src/lib.rs:4, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a.wrapping_mul(3) ^ b => part($a)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
+      affected bodies: depot::total (with 1 other edit of this body)
+      control flow: ~ call `num::<impl u32>::wrapping_mul` → `part` [closure] (src/lib.rs:-3, src/lib.rs:4)
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::total (src/lib.rs:1): same structure: 1 changed call target; MIR changes
+    depot::total::{closure#0} move |x: u32| x.wrapping_mul(3) ^ b (src/lib.rs:2): graph added: 3 points, 2 arrows
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let part = move |x: u32| x.wrapping_mul(3) ^ b;` at `depot::total/S0` [semantics · code different]
+    lines: src/lib.rs:2
+◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `a.wrapping_mul(3) ^ b` → `part(a)` at `depot::total/S1/init` [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:-3

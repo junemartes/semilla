@@ -1,0 +1,60 @@
+note: an extract and a moved statement in one body: one extract entry and one reorder entry
+rule+: R95.1-3
+refactor: yes
+must_match: ◆ f\d+ extract \(Semilla; R94\.1-1
+must_match: ◆ f\d+ reorder \(Semilla; R95\.1-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let x = a ^ 2;
+    let y = b | 3;
+    let s = x.wrapping_mul(3) ^ y;
+    s.rotate_left(1)
+}
+=== new src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let y = b | 3;
+    let x = a ^ 2;
+    let s = part(x, y);
+    s.rotate_left(1)
+}
+
+fn part(x: u32, y: u32) -> u32 {
+    x.wrapping_mul(3) ^ y
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::part` (src/lib.rs:8): an added body: `#[new(depot::part)] fn part_new(x: u32, y: u32) -> bool { let new = after::depot::part(x, y); true }`
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 3 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::total`:
+  ◆ f1 reorder (Semilla; R95.1-1, the statements in another order; the parts are independent (1 pair(s) of MIR elements change order); the check reads the region: the other edits of the body are real edits): moved statement `let x = a ^ 2;` from `depot::total/S0` to `depot::total/S1` [semantics · code different]
+      affected bodies: depot::total (with 1 other edit of this body)
+      control flow: ~ call `num::<impl u32>::wrapping_mul` → `part` (src/lib.rs:-4, src/lib.rs:4)
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
+  ◆ f2 extract (Semilla; R94.1-1, the MIR of `depot::part` put in at the call is the MIR of the old code (2 element place(s) explained); 2 nodes; one change (R92.6-1)): changed expression `x.wrapping_mul(3) ^ y` → `part(x, y)` at `depot::total/S2/init`; added `depot::part` [semantics · code different]
+      affected bodies: depot::total, depot::part
+      control flow: ~ call `num::<impl u32>::wrapping_mul` → `part` (src/lib.rs:-4, src/lib.rs:4)
+      control flow: + graph of `depot::part`: 3 points, 2 arrows (semilla expand --step 0)
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
+  cover: each of the 8 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::part (src/lib.rs:8): graph added: 3 points, 2 arrows
+    depot::total (src/lib.rs:1): same structure: 1 changed call target; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 reorder (Semilla; R95.1-1, the statements in another order; the parts are independent (1 pair(s) of MIR elements change order); the check reads the region: the other edits of the body are real edits): moved statement `let x = a ^ 2;` from `depot::total/S0` to `depot::total/S1` [semantics · code different]
+    lines: src/lib.rs:3-4, src/lib.rs:-2, src/lib.rs:-4
+◆ f2 extract (Semilla; R94.1-1, the MIR of `depot::part` put in at the call is the MIR of the old code (2 element place(s) explained); 2 nodes; one change (R92.6-1)): changed expression `x.wrapping_mul(3) ^ y` → `part(x, y)` at `depot::total/S2/init`; added `depot::part` [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:7-10, src/lib.rs:-4

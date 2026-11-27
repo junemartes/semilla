@@ -1,0 +1,64 @@
+note: a region that becomes a call of a trait method on a concrete type: the impl method that rustc resolves goes in
+rule+: R95.4-1
+refactor: yes
+must_match: ◆ f\d+ extract \(Semilla; R95\.4-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub trait Tax {
+    fn rate(&self) -> u32;
+}
+
+pub struct Food(pub u32);
+
+impl Tax for Food {
+    fn rate(&self) -> u32 {
+        self.0.wrapping_mul(3)
+    }
+}
+
+pub fn total(f: &Food) -> u32 {
+    f.0.wrapping_mul(3) ^ 1
+}
+=== new src/lib.rs
+pub trait Tax {
+    fn rate(&self) -> u32;
+}
+
+pub struct Food(pub u32);
+
+impl Tax for Food {
+    fn rate(&self) -> u32 {
+        self.0.wrapping_mul(3)
+    }
+}
+
+pub fn total(f: &Food) -> u32 {
+    f.rate() ^ 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:13): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(f_before: &before::depot::Food, f_after: &after::depot::Food) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::total`:
+  ◆ f1 extract (Semilla; R95.4-1, the MIR of `<depot::Food as depot::Tax>::rate` put in at the call is the MIR of the old code (2 element place(s) explained); the impl method that rustc resolves for the call of `<depot::Food as depot::Tax>::rate` (R95.4-1)): changed expression `f.0.wrapping_mul(3)` → `f.rate()` at `depot::total/tail/lhs` [semantics · code different]
+      affected bodies: depot::total
+      control flow: ~ call `num::<impl u32>::wrapping_mul` → `<Food as Tax>::rate` (src/lib.rs:-14, src/lib.rs:14)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:13): same structure: 1 changed call target; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 extract (Semilla; R95.4-1, the MIR of `<depot::Food as depot::Tax>::rate` put in at the call is the MIR of the old code (2 element place(s) explained); the impl method that rustc resolves for the call of `<depot::Food as depot::Tax>::rate` (R95.4-1)): changed expression `f.0.wrapping_mul(3)` → `f.rate()` at `depot::total/tail/lhs` [semantics · code different]
+    lines: src/lib.rs:14, src/lib.rs:-14
