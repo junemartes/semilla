@@ -172,7 +172,7 @@ impl NormalOracle {
                     }
                 }
                 let Ok(sides) = self.sides(step, config) else { continue };
-                let empty = Vec::new();
+                let empty = semilla_normal::Records::default();
                 let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
                 let new = EquivSide::new(sides.after.get("n0").unwrap_or(&empty));
                 let walk = walks.as_ref().and_then(|walks| walks.iter().find(|(name, _)| *name == config.name()).map(|(_, walk)| walk.clone()));

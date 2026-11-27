@@ -93,6 +93,9 @@ pub struct MirMap<'a> {
     pub idle_doubt: BTreeSet<usize>,
     /// The symbol links of the step (design 44).
     links: Option<&'a crate::links::Links<'a>>,
+    /// [R86.1-6] The result of each look-up of [`MirMap::node`], by the side and the place: a
+    /// second look-up of a place gives the first result (a map error counts again).
+    found: std::collections::HashMap<(usize, MirPlace), Result<Mapped, String>>,
 }
 
 /// The cause of a changed element (design 45; the names of `report::CAUSES`).
@@ -261,7 +264,7 @@ impl<'a> MirMap<'a> {
                 }
             }
         }
-        MirMap { sides, trees: [BTreeMap::new(), BTreeMap::new()], places, errors: 0, examples: Vec::new(), counts: Default::default(), owning: BTreeSet::new(), idle_equal: BTreeSet::new(), idle_doubt: BTreeSet::new(), links: None }
+        MirMap { sides, trees: [BTreeMap::new(), BTreeMap::new()], places, errors: 0, examples: Vec::new(), counts: Default::default(), owning: BTreeSet::new(), idle_equal: BTreeSet::new(), idle_doubt: BTreeSet::new(), links: None, found: Default::default() }
     }
 
     /// The map with the symbol links of the step (design 44).
@@ -273,6 +276,36 @@ impl<'a> MirMap<'a> {
     /// The node of a source range on one side. `None` for a file that the side does not have,
     /// and for a map error (counted).
     pub fn node(&mut self, side: usize, place: &MirPlace) -> Option<Mapped> {
+        let key = (side, place.clone());
+        let found = match self.found.get(&key) {
+            Some(found) => found.clone(),
+            None => {
+                let found = self.find_node(side, place);
+                if let Err(Some(_)) | Ok(_) = &found {
+                    self.found.insert(key, found.clone().map_err(|example| example.unwrap_or_default()));
+                }
+                match found {
+                    Ok(mapped) => Ok(mapped),
+                    Err(None) => return None,
+                    Err(Some(example)) => Err(example),
+                }
+            }
+        };
+        match found {
+            Ok(mapped) => Some(mapped),
+            Err(example) => {
+                self.errors += 1;
+                if self.examples.len() < EXAMPLES {
+                    self.examples.push(example);
+                }
+                None
+            }
+        }
+    }
+
+    /// The look-up of [`MirMap::node`]. `Err(None)`: the side has no such file; `Err(Some)`: a
+    /// map error, with its example text.
+    fn find_node(&mut self, side: usize, place: &MirPlace) -> Result<Mapped, Option<String>> {
         let (file, start, end) = (&place.0, place.1, place.2);
         let ws = self.sides[side];
         let tree = self.trees[side].entry(file.clone()).or_insert_with(|| {
@@ -281,7 +314,7 @@ impl<'a> MirMap<'a> {
             let parsed = rs::ast::SourceFile::parse(text, ws.editions.get(file).copied().unwrap_or(rs::Edition::Edition2021)).tree();
             Some(FileTree { lines: rs::Lines::new(text), root: parsed.syntax().clone() })
         });
-        let tree = tree.as_ref()?;
+        let tree = tree.as_ref().ok_or(None)?;
         let length = tree.lines.text().len();
         let boundary = |offset: usize| -> bool {
             if offset == 0 || offset == length {
@@ -308,22 +341,18 @@ impl<'a> MirMap<'a> {
             _ => (start, end),
         };
         if end > length || start > end || !boundary(start) || !boundary(end) {
-            self.errors += 1;
-            if self.examples.len() < EXAMPLES {
-                let at = tree.lines.pos((start).min(length));
-                self.examples.push(format!("{file}:{}:{} (bytes {start}..{end})", at.0, at.1));
-            }
-            return None;
+            let at = tree.lines.pos((start).min(length));
+            return Err(Some(format!("{file}:{}:{} (bytes {start}..{end})", at.0, at.1)));
         }
         let range = TextRange::new(TextSize::from(start as u32), TextSize::from(end as u32));
         // An empty range (the end of a block, the unit value of an `if` with no `else`) belongs
         // to the token that ends at it, if that token is not a space or a comment.
         let left = (start == end).then(|| tree.root.token_at_offset(range.start()).left_biased()).flatten().filter(|token| !token.kind().is_trivia() && token.text_range().end() == range.start());
         let node = match left {
-            Some(token) => token.parent()?,
+            Some(token) => token.parent().ok_or(None)?,
             None => match tree.root.covering_element(range) {
                 rs::NodeOrToken::Node(node) => node,
-                rs::NodeOrToken::Token(token) => token.parent()?,
+                rs::NodeOrToken::Token(token) => token.parent().ok_or(None)?,
             },
         };
         let block_free = node.kind() != rs::SyntaxKind::STMT_LIST && !node.descendants().any(|inner| inner.kind() == rs::SyntaxKind::STMT_LIST);
@@ -331,7 +360,7 @@ impl<'a> MirMap<'a> {
         // A node with only trivia in the range keeps the range itself.
         let (from, to) = if code.start <= start && end <= code.end { (code.start, code.end) } else { (start, end) };
         let text = semilla_syntax::tree::short(&rs::display_syntax(&node), 60);
-        Some(Mapped { file: file.clone(), start: tree.lines.pos(from), end: tree.lines.pos(to), text, block_free })
+        Ok(Mapped { file: file.clone(), start: tree.lines.pos(from), end: tree.lines.pos(to), text, block_free })
     }
 
     /// The smallest edit whose node contains a node on one side.

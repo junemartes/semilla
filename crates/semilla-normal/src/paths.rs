@@ -23,10 +23,44 @@ fn starts_token(text: &str, index: usize) -> bool {
 /// child item, such as a method of a renamed type or a closure of a renamed function). So a
 /// rename of `krate::Cart` also renames `krate::Cart::total`. The longest key wins.
 pub fn rename(text: &str, renames: &[(String, String)]) -> String {
+    rename_cow(text, renames).into_owned()
+}
+
+/// [`rename`] with no new text when no key matches (R86.3-1): the result borrows `text`.
+pub fn rename_cow<'t>(text: &'t str, renames: &[(String, String)]) -> std::borrow::Cow<'t, str> {
     if renames.is_empty() {
-        return text.to_string();
+        return std::borrow::Cow::Borrowed(text);
     }
-    Replacer::renames(renames).apply(text)
+    with_renames(renames, |replacer| replacer.apply_cow(text))
+}
+
+thread_local! {
+    /// [R86.1-3] The replacer of the last rename map of this thread. A caller gives the same map
+    /// for each text of a record set, and the build of the replacer is the larger part of the
+    /// work. The key is the full map: another map makes a new replacer.
+    static LAST_RENAMES: std::cell::RefCell<Option<(Vec<(String, String)>, std::rc::Rc<Replacer>)>> = const { std::cell::RefCell::new(None) };
+}
+
+thread_local! {
+    /// The count of the replacers that [`with_renames`] built in this thread (a test reads it,
+    /// R86.1-3).
+    pub static RENAMES_BUILT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Runs `apply` with the replacer of a rename map: the replacer of the last call of this thread
+/// if the map is equal, else a new one.
+pub fn with_renames<R>(renames: &[(String, String)], apply: impl FnOnce(&Replacer) -> R) -> R {
+    let known = LAST_RENAMES.with(|last| last.borrow().as_ref().filter(|(map, _)| map.as_slice() == renames).map(|(_, replacer)| replacer.clone()));
+    let replacer = match known {
+        Some(replacer) => replacer,
+        None => {
+            RENAMES_BUILT.with(|built| built.set(built.get() + 1));
+            let made = std::rc::Rc::new(Replacer::renames(renames));
+            LAST_RENAMES.with(|last| *last.borrow_mut() = Some((renames.to_vec(), made.clone())));
+            made
+        }
+    };
+    apply(&replacer)
 }
 
 /// Replaces each exact reference to a function (not a longer path that starts with it) by a
@@ -56,6 +90,9 @@ enum Mode {
 /// buckets by their first character, longest key first, so a position costs one map lookup.
 pub struct Replacer {
     buckets: HashMap<char, Vec<(String, String)>>,
+    /// The ASCII characters that start a key of `buckets` or of `generic` (R86.3-3): a position
+    /// with another ASCII character needs no look-up.
+    ascii_starts: [bool; 128],
     /// The generic keys (`GENERIC_KEY`): the segments of the key and of the value.
     generic: HashMap<char, Vec<(Vec<String>, Vec<String>)>>,
     mode: Mode,
@@ -185,7 +222,11 @@ impl Replacer {
         for keys in buckets.values_mut() {
             keys.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
         }
-        Replacer { buckets, generic, mode }
+        let mut ascii_starts = [false; 128];
+        for first in buckets.keys().chain(generic.keys()).filter(|first| first.is_ascii()) {
+            ascii_starts[*first as usize] = true;
+        }
+        Replacer { buckets, generic, mode, ascii_starts }
     }
 
     /// The match of a generic key at the start of `rest`: the length of the match and the new
@@ -238,10 +279,15 @@ impl Replacer {
 
     /// Applies the replacements to a text.
     pub fn apply(&self, text: &str) -> String {
+        self.apply_cow(text).into_owned()
+    }
+
+    /// [`Replacer::apply`] with no new text when no key matches (R86.3-1).
+    pub fn apply_cow<'t>(&self, text: &'t str) -> std::borrow::Cow<'t, str> {
         if self.buckets.is_empty() && self.generic.is_empty() {
-            return text.to_string();
+            return std::borrow::Cow::Borrowed(text);
         }
-        let mut out = String::with_capacity(text.len());
+        let mut out = String::new();
         let mut copied = 0;
         let mut index = 0;
         while index < text.len() {
@@ -256,12 +302,24 @@ impl Replacer {
             if candidate >= text.len() {
                 break;
             }
+            // No key starts with this ASCII character: no match here.
+            let byte = text.as_bytes()[candidate];
+            if byte.is_ascii() && !self.ascii_starts[byte as usize] {
+                index = match self.mode {
+                    Mode::Functions => candidate,
+                    Mode::Rename => candidate + 1,
+                };
+                continue;
+            }
             let position_ok = match self.mode {
                 Mode::Functions => true,
                 Mode::Rename => starts_token(text, candidate),
             };
             if position_ok {
                 if let Some((key, value)) = self.find(&text[candidate..]) {
+                    if out.capacity() == 0 {
+                        out.reserve(text.len() + 16);
+                    }
                     out.push_str(&text[copied..candidate]);
                     out.push_str(value);
                     index = candidate + key.len();
@@ -269,6 +327,9 @@ impl Replacer {
                     continue;
                 }
                 if let Some((len, value)) = self.find_generic(&text[candidate..]) {
+                    if out.capacity() == 0 {
+                        out.reserve(text.len() + 16);
+                    }
                     out.push_str(&text[copied..candidate]);
                     out.push_str(&value);
                     index = candidate + len;
@@ -283,8 +344,11 @@ impl Replacer {
                 }
             };
         }
+        if copied == 0 {
+            return std::borrow::Cow::Borrowed(text);
+        }
         out.push_str(&text[copied..]);
-        out
+        std::borrow::Cow::Owned(out)
     }
 }
 
@@ -294,6 +358,67 @@ mod tests {
 
     fn map(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+    }
+
+    // [R86.1-3] One replacer for each rename map of a thread.
+    // rule+ R86.1-3
+    #[test]
+    fn the_replacer_of_a_rename_map_is_built_one_time() {
+        let renames = map(&[("k::once", "k::bar")]);
+        let built = || RENAMES_BUILT.with(std::cell::Cell::get);
+        let before = built();
+        for _ in 0..5 {
+            assert_eq!(rename("k::once(_1)", &renames), "k::bar(_1)");
+        }
+        assert_eq!(built() - before, 1);
+    }
+
+    // rule- R86.1-3
+    #[test]
+    fn another_rename_map_gets_its_own_replacer() {
+        let (one, two) = (map(&[("k::foo", "k::bar")]), map(&[("k::foo", "k::baz")]));
+        let built = || RENAMES_BUILT.with(std::cell::Cell::get);
+        let before = built();
+        assert_eq!(rename("k::foo(_1)", &one), "k::bar(_1)");
+        // The key is the full map: a stale replacer would give `k::bar` here.
+        assert_eq!(rename("k::foo(_1)", &two), "k::baz(_1)");
+        assert_eq!(rename("k::foo(_1)", &one), "k::bar(_1)");
+        assert_eq!(built() - before, 3);
+    }
+
+    // [R86.3-1] A rename with no match makes no new text.
+    // rule+ R86.3-1
+    #[test]
+    fn a_rename_with_no_match_borrows_the_text() {
+        let renames = map(&[("k::foo", "k::bar")]);
+        assert!(matches!(rename_cow("k::other(_1)", &renames), std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(rename_cow("k::foo(_1)", &[]), std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(Replacer::functions(&map(&[("k::f", "#1")])).apply_cow("fn() {k::g}"), std::borrow::Cow::Borrowed(_)));
+    }
+
+    // rule- R86.3-1
+    #[test]
+    fn a_rename_with_a_match_makes_the_new_text() {
+        let renames = map(&[("k::foo", "k::bar")]);
+        assert_eq!(rename_cow("x k::foo(_1)", &renames), std::borrow::Cow::<str>::Owned("x k::bar(_1)".to_string()));
+        assert_eq!(Replacer::functions(&map(&[("k::f", "#1")])).apply_cow("a {{k::f}"), "a {{#1}");
+    }
+
+    // [R86.3-3] A position whose ASCII character starts no key needs no look-up; each other
+    // position is a look-up as before.
+    // rule+ R86.3-3
+    #[test]
+    fn the_scan_skips_only_the_characters_that_start_no_key() {
+        let renames = map(&[("k::foo", "k::bar"), ("é::x", "é::y")]);
+        assert_eq!(rename("(k::foo, é::x, zk::foo)", &renames), "(k::bar, é::y, zk::foo)");
+    }
+
+    // rule- R86.3-3
+    #[test]
+    fn a_key_with_a_start_character_of_the_text_still_matches() {
+        // Each start character of a key is in the table: `_` and a digit too.
+        let renames = map(&[("_k::a", "_k::b"), ("9", "8")]);
+        assert_eq!(rename("(_k::a, 9)", &renames), "(_k::b, 8)");
     }
 
     #[test]

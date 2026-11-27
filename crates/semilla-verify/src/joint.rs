@@ -81,6 +81,11 @@ pub(crate) struct Recorder<'a, 'b> {
 /// configuration that it reads (`cfgcond::covered`). So a run gets a clone of an earlier
 /// construction (made before its first `note`) only if each of these answers is the same in
 /// the run; else it makes its own.
+/// The name of the count of the passes of the joint rule.
+const SETTLE_PHASE: &str = "the passes of the joint rule";
+/// The phase name of the construction of the opaque inputs (R86.5-1).
+const OPAQUE_PHASE: &str = "the construction of the opaque inputs";
+
 pub(crate) struct OpaqueBases<'a> {
     sides: [&'a semilla_syntax::Workspace; 2],
     made: RefCell<Vec<(Vec<crate::cfgcond::Query>, crate::opaque::Opaque<'a>)>>,
@@ -100,9 +105,10 @@ impl<'a> OpaqueBases<'a> {
     /// with the same answers, or a new construction.
     pub(crate) fn get(&self) -> crate::opaque::Opaque<'a> {
         if let Some((_, base)) = self.made.borrow().iter().find(|(queries, _)| crate::cfgcond::same_answers(queries)) {
+            semilla_core::timing::count(OPAQUE_PHASE, "reused", 1);
             return base.clone();
         }
-        let (made, queries) = crate::cfgcond::logged(|| crate::opaque::Opaque::new(self.sides[0], self.sides[1]));
+        let (made, queries) = semilla_core::timing::phase(OPAQUE_PHASE, || crate::cfgcond::logged(|| crate::opaque::Opaque::new(self.sides[0], self.sides[1])));
         self.made.borrow_mut().push((queries, made.clone()));
         made
     }
@@ -520,6 +526,11 @@ impl Joint<'_> {
             map
         };
         let result = |map: &BTreeMap<Key, Option<BodyComparison>>, body: &BodyComparison| -> Option<BodyComparison> { map.get(&key(body)).cloned().flatten() };
+        // R86.5-1: each run of the body compare in a mode of the rule.
+        let run = |mode: &Mode| {
+            semilla_core::timing::count(SETTLE_PHASE, "compare runs", 1);
+            run(mode)
+        };
         let strict = by_name(run(&Mode::Strict)?);
         let proved = |body: &BodyComparison| property || matches!(body.status, BodyStatus::Equal { .. });
         let open: Vec<usize> = plain.iter().enumerate().filter(|(_, body)| proved(body) && result(&strict, body).as_ref() != Some(*body)).map(|(at, _)| at).collect();

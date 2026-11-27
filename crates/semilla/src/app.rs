@@ -195,7 +195,7 @@ impl semilla_verify::BodyOracle for Guard<'_> {
         if self.off(step) { Vec::new() } else { self.inner.instances(step, renames) }
     }
 
-    fn expansions(&self, step: &Step) -> Option<[Vec<semilla_verify::expand::ExpansionUnit>; 2]> {
+    fn expansions(&self, step: &Step) -> Option<std::sync::Arc<[Vec<semilla_verify::expand::ExpansionUnit>; 2]>> {
         if self.off(step) { None } else { self.inner.expansions(step) }
     }
 
@@ -2185,12 +2185,17 @@ impl App {
         report.configs = config_note(set, &log, &cache);
         crate::timing("verify the change set (with the body checks)", started);
         // The parts of that time (batch 5x, part F).
-        crate::oracle::READ_TIME.print("read the records of a cache folder");
         crate::oracle::MARK_TIME.print("give the records to the build configuration rules");
         crate::oracle::N0_TIME.print("compare the bodies at N0");
         crate::oracle::FORM_TIME.print("read the forms of the body checks");
         crate::oracle::STD_FORM_TIME.print("read the forms of the callees of the body checks");
         crate::oracle::SOLVE_TIME.print("run the body checks");
+        // R86.2-1: the count of the forms that loaded on need.
+        let loaded = semilla_normal::lazy::LOADED.swap(0, std::sync::atomic::Ordering::Relaxed);
+        if loaded > 0 {
+            semilla_core::timing::count(crate::recstore::READ_PHASE, "forms loaded on need", loaded);
+        }
+        semilla_core::timing::print_all();
         // The test rule of `tests` groups needs the test items of all trees.
         let test_items: BTreeSet<String> = cache.values().flat_map(|ws| ws.items.values().filter(|i| i.test).map(|i| i.path.clone())).collect();
         semilla_verify::organize::check_test_groups(set, &test_items, &mut report);

@@ -26,6 +26,7 @@ mod onestep;
 mod oracle;
 mod plan;
 mod replay;
+mod recstore;
 mod store;
 
 use std::path::PathBuf;

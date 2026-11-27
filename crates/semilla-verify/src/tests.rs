@@ -2109,8 +2109,8 @@ impl BodyOracle for WithRecords<'_> {
     fn facts(&self, step: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
         self.0.facts(step)
     }
-    fn expansions(&self, _: &Step) -> Option<[Vec<crate::expand::ExpansionUnit>; 2]> {
-        Some(self.1.clone())
+    fn expansions(&self, _: &Step) -> Option<std::sync::Arc<[Vec<crate::expand::ExpansionUnit>; 2]>> {
+        Some(std::sync::Arc::new(self.1.clone()))
     }
 }
 
@@ -11435,4 +11435,38 @@ fn the_name_of_a_macro_call_with_a_path_has_no_space() {
     assert_eq!(crate::macro_call_key("demo::crate :: table!#0"), "demo::crate::table!#0");
     assert_eq!(crate::macro_call_key("demo::table!#0"), "demo::table!#0");
     assert_eq!(crate::macro_call_key("demo::<Cart as Add>::add"), "demo::<Cart as Add>::add");
+}
+
+// rule+ R86.1-6
+#[test]
+fn a_second_look_up_of_a_place_in_the_mir_map_gives_the_first_result() {
+    let text = "pub fn g(a: u32) -> u32 {\n    a + 5\n}\n";
+    let mut ws = Workspace::default();
+    ws.rust_files.insert("src/lib.rs".into(), text.into());
+    let mut map = mirmap::MirMap::new(&ws, &ws, &[]);
+    let start = text.find("a + 5").unwrap();
+    let place = ("src/lib.rs".to_string(), start, start + "a + 5".len());
+    let first = map.node(1, &place);
+    assert_eq!(first.as_ref().map(|node| node.text.as_str()), Some("a + 5"));
+    assert_eq!(map.node(1, &place), first);
+    assert_eq!(map.errors, 0);
+}
+
+// rule- R86.1-6
+#[test]
+fn a_second_look_up_of_a_bad_place_counts_a_second_map_error() {
+    let text = "pub fn g(abc: u32) -> u32 {\n    abc + 5\n}\n";
+    let mut ws = Workspace::default();
+    ws.rust_files.insert("src/lib.rs".into(), text.into());
+    let mut map = mirmap::MirMap::new(&ws, &ws, &[]);
+    // A range that starts inside a name is a map error, also the second time.
+    let start = text.find("bc + 5").unwrap();
+    let place = ("src/lib.rs".to_string(), start, start + 2);
+    assert_eq!(map.node(1, &place), None);
+    assert_eq!(map.node(1, &place), None);
+    assert_eq!(map.errors, 2);
+    assert_eq!(map.examples.len(), 2);
+    // Another place is a new look-up.
+    let good = text.find("abc + 5").unwrap();
+    assert!(map.node(1, &("src/lib.rs".to_string(), good, good + 3)).is_some());
 }

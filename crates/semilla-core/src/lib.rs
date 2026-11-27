@@ -17,6 +17,7 @@ pub mod ops;
 pub mod report;
 pub mod run;
 pub mod text;
+pub mod timing;
 pub mod view;
 
 pub use anchor::{Anchor, Segment};

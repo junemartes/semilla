@@ -22,6 +22,7 @@ pub mod intent;
 pub mod elements;
 pub mod graph;
 pub mod hash;
+pub mod lazy;
 pub mod paths;
 pub mod sandbox;
 
@@ -167,12 +168,13 @@ pub struct BodyRecord {
     pub graph: Option<std::sync::Arc<graph::RecordGraph>>,
     /// The body in the form of the equivalence check (design 61; only at N0). Shared, as
     /// `elements`. The check of `semilla-smt` reads it.
-    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "graph::serialize_text", deserialize_with = "graph::deserialize_text")]
-    pub q: Option<std::sync::Arc<String>>,
+    /// It loads on its first read (R86.2-1).
+    #[serde(default, skip_serializing_if = "lazy::LazyText::is_none")]
+    pub q: lazy::LazyText,
     /// The forms of the small callees of the standard library, by the callee text (design 61,
     /// C3; only at N0).
-    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "graph::serialize_text", deserialize_with = "graph::deserialize_text")]
-    pub qx: Option<std::sync::Arc<String>>,
+    #[serde(default, skip_serializing_if = "lazy::LazyText::is_none")]
+    pub qx: lazy::LazyText,
     /// The values of the constant items that the body reads: the path and the value (design
     /// 61, A2; only at N0).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -247,7 +249,52 @@ pub struct SpanInfo {
 }
 
 /// The records of one version, by level name (`n0`, `n2`, `n3`).
-pub type Levels = BTreeMap<String, Vec<BodyRecord>>;
+pub type Levels = BTreeMap<String, Records>;
+
+/// [R86.3-2] A shared list of records: the records of a cache folder in memory. Each reader gets
+/// the same list, with no copy. A change of the list (`make_mut`) copies it only if another
+/// reader has it too.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Records(pub std::sync::Arc<Vec<BodyRecord>>);
+
+impl Records {
+    /// The list for a change: a copy only if another reader shares it.
+    pub fn make_mut(&mut self) -> &mut Vec<BodyRecord> {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+
+    /// True if the two values are one list in memory (no copy).
+    pub fn same_list(&self, other: &Records) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::ops::Deref for Records {
+    type Target = Vec<BodyRecord>;
+    fn deref(&self) -> &Vec<BodyRecord> {
+        &self.0
+    }
+}
+
+impl<'a> IntoIterator for &'a Records {
+    type Item = &'a BodyRecord;
+    type IntoIter = std::slice::Iter<'a, BodyRecord>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl From<Vec<BodyRecord>> for Records {
+    fn from(records: Vec<BodyRecord>) -> Records {
+        Records(std::sync::Arc::new(records))
+    }
+}
+
+impl FromIterator<BodyRecord> for Records {
+    fn from_iter<I: IntoIterator<Item = BodyRecord>>(records: I) -> Records {
+        Records::from(records.into_iter().collect::<Vec<_>>())
+    }
+}
 
 /// The result of the compare of one body.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -460,7 +507,7 @@ pub fn read_expansions(dir: &Path) -> Option<Vec<UnitExpansions>> {
 }
 
 /// The start of the line of a unit record.
-const UNIT_LINE: &str = "{\"unit\":";
+pub const UNIT_LINE: &str = "{\"unit\":";
 
 /// The order of the record files of a folder (R66.10-3): by the data of the unit record of each
 /// file (the package, the target name with no metadata hash, the configuration, the root file),
@@ -521,16 +568,103 @@ pub fn read_records(dir: &Path) -> Result<Vec<BodyRecord>> {
     );
     let mut records = Vec::new();
     for file in files {
-        let text = std::fs::read_to_string(&file)
-            .with_context(|| format!("cannot read {}", file.display()))?;
-        let unit = unit_settings(&text);
-        let mut found = parse_records(&text).with_context(|| format!("in {}", file.display()))?;
-        for record in found.iter_mut() {
-            record.unit.clone_from(&unit);
-        }
-        records.extend(found);
+        let mut found = match read_lazy(&file) {
+            Some(found) => found,
+            None => {
+                let text = std::fs::read_to_string(&file)
+                    .with_context(|| format!("cannot read {}", file.display()))?;
+                let unit = unit_settings(&text);
+                let mut found = parse_records(&text).with_context(|| format!("in {}", file.display()))?;
+                for record in found.iter_mut() {
+                    record.unit.clone_from(&unit);
+                }
+                found
+            }
+        };
+        records.append(&mut found);
     }
     Ok(records)
+}
+
+/// The member of a record that loads on its first read (R86.2-1): the two forms of the
+/// equivalence check, the members `q` and `qx` of [`BodyRecord`]. This is the format of the
+/// records of Semilla, not a name of the code under review.
+fn lazy_member(key: &str) -> Option<bool> {
+    match key {
+        "q" => Some(false),
+        "qx" => Some(true),
+        _ => None,
+    }
+}
+
+/// [R86.2-1] The records of one file, with each member of `LAZY_MEMBERS` at its place in the
+/// file: the parse skips it. `None` if a line does not have the plain form (then
+/// [`parse_records`] reads the file, with its errors).
+fn read_lazy(file: &Path) -> Option<Vec<BodyRecord>> {
+    let bytes = std::fs::read(file).ok()?;
+    let handle = std::sync::Arc::new(std::fs::File::open(file).ok()?);
+    let mut records = Vec::new();
+    let mut unit = None;
+    let mut offset = 0usize;
+    for line in bytes.split(|byte| *byte == b'\n') {
+        let start = offset;
+        offset += line.len() + 1;
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.starts_with(UNIT_LINE.as_bytes()) {
+            if unit.is_none() {
+                unit = Some(unit_settings(std::str::from_utf8(line).ok()?));
+            }
+            continue;
+        }
+        if line.trim_ascii().is_empty() {
+            continue;
+        }
+        let members = lazy::members(line)?;
+        let lazy: Vec<&(&str, std::ops::Range<usize>, std::ops::Range<usize>)> = members.iter().filter(|(key, _, _)| lazy_member(key).is_some()).collect();
+        let mut record: BodyRecord = if lazy.is_empty() {
+            serde_json::from_slice(line).ok()?
+        } else {
+            // Two members with one key: the full parse gives its error.
+            if [false, true].iter().any(|kind| lazy.iter().filter(|(key, _, _)| lazy_member(key) == Some(*kind)).count() > 1) {
+                return None;
+            }
+            let mut rest = Vec::with_capacity(line.len());
+            rest.push(b'{');
+            for (key, member, _) in &members {
+                if lazy_member(key).is_none() {
+                    if rest.len() > 1 {
+                        rest.push(b',');
+                    }
+                    rest.extend_from_slice(&line[member.clone()]);
+                }
+            }
+            rest.push(b'}');
+            serde_json::from_slice(&rest).ok()?
+        };
+        for (key, _, value) in lazy {
+            let text = if &line[value.clone()] == b"null" {
+                lazy::LazyText::known(None)
+            } else {
+                // The value must be a text: else the full parse gives its error.
+                if line[value.start] != b'"' {
+                    return None;
+                }
+                lazy::LazyText::at(lazy::Place { file: handle.clone(), offset: (start + value.start) as u64, len: value.len() })
+            };
+            if lazy_member(key) == Some(false) {
+                record.q = text;
+            } else {
+                record.qx = text;
+            }
+        }
+        records.push(record);
+    }
+    // The settings of the first unit line, as `unit_settings` reads them.
+    let unit = unit.unwrap_or_default();
+    for record in records.iter_mut() {
+        record.unit.clone_from(&unit);
+    }
+    Some(records)
 }
 
 /// The build settings of the unit record of a record file with no feature (see
@@ -552,9 +686,19 @@ pub fn read_units(dir: &Path) -> Option<Vec<UnitRecord>> {
     files.sort();
     let mut units = Vec::new();
     for file in files {
-        let text = std::fs::read_to_string(&file).ok()?;
-        let line = text.lines().find(|line| line.starts_with(UNIT_LINE))?;
-        let mut unit = serde_json::from_str::<UnitLine>(line).ok()?.unit;
+        // R86.3-3: the read stops at the unit record (the first line of a file of the driver).
+        use std::io::BufRead as _;
+        let reader = std::io::BufReader::new(std::fs::File::open(&file).ok()?);
+        let mut found = None;
+        for line in reader.lines() {
+            let line = line.ok()?;
+            if line.starts_with(UNIT_LINE) {
+                found = Some(line);
+                break;
+            }
+        }
+        let line = found?;
+        let mut unit = serde_json::from_str::<UnitLine>(&line).ok()?.unit;
         // The name of the file is the name of the unit, also for a file that a caller copied.
         if let Some(stem) = file.file_stem() {
             unit.target = stem.to_string_lossy().into_owned();
@@ -566,11 +710,11 @@ pub fn read_units(dir: &Path) -> Option<Vec<UnitRecord>> {
 
 /// Groups records by their level.
 pub fn group_levels(records: impl IntoIterator<Item = BodyRecord>) -> Levels {
-    let mut levels = Levels::new();
+    let mut levels: BTreeMap<String, Vec<BodyRecord>> = BTreeMap::new();
     for record in records {
         levels.entry(record.level.clone()).or_default().push(record);
     }
-    levels
+    levels.into_iter().map(|(level, records)| (level, Records::from(records))).collect()
 }
 
 /// Returns the N1 content hash of each body of one level (design 8.4: a body with a new hash
@@ -620,9 +764,9 @@ pub fn drop_opaque_inlines(levels: &mut Levels, marks: &Marks) {
         .flatten()
         .map(|record| record.inlined.iter().all(|callee| known.contains(callee.as_str()) && !marks.opaque.contains(callee)))
         .collect();
-    if let Some(records) = levels.get_mut("n3") {
+    if let Some(records) = levels.get_mut("n3").filter(|_| keep.iter().any(|kept| !kept)) {
         let mut keep = keep.into_iter();
-        records.retain(|_| keep.next().unwrap_or(false));
+        records.make_mut().retain(|_| keep.next().unwrap_or(false));
     }
 }
 
@@ -756,7 +900,7 @@ fn lifetime_names(before: &Levels, after: &Levels, marks: &Marks) -> Option<(Lev
         return None;
     }
     let mut levels = before.clone();
-    for record in levels.values_mut().flatten() {
+    for record in levels.values_mut().flat_map(|records| records.make_mut().iter_mut()) {
         if let Some(to) = pairs.get(&record.name) {
             record.name = to.clone();
         }
@@ -864,7 +1008,7 @@ fn param_names(before: &Levels, after: &Levels, usable: &[(String, String)], mar
         }
         text
     };
-    for record in levels.values_mut().flatten() {
+    for record in levels.values_mut().flat_map(|records| records.make_mut().iter_mut()) {
         if let Some(map) = change(&record.name) {
             record.name = replace_words(&record.name, map);
             record.text = replace_words(&record.text, map);
@@ -1229,20 +1373,22 @@ fn split_top(text: &str) -> Vec<&str> {
 
 impl Group {
     fn add(&mut self, record: &BodyRecord, renames: &[(String, String)], use_targets: bool) {
-        let normal = BodyRecord { text: without_test_positions(&record.text, &record.name).into_owned(), ..record.clone() };
-        let record = &normal;
+        // R86.3-1: the normal text is a borrow of the record when the record has no test position.
+        let text = without_test_positions(&record.text, &record.name);
         let target = if use_targets { record.target.clone() } else { String::new() };
         if !renames.is_empty() {
             self.raw
                 .get_or_insert_default()
                 .entry(target.clone())
                 .or_default()
-                .insert(record.text.clone());
+                .insert(text.to_string());
         }
-        let renamed = paths::rename(&record.text, renames);
         // A rename can change the order of the named operands of an aggregate, of the named
         // targets of a switch, and of the entries of a discriminant table.
-        let renamed = if renamed != record.text { sort_variant_lists(&sort_aggregates(&renamed)) } else { renamed };
+        let renamed = match paths::rename_cow(&text, renames) {
+            std::borrow::Cow::Owned(renamed) if renamed != *text => sort_variant_lists(&sort_aggregates(&renamed)),
+            _ => text.into_owned(),
+        };
         if record.level == "n0" {
             if let Some(span) = &record.span {
                 self.files.entry(target.clone()).or_insert_with(|| span.file.clone());
@@ -1252,7 +1398,7 @@ impl Group {
             self.graphs.entry(target.clone()).or_default().push(record.graph.as_ref().map(|found| graph::renamed(found, renames)));
         }
         self.texts.entry(target.clone()).or_default().insert(renamed);
-        self.callees.extend(record.callees.iter().map(|callee| paths::rename(callee, renames)));
+        self.callees.extend(record.callees.iter().map(|callee| paths::rename_cow(callee, renames).into_owned()));
         self.shapes.insert(record.shape.clone());
         self.terms
             .entry(target)
