@@ -717,11 +717,13 @@ The change set is **accepted** only if every claim is `verified`, nothing is unc
 
 ### 8.12 Configurations
 
-**The list (batch 5s, part A).** A configuration is a profile (`dev` or `release`), a feature selection, and the target of this machine. Its name is short and fixed: `dev`, `release`, `dev, no default features`, `release, all features`, `dev, features a+b`. The default list has the two profiles, each with the default features, `--no-default-features`, `--all-features`, and each set of `feature-sets` in the manifest. Semilla computes the list from the manifests of the two trees of the step. No option of the agent makes the list shorter. *Decided by Claude:* the list is the union of the two trees. A selection with the same feature state of each package as an earlier selection, by the manifests, is not in the list. The test does not use the unified features, so two configurations of a workspace can have equal true features. This costs time and is not a risk.
+**The default list (batch 14c, design 85).** With no option and no setting, a step checks one configuration: `dev` with the default features. The options `--release`, `--features LIST`, `--all-features`, `--no-default-features` (one configuration, as for `cargo build`), `--configuration NAME` (it can repeat; NAME is a printed name), and `--configuration full` (the full list below) give a different list; the setting `configurations = [...]` of `[workspace.metadata.semilla]` or `[package.metadata.semilla]` gives the default list of a repository. A stored step keeps its list, and each later check of the step uses it. A record of an earlier version has no list: its list is the full list. Each result holds for the checked configurations of its step, and for no other one. Design 85 has the rules.
+
+**The full list (batch 5s, part A).** A configuration is a profile (`dev` or `release`), a feature selection, and the target of this machine. Its name is short and fixed: `dev`, `release`, `dev, no default features`, `release, all features`, `dev, features a,b`. The full list has the two profiles, each with the default features, `--no-default-features`, `--all-features`, and each set of `feature-sets` in the manifest. Semilla computes the list from the manifests of the two trees of the step. Before batch 14c, the full list was the default list of each step. *Decided by Claude:* the list is the union of the two trees. A selection with the same feature state of each package as an earlier selection, by the manifests, is not in the list. The test does not use the unified features, so two configurations of a workspace can have equal true features. This costs time and is not a risk.
 
 **The profiles (batch 5u). A known limit.** The list has only the profiles `dev` and `release` of the repository. A different profile (a custom profile, or profile settings from outside the repository, for example of a configuration file in the home folder or of an environment variable) is not a checked configuration. A compiler flag that is not a `cfg` condition follows the profile: for example, Semilla checks the overflow checks on in `dev` and off in `release`, and no other pair, if the manifest does not change them.
 
-**An added configuration (batch 5u, part C).** When a proof of a step needs a joint state that no unit of the list has, Semilla adds a feature selection with that state (8.2). The name has the features: `dev, features cb58`, or `dev, no default features, features check`. The checked line shows it with a mark: "`dev, features cb58` (added for a proof)" for a step, and "(added for a proof in step 2)" for a change set. `semilla step` prints one line: "Semilla added the configuration `dev, features cb58` for a proof". The limit is 4 added selections for one step.
+**An added configuration (batch 5u, part C).** Only with the full list (R85.5-1). When a proof of a step needs a joint state that no unit of the list has, Semilla adds a feature selection with that state (8.2). The name has the features: `dev, features cb58`, or `dev, no default features, features check`. The checked line shows it with a mark: "`dev, features cb58` (added for a proof)" for a step, and "(added for a proof in step 2)" for a change set. `semilla step` prints one line: "Semilla added the configuration `dev, features cb58` for a proof". The limit is 4 added selections for one step.
 
 **A configuration that does not build.**
 
@@ -743,7 +745,7 @@ checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `release`, `d
 
 The condition line has at most eight conditions and then a count. `semilla step` has no new line if each configuration is checked, and one line for the configurations that are not checked. *Decided by Claude:* the target is the target of a unit record of the compiler, else the host of the toolchain. The checked list has the configurations that each compared step checked. Configurations with the same kind of cause go into one line with the error of the first one.
 
-**Cost.** The configurations of a step build in parallel, and each tree and configuration builds one time. Measured on one machine (one step, batch 5n → batch 5s): fixedbitset cold 11.3 s → 22.1 s, warm 2.7 s → 5.7 s, cache 104 MB → 470 MB; bs58 cold 14.1 s → 26.4 s, warm 1.6 s → 2.1 s, cache 98 MB → 466 MB. A later run on a calm machine (one step, batch 5s → batch 5t): fixture cold 0.8 s → 0.9 s, warm 0.5 s → 0.6 s; fixedbitset cold 15.4 s → 16.7 s, warm 4.1 s → 5.8 s, cache 470 MB → 470 MB; bs58 cold 18.8 s → 19.9 s, warm 2.1 s → 3.2 s, cache 466 MB → 469 MB. The added runs of part B make the warm step longer. bs58 has two more checked configurations (libraries and binaries only). Batch 5u (bs58, one step at a time, the debug build of Semilla, a new cache): the first step 44.1 s; a later step with no added configuration 2.0 s to 2.7 s; the first step that adds configurations 27.5 s; a later step that adds the same configurations 14.3 s. With the hint, the builds of the added configurations take about 1.1 s. The rest is the joint check: it runs two times (one time before the added configurations and one time after), with 9 compare runs each time. A step after such a step builds the configurations of the hint also when it needs none of them (5.3 s, not 2.3 s).
+**Cost.** With the default list of batch 14c, each tree builds one time (one configuration): the cost of a step is the cost of one build of each tree and one compare (design 85.10 has the times). With the full list, the configurations of a step build in parallel, and each tree and configuration builds one time. Measured on one machine (one step, batch 5n → batch 5s): fixedbitset cold 11.3 s → 22.1 s, warm 2.7 s → 5.7 s, cache 104 MB → 470 MB; bs58 cold 14.1 s → 26.4 s, warm 1.6 s → 2.1 s, cache 98 MB → 466 MB. A later run on a calm machine (one step, batch 5s → batch 5t): fixture cold 0.8 s → 0.9 s, warm 0.5 s → 0.6 s; fixedbitset cold 15.4 s → 16.7 s, warm 4.1 s → 5.8 s, cache 470 MB → 470 MB; bs58 cold 18.8 s → 19.9 s, warm 2.1 s → 3.2 s, cache 466 MB → 469 MB. The added runs of part B make the warm step longer. bs58 has two more checked configurations (libraries and binaries only). Batch 5u (bs58, one step at a time, the debug build of Semilla, a new cache): the first step 44.1 s; a later step with no added configuration 2.0 s to 2.7 s; the first step that adds configurations 27.5 s; a later step that adds the same configurations 14.3 s. With the hint, the builds of the added configurations take about 1.1 s. The rest is the joint check: it runs two times (one time before the added configurations and one time after), with 9 compare runs each time. A step after such a step builds the configurations of the hint also when it needs none of them (5.3 s, not 2.3 s).
 
 In a workspace, Cargo unifies the features across the member crates. The verifier uses the same feature resolution as `cargo check --workspace`.
 
@@ -9886,6 +9888,130 @@ Rule index: no rule: the subsection has the limits and the open questions.
 - Should a line of the gap list read the result of a claim, or should a body with "MIR changes" keep the plain `--change` form and the one command (the form of a decided line)?
 - Should the step show the callers of a changed body with no check (the closure of R84.1-2) as a review aid?
 - Should a stored step keep the suggested test of a claim, for example with `--reason` on a false claim?
+
+## 85. Batch 14c: one build configuration by default; options give the other ones
+
+Date: 2026-11-27. The decision of the user:
+
+> "you likely don't need to build under all configurations. By default let's just build debug. Allow to pass in config parameters and feature flags to build different configs. In the future, based on which features a change affect, we could dynamically build the necessary features".
+
+The rules that stay: a result holds for each checked configuration, and for no other one (design 35.5). No changed line can be silent (the cover rule). No rule of the build configuration goes away: the joint check, the notes, the gap lines, the narrowed build, and the one-side features (37.7) work as before for each configuration of the list.
+
+### 85.1 The default list
+
+Rule index: the identities are below.
+
+1. [R85.1-1] **With no option and no setting, the list of a step has one configuration: `dev` with the default features.** The name `dev` stays (the word of cargo). The list of a step is the field `configurations` of the stored step: an empty list is the default (the setting of the manifest, else `dev`); `full` is the full list of 8.12; a record of an earlier version has no field, and its list is the full list. Unit tests in `crates/semilla/src/configs.rs`.
+
+### 85.2 The options
+
+Rule index: the identities are below.
+
+1. [R85.2-1] **The options of a command give one list in a fixed order.** `--release`, `--features LIST`, `--all-features`, `--no-default-features` give one configuration, as for `cargo build`. `--configuration NAME` (it can repeat) takes the printed name of a configuration (`dev`, `release`, `dev, no default features`, `release, all features`, `dev, features a,b`; also `a+b`; the end " (libraries and binaries only)" is not a part of the name). `--configuration full` gives the full list. The list is the union, in the order of the full list (the feature selection, then the profile), so the order of the options does not matter. The options are global options of the command line. The commands that make a step (`step`, `tag` for a step after the commit, `replay`, `old-step`) give the list to the new step; the commands that check stored steps (`status`, `review`, `verify`, `ui`, `load`, `expand`, `intent`, `check`) use it as in R85.3-2; each other command gives an error. The command to run again (the `run again:` line) keeps the options.
+2. [R85.2-2] **A wrong list is one error line with the exit code 2, and the command does nothing else.** A wrong name, `--all-features` with `--features` or `--no-default-features` (Semilla has no such selection), and a feature that no tree of the step has (by `cargo metadata` of the two trees). The line gives the forms of the names, or the features of the tree and the names of the full list.
+3. [R85.2-3] **A setting of the manifest gives the default list of a repository.** `configurations = ["dev", "release, all features"]` in `[workspace.metadata.semilla]`, else in `[package.metadata.semilla]`, of the root manifest. As for `feature-sets`, the list is the union of the settings of the two trees of the step. An option replaces the setting. A bad setting is an error of the check.
+4. [R85.2-4] **The MCP tools take the same data as arguments.** `release`, `features`, `all_features`, `no_default_features`, `configurations` (a list of names) for the tools `step`, `tag`, `replay_apply` (the list of a new step) and `results`, `verify` (R85.3-2). A wrong list is an error of the tool.
+
+**Decided by Claude.** The options are global options of the command line (one place for each command). `--all-features` with another feature word is an error, not the rule of cargo (all features win): a list must name a configuration that the output names in the same words. `tag` of a session does not change the lists of the steps of the session: the options give the list of a step that `tag` makes (a tag after the commit).
+
+### 85.3 The list is data of the step
+
+Rule index: the identities are below.
+
+1. [R85.3-1] **A stored step keeps its list.** The step (and an open step of the old protocol) has the field `configurations`. Each command that checks the step again (`verify`, `review`, `status`, `status <commit>`, `tag`, `load`, `ui`, the background worker, a replay) reads the list of the step, so it computes the same result (I5 of 8.12). A record of an earlier version has the full list.
+2. [R85.3-2] **A reviewer command with an option checks with the list of the option.** The list replaces the list of each step for the check of this process only (a copy of the change set; nothing is stored in the session or a note). The hash of the change set has the replaced lists, so a stored result of the lists of the steps is never the result of the option, and a job of the background worker carries the copy. The output has the line "! the configurations of the option (`release`) replace the list of each step for this check; with no option, each step has its own list", only if the option is not the list of each step.
+
+### 85.4 Full information (the cover rule)
+
+Rule index: the identities are below.
+
+1. [R85.4-1] **A line of code that no checked configuration compiles names what checks it.** With a list that is not the full list, the clause of the spotlight "inactive code" and of the cause of a claim gets "; `OPTION` checks it", "; not on this target", or "; no option of Semilla switches the condition". Semilla computes it from the condition and the manifests: for each configuration of the full list that is not in the list, and for each single feature of the feature tables (`--features NAME`, with `dev`, then with `release`), it predicts the units of the checked build with the feature atoms of that selection (`cargo metadata`, the feature closure of 5s) and with `debug_assertions` on only for `dev`; the first configuration whose predicted units that read the file make each condition true gives the option. A condition that no configuration makes true and that the target makes false is "not on this target" (the atoms of R68.12-1). The line of the conditions that Semilla did not check gives the option of the other state of each condition, in the same way. No list of names: the data is the condition, the feature table, and the units of the compiler. A prediction is never a part of a result.
+2. [R85.4-2] **One note of the step gives the options of the command line.** "note: to check the changed code that no checked configuration compiles, add `--features std` to the command (or `--configuration full`)". Two configurations or more give one `--configuration 'NAME'` for each.
+3. [R85.4-3] **Each output has the line of the checked configurations.** The reviewer outputs have it, also for one configuration (as before). `semilla step` has it when the list of the step is not the full list.
+
+4. [R85.4-4] **Each part of the change whose effect only a configuration that is not checked can show names the option that checks it.** R85.4-1 does this for a line of code. The same mechanism (the configurations outside the list and their feature states, from the feature closure of the manifests) applies to the manifest: a fact of a dependency (`dependencies.NAME…`, `dev-dependencies.NAME…`, `build-dependencies.NAME…`) or of a feature list (`features.NAME`) that no checked configuration uses, and that a configuration outside the list uses (the feature is on; the dependency is not optional, or a feature of the state turns it on: `NAME`, `dep:NAME`, `NAME/x`), is not `no code`: it is `no compare` with the note "no compare: no checked configuration uses the dependency `atomic`; `--features atomic` checks it". The option of the name of the subject comes first. The line "! features that no checked configuration enables" names the option of each feature: "`shop/a` (`--features a` checks it)". With the full list, the output stays equal to BASE (C6). Decided by Claude (coordinator, after the uuid result of 85.10): a reviewer reads `no code` as "no effect", which is true only for the checked configurations. Tests: `tests/configurations.rs` (an optional path dependency).
+
+### 85.5 No added configuration with a list that is not the full list
+
+Rule index: the identities are below.
+
+1. [R85.5-1] **Semilla adds a configuration only with the full list.** With another list, the oracle adds no feature selection for a joint state (5u, part C), and it builds no configuration of the hint file. The gap line of the joint rule stays and names the options: "not checked together: `feature = "fa"` on with `feature = "fb"` off. To check it: `--features fa`". With the full list the behavior is the behavior of batch 14b.
+
+### 85.6 `--configuration full` gives the output of batch 14b
+
+Rule index: the identities are below.
+
+1. [R85.6-1; no negative case: the full list has one form] **With `--configuration full`, each output equals the output of the binaries of batch 14b with no option, line for line, but for time values and the option in a suggested command line.** The new lines of 85.4 and 85.3 come only with a list that is not the full list. The case runner has the variable `SEMILLA_CASES_CONFIGURATION=full` (of the runner only, not of the product): it gives `--configuration full` to each command of a check.
+
+### 85.7 The kinds of a result change with a shorter list
+
+Rule index: the identities are below.
+
+1. [R85.7-1; no negative case: a measure of the case set and the training set] **A result changes only in these ways.** A body with "MIR changes" only in a configuration outside the list has "equal MIR"; a body that only a configuration outside the list compiles has the line of R85.4-1; a count line and the line of the checked configurations change with the list; a line of the build configuration rule (a gap, a note of the scope, a condition that Semilla did not check, a feature that no checked configuration enables) changes with the list.
+
+### 85.8 No configuration of the list builds
+
+Rule index: the identities are below.
+
+1. [R85.8-1] **The error names each configuration of the list with its cause, and gives the option to select another one.** "no configuration of the list of the step builds before the step (`dev`: it does not build before the step: error: …). To check another configuration, give `--configuration NAME` (the other configurations: `dev, features fast`, …) or `--configuration full`". The narrowed build ("libraries and binaries only") stays for each configuration of the list. With the full list, the error of batch 14b stays.
+
+### 85.10 The results
+
+Rule index: no rule: the subsection has the results of the measures.
+
+**The case set (665 cases, and 1 new case `configs85/bench_feature`).** With `SEMILLA_CASES_CONFIGURATION=full` and no write, 159 expected texts differ, and each changed line is only the option `--configuration full` in a suggested command (`run again:`, the command of the positions): C6 holds. With the default list, 658 expected texts changed. The kinds (a script sorts each changed line; a line can be in one kind only): the line of the checked configurations (658 cases), the configuration mark of a line (`(in dev; 1 more result(s) in other configurations …)`, `in dev:`, `also: cargo test --release`: 340 lines in 128 cases), the lines of R85.4-1 (50 lines in 20 cases: "not on this target" 15, "no option of Semilla switches the condition" 4, "Semilla finds no option that checks it" 3), a line of the build configuration rule (7 lines in 7 cases: the line of the features that no checked configuration enables, a gap line of a configuration that does not build), a count (6 lines in 4 cases), and the results of a body that only another configuration compiles (16 lines in 3 cases). These 11 cases test a rule that needs more than one configuration, and they have `option: --configuration=full` (their expected texts are the texts of batch 14b, but for the option in a suggested command): `compiled/two_targets_one_name`, `compiled/two_targets_other_change`, `compiled/two_targets_test_change` (R61.16-1; the bench needs a feature), `compiled/feature_breaks_before` (R61.14-4), `compiled/expand_pair_new_bench` (R72.1-1; a bench with `required-features`), `compiled/equiv_wrapping` (R61.4-5; equivalent in `release` only), `r77/features_all_checked`, `r77/features_not_checked` (R77.3-8), `r77/variant_builds_count` (R77.2-2), `suggest75/confirmed`, `suggest75/mut_write` (R75.1-1, the `also:` command of `release`). The cases `suggest75/own_debug`, `suggest75/private_caller`, `compiled/reach_chain`, `compiled/reach_generic` lose the `also: … --release` part with the default list: `suggest75/mut_write` keeps that rule.
+
+After the rebase onto batches 14d and 14e, the 7 cases `templates87/*` of batch 14e changed with the default list: the line of the checked configurations, and the configuration mark of a graph line goes away (no template line changed).
+
+**The tests of Rust.** The e2e tests of the rules of 8.12, 35.5, 37.7, 5s to 5y get the full list (a helper `full_list()` of `tests/e2e.rs` gives `--configuration=full` to each command of a check and `configurations: ["full"]` to the MCP tools): 12 tests of `e2e.rs`, 1 of `aftertag.rs`, 1 of `intent_cli.rs`, and the step of `model_runs.rs`. Two tests of `e2e.rs` read the full text of a step, which starts with the line of the checked configurations now.
+
+**The training set** (7 PRs; a fresh copy and an empty cache for each run; `step "the change"` cold, then the same step warm, then `status --verbose`, `review --md`, `verify --json`; the release binaries of BASE and of this batch; one run at a time). C6: with `--configuration full`, each output equals the output of BASE with no option (each of the 7 PRs, each of the 5 outputs and the exit codes), but for the option in a suggested command and the path of the written report. With the default list, the exit codes do not change (bitflags 1, hashbrown 0, indexmap 0, itertools 0, num-traits 1, uuid 1, winnow 1).
+
+The default runs of uuid and winnow ran again with the final binary (the search for an option prefers the feature that the condition names); the other default runs used a binary that differs only in that order, and their outputs have no option of R85.4-1. The times (wall s / CPU s; the machine runs other work: the load is the 1-minute load at the start of the default run):
+
+| PR | BASE cold | BASE warm | full cold | full warm | default cold | default warm | cache BASE → default | load |
+|---|---|---|---|---|---|---|---|---|
+| `pr-bitflags-465` | 39.3 / 170.8 | 12.9 / 6.6 | 92.9 / 186.8 | 13.5 / 8.2 | 42.5 / 40.8 | 7.6 / 2.6 | 828M → 243M | 40.13 |
+| `pr-hashbrown-693` | 71.3 / 198.9 | 14.4 / 14.3 | 47.5 / 187.4 | 11.0 / 12.7 | 25.3 / 36.4 | 10.3 / 6.2 | 995M → 218M | 24.60 |
+| `pr-indexmap-424` | 556.4 / 343.6 | 212.8 / 52.6 | 99.4 / 304.8 | 66.2 / 49.4 | 24.2 / 42.9 | 6.5 / 6.6 | 1.5G → 359M | 17.08 |
+| `pr-itertools-1086` | 100.1 / 338.2 | 12.5 / 13.2 | 105.9 / 341.3 | 9.8 / 11.9 | 214.1 / 114.3 | 29.7 / 9.6 | 1.3G → 533M | 27.19 |
+| `pr-num-traits-334` | 114.5 / 256.3 | 37.4 / 33.5 | 111.5 / 256.5 | 40.6 / 34.5 | 61.3 / 44.7 | 12.1 / 7.2 | 2.0G → 378M | 32.54 |
+| `pr-uuid-932` | 92.9 / 530.5 | 5.5 / 9.9 | 67.3 / 514.6 | 5.7 / 9.5 | 27.0 / 80.7 | 2.9 / 3.0 | 2.0G → 420M | 13.37 |
+| `pr-winnow-891` | 496.6 / 2251.3 | 121.3 / 112.2 | 300.5 / 2137.6 | 65.6 / 97.9 | 79.8 / 306.8 | 20.5 / 21.2 | 7.6G → 1.6G | 12.98 |
+
+The C7 kinds of the step outputs of the training set (BASE against the default list, 7 PRs): the line of the checked configurations (7 lines), the configuration marks (140 lines in 6 PRs), the lines of R85.4-1 (64 lines in 2 PRs: uuid, winnow), the lines of the build configuration rule (22 lines in 7 PRs: the features that no checked configuration enables, the gap lines), counts and cut lists (`… 134 more`, `changed bodies: …`, `run again:`; 231 lines in 7 PRs), the results of the bodies that only a configuration outside the list compiles (equal MIR, MIR changes, and the lines of such bodies: 137 lines changed in 5 PRs, and 1302 lines removed in 7 PRs, for example the derived `serde` and `arbitrary` impls of bitflags, the second path of a body under `rustc-dep-of-std` in hashbrown, the tests under a feature in num-traits). One more kind, understood and accepted: a manifest fact whose compare came from a body that only another configuration compiles (uuid: `dependencies.atomic.optional removed` is `[manifest · code different]` with the spotlight "a build input" in BASE, and `[manifest · no code]` with the spotlights of a dependency setting with the default list). R85.4-4 corrects this: with the final binary the facts of `atomic` are `[manifest · no compare]` with the note "no checked configuration uses the dependency `atomic`; `--all-features` checks it" (the feature `atomic` is only in the tree before the step, so `--features atomic` is no option of the tree after it), and the line of the features that no checked configuration enables names an option for each feature. The changed lines that no checked configuration compiles: 0 with the full list; with the default list, uuid has 1 file (`src/external/serde_support.rs`, 519 changed lines of `pr.diff`, "`--features serde` checks it") and winnow has 4 pieces (2 items under `cfg(feature = "unstable-recover")`, "`--features unstable-recover` checks it", and 2 inputs of `proptest!`); the other 5 PRs have none.
+
+**The stored list.** A step of the binary of BASE (no field `configurations`) reads with the new binary, and `verify` and `status --verbose` check it with the full list. A step with `--release`, then `verify`, `review`, and `status --verbose` with no option: each has `release` (`tests/configurations.rs`).
+
+**The three numbers.** Rules with an identity: +15 (R85.1-1 to R85.8-1, with R85.4-4). Rows of `docs/name-lists.md`: 0 (103 → 103). Code paths that decide by a name: 0 new lists; the clause "not on this target" uses the atoms of R68.12-1 (`target_*`, `unix`, `windows`) at two more places.
+
+### 85.9 Decisions, limits, and open questions
+
+Rule index: no rule: the subsection has the decisions, the limits, and the open questions.
+
+**Decided by Claude.**
+
+- The list of a step is stored as the request (the entries of the options), not as the resolved list: the trees of a step do not change, so the setting of the manifest and the feature tables give the same list in each later check.
+- The setting of the manifest is the union of the settings of the two trees (the rule of `feature-sets`).
+- The step output has the line of the checked configurations only with a list that is not the full list, so the output of `--configuration full` is the output of batch 14b (C6). The full text of a step (`semilla expand --step N`) starts with it.
+- The option of a line comes from a prediction of the units of each configuration outside the list (the feature closure of the manifests, `debug_assertions` by the profile), and from the `required-features` of the targets for a file that no checked unit reads. The search tries one feature at a time (at most 64 features), then `release`, then the selections of the full list.
+- A reviewer command with an option uses a copy of the change set with the list in each step; the hash of the change set has it, so a stored result and a job of the worker never mix the two lists.
+- `tag` of a session keeps the lists of the steps; its options give the list of a step that the tag makes.
+
+**Limits.**
+
+- The records of a tree for a command that is not a step check (`semilla expand` of a step that is not stored, `semilla intent check`) use the list of the options of the command, else `dev`.
+- A file of a target that no checked configuration builds, with no module condition and no `required-features`, gets "Semilla finds no option that checks it".
+- A body that only a configuration outside the list compiles, and that has no source item (a derived impl under `cfg_attr` of a feature), has no fact with the default list: its source line is a fact of its own (the attribute), and the line "! features that no checked configuration enables" names the feature (85.10).
+- The condition notes under a fact ("this body uses `cfg!(unix)`, which Semilla did not check") do not name an option; the line of the conditions at the top does.
+- The option of a line is a suggestion: Semilla does not build the configuration to confirm it.
+
+**Open questions for the user.**
+
+- Answered (Decided by Claude, coordinator): the line "features that no checked configuration enables" gives the options (R85.4-4); a derived body that only another configuration has gets no line for now (a limit); `semilla tag` of a session takes no option for now and keeps the lists of its steps.
+- A dependency of a target condition (`target.'cfg(…)'.dependencies`) and a key of `[workspace.dependencies]` get no option: is a rule for them needed?
+
+**The later batch: a list from the change.** The `cfg` conditions of the changed code select the configurations. For each changed token, the conditions around it (the regions of `uncompiled.rs`, the module conditions, the `required-features` of its target) give the atoms. The feature atoms of the manifests (the feature closure of 5s) give the smallest set of selections in which each changed token is compiled at least one time, and each condition of a changed body has its two states (the cover rule of 5s); `debug_assertions` and `overflow-checks` of a changed body add `release`. The default list is `dev` plus these selections, and the step output names why each one is in the list. The rule of R85.4-1 then gives a line only for a condition that no selection of Semilla can switch (the target).
 
 ## 86. Batch 14d: the speed of a step (each piece of work one time, the store behind one interface)
 

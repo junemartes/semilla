@@ -76,6 +76,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::extra` (src/list.rs:16): no template: error[S0112]: the scope path `before::depot::list::extra` names no item of the version
@@ -95,7 +96,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f3 derived: public API: a different crate can now use `depot::list::extra` [move · no code]
   cover: each of the 10 changed line(s) is in a fact
   control flow: 1 body
-    depot::list::extra (src/list.rs:16): graph added: 6 points, 5 arrows (in dev; 3 more result(s) in other configurations: semilla expand --step 0)
+    depot::list::extra (src/list.rs:16): graph added: 6 points, 5 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

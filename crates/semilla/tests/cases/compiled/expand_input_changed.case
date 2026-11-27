@@ -23,6 +23,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::f` (src/lib.rs:4): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(v: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
@@ -57,8 +58,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::f (src/lib.rs:4): same structure: 2 changed checks (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
-    shop::g (src/lib.rs:5): graph changes: −1 check, −1 panic, +1 arrow, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::f (src/lib.rs:4): same structure: 2 changed checks; MIR changes
+    shop::g (src/lib.rs:5): graph changes: −1 check, −1 panic, +1 arrow, −3 arrows; MIR changes
   expansions: 1 changed, 1 removed
     `scale!(v + 2)` at `shop::f/tail` (src/lib.rs:4): expansion changed: `macro_rules! scale` (src/lib.rs:1): changed literal `1` → `2` at `expansion/lhs/rhs` [semantics]; the input of the call changes
     `other!(v)` at `shop::g/tail` (src/lib.rs:-5): expansion removed: `macro_rules! other` (src/lib.rs:2): 1 line(s) of code; the step removes the call or its input

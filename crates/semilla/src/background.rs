@@ -120,7 +120,9 @@ pub fn stored_review(app: &App, key: &str, hash: &str) -> Option<semilla_ui::UiD
 /// The hash of a change set (its JSON form).
 pub fn changeset_hash(set: &ChangeSet) -> String {
     let mut hasher = DefaultHasher::new();
-    serde_json::to_string(set).unwrap_or_default().hash(&mut hasher);
+    // [R85.3-2] The hash has the lists of the check: a check with the list of an option is a
+    // check of a different change set.
+    serde_json::to_string(&crate::configs::listed(set)).unwrap_or_default().hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
 

@@ -33,6 +33,7 @@ pub fn mix(x: usize) -> usize {
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -44,7 +45,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: value of `shop::K#1` changed: 0x9E37_79B9 → 0x9E37_79B1 [semantics · no compare]
       note: no compare: no checked configuration compiles `shop::K#1`
-      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:1); no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:3), so Semilla did not compare the edit; it needs a reason: --reason 'shop::K#1=…'
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:1; not on this target); no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:3; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'shop::K#1=…'
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   note: twins: `shop::K#0` of the old tree and `shop::K#1` of the new tree are one pair (a pair by its identity); the facts name the pair `shop::K#1`

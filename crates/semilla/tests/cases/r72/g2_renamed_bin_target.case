@@ -35,6 +35,7 @@ fn main() {
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
@@ -48,7 +49,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 3 bodies
     tool::{test-harness-main} (no place): no graph data: a record of the driver has no graph; no edit in the body
-    toolbox::main (src/main.rs:1): graph added: 15 points, 15 arrows (in dev; 3 more result(s) in other configurations: semilla expand --step 0); no edit in the body
+    toolbox::main (src/main.rs:1): graph added: 15 points, 15 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body
     toolbox::{test-harness-main} (no place): no graph data: a record of the driver has no graph; no edit in the body
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'Cargo.toml:bin=<why>'

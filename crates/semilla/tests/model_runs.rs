@@ -50,7 +50,8 @@ fn step(dir: &Path, old: &str, new: &str, env: &[(&str, &str)]) -> String {
     std::fs::write(&intent_path, intent).unwrap();
     let root = workspace_root();
     let mut command = Command::new(env!("CARGO_BIN_EXE_semilla"));
-    command.current_dir(&repo).args(["step", "the change", "--intent"]).arg(&intent_path);
+    // Design 85: the runs check the models of each profile (`dev` and `release`): the full list.
+    command.current_dir(&repo).args(["step", "the change", "--configuration=full", "--intent"]).arg(&intent_path);
     command.env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"));
     command.env("SEMILLA_CACHE_DIR", dir.join("cache")).env_remove("SEMILLA_COMPILED").env_remove("SEMILLA_TEST_RULE_OFF");
     let z3 = root.join(".semilla/tools/z3");

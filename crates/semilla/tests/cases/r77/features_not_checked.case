@@ -1,3 +1,5 @@
+note: design 85: the rule of this case needs more than one configuration, so the case has the full list
+option: --configuration=full
 note: batch 13a, test case "mutually exclusive features": the configuration with all features does not build, so no checked configuration enables `a` or `b`; one line names them (G6)
 rule+: R77.3-8
 must_match: ! features that no checked configuration enables: `shop/a`, `shop/b`; no result covers the code or the dependencies that they enable

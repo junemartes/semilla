@@ -38,6 +38,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 3 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 1 equal MIR, 0 explained by claims, 5 MIR changes with no claim
     MIR changes with no claim: `shop::fresh` (src/lib.rs:10): an added body: `#[new(shop::fresh)] fn fresh_new(v: &[u32]) -> bool { let new = after::shop::fresh(v); true }`

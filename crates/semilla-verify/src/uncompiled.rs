@@ -330,12 +330,154 @@ fn unread(workspace: &Workspace, file: &str) -> String {
     }
 }
 
+/// [R85.4-1] The clause that names what checks code under the conditions `around` (design 85):
+/// the option of the first configuration outside the list whose predicted units that read the
+/// file make each condition true, else "not on this target" if the target makes a condition
+/// false, else "no option of Semilla switches the condition". `None` with the full list (no
+/// other configuration).
+fn check(around: &[&Region], file: &str, side: usize, others: &[crate::OtherConfig]) -> Option<String> {
+    if others.is_empty() {
+        return None;
+    }
+    // A feature that the conditions name comes first: `--features x` for `feature = "x"`.
+    let mut named = BTreeSet::new();
+    around.iter().flat_map(|region| &region.preds).for_each(|pred| cfgcond::atoms(pred, &mut named));
+    let first: Vec<String> = named.iter().filter_map(|atom| atom.strip_prefix("feature=\"")?.strip_suffix('"').map(|name| format!("--features {name}"))).collect();
+    let order = others.iter().filter(|other| first.contains(&other.option)).chain(others.iter().filter(|other| !first.contains(&other.option)));
+    for other in order {
+        let units: Vec<&crate::Unit> = other.truths[side].units.iter().filter(|unit| unit.files.contains(file)).collect();
+        if units.iter().any(|unit| around.iter().all(|region| region.compiled(unit, &units))) {
+            return Some(format!("`{}` checks it", other.option));
+        }
+    }
+    let preds: Vec<&Pred> = around.iter().flat_map(|region| &region.preds).collect();
+    Some(no_option(&preds, others, side))
+}
+
+/// The clause for conditions that no configuration of Semilla makes true.
+fn no_option(preds: &[&Pred], others: &[crate::OtherConfig], side: usize) -> String {
+    let host: BTreeSet<String> = others.first().and_then(|other| other.truths[side].units.first()).map(|unit| unit.cfg.clone()).unwrap_or_default();
+    if preds.iter().any(|pred| target_value(pred, &host) == Some(false)) { "not on this target".to_string() } else { "no option of Semilla switches the condition".to_string() }
+}
+
+/// [R85.4-1] The clause for a file that no checked unit reads: the `cfg` attributes of the
+/// modules of the file, with the units of each configuration outside the list that read the
+/// file of the module.
+fn whole_check(workspace: &Workspace, file: &str, side: usize, others: &[crate::OtherConfig]) -> Option<String> {
+    if others.is_empty() {
+        return None;
+    }
+    let modules: Vec<&semilla_syntax::Item> = workspace.items.values().filter(|item| item.kind == semilla_syntax::ItemKind::Mod && item.file != file && workspace.items.values().any(|child| child.file == file && crate::checks::is_child(&child.path, &item.path))).collect();
+    // A target with `required-features` (a bench, an example, a test, a binary).
+    if let Some(other) = others.iter().find(|other| other.roots[side].contains(file)) {
+        return Some(format!("`{}` checks it", other.option));
+    }
+    let preds: Vec<(Pred, &str)> = modules.iter().flat_map(|module| module.attrs.iter().flat_map(|attr| cfgcond::own_conditions(attr)).map(|pred| (pred, module.file.as_str()))).collect();
+    if preds.is_empty() {
+        return Some("Semilla finds no option that checks it".to_string());
+    }
+    for other in others {
+        let true_in = |pred: &Pred, owner: &str| other.truths[side].units.iter().filter(|unit| unit.files.contains(owner)).any(|unit| cfgcond::eval(pred, &unit.cfg) == Some(true));
+        if preds.iter().all(|(pred, owner)| true_in(pred, owner)) {
+            return Some(format!("`{}` checks it", other.option));
+        }
+    }
+    let list: Vec<&Pred> = preds.iter().map(|(pred, _)| pred).collect();
+    Some(no_option(&list, others, side))
+}
+
+/// [R85.4-2] The note of a step with code that no checked configuration compiles and that a
+/// configuration outside the list compiles: the options of the command line that check each
+/// such piece. One configuration gives its words of cargo; more give one `--configuration NAME`
+/// for each.
+pub(crate) fn check_note(dead: &[Dead], others: &[crate::OtherConfig]) -> Option<String> {
+    let used: Vec<&crate::OtherConfig> = others.iter().filter(|other| dead.iter().any(|entry| entry.cause.contains(&format!("`{}` checks it", other.option)))).collect();
+    let options = match used.as_slice() {
+        [] => return None,
+        [one] => one.option.clone(),
+        more => more.iter().map(|other| format!("--configuration '{}'", other.name)).collect::<Vec<_>>().join(" "),
+    };
+    Some(format!("to check the changed code that no checked configuration compiles, add `{options}` to the command (or `--configuration full`)"))
+}
+
+/// [R85.4-4] The subject of a key of a manifest: a dependency (`dependencies.NAME…`,
+/// `dev-dependencies.NAME…`, `build-dependencies.NAME…`) or a feature (`features.NAME`).
+enum Subject {
+    Dependency(String),
+    Feature(String),
+}
+
+fn subject(part: &str) -> Option<Subject> {
+    let mut words = part.split('.');
+    match (words.next()?, words.next()) {
+        ("dependencies" | "dev-dependencies" | "build-dependencies", Some(name)) => Some(Subject::Dependency(name.split([':', ' ']).next()?.trim_matches('"').to_string())),
+        ("features", Some(name)) => Some(Subject::Feature(name.split([':', ' ']).next()?.trim_matches('"').to_string())),
+        _ => None,
+    }
+}
+
+/// True if a feature state uses the subject in a package folder of one tree: a feature that is
+/// on, or a dependency that is not optional or that a feature of the state turns on (`NAME`,
+/// `dep:NAME`, `NAME/x`).
+fn uses(subject: &Subject, state: Option<&BTreeSet<String>>, dependencies: Option<&std::collections::BTreeMap<String, bool>>) -> bool {
+    let on = |name: &str| state.is_some_and(|state| state.contains(name));
+    match subject {
+        Subject::Feature(name) => on(name),
+        Subject::Dependency(name) => match dependencies.and_then(|list| list.get(name)) {
+            None => false,
+            Some(false) => true,
+            Some(true) => on(name) || on(&format!("dep:{name}")) || state.is_some_and(|state| state.iter().any(|entry| entry.strip_prefix(name.as_str()).is_some_and(|rest| rest.starts_with('/')))),
+        },
+    }
+}
+
+/// [R85.4-4] Each fact of a key of a manifest (a dependency or a feature) that no checked
+/// configuration uses, and that a configuration outside the list uses: the fact is not `no
+/// code`. It gets `no compare` with a note that names the option (design 85).
+pub(crate) fn manifest_checks(report: &mut semilla_core::StepReport, table: &crate::FeatureTable, others: &[crate::OtherConfig]) {
+    use semilla_core::{Category, Compare};
+    for fact in report.facts.iter_mut().filter(|fact| fact.category == Category::Manifest && fact.compare == Compare::NoCode) {
+        // The part of a manifest fact is `FOLDER/Cargo.toml:KEY …`.
+        let Some((file, key)) = fact.part.split_once("Cargo.toml:") else { continue };
+        let Some(subject) = subject(key) else { continue };
+        let folder = file.trim_end_matches('/');
+        let used = |states: &[std::collections::BTreeMap<String, BTreeSet<String>>; 2]| (0..2).any(|side| uses(&subject, states[side].get(folder), table.dependencies[side].get(folder)));
+        if used(&table.checked) {
+            continue;
+        }
+        // The option of the name of the subject comes first: `--features x` for `x`.
+        let own = match &subject {
+            Subject::Dependency(name) | Subject::Feature(name) => format!("--features {name}"),
+        };
+        let Some(other) = others.iter().filter(|other| other.option == own).chain(others.iter()).find(|other| used(&other.states)) else { continue };
+        let what = match &subject {
+            Subject::Dependency(name) => format!("the dependency `{name}`"),
+            Subject::Feature(name) => format!("the feature `{name}`"),
+        };
+        fact.compare = Compare::NoCompare;
+        let text = format!("{NO_COMPARE} no checked configuration uses {what}; `{}` checks it", other.option);
+        fact.note = Some(match fact.note.take() {
+            Some(old) => format!("{old}; {text}"),
+            None => text,
+        });
+    }
+}
+
+/// A cause with the clause of [`check`] in its last parentheses.
+fn with_check(cause: String, check: Option<String>) -> String {
+    match (check, cause.strip_suffix(')')) {
+        (Some(check), Some(head)) => format!("{head}; {check})"),
+        (Some(check), None) => format!("{cause} ({check})"),
+        (None, _) => cause,
+    }
+}
+
 /// Each changed line of the step that no checked configuration compiles.
 ///
 /// `truths` has the units of the checked configurations of the two sides. An empty list
 /// gives no result: the oracle has no data. A configuration with no unit record gives the
 /// careful rule: a token in a `cfg` range is dead if its item has no body record.
-pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2], bodies: &BodyIndex) -> Vec<Dead> {
+pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2], bodies: &BodyIndex, others: &[crate::OtherConfig]) -> Vec<Dead> {
     let mut out: BTreeSet<Dead> = BTreeSet::new();
     if truths.iter().all(|side| side.is_empty()) {
         return Vec::new();
@@ -365,7 +507,7 @@ pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2],
             let known = !truths[side].is_empty() && truths[side].iter().all(|truth| truth.known);
             let units: Vec<&crate::Unit> = truths[side].iter().flat_map(|truth| truth.units.iter()).filter(|unit| unit.files.contains(file.as_str())).collect();
             if known && units.is_empty() {
-                let cause = unread(sides[side], file);
+                let cause = with_check(unread(sides[side], file), whole_check(sides[side], file, side, others));
                 for (token, _) in list.iter().zip(&changed).filter(|(_, flag)| **flag) {
                     out.insert(Dead { file: file.to_string(), side, line: token.at.0, cause: cause.clone(), whole: true });
                 }
@@ -406,7 +548,7 @@ pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2],
                     }
                 }
                 let cause = match attrs.is_empty() {
-                    false => format!("{NOT_COMPILED} ({})", attrs.join(", ")),
+                    false => format!("{NOT_COMPILED} ({}{})", attrs.join(", "), check(&around, file, side, others).map(|text| format!("; {text}")).unwrap_or_default()),
                     true => format!("{UNSEEN} ({})", macros.join(", ")),
                 };
                 out.insert(Dead { file: file.to_string(), side, line: token.at.0, cause, whole: false });
@@ -602,7 +744,7 @@ pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::
 /// R68.12-1: true for an atom of a property of the target (`target_feature="sse2"`,
 /// `target_os="linux"`, `unix`, `windows`). The build check builds for one target, so the target
 /// decides these atoms. Each other atom (a feature, `test`, `debug_assertions`) is not known here.
-fn target_atom(atom: &str) -> bool {
+pub(crate) fn target_atom(atom: &str) -> bool {
     let name = atom.split('=').next().unwrap_or(atom);
     name.starts_with("target_") || name == "unix" || name == "windows"
 }

@@ -63,6 +63,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 4 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 2 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::state::Mode::rank` (src/lib.rs:23): no template: the step pairs `depot::Mode::rank` with `depot::state::Mode::rank` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim

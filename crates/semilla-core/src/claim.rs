@@ -72,6 +72,14 @@ pub struct Step {
     /// of the command. A tag is not a fact. A stored step with no field has no tag.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// [R85.3-1] The list of the build configurations of the step (design 85), as the options of
+    /// the command gave it: each entry is the printed name of a configuration (`dev`,
+    /// `release, all features`) or `full` (the full list of design 8.12). An empty list: the
+    /// command had no option, so the list is the setting of the manifest, else `dev`. `None`: a
+    /// stored step of an earlier version, so the list is the full list. Each later check of
+    /// the step uses this list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configurations: Option<Vec<String>>,
 }
 
 /// The facts of the agent for one step (design 54): the texts of the options `--same` and
@@ -500,7 +508,7 @@ mod tests {
             syntax_only: false,
             build_check: None,
             agent: Default::default(),
-            tags: Vec::new(),
+            tags: Vec::new(), configurations: None,
         };
         let set = ChangeSet { steps: vec![step], ..Default::default() };
         assert_eq!(set.next_claim_id(), "c3");

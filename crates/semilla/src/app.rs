@@ -39,6 +39,10 @@ pub struct OpenStep {
     /// The tags of the agent of the step (design 55.3).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// [R85.3-1] The list of the build configurations of the step (design 85), as for a stored
+    /// step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configurations: Option<Vec<String>>,
 }
 
 pub use semilla_core::ops::optional_args;
@@ -132,6 +136,9 @@ pub struct App {
     /// The base trees that a commit gives: the tree of the parent of a commit that this process
     /// checked against its note. The build code of such a tree is trusted.
     pub(crate) trusted_bases: std::cell::RefCell<BTreeSet<String>>,
+    /// [R85.2-1] The list of the build configurations of a new step of this command (design 85):
+    /// the entries of the options. Empty: no option, so the step has the default list.
+    pub new_list: Vec<String>,
 }
 
 /// Gives no body data for the steps that the command does not check (`--no-build-code`): these
@@ -185,6 +192,18 @@ impl semilla_verify::BodyOracle for Guard<'_> {
 
     fn set_selections(&self, step: &Step, selections: &[semilla_verify::Selection]) -> Result<bool> {
         if self.off(step) { Ok(false) } else { self.inner.set_selections(step, selections) }
+    }
+
+    fn full_list(&self, step: &Step) -> bool {
+        self.off(step) || self.inner.full_list(step)
+    }
+
+    fn other_configs(&self, step: &Step) -> Vec<semilla_verify::OtherConfig> {
+        if self.off(step) { Vec::new() } else { self.inner.other_configs(step) }
+    }
+
+    fn feature_table(&self, step: &Step) -> Option<semilla_verify::FeatureTable> {
+        if self.off(step) { None } else { self.inner.feature_table(step) }
     }
 
     fn equivalence(&self, step: &Step, renames: &BTreeMap<String, String>, queries: &[semilla_verify::equiv::Query]) -> Vec<Option<semilla_verify::equiv::Answer>> {
@@ -317,7 +336,7 @@ fn later_claims(set: &ChangeSet, all: &[Step], bodies: &dyn semilla_verify::Body
             }
             let Ok(parsed) = semilla_verify::intent::parse_files(&earlier.agent.intent) else { continue };
             let queries: Vec<semilla_verify::intent::Query> = semilla_verify::intent::queries(&parsed, false).into_iter().filter(|query| stale.iter().any(|(id, _)| *id == query.id)).collect();
-            let pair = Step { index: later.index, intent: earlier.intent.clone(), claims: Vec::new(), tree_before: earlier.tree_before.clone(), tree_after: later.tree_after.clone(), reasons: Default::default(), syntax_only: false, build_check: None, agent: earlier.agent.clone(), tags: Vec::new() };
+            let pair = Step { index: later.index, intent: earlier.intent.clone(), claims: Vec::new(), tree_before: earlier.tree_before.clone(), tree_after: later.tree_after.clone(), reasons: Default::default(), syntax_only: false, build_check: None, agent: earlier.agent.clone(), tags: Vec::new(), configurations: later.configurations.clone() };
             let Some(answers) = bodies.intent(&pair, &BTreeMap::new(), &queries) else { continue };
             for (query, answer) in queries.iter().zip(answers) {
                 let hit = stale.iter().find(|(id, _)| *id == query.id).map(|(_, hit)| hit.join(", ")).unwrap_or_default();
@@ -671,7 +690,7 @@ impl App {
             std::fs::create_dir_all(repo.state_dir())?;
             std::fs::write(&ignore, "*\n")?;
         }
-        Ok(App { repo, workspaces: BTreeMap::new(), step_memo: BTreeMap::new(), config_log: Default::default(), no_bodies: std::env::var_os("SEMILLA_NO_BODIES").is_some(), mode: Mode::default(), trusted_bases: Default::default() })
+        Ok(App { repo, workspaces: BTreeMap::new(), step_memo: BTreeMap::new(), config_log: Default::default(), no_bodies: std::env::var_os("SEMILLA_NO_BODIES").is_some(), mode: Mode::default(), trusted_bases: Default::default() , new_list: Vec::new() })
     }
 
     /// The review state of the reviewer (the decisions in the UI). It is in the cache folder of
@@ -683,6 +702,12 @@ impl App {
     /// The key of the tools that a result depends on: the Semilla binary, the MIR driver, the
     /// solver, the toolchain, and the build settings outside the tree. A stored result is valid
     /// only for the same key.
+    /// The list of the build configurations for a step that this command makes for its own
+    /// check (an expansion, an intent check): the list of the options (design 85).
+    pub(crate) fn request_list(&self) -> Option<Vec<String>> {
+        Some(crate::configs::override_list().unwrap_or_else(|| self.new_list.clone()))
+    }
+
     pub fn tools_key(&self) -> String {
         let file = |path: Option<std::path::PathBuf>| match path {
             Some(path) => {
@@ -1022,7 +1047,7 @@ impl App {
         } else if session.changeset.head_tree != tree {
             bail!("the working tree changed after the last step ended; put all changes inside steps");
         }
-        session.open = Some(OpenStep { intent: intent.to_string(), tree_before: tree.clone(), claims: Vec::new(), reasons: BTreeMap::new(), build_check: None, agent: Default::default(), tags: Vec::new() });
+        session.open = Some(OpenStep { intent: intent.to_string(), tree_before: tree.clone(), claims: Vec::new(), reasons: BTreeMap::new(), build_check: None, agent: Default::default(), tags: Vec::new(), configurations: Some(self.new_list.clone()) });
         self.save_session(&session)?;
         let mut text = format!("step {} started at tree {tree}", session.changeset.steps.len());
         if session.changeset.steps.is_empty() {
@@ -1163,7 +1188,7 @@ impl App {
             group.steps.retain(|index| *index != step.index);
         }
         let claims = step.claims.len();
-        session.open = Some(OpenStep { intent: step.intent, tree_before: step.tree_before, claims: step.claims, reasons: step.reasons, build_check: None, agent: step.agent, tags: step.tags });
+        session.open = Some(OpenStep { intent: step.intent, tree_before: step.tree_before, claims: step.claims, reasons: step.reasons, build_check: None, agent: step.agent, tags: step.tags, configurations: step.configurations });
         self.save_session(&session)?;
         Ok(format!("step {} is open again, with {claims} claim(s); edit, claim or unclaim, then `semilla old-step end`", step.index))
     }
@@ -1200,7 +1225,7 @@ impl App {
         let open = session.open.take().context("no step is open")?;
         let tree = self.repo.write_tree()?;
         let index = session.changeset.steps.len();
-        session.changeset.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, syntax_only: false, build_check: open.build_check, agent: open.agent, tags: open.tags });
+        session.changeset.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, syntax_only: false, build_check: open.build_check, agent: open.agent, tags: open.tags, configurations: open.configurations });
         session.changeset.head_tree = tree.clone();
         self.save_session(&session)?;
         if queue {
@@ -1270,7 +1295,7 @@ impl App {
         // No check for this change set exists on this machine (a stale report, a forged or copied
         // report note, a new clone): start the check now.
         if matches!(state, crate::background::State::Stale | crate::background::State::Missing) && !set.steps.is_empty() {
-            let job = crate::background::Job { key: key.clone(), hash: hash.clone(), changeset: (key == "session").then(|| set.clone()), mode: self.mode };
+            let job = crate::background::Job { key: key.clone(), hash: hash.clone(), changeset: (key == "session" || crate::configs::override_list().is_some()).then(|| crate::configs::listed(&set)), mode: self.mode };
             crate::background::enqueue(self, &job)?;
             crate::background::spawn_worker(self)?;
             state = crate::background::state(self, &key, &hash);
@@ -1281,7 +1306,7 @@ impl App {
             state = crate::background::wait(self, &key, &hash, timeout)?;
             // A lost or failed job: start it again, and run it in this process (M1).
             if state != crate::background::State::Ready && !set.steps.is_empty() && started.elapsed() < timeout {
-                let job = crate::background::Job { key: key.clone(), hash: hash.clone(), changeset: (key == "session").then(|| set.clone()), mode: self.mode };
+                let job = crate::background::Job { key: key.clone(), hash: hash.clone(), changeset: (key == "session" || crate::configs::override_list().is_some()).then(|| crate::configs::listed(&set)), mode: self.mode };
                 crate::background::enqueue(self, &job)?;
                 state = crate::background::wait(self, &key, &hash, timeout.saturating_sub(started.elapsed()))?;
             }
@@ -1709,7 +1734,7 @@ impl App {
         };
         // R76.1-1: the command of this output, for the line of a cut text.
         let again = format!("semilla expand {place}{}{}", step.map(|step| format!(" --step {step}")).unwrap_or_default(), commit.map(|commit| format!(" --commit {commit}")).unwrap_or_default());
-        let step = Step { index: 0, intent: "expand".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+        let step = Step { index: 0, intent: "expand".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new(), configurations: self.request_list() };
         let set = ChangeSet { base_tree: before.clone(), head_tree: after.clone(), steps: vec![step.clone()], ..Default::default() };
         let code = self.build_code(&set)?;
         let oracle = NormalOracle { repo: self.repo.clone(), code, mode: self.mode, log: self.config_log.clone(), added: Default::default(), after_commit: false };
@@ -1751,7 +1776,7 @@ impl App {
             if before == tree {
                 bail!("the working tree has no change since the last step, and the session has no step {}: give a stored step with `--step N`", set.steps.len());
             }
-            let step = Step { index: set.steps.len(), intent: "expand".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: tree.clone(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+            let step = Step { index: set.steps.len(), intent: "expand".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: tree.clone(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new(), configurations: self.request_list() };
             Ok(ChangeSet { base_tree: before, head_tree: tree.clone(), steps: vec![step], pair_refusals: set.pair_refusals.clone(), ..Default::default() })
         };
         let one = match step {
@@ -1885,7 +1910,7 @@ impl App {
         let check = match crate::intentcrate::check_fast(&self.repo.cache_dir(), &self.repo.root, &before, &after, &sources)? {
             Some(check) => check,
             None => {
-                let step = Step { index: 0, intent: "intent check".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+                let step = Step { index: 0, intent: "intent check".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new(), configurations: self.request_list() };
                 let set = ChangeSet { base_tree: before.clone(), head_tree: after.clone(), steps: vec![step], ..Default::default() };
                 let code = self.build_code(&set)?;
                 let oracle = NormalOracle { repo: self.repo.clone(), code, mode: self.mode, log: self.config_log.clone(), added: Default::default(), after_commit: false };
@@ -1966,7 +1991,7 @@ impl App {
         if let Some(open) = session.open {
             let tree = self.repo.write_tree()?;
             let index = set.steps.len();
-            set.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, syntax_only: false, build_check: open.build_check, agent: open.agent, tags: open.tags });
+            set.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, syntax_only: false, build_check: open.build_check, agent: open.agent, tags: open.tags, configurations: open.configurations });
             set.head_tree = tree;
         }
         Ok(set)
@@ -2126,6 +2151,9 @@ impl App {
 
     /// Checks a change set, or one step of it, with the build code state of the full change set.
     fn check_set_with(&mut self, set: &ChangeSet, require_groups: bool, code: &BuildCode) -> Result<CheckResult> {
+        // [R85.3-2] The list of the option of a reviewer command replaces the list of each step.
+        let option_list = crate::configs::overrides(set).unwrap_or_default();
+        let set = &crate::configs::listed(set);
         // A command with `--no-build-code` does not check a step that uses a tree with changed
         // build code. Such a step gets its phase 1 facts, with no MIR data.
         let note = code.note(self.mode.runs_build_code());
@@ -2133,6 +2161,13 @@ impl App {
         let log = self.config_log.clone();
         let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone(), added: Default::default(), after_commit: set.after_commit.is_some() }) };
         let bodies = Guard { inner: inner.as_ref(), skip: &skip, code };
+        // [R85.2-2] A feature of the list that no tree of a step has is an error of the command.
+        if !self.no_bodies {
+            let oracle = NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: Default::default(), added: Default::default(), after_commit: false };
+            for step in set.steps.iter().filter(|step| !skip.contains(&step.index)) {
+                oracle.check_list(step)?;
+            }
+        }
         // [R84.7-1] No solver for the effect of a changed condition (design 84): only a claim of
         // an intent file starts the solver. A plain negation keeps its effect by the syntax.
         let exprs = semilla_verify::NoOracle;
@@ -2186,7 +2221,10 @@ impl App {
             }
         }
         report.build_code = note;
-        report.configs = config_note(set, &log, &cache);
+        // [R85.4-1] The configurations outside the list of each step with a list that is not the
+        // full list: they name the option for each condition that the list does not cover.
+        let others: BTreeMap<usize, Vec<semilla_verify::OtherConfig>> = set.steps.iter().filter(|step| !semilla_verify::BodyOracle::full_list(&bodies, step)).map(|step| (step.index, semilla_verify::BodyOracle::other_configs(&bodies, step))).collect();
+        report.configs = config_note(set, &log, &cache, &others).map(|note| semilla_core::report::ConfigNote { option_list, ..note });
         crate::timing("verify the change set (with the body checks)", started);
         // The parts of that time (batch 5x, part F).
         crate::oracle::MARK_TIME.print("give the records to the build configuration rules");
@@ -2661,7 +2699,7 @@ impl App {
 /// `status --verbose` prints the facts.
 /// The build configurations of the body checks of a change set (design 8.12; batch 5s, B1),
 /// from the log of the oracle. `None` if no step has a body check.
-fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap<String, Workspace>) -> Option<semilla_core::report::ConfigNote> {
+fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap<String, Workspace>, others: &BTreeMap<usize, Vec<semilla_verify::OtherConfig>>) -> Option<semilla_core::report::ConfigNote> {
     let log = log.lock().ok()?;
     let mut note = semilla_core::report::ConfigNote::default();
     let mut found = false;
@@ -2675,6 +2713,7 @@ fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap
         let Some(configs) = log.get(&(step.tree_before.clone(), step.tree_after.clone())) else { continue };
         found = true;
         compared += 1;
+        note.partial |= configs.partial;
         if note.target.is_empty() {
             note.target = configs.target.clone();
         }
@@ -2708,6 +2747,11 @@ fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap
         if let (Some(before), Some(after)) = (trees.get(&step.tree_before), trees.get(&step.tree_after)) {
             let cover = semilla_verify::cfgcond::Cover::new(&[(before, &configs.truth[0]), (after, &configs.truth[1])]);
             conditions.extend(cover.not_covered.iter().map(|text| semilla_verify::cfgcond::show(text)));
+            if let Some(others) = others.get(&step.index) {
+                for (text, check) in semilla_verify::cfgcond::other_state_options(&cover.not_covered, &configs.truth, others) {
+                    note.condition_checks.entry(text).or_insert(check);
+                }
+            }
             // [R77.3-8] The features of each built package that no checked configuration of the
             // tree after the step enables (the true `feature` atoms of the compiler, by unit).
             if configs.truth[1].iter().all(|truth| truth.known) {
@@ -2722,6 +2766,13 @@ fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap
                     let name = table.get("package").and_then(|package| package.get("name")).and_then(|name| name.as_str()).unwrap_or(package).to_string();
                     for feature in table.get("features").and_then(|features| features.as_table()).map(|features| features.keys().cloned().collect::<Vec<_>>()).unwrap_or_default() {
                         if feature != "default" && !on.contains(&feature) {
+                            // [R85.4-4] The option of a configuration outside the list that turns
+                            // the feature on.
+                            let first = format!("--features {feature}");
+                            let found = others.get(&step.index).and_then(|list| list.iter().filter(|other| other.option == first).chain(list.iter()).find(|other| other.states[1].get(*package).is_some_and(|state| state.contains(&feature))));
+                            if let Some(other) = found {
+                                note.feature_checks.entry(format!("{name}/{feature}")).or_insert_with(|| other.option.clone());
+                            }
                             features_off.insert(format!("{name}/{feature}"));
                         }
                     }

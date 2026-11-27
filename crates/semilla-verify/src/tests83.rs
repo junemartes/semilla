@@ -30,7 +30,7 @@ fn tree(files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace) {
 fn facts(old: &[(&str, &str)], new: &[(&str, &str)]) -> (Vec<(String, Category, bool)>, Vec<String>) {
     let (_a, before) = tree(old);
     let (_b, after) = tree(new);
-    let step = Step { index: 0, intent: "the change".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new() };
+    let step = Step { index: 0, intent: "the change".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new(), configurations: None };
     let outcome = verify_step_with(&StepInput { step: &step, before: &before, after: &after }, &NoOracle, &NoOracle, true);
     (outcome.report.facts.iter().map(|fact| (fact.description.clone(), fact.category, fact.spotlight)).collect(), outcome.report.errors.clone())
 }

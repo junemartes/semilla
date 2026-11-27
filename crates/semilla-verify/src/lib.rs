@@ -216,6 +216,34 @@ pub struct ConfigTruth {
     pub known: bool,
 }
 
+/// [R85.4-1] A configuration that the list of a step does not check (design 85): its name, the
+/// command line option that checks it, and the units that the configuration would have in the
+/// two trees. The units are a prediction from the checked units and the feature tables of the
+/// manifests: the feature atoms and `debug_assertions` follow the configuration. A prediction
+/// is never a part of a result: it only names an option in a line.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OtherConfig {
+    pub name: String,
+    pub option: String,
+    pub truths: [ConfigTruth; 2],
+    /// The root files of the targets that the configuration builds and the checked list does
+    /// not build (the `required-features` of the manifest), of the two trees.
+    pub roots: [BTreeSet<String>; 2],
+    /// [R85.4-4] The feature state of each package of the configuration, by the folder of the
+    /// package (the features of the selection and each entry that they name in the feature
+    /// tables: `dep:x`, `x/y`), in the two trees.
+    pub states: [BTreeMap<String, BTreeSet<String>>; 2],
+}
+
+/// [R85.4-4] The data of the manifests for the parts of a change that only a configuration can
+/// show (design 85): the dependencies of each package folder (the name, true if it is optional),
+/// and the feature state of the checked configurations, in the two trees.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FeatureTable {
+    pub dependencies: [BTreeMap<String, BTreeMap<String, bool>>; 2],
+    pub checked: [BTreeMap<String, BTreeSet<String>>; 2],
+}
+
 /// The MIR facts of one body after a step, for the property claims.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BodyFacts {
@@ -442,6 +470,24 @@ pub trait BodyOracle {
     /// configuration.
     fn set_selections(&self, _step: &Step, _selections: &[Selection]) -> anyhow::Result<bool> {
         Ok(false)
+    }
+
+    /// [R85.4-1] True if the list of the build configurations of the step is the full list of
+    /// design 8.12 (design 85). Then no line names an option that checks more.
+    fn full_list(&self, _step: &Step) -> bool {
+        true
+    }
+
+    /// [R85.4-1] The configurations that the list of the step does not check, each with its
+    /// option and its predicted units. Empty with the full list.
+    fn other_configs(&self, _step: &Step) -> Vec<OtherConfig> {
+        Vec::new()
+    }
+
+    /// [R85.4-4] The dependencies and the feature state of the checked configurations, from the
+    /// manifests. `None`: no data (the full list, or no manifest that cargo can read).
+    fn feature_table(&self, _step: &Step) -> Option<FeatureTable> {
+        None
     }
 
     /// The equivalence check of two versions of each body (design 61, part C): one answer for
@@ -1171,6 +1217,9 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     // check, so the result is a function of the two trees and the claims only.
     let mut selections: Vec<Selection> = Vec::new();
     let can_add = bodies.set_selections(step, &[]).unwrap_or(false);
+    // [R85.5-1] The list of the step (design 85): a list that is not the full list adds no
+    // configuration.
+    let full_list = bodies.full_list(step);
     let mut scope: Option<cfgcond::Scope> = None;
     // The compare result of each body with no rule of the build configuration (design 35): the
     // MIR level N0 after the rename and move map (N1), in the checked configurations.
@@ -1224,7 +1273,7 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
         // The rule goes off for a proof only if the checked units have each valuation of the
         // atoms of the proof (batch 5t, part B).
         let settled = run(&cfgcond::Mode::Plain).and_then(|(plain, seen)| {
-            let joint = joint::Joint { sides: [input.before, input.after], truths: &truths, bodies: &seen, renames: &renames.items };
+            let joint = joint::Joint { sides: [input.before, input.after], truths: &truths, bodies: &seen, renames: &renames.items, options: !full_list };
             let property = step.claims.iter().any(|claim| semilla_core::ops::op(&claim.op).is_some_and(|info| info.kind == semilla_core::OpKind::Property));
             // The joint check stays for each step (design 35.5): an equal compare that uses
             // two or more conditions gets the configurations of the joint states (batch 5u).
@@ -1906,7 +1955,21 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
 
     // An edit in code that no checked configuration compiles has no compare (batch 5w, part A).
     if body_index.available {
-        let dead = uncompiled::dead_edits([input.before, input.after], &truths, &body_index);
+        let mut dead = uncompiled::dead_edits([input.before, input.after], &truths, &body_index, &[]);
+        // [R85.4-1] With a list that is not the full list, each line names what checks the code
+        // (design 85), and one note of the step gives the options of the command line.
+        if !dead.is_empty() && !full_list {
+            let others = oracle.other_configs(step);
+            dead = uncompiled::dead_edits([input.before, input.after], &truths, &body_index, &others);
+            report.notes.extend(uncompiled::check_note(&dead, &others));
+        }
+        // [R85.4-4] A manifest part that only a configuration outside the list uses names the
+        // option, and it is not `no code`.
+        if !full_list && report.facts.iter().any(|fact| fact.category == semilla_core::Category::Manifest && fact.compare == semilla_core::Compare::NoCode)
+            && let Some(table) = oracle.feature_table(step)
+        {
+            uncompiled::manifest_checks(&mut report, &table, &oracle.other_configs(step));
+        }
         uncompiled::apply(&dead, [input.before, input.after], step, &edits, &fact_of, &renames, &mut report);
     }
 

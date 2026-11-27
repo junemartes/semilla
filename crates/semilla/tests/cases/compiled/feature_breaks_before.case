@@ -1,3 +1,5 @@
+note: design 85: the rule of this case needs more than one configuration, so the case has the full list
+option: --configuration=full
 note: the tree before the step has a feature whose code does not build: one line names the configurations that are not checked and the cause (design 61.14, defect 4)
 rule+: R61.14-4
 === new Cargo.toml
@@ -52,9 +54,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: shop
   ! spotlight: features: Cargo.toml (the key of the reason: `Cargo.toml:features.nightly`)
-run again: semilla step 'the change' --reason 'shop=<why>' --reason 'Cargo.toml:features.nightly=<why>'
+run again: semilla step 'the change' --reason 'shop=<why>' --reason 'Cargo.toml:features.nightly=<why>' --configuration full
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop=the reason of the test' --reason 'Cargo.toml:features.nightly=the reason of the test'
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop=the reason of the test' --reason 'Cargo.toml:features.nightly=the reason of the test' --configuration full
 ◆ f3 derived: changed literal `2` → `1` at `shop::price/tail/rhs` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-4
 ◆ f1 derived: attributes of `shop`: removed `#![cfg_attr(feature = "nightly", feature(no_such_feature_of_semilla))]` [attribute · code equal]

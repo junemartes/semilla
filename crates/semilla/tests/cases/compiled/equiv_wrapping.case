@@ -1,3 +1,5 @@
+note: design 85: the rule of this case needs more than one configuration, so the case has the full list
+option: --configuration=full
 note: `x.wrapping_add(1)` → `x + 1` is equivalent in release and different in dev (the overflow check)
 rule+: R61.4-5
 === both Cargo.toml

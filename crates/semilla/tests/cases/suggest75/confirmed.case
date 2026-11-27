@@ -1,3 +1,5 @@
+note: design 85: the rule of this case needs more than one configuration, so the case has the full list
+option: --configuration=full
 note: a difference of a value and of a panic each get a suggested test (design 75)
 note: design 84: only a claim starts the solver, so each body of the case has an empty `#[same]` claim (the full compare of today); a false claim rejects the step
 rule+: R75.1-1

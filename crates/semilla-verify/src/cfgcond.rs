@@ -419,6 +419,41 @@ pub(crate) fn own_conditions(attr: &str) -> Vec<Pred> {
     out
 }
 
+/// [R85.4-1] The option that gives the other state of each condition that the checked
+/// configurations do not cover (design 85): the first configuration outside the list whose
+/// predicted units give a value of the condition that no checked unit gives. A condition with no
+/// such configuration gets "not on this target" if its value depends on the target, else "no
+/// option of Semilla switches it". `keys`: the key texts of `Cover::not_covered`. The result
+/// is by the text of [`show`].
+pub fn other_state_options(keys: &BTreeSet<String>, truths: &[Vec<ConfigTruth>; 2], others: &[crate::OtherConfig]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    if others.is_empty() {
+        return out;
+    }
+    for key in keys {
+        let Ok(stream) = key.parse::<TokenStream>() else { continue };
+        let pred = parse(&stream.into_iter().collect::<Vec<_>>());
+        let values = |units: &mut dyn Iterator<Item = &Unit>| -> BTreeSet<Option<bool>> { units.map(|unit| eval(&pred, &unit.cfg)).collect() };
+        let seen = values(&mut truths.iter().flatten().flat_map(|truth| &truth.units));
+        // A feature that the condition names comes first: `--features x` for `feature = "x"`.
+        let mut named = BTreeSet::new();
+        atoms(&pred, &mut named);
+        let first: Vec<String> = named.iter().filter_map(|atom| atom.strip_prefix("feature=\"")?.strip_suffix('"').map(|name| format!("--features {name}"))).collect();
+        let gives = |other: &&crate::OtherConfig| values(&mut other.truths.iter().flat_map(|truth| &truth.units)).iter().any(|value| value.is_some() && !seen.contains(value));
+        let found = others.iter().filter(|other| first.contains(&other.option)).find(gives).or_else(|| others.iter().find(gives));
+        let text = match found {
+            Some(other) => format!("`{}`", other.option),
+            None => {
+                let mut names = BTreeSet::new();
+                atoms(&pred, &mut names);
+                if names.iter().any(|atom| crate::uncompiled::target_atom(atom)) { "not on this target".to_string() } else { "no option of Semilla switches it".to_string() }
+            }
+        };
+        out.insert(show(key), text);
+    }
+    out
+}
+
 /// The input of `Cover::new` for one tree: the Rust files and the checked configurations.
 type CoverInput = (BTreeMap<String, String>, Vec<ConfigTruth>);
 

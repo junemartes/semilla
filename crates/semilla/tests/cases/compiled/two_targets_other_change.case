@@ -1,3 +1,5 @@
+note: design 85: the rule of this case needs more than one configuration, so the case has the full list
+option: --configuration=full
 note: the same two targets; the step changes only `price` of the library: each `probe::hash` has no line, and the library body and its test build stay one body with one line (design 61.16)
 rule-: R61.16-1
 must_match: shop::price \(src/lib\.rs:16\)

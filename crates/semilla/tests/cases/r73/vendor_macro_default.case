@@ -48,6 +48,7 @@ dependencies = [
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
@@ -59,7 +60,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ✗ spotlight: Rust code that Semilla does not parse: this file is code of the lib target `depot` of the package in `vendor/depot` (not a workspace member); it needs a reason: --reason 'vendor/depot/src/lib.rs:=…'
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (shop/src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; MIR changes; the expansion of `depot::fee!(v)` changes (semilla expand shop/src/lib.rs:1 --step 0)
+    shop::price (shop/src/lib.rs:1): same structure: 1 changed check; no edit in the body; MIR changes; the expansion of `depot::fee!(v)` changes (semilla expand shop/src/lib.rs:1 --step 0)
   expansions: 1 changed
     `depot::fee!(v)` at `shop::price/tail` (shop/src/lib.rs:1): expansion changed: `macro_rules! depot::fee` (vendor/depot/src/lib.rs:2): changed literal `10` → `12` at `expansion/rhs` [semantics]; from `macro_rules! depot::fee` (vendor/depot/src/lib.rs:2)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

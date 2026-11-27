@@ -31,6 +31,7 @@ pub fn value() -> u32 {
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -44,7 +45,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       note: no compare: no checked configuration compiles `depot::imp#1::value`
   ◆ f2 derived: src/imp_win.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
       note: no compare: no checked configuration compiles `src/imp_win.rs`
-      ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/imp_win.rs`: `#[cfg(windows)]` at `depot::imp#1`), so Semilla did not compare the edit; it needs a reason: --reason 'src/imp_win.rs=…'
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/imp_win.rs`: `#[cfg(windows)]` at `depot::imp#1`; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'src/imp_win.rs=…'
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: inactive code: src/imp_win.rs (no checked unit reads the file)

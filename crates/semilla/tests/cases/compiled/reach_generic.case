@@ -62,6 +62,7 @@ fn same_1() {}
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   ✗ the intent claim i2 `#[same(shop::food_bill)] fn same_1()` (.semilla/intent/step.rs:6): false: for n = 1: before returns 5, after returns 6 (suggested test `semilla_test_food_bill_3f08e7`)
 
   intent (2 claim(s); a claim is a proof only if it is proved):
@@ -87,7 +88,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   control flow: 1 body
     <shop::Food as shop::Tax>::rate (src/lib.rs:8): same graph (the edit keeps the control flow); MIR changes
   suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_food_bill_3f08e7`: add it to `src/lib.rs`, in the module of `shop::food_bill` (line 17); run it: `cargo test -p shop semilla_test_food_bill_3f08e7`; also: `cargo test -p shop --release semilla_test_food_bill_3f08e7`
+    `semilla_test_food_bill_3f08e7`: add it to `src/lib.rs`, in the module of `shop::food_bill` (line 17); run it: `cargo test -p shop semilla_test_food_bill_3f08e7`
       #[cfg(test)]
       mod semilla_test_food_bill_3f08e7 {
           // Semilla (design 75): the two versions differ for this input.

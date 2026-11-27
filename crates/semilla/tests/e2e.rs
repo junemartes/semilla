@@ -28,11 +28,29 @@ fn semilla(repo: &Path, args: &[&str]) -> Output {
     semilla_env(repo, args, &[])
 }
 
+thread_local! {
+    /// Design 85: true for a test of a rule of the build configurations. Each command of a check
+    /// of the test then has the full list of design 8.12 (`--configuration full`).
+    static FULL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Design 85: the test checks a rule that needs more than one configuration, so each command of
+/// a check gets the full list (the default list has only `dev`).
+fn full_list() {
+    FULL.with(|full| full.set(true));
+}
+
+/// The commands that take the list of the build configurations.
+const LIST_COMMANDS: [&str; 7] = ["step", "tag", "status", "review", "verify", "expand", "load"];
+
 /// Runs semilla with more environment variables.
 fn semilla_env(repo: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     let root = workspace_root();
     let mut command = Command::new(env!("CARGO_BIN_EXE_semilla"));
     command.current_dir(repo).args(args);
+    if FULL.with(|full| full.get()) && args.first().is_some_and(|name| LIST_COMMANDS.contains(name)) {
+        command.arg("--configuration=full");
+    }
     command.env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"));
     // The cache folder of the user: a folder next to the test repository, not the home folder.
     // A test can give a different folder in `env`.
@@ -281,6 +299,10 @@ fn mcp_calls_env(repo: &Path, calls: &[(&str, serde_json::Value)], env: &[(&str,
     ask(serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}}));
     let mut out = Vec::new();
     for (index, (name, arguments)) in calls.iter().enumerate() {
+        let mut arguments = arguments.clone();
+        if FULL.with(|full| full.get()) && ["step", "tag", "results", "verify", "replay_apply"].contains(name) && let Some(map) = arguments.as_object_mut() {
+            map.insert("configurations".into(), serde_json::json!(["full"]));
+        }
         let answer = ask(serde_json::json!({"jsonrpc": "2.0", "id": index + 2, "method": "tools/call", "params": {"name": name, "arguments": arguments}}));
         out.push((answer["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string(), answer["result"]["isError"] == true));
     }
@@ -2970,6 +2992,8 @@ fn json_body(answer: &str) -> serde_json::Value {
 
 #[test]
 fn each_command_runs_changed_build_code_and_marks_each_proof() {
+    // Design 85: the rule of this test needs more than one configuration.
+    full_list();
     // Design 28, rules 1, 3, 4, 5, and invariant I6. Each command runs the changed build code
     // in the sandbox. Each output form shows the build code change first, and each proof from
     // that step on has the mark.
@@ -4200,6 +4224,8 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
 
 #[test]
 fn a_name_that_a_macro_puts_into_a_body_is_a_use_of_the_build_configuration() {
+    // Design 85: the rule of this test needs more than one configuration.
+    full_list();
     // Batch 5p: the name rule reads the names of the expanded code. The text of a body with
     // a macro call does not have the names that the macro gives.
     let dir = setup();
@@ -4728,6 +4754,8 @@ pub fn never() {}
 
 #[test]
 fn a_proof_holds_in_each_checked_configuration() {
+    // Design 85: the rule of this test needs more than one configuration.
+    full_list();
     // Batch 5s, parts A, B, and C. Semilla checks a list of configurations: the two profiles,
     // each with the default features and with all features.
     let dir = setup();
@@ -4809,6 +4837,8 @@ fn a_proof_holds_in_each_checked_configuration() {
 
 #[test]
 fn a_configuration_with_a_compile_error_is_named() {
+    // Design 85: the rule of this test needs more than one configuration.
+    full_list();
     // Batch 5s, A4. A configuration that does not build before the step has no check: the
     // output names it with the first error line. A step that breaks a configuration is a
     // compile error.
@@ -4851,6 +4881,8 @@ fn twin(condition: &str) -> String {
 
 #[test]
 fn the_compiler_gives_the_true_values_of_each_condition() {
+    // Design 85: the rule of this test needs more than one configuration.
+    full_list();
     // Batch 5t, part A. The values of the `cfg` names come from the compiler, for each
     // compile unit. A condition is covered only if a checked unit that reads the file has it
     // true and a checked unit that reads the file has it false.
@@ -4911,6 +4943,8 @@ fn the_compiler_gives_the_true_values_of_each_condition() {
 
 #[test]
 fn a_configuration_that_builds_only_its_libraries_and_binaries_is_checked() {
+    // Design 85: the rule of this test needs more than one configuration.
+    full_list();
     // Batch 5t, part C. The test target needs the feature `std`, so the configurations with
     // no default features do not build with each target. Semilla checks their libraries and
     // binaries.
@@ -5032,6 +5066,8 @@ fn a_removed_proof_with_no_spotlight_has_a_note_with_the_cause() {
 
 #[test]
 fn an_added_configuration_is_a_check_and_not_a_proof() {
+    // Design 85: the rule of this test needs more than one configuration.
+    full_list();
     // Batch 5u, part C: the negative cases. An added configuration is a checked configuration:
     // its compare result shows in the note of the fact (design 35.5).
     let dir = setup();
@@ -5107,6 +5143,8 @@ fn an_added_configuration_is_a_check_and_not_a_proof() {
 
 #[test]
 fn a_proof_with_two_conditions_needs_each_joint_state() {
+    // Design 85: the rule of this test needs more than one configuration.
+    full_list();
     // Batch 5t, part B. Each of the two features is covered. The compare uses the two
     // conditions, and no build of the default list has `fast` on with `slow` off.
     let dir = setup();
@@ -5612,6 +5650,8 @@ fn a_binding_that_rule_3c_forwards_on_one_side_keeps_the_cause_of_its_edit() {
 
 #[test]
 fn an_edit_in_code_that_no_configuration_compiles_needs_a_reason() {
+    // Design 85: the rule of this test needs more than one configuration.
+    full_list();
     // Batch 5w, part A (trial 7 on humantime). A constant in a module with a `cfg` condition
     // that is false in each checked configuration got `neutral (proved)`. "No body changed"
     // is evidence only for code that a checked configuration compiles.
@@ -5663,14 +5703,14 @@ fn an_edit_in_code_that_no_configuration_compiles_needs_a_reason() {
     // Design 37.19: eleven open spotlights have the kind `inactive-code`. The command to run
     // again has one kind reason for them, and no key of an item of the kind.
     let again = out.lines().find(|line| line.starts_with("run again: ")).unwrap_or_else(|| panic!("{out}"));
-    assert_eq!(again, "run again: semilla step 'tidy the small module' --reason 'kind:inactive-code=<why>'", "{out}");
+    assert_eq!(again, "run again: semilla step 'tidy the small module' --reason 'kind:inactive-code=<why>' --configuration full", "{out}");
     // A kind with no open spotlight, a name that is no kind, and the build code kind: each
     // reason gets the usual warning, and the command to run again omits it.
     let out = run(repo, &["step", "tidy the small module", "--reason", "kind:cfg-attribute=a", "--reason", "kind:other=b", "--reason", "kind:build-code=c"], 1);
     assert!(out.contains("  ! the reason for `kind:cfg-attribute` belongs to no fact of this step; Semilla does not use it. No open spotlight of this step has the kind `cfg-attribute`\n"), "{out}");
     assert!(out.contains("  ! the reason for `kind:other` belongs to no fact of this step; Semilla does not use it. `other` is not the name of a kind. The kinds: `cfg-attribute`, "), "{out}");
     assert!(out.contains("  ! the reason for `kind:build-code` belongs to no fact of this step; Semilla does not use it. A kind reason does not cover build code: each changed file of build code needs its own reason\n"), "{out}");
-    assert!(out.ends_with("run again: semilla step 'tidy the small module' --reason 'kind:inactive-code=<why>'\n"), "{out}");
+    assert!(out.ends_with("run again: semilla step 'tidy the small module' --reason 'kind:inactive-code=<why>' --configuration full\n"), "{out}");
     // The kind reason covers each spotlight of the kind. The exact key of a fact goes first.
     // Each covered spotlight says how many spotlights the reason covers.
     let out = run(repo, &["step", "tidy the small module", "--reason", "kind:inactive-code=the 16 bit target is not in the checks", "--reason", "shop_core::small::LIMIT=the limit of the small target is 8"], 0);
@@ -6167,6 +6207,8 @@ fn a_review_after_a_step_uses_the_stored_result_of_the_step() {
 
 #[test]
 fn a_reviewer_output_names_a_configuration_of_only_some_steps() {
+    // Design 85: the rule of this test needs more than one configuration.
+    full_list();
     // Batch 5y, C4.4 and C4.5 (trial 8). Step 1 changes the default features: only this step
     // has the configuration `all features`. `status HEAD` had no line for it.
     let dir = setup();
@@ -6441,6 +6483,8 @@ fn the_run_again_line_passes_with_a_key_that_has_an_equal_sign() {
 
 #[test]
 fn a_feature_that_only_one_side_has_does_not_stop_the_step() {
+    // Design 85: the rule of this test needs more than one configuration.
+    full_list();
     let dir = setup();
     let repo = &dir.path().join("repo");
     let manifest = "[package]\nname = \"shop-core\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nold-name = []\n";
@@ -6454,7 +6498,7 @@ fn a_feature_that_only_one_side_has_does_not_stop_the_step() {
     // The step gives the feature a new name, and changes a body.
     write(repo, "crates/shop-core/Cargo.toml", &manifest.replace("old-name", "new-name"));
     write(repo, "crates/shop-core/src/lib.rs", &code.replace("old-name", "new-name").replace("a + 1", "a + 2"));
-    let (_, out) = shell(repo, "semilla step 'a new name for the feature'");
+    let (_, out) = shell(repo, "semilla step 'a new name for the feature' --configuration full");
     // The build of the configuration with the old feature does not stop the step.
     assert!(!out.contains("the body check failed") && !out.contains("does not contain this feature") && !out.contains("the build failed"), "{out}");
     let gap = "! configurations `dev, features old-name`, `release, features old-name` are not checked: only the code before the step has the feature `old-name`. The code after the step has no such configuration: no compare";
@@ -8498,6 +8542,8 @@ fn an_mcp_step_and_a_plan_step_with_no_key_have_no_fact_of_the_agent() {
 // rule+ R61.16-1
 #[test]
 fn a_body_name_of_two_targets_opens_no_body_of_the_joint_check() {
+    // Design 85: the rule of this test needs more than one configuration.
+    full_list();
     let status = Command::new("cargo").current_dir(workspace_root()).args(["build", "-q", "-p", "semilla-mir"]).status().unwrap();
     assert!(status.success(), "build the MIR driver");
     let dir = common::TestDir::new();
@@ -8739,6 +8785,8 @@ fn a_full_text_command_names_only_a_step_of_the_state() {
     // The full text of the stored step.
     let (code, full) = run_env(repo, &["expand", "--step", "0"], &env);
     assert_eq!(code, 0, "{full}");
+    // Design 85: the full text has the line of the checked configurations first.
+    let full = full.split_once("\n").filter(|(first, _)| first.trim_start().starts_with("checked configurations (target `")).map(|(_, rest)| rest.to_string()).unwrap_or(full);
     assert!(full.starts_with("step 0  \"two\"\n") && full.contains("changed literal `1` → `2`"), "{full}");
     // A rejected step keeps its record until the next step.
     write(repo, lib, "pub mod cart;\npub fn one() -> u32 {\n    3\n}\n");
@@ -8749,5 +8797,6 @@ fn a_full_text_command_names_only_a_step_of_the_state() {
     let (code, stored) = run_env(repo, &["step", "three"], &env);
     assert_eq!(code, 0, "{stored}");
     let (_, text) = run_env(repo, &["expand", "--step", "1"], &env);
+    let text = text.split_once("\n").filter(|(first, _)| first.trim_start().starts_with("checked configurations (target `")).map(|(_, rest)| rest.to_string()).unwrap_or(text);
     assert!(text.starts_with("step 1  \"three\"\n") && !text.contains("✗ a1"), "{text}");
 }

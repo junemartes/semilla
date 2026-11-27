@@ -1,3 +1,5 @@
+note: design 85: the rule of this case needs more than one configuration, so the case has the full list
+option: --configuration=full
 note: a bench and a test with one crate name `probe` (the bench needs the feature `fast`), each with its own `fn hash`; the step changes only the `hash` of the bench: its line has its own graph change only, with no point of `tests/probe.rs`, and the walk reaches only the callers of the bench (design 61.16)
 rule+: R61.16-1
 must_match: probe::hash \(benches/probe\.rs:1\): graph changes

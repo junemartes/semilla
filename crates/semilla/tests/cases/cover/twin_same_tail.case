@@ -129,6 +129,7 @@ pub fn alpha(v: &[u32]) -> u32 {
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 6 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 6 MIR changes with no claim
@@ -149,7 +150,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + graph of `<depot::Other as depot::Draw<depot::Small>>::sample`: 3 points, 2 arrows (semilla expand --step 0)
       control flow: + graph of `<depot::Other as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); }`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
-      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:41); no checked configuration compiles the changed code (`#[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]` at src/lib.rs:45), so Semilla did not compare the edit; it needs a reason: --reason 'depot::impl <Other as Draw>=…'
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:41; not on this target); no checked configuration compiles the changed code (`#[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]` at src/lib.rs:45; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::impl <Other as Draw>=…'
   ◆ f2 derived: trait impl `<Third as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added · code different]
       affected bodies: depot::<Third as Draw>::sample
       control flow: + graph of `<depot::Third as depot::Draw<depot::Small>>::sample`: 3 points, 2 arrows (semilla expand --step 0)
@@ -166,7 +167,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + arrow entry (src/lib.rs:13) → call `Small::new` (src/lib.rs:28)
       control flow: + graph of `<depot::Source as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); }`: 2 points, 1 arrow (semilla expand --step 0)
       equivalence: MIR changes
-      ✗ spotlight of f3, f4: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:18); no checked configuration compiles the changed code (`#[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]` at src/lib.rs:22), so Semilla did not compare the edit; it needs a reason: --reason 'depot::<Source as Draw>::sample/S0=…'
+      ✗ spotlight of f3, f4: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:18; not on this target); no checked configuration compiles the changed code (`#[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]` at src/lib.rs:22; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::<Source as Draw>::sample/S0=…'
   cover: each of the 50 changed line(s) is in a fact
   control flow: 6 bodies
     <depot::Other as depot::Draw<depot::Small>>::sample (src/lib.rs:34): graph added: 3 points, 2 arrows

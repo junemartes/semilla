@@ -36,6 +36,7 @@ pub fn value() -> u32 {
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
@@ -58,7 +59,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       note: no compare: no checked configuration compiles `depot::imp#1::value`
   ◆ f3 derived: src/imp_win.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
       note: no compare: no checked configuration compiles `src/imp_win.rs`
-      ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/imp_win.rs`: `#[cfg(windows)]` at `depot::imp#1`), so Semilla did not compare the edit; it needs a reason: --reason 'src/imp_win.rs=…'
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/imp_win.rs`: `#[cfg(windows)]` at `depot::imp#1`; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'src/imp_win.rs=…'
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     depot::imp::value (src/imp_unix.rs:1): same graph (the edit keeps the control flow); MIR changes

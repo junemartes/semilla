@@ -458,7 +458,8 @@ fn a_configuration_that_does_not_build_does_not_stop_the_others() {
     // The step adds code of the feature `nightly` that does not compile, and changes `total`.
     write(repo, "src/lib.rs", &format!("pub mod cart;\n\n{TOTAL_V1}\n#[cfg(feature = \"nightly\")]\npub fn fast() -> u32 {{\n    missing_fast()\n}}\n"));
     let commit = commit_all(repo, "a nightly path");
-    let out = run(repo, &["tag"], 1);
+    // Design 85: the rule needs more than one configuration: the full list.
+    let out = run(repo, &["tag", "--configuration=full"], 1);
     assert!(out.contains("configurations that do not build"), "{out}");
     assert!(out.contains("`dev`") && out.contains("`release`"), "{out}");
     assert!(out.contains("it does not build after the step"), "{out}");
@@ -469,7 +470,7 @@ fn a_configuration_that_does_not_build_does_not_stop_the_others() {
     // The negative case: `semilla step --compiled` on the same trees stops at the first
     // configuration that does not compile (the rule of today).
     git(repo, &["reset", "-q", "--soft", "HEAD^"]);
-    let out = semilla_env(repo, &["step", "a nightly path"], &[]);
+    let out = semilla_env(repo, &["step", "a nightly path", "--configuration=full"], &[]);
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     assert_ne!(out.status.code(), Some(0), "{text}");
     assert!(text.contains("does not compile in the configuration"), "{text}");

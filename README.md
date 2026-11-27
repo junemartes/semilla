@@ -106,14 +106,23 @@ claude mcp add semilla -- /path/to/semilla/target/debug/semilla mcp
 
 The tools are `step` (the same fields as the command, as a JSON object: `intent`, `group`, `claims`, `reasons` as an object from anchor to text, `tree`), `fact` (with `commit` and `reasons` for the note of a tagged commit), `undo`, `tag` (`commit` is a revision or a range `A..B`; `compiled`, `no_check`, `again`), `results` (the `status` command), `ops`, `verify`, `pair_refuse`, and the replay tools `replay_begin`, `replay_status`, `replay_plan`, `replay_apply`, `replay_end`, `replay_abort`. A rejected `step` is a tool error with the cause and the call to make again. The tools of the old protocol are not served.
 
-### Feature sets
+### Build configurations and feature sets
 
-Semilla checks each step in a list of build configurations (design 8.12): the profiles `dev` and `release`, each with the default features, no default features, and all features. To check more feature sets, list them in the root manifest:
+By default, a step checks one build configuration: `dev` with the default features (design 85). The options of a command give other configurations:
+
+- `--release`, `--features a,b`, `--all-features`, `--no-default-features`: one configuration, as for `cargo build`.
+- `--configuration NAME` (it can repeat): a configuration by the name that each output prints (`dev`, `release, all features`, `dev, features a,b`).
+- `--configuration full`: the full list of design 8.12: the profiles `dev` and `release`, each with the default features, no default features, all features, and each set of `feature-sets`.
+
+A stored step keeps its list, and each later check of the step uses it. The root manifest can give the default list of the repository, and the feature sets of the full list:
 
 ```toml
 [workspace.metadata.semilla]   # or [package.metadata.semilla]
+configurations = ["dev", "release, all features"]
 feature-sets = [["serde"], ["std", "unicode"]]
 ```
+
+Code that no checked configuration compiles keeps its line, and the line names the option that checks it: "no checked configuration compiles the changed code (`#[cfg(feature = "std")]` at src/lib.rs:3; `--features std` checks it)". A condition of the target says "not on this target".
 
 A fact is `code equal` only if each of its bodies is equal in each checked configuration. Semilla checks one target: the target of this machine. Each reviewer output shows the list near the base line, and it says one time: "Each compare result holds for the checked configurations."
 

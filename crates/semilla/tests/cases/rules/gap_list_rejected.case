@@ -62,6 +62,7 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   ✗ fact a1 of the agent is false: `--change 'idle=more'`
 
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
@@ -86,7 +87,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   ◆ f1 derived: changed literal `1` → `2` at `depot::far/tail` [semantics · no compare]
       note: no compare: no checked configuration compiles `depot::far`
-      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:1), so Semilla did not compare the edit; it needs a reason: --reason 'depot::far/tail=…'
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:1; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::far/tail=…'
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     depot::limit (src/lib.rs:13): same graph (the edit keeps the control flow); MIR changes

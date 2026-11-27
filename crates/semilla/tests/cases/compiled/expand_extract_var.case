@@ -18,6 +18,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `shop::f` (src/lib.rs:3)
@@ -27,7 +28,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: `cost!(n)` at `shop::f/tail` (src/lib.rs:3): expansion changed: extracted variable `base` = `n * 3` (1 use) at `expansion/S0/body/S0` [move]
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::f (src/lib.rs:3): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; equivalent (proved by equal MIR); the expansion of `cost!(n)` changes (semilla expand src/lib.rs:3 --step 0)
+    shop::f (src/lib.rs:3): same structure: 1 changed check; no edit in the body; equivalent (proved by equal MIR); the expansion of `cost!(n)` changes (semilla expand src/lib.rs:3 --step 0)
   expansions: 1 changed
     `cost!(n)` at `shop::f/tail` (src/lib.rs:3): expansion changed: `macro_rules! cost` (src/lib.rs:1): extracted variable `base` = `n * 3` (1 use) at `expansion/S0/body/S0` [move]; from `macro_rules! cost` (src/lib.rs:1)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

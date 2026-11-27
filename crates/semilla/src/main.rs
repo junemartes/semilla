@@ -19,6 +19,7 @@ mod app;
 mod background;
 mod buildcheck;
 mod buildcode;
+mod configs;
 mod gate;
 mod git;
 mod intentcrate;
@@ -53,6 +54,30 @@ struct Cli {
     /// change set changes with the limits that the machine has. The default does not run it.
     #[arg(long, global = true)]
     build_code_no_sandbox: bool,
+    /// Check the `release` profile (design 85). With no option of the list, a step checks one
+    /// configuration: `dev` with the default features (or the list of the setting
+    /// `configurations` of `[workspace.metadata.semilla]`). The words of cargo (`--release`,
+    /// `--features`, `--all-features`, `--no-default-features`) give one configuration.
+    #[arg(long, global = true, help_heading = "Build configurations")]
+    release: bool,
+    /// Check the features of this list (`--features a,b`), with the default features.
+    #[arg(long, global = true, help_heading = "Build configurations")]
+    features: Vec<String>,
+    /// Check each feature of each package.
+    #[arg(long, global = true, help_heading = "Build configurations")]
+    all_features: bool,
+    /// Check with no default features.
+    #[arg(long, global = true, help_heading = "Build configurations")]
+    no_default_features: bool,
+    /// Check this configuration, by the name that each output prints (`dev`, `release`,
+    /// `dev, no default features`, `release, all features`, `dev, features a,b`). It can repeat.
+    /// `--configuration full` checks the full list: the two profiles, each with the default
+    /// features, no default features, all features, and each set of `feature-sets`. A new step
+    /// keeps its list, and each later check of the step uses it. For a command that checks
+    /// stored steps (`status`, `verify`, `review`), the list of the option replaces the list
+    /// of each step for this check only.
+    #[arg(long = "configuration", global = true, help_heading = "Build configurations")]
+    configuration: Vec<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -661,7 +686,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
         mcp::serve(&dir)?;
         return Ok(ExitCode::SUCCESS);
     }
+    // [R85.2-1] The list of the options is checked before each other work: a wrong name is
+    // one error line with the exit code 2.
+    let list = configs::Options { release: cli.release, features: cli.features.clone(), all_features: cli.all_features, no_default_features: cli.no_default_features, configurations: cli.configuration.clone() }.list()?;
     let mut app = App::open(&dir)?;
+    // [R85.3-1] A command that makes a step gives the list to the new step. [R85.3-2] A command
+    // that checks stored steps checks them with the list of the option, for this check only.
+    match (&cli.command, list) {
+        (_, None) => {}
+        (Command::Step { .. } | Command::OldStep { .. } | Command::Replay { .. } | Command::Tag { .. }, Some(list)) => app.new_list = list,
+        (Command::Status { .. } | Command::Review { .. } | Command::Verify { .. } | Command::Ui { .. } | Command::Load { .. } | Command::Expand { .. } | Command::Intent { .. } | Command::Check { .. }, Some(list)) => configs::set_override(Some(list)),
+        (_, Some(_)) => anyhow::bail!("{}", configs::form_error("this command takes no option of the build configurations")),
+    }
     app.mode = command_mode(&cli.command);
     // A reviewer command runs changed build code only with the full sandbox, or with the option.
     if is_reviewer_command(&cli.command) {
@@ -708,7 +744,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Step { intent, group, claims, same, change, intent_files, tag, reasons, tree, fast, .. } => {
             let intent = intent.context("give the intent: `semilla step \"<intent>\"`")?;
             let intent_files = app.read_intent_files(&intent_files)?;
-            let request = onestep::StepRequest { intent, group, claims, reasons, same, change, intent_files, tags: tag, tree, fast };
+            let request = onestep::StepRequest { intent, group, claims, reasons, same, change, intent_files, tags: tag, tree, fast, configurations: app.new_list.clone() };
             let (text, stored) = app.step_once(&request)?;
             print!("{text}");
             // Design 37.22: the build code cache keeps the entries of the stored steps and the
@@ -805,7 +841,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     // A result of an older state or of an other mode (design 28) is not the
                     // result of this command: the check runs again.
                     if matches!(background::state(&app, &key, &hash), background::State::Missing | background::State::Stale) {
-                        background::enqueue(&app, &background::Job { key: key.clone(), hash: hash.clone(), changeset: (key == "session").then(|| set.clone()), mode: app.mode })?;
+                        background::enqueue(&app, &background::Job { key: key.clone(), hash: hash.clone(), changeset: (key == "session" || configs::override_list().is_some()).then(|| configs::listed(&set)), mode: app.mode })?;
                     }
                     let state = background::wait(&mut app, &key, &hash, std::time::Duration::from_secs(wait))?;
                     if state != background::State::Ready {

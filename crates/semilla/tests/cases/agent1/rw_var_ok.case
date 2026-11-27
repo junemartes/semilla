@@ -54,6 +54,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rewrite `wrap($a)` => `wrap2($a)` (the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
       places: depot::both/tail/lhs/callee
@@ -67,7 +68,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   not stated: 0 item(s)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::both (src/lib.rs:8): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    depot::both (src/lib.rs:8): same structure: 1 changed call target, 1 changed check; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

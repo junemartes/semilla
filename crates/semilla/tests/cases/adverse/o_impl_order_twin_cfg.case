@@ -23,6 +23,7 @@ impl T {
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
@@ -43,7 +44,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   ◆ f1 derived: changed literal `2` → `1` at `depot::T::a#0/tail` [semantics · no compare]
       note: no compare: no checked configuration compiles `depot::T::a#0`
-      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:3), so Semilla did not compare the edit; it needs a reason: --reason 'depot::T::a#0/tail=…'
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:3; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::T::a#0/tail=…'
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     depot::T::a (src/lib.rs:6): same graph (the edit keeps the control flow); MIR changes

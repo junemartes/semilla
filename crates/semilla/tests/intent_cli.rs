@@ -238,7 +238,8 @@ fn half_loop(x: i32) -> bool {
 }
 "#;
     write(&repo, ".semilla/intent/wrong.rs", wrong);
-    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/wrong.rs"], 1);
+    // Design 85: the claim i2 is false only in `release`: the full list.
+    let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/wrong.rs", "--configuration=full"], 1);
     assert!(text.starts_with("rejected:"), "{text}");
     assert!(claim_line(&text, "i1").contains("false") && claim_line(&text, "i1").contains("for x = 4"), "{text}");
     // No `cfg`: the claim is false in the release configuration.
