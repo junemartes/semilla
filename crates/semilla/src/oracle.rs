@@ -1865,6 +1865,10 @@ impl NormalOracle {
 }
 
 impl BodyOracle for NormalOracle {
+    fn phase_store(&self) -> Option<std::sync::Arc<dyn semilla_verify::PhaseStore>> {
+        crate::recstore::PhaseDb::of(&self.repo.cache_dir())
+    }
+
     fn check_templates(&self, step: &Step, asks: &[semilla_verify::template::Ask]) -> Option<Vec<semilla_verify::template::Verdict>> {
         self.gate_templates(step, asks)
     }
@@ -2224,20 +2228,20 @@ impl BodyOracle for NormalOracle {
         // the configurations and the trees, so the result is that of one thread.
         let checked = self.checked(step)?;
         let folders: Vec<(&Configuration, &String)> = checked.iter().flat_map(|config| [(config, &step.tree_before), (config, &step.tree_after)]).collect();
-        let read = |config: &Configuration, tree: &str| -> Result<Option<semilla_normal::Made>> {
+        let read = |config: &Configuration, tree: &str| -> Result<Option<std::sync::Arc<semilla_normal::Made>>> {
             self.records_or_build(tree, "n0", config, false)?;
             let (_, cache, _, _) = self.cache_folder(tree, "n0", config)?;
-            let mut made = semilla_normal::Made::default();
-            Ok(semilla_normal::read_made(&cache, &mut made).then_some(made))
+            // [R89.3-2] The store reads the files of a folder one time in a process.
+            Ok(crate::recstore::store().made(&cache))
         };
-        let results: Vec<Result<Option<semilla_normal::Made>>> = std::thread::scope(|scope| {
+        let results: Vec<Result<Option<std::sync::Arc<semilla_normal::Made>>>> = std::thread::scope(|scope| {
             let handles: Vec<_> = folders.iter().map(|(config, tree)| scope.spawn(|| read(config, tree))).collect();
             handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a read thread failed")))).collect()
         });
         for (index, result) in results.into_iter().enumerate() {
             let Some(made) = result? else { return Ok(None) };
-            sides[index % 2].items.extend(made.items);
-            sides[index % 2].sites.extend(made.sites);
+            sides[index % 2].items.extend(made.items.iter().cloned());
+            sides[index % 2].sites.extend(made.sites.iter().map(|(name, site)| (name.clone(), site.clone())));
         }
         Ok(Some(sides.map(|side| semilla_verify::made::Made {
             items: side.items.into_iter().map(|item| semilla_verify::made::MadeItem { file: item.file, line: item.line, col: item.col, module: item.module, text: item.text, test: item.test, public: item.public, owner: item.owner }).collect(),

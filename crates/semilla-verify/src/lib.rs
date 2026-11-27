@@ -414,7 +414,38 @@ pub struct ItemFacts {
 }
 
 /// The access to the normal forms. The real one runs the MIR driver on both snapshots.
+/// [R89.1-1] The kind of an entry of a [`PhaseStore`] (design 89).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PhaseKind {
+    /// A construction of the opaque inputs of two trees, with the answers of the rule of the
+    /// build configuration that it read (`joint::OpaqueBases`).
+    Opaque,
+}
+
+/// [R89.5-1] The counts of the stored kind of design 89 in the timing line of the new work of a
+/// command: the constructions of the opaque inputs from the store, and those computed.
+pub const OPAQUE_FROM_STORE: &str = "opaque inputs from the store";
+pub const OPAQUE_COMPUTED: &str = "opaque inputs computed";
+
+/// [R89.1-1] The store of the result of a phase by the digest of its inputs (design 89). The
+/// app keeps the entries in the database of the store; a check with no store computes each
+/// result.
+pub trait PhaseStore: Send + Sync {
+    /// The key of the inputs: a digest of their bytes and the identity of the program that
+    /// computes the result.
+    fn key(&self, kind: PhaseKind, inputs: &[&[u8]]) -> String;
+    /// The payload of the entry of a kind with this key, or `None`.
+    fn get(&self, kind: PhaseKind, key: &str) -> Option<Vec<u8>>;
+    /// Writes one entry (one transaction). A failed write only costs time.
+    fn put(&self, kind: PhaseKind, key: &str, payload: Vec<u8>);
+}
+
 pub trait BodyOracle {
+    /// [R89.1-1] The store of the phase results of the check (design 89), or `None`.
+    fn phase_store(&self) -> Option<std::sync::Arc<dyn PhaseStore>> {
+        None
+    }
+
     /// Compares all bodies of the two snapshots of a step.
     ///
     /// `renames` maps item paths (before to after) from the identity claims. `added` lists the
@@ -788,7 +819,7 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
     impl_names(&mut step, input.before, input.after);
     let input = &StepInput { step: &step, before: input.before, after: input.after };
     // The opaque inputs of each check of this step, also of the rename search (R61.15-2).
-    let bases = joint::OpaqueBases::new(input.before, input.after);
+    let bases = joint::OpaqueBases::new(input.before, input.after).with_store(bodies.phase_store());
     let mut plain = semilla_core::timing::phase(CORE_PHASE, || verify_core(input, bodies, exprs, derive_edits, false, &bases));
     if !derive_edits || input.step.claims.iter().any(is_identity) {
         if derive_edits {
@@ -1235,7 +1266,7 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     let bases = if shared.fits(input.before, input.after) {
         shared
     } else {
-        own = joint::OpaqueBases::new(input.before, input.after);
+        own = joint::OpaqueBases::new(input.before, input.after).with_store(bodies.phase_store());
         &own
     };
     let settled = loop {

@@ -27,6 +27,9 @@ pub fn enabled() -> bool {
     std::env::var_os("SEMILLA_TIMING").is_some()
 }
 
+/// [R88.6-1] The phase name of the counts of the new work of a command in the timing lines.
+pub const WORK_PHASE: &str = "the new work of the command";
+
 /// Adds one run of a phase, from `started` to now.
 pub fn add(phase: &'static str, started: Instant) {
     let nanos = started.elapsed().as_nanos() as u64;

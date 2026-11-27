@@ -31,7 +31,7 @@ use crate::srcconfig::{compact, Scan, KEYWORDS};
 use crate::{BodyComparison, BodyStatus};
 
 /// Where a hard name can mean the item of the build configuration.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Place {
     /// In each item.
     Any,
@@ -42,7 +42,7 @@ enum Place {
 }
 
 /// The position of a token that can mean the item.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Form {
     /// Each position.
     Any,
@@ -55,7 +55,7 @@ enum Form {
 }
 
 /// Why a name is hard.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct Cause {
     /// The text for the spotlight, without the name.
     text: String,
@@ -844,7 +844,7 @@ const TRUSTED_CRATES: &[&str] = semilla_core::names::STD_CRATES;
 /// `#[macro_use] extern crate`, then the prelude of the standard library. Thus a `use`, a
 /// glob `use`, or a `macro_use` can give the name `Clone` to a macro of a different crate.
 /// That macro can make each kind of item.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Shadow {
     /// A `use` of the workspace gives this name a meaning from a crate that is not in the
     /// trusted list. A `use` of a different module can pass the name on. Thus the rule
@@ -1513,7 +1513,7 @@ pub(crate) struct Opaque<'a> {
 
 /// The trait facts of the workspace that the build configuration can change (batch 5q). A
 /// call with a rival is an input of the configuration only if a fact of its kind exists.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 struct Facts {
     /// A trait fact can change: a trait `impl` under `cfg`, a `derive` in a `cfg_attr`, a
     /// `use` under `cfg`, a trait under `cfg` or with a `cfg` in it, an item macro with
@@ -3141,5 +3141,113 @@ impl crate::OpaqueInputs for Opaque<'_> {
         let side = usize::from(after);
         let path = crate::checks::find_item_by(name, span, self.sides[side]);
         self.stops(path.as_deref().map(|path| (side, path)), types)
+    }
+}
+
+/// [R89.1-1] The stored form of a construction of the opaque inputs (design 89): each member
+/// that `Opaque::new` makes. The other members are empty after a construction: the lists that
+/// `note`, `names`, and `callee` fill, and the caches (`toks` and `wide` have the places of the
+/// texts of this process as keys).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct StoredOpaque {
+    hard: BTreeMap<String, Vec<Cause>>,
+    soft: BTreeMap<String, String>,
+    types: BTreeSet<String>,
+    type_names: BTreeSet<String>,
+    hold: BTreeSet<String>,
+    hold_names: BTreeSet<String>,
+    heads: BTreeSet<String>,
+    defined: BTreeSet<String>,
+    globs: BTreeSet<String>,
+    selected: [BTreeSet<String>; 2],
+    exempt: BTreeSet<String>,
+    node_text: BTreeMap<String, String>,
+    roots: [BTreeMap<String, String>; 2],
+    modules: BTreeSet<String>,
+    glob_from: BTreeMap<String, BTreeSet<String>>,
+    glob_pub: BTreeMap<String, BTreeSet<String>>,
+    renames: BTreeSet<String>,
+    shadow: Shadow,
+    macros: BTreeSet<String>,
+    macro_words: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)>,
+    member_scope: BTreeMap<String, (Place, Form)>,
+    traits: BTreeSet<String>,
+    covered: [BTreeSet<String>; 2],
+    facts: Facts,
+}
+
+impl<'a> Opaque<'a> {
+    /// The stored form of a construction (call it before the first `note`).
+    pub(crate) fn stored(&self) -> StoredOpaque {
+        StoredOpaque {
+            hard: self.hard.clone(),
+            soft: self.soft.clone(),
+            types: self.types.clone(),
+            type_names: self.type_names.clone(),
+            hold: self.hold.clone(),
+            hold_names: self.hold_names.clone(),
+            heads: self.heads.clone(),
+            defined: self.defined.clone(),
+            globs: self.globs.clone(),
+            selected: self.selected.clone(),
+            exempt: self.exempt.clone(),
+            node_text: self.node_text.clone(),
+            roots: self.roots.clone(),
+            modules: self.modules.clone(),
+            glob_from: self.glob_from.clone(),
+            glob_pub: self.glob_pub.clone(),
+            renames: self.renames.clone(),
+            shadow: self.shadow.clone(),
+            macros: self.macros.clone(),
+            macro_words: self.macro_words.clone(),
+            member_scope: self.member_scope.clone(),
+            traits: self.traits.clone(),
+            covered: self.covered.clone(),
+            facts: self.facts.clone(),
+        }
+    }
+
+    /// The construction of a stored form, for the two workspaces of the construction.
+    pub(crate) fn from_stored(stored: StoredOpaque, before: &'a Workspace, after: &'a Workspace) -> Opaque<'a> {
+        Opaque {
+            sides: [before, after],
+            hard: stored.hard,
+            soft: stored.soft,
+            types: stored.types,
+            type_names: stored.type_names,
+            hold: stored.hold,
+            hold_names: stored.hold_names,
+            heads: stored.heads,
+            defined: stored.defined,
+            globs: stored.globs,
+            selected: stored.selected,
+            exempt: stored.exempt,
+            node_text: stored.node_text,
+            roots: stored.roots,
+            modules: stored.modules,
+            glob_from: stored.glob_from,
+            glob_pub: stored.glob_pub,
+            renames: stored.renames,
+            shadow: stored.shadow,
+            macros: stored.macros,
+            macro_words: stored.macro_words,
+            member_scope: stored.member_scope,
+            traits: stored.traits,
+            covered: stored.covered,
+            facts: stored.facts,
+            wide: RefCell::new(HashMap::new()),
+            expanded: Default::default(),
+            toks: RefCell::new(HashMap::new()),
+            memo: RefCell::new(BTreeMap::new()),
+            layouts: Default::default(),
+            aliases: Default::default(),
+            entries: Default::default(),
+            type_uses: Default::default(),
+            cfg_uses: Default::default(),
+            stop_uses: Default::default(),
+            part_causes: Default::default(),
+            noted: Default::default(),
+            named: Default::default(),
+        }
     }
 }

@@ -37,6 +37,9 @@ pub(crate) trait RecordStore: Sync {
     /// The expansions of each unit of a folder (`None`: a file has no expansion list). The
     /// name of the configuration of each unit is empty: the caller sets it.
     fn expansions(&self, folder: &Path) -> Option<Arc<Vec<semilla_verify::expand::ExpansionUnit>>>;
+    /// [R89.3-2] The items of the expanded code and the macro call sites of a folder (`None`: a
+    /// file has no list of the items).
+    fn made(&self, folder: &Path) -> Option<Arc<semilla_normal::Made>>;
     /// The text of a mark file of a folder (`.failed`, `.no-sandbox`), or `None`.
     fn mark(&self, folder: &Path, name: &str) -> Option<String>;
     /// Writes a mark file of a folder.
@@ -60,6 +63,7 @@ struct Memory {
     records: BTreeMap<FolderKey, semilla_normal::Records>,
     units: BTreeMap<FolderKey, Option<Arc<Vec<semilla_normal::UnitRecord>>>>,
     expansions: BTreeMap<FolderKey, Option<Arc<Vec<semilla_verify::expand::ExpansionUnit>>>>,
+    made: BTreeMap<FolderKey, Option<Arc<semilla_normal::Made>>>,
 }
 
 /// The store in the files of the cache folder, with the values of this process in memory.
@@ -155,6 +159,15 @@ impl RecordStore for FileStore {
         self.cached(folder, |memory| &mut memory.expansions, || semilla_core::timing::phase(EXPANSIONS_PHASE, || read_expansions(folder).map(Arc::new)))
     }
 
+    fn made(&self, folder: &Path) -> Option<Arc<semilla_normal::Made>> {
+        self.cached(folder, |memory| &mut memory.made, || {
+            semilla_core::timing::phase("read the expanded items of a cache folder", || {
+                let mut made = semilla_normal::Made::default();
+                semilla_normal::read_made(folder, &mut made).then(|| Arc::new(made))
+            })
+        })
+    }
+
     fn mark(&self, folder: &Path, name: &str) -> Option<String> {
         std::fs::read_to_string(folder.join(name)).ok()
     }
@@ -165,10 +178,17 @@ impl RecordStore for FileStore {
     }
 
     fn remove(&self, folder: &Path) {
+        // [R89.4-1] The entries of the files of the folder go in one transaction, before the
+        // files: no entry stays with no folder.
+        if let Some(db) = database_for(folder) {
+            let prefix = folder_prefix(&db, folder);
+            let _ = db.remove_where(Kind::Index, &|key| key.starts_with(&prefix));
+        }
         let mut memory = self.memory();
         memory.records.retain(|(path, _), _| path != folder);
         memory.units.retain(|(path, _), _| path != folder);
         memory.expansions.retain(|(path, _), _| path != folder);
+        memory.made.retain(|(path, _), _| path != folder);
         drop(memory);
         let _ = std::fs::remove_dir_all(folder);
     }
@@ -211,6 +231,8 @@ pub(crate) enum Kind {
     Syntax,
     /// The output of `cargo metadata` for a tree (R88.5-1).
     Metadata,
+    /// [R89.1-1] A construction of the opaque inputs of two trees (design 89).
+    Opaque,
 }
 
 impl Kind {
@@ -219,6 +241,7 @@ impl Kind {
             Kind::Index => b'i',
             Kind::Syntax => b's',
             Kind::Metadata => b'm',
+            Kind::Opaque => b'o',
         }
     }
 }
@@ -282,7 +305,12 @@ impl Db {
             if head.1 != key.as_bytes() {
                 return None;
             }
-            read(payload)
+            let result = read(payload);
+            // [R89.7-1] The pages of the value leave the memory of the process after the read.
+            if let std::borrow::Cow::Borrowed(bytes) = &value {
+                release_pages(bytes);
+            }
+            result
         })();
         semilla_core::timing::add(DB_PHASE, started);
         result
@@ -313,6 +341,92 @@ impl Db {
     }
 }
 
+impl Db {
+    /// [R89.4-1, R89.4-2] Removes each entry of a kind whose key text `remove` accepts, in one write
+    /// transaction (a stop in the middle leaves each entry). The result is the count of the
+    /// removed entries.
+    pub(crate) fn remove_where(&self, kind: Kind, remove: &dyn Fn(&str) -> bool) -> Result<usize> {
+        let started = std::time::Instant::now();
+        let result = (|| -> Result<usize> {
+            let txn = self.env.begin_rw_txn()?;
+            let table = txn.open_table(None)?;
+            let mut gone: Vec<Vec<u8>> = Vec::new();
+            {
+                let mut cursor = txn.cursor(&table)?;
+                for entry in cursor.iter_from::<std::borrow::Cow<'_, [u8]>, std::borrow::Cow<'_, [u8]>>(&[kind.byte()]) {
+                    let (key, value) = entry?;
+                    if key.first() != Some(&kind.byte()) {
+                        break;
+                    }
+                    // A value of another form has no key text: it stays.
+                    let Some(((_, text), _)) = split_value(&value) else { continue };
+                    if std::str::from_utf8(text).is_ok_and(remove) {
+                        gone.push(key.to_vec());
+                    }
+                }
+            }
+            for (at, key) in gone.iter().enumerate() {
+                txn.del(&table, key, None)?;
+                #[cfg(test)]
+                tests::stop_point(at);
+                #[cfg(not(test))]
+                let _ = at;
+            }
+            txn.commit()?;
+            Ok(gone.len())
+        })();
+        semilla_core::timing::add(DB_PHASE, started);
+        if let Ok(count) = &result {
+            semilla_core::timing::count(DB_PHASE, "entries removed", *count as u64);
+        }
+        result
+    }
+}
+
+/// [R89.4-1] The key texts of the index entries of the files of a folder start with this text.
+fn folder_prefix(db: &Db, folder: &Path) -> String {
+    let rel = folder.strip_prefix(&db.cache).unwrap_or(folder);
+    format!("index {}/", rel.display())
+}
+
+/// [R89.4-2] `semilla cache --clean`: removes each entry of the database that no folder of the
+/// cache can use: the index of a record file that is not there, and an entry of a tree (the
+/// syntax data, the opaque inputs) of another Semilla binary (its key has the identity of the
+/// binary that made it). The result is the count of the removed entries.
+pub(crate) fn clean_database(cache: &Path) -> Result<usize> {
+    let Some(db) = database_for(cache) else { return Ok(0) };
+    let root = db.cache.clone();
+    let mut count = db.remove_where(Kind::Index, &|key| key.strip_prefix("index ").is_none_or(|rel| !root.join(rel).is_file()))?;
+    let identity = crate::store::binary_identity();
+    for kind in [Kind::Syntax, Kind::Opaque] {
+        count += db.remove_where(kind, &|key| !key.ends_with(&format!(" {identity}")))?;
+    }
+    Ok(count)
+}
+
+/// [R89.7-1] Gives the whole pages of a value of the map of the database back to the system
+/// (`madvise` with `MADV_DONTNEED`). The map is a read-only map of the file: the pages stay in
+/// the cache of the file system, and a later read of the value maps them again. So a read of
+/// the index of each record file does not keep the bytes of the index in the memory of the
+/// process (the peak memory of a step of design 88 had them).
+fn release_pages(bytes: &[u8]) {
+    const PAGE: usize = 4096;
+    const MADV_DONTNEED: i32 = 4;
+    unsafe extern "C" {
+        fn madvise(addr: *mut std::ffi::c_void, len: usize, advice: i32) -> i32;
+    }
+    let start = (bytes.as_ptr() as usize).div_ceil(PAGE) * PAGE;
+    let end = (bytes.as_ptr() as usize + bytes.len()) / PAGE * PAGE;
+    if end > start {
+        // SAFETY: the range is inside the map of the database, and the map is not written in
+        // this process (`NoWriteMap`, a read transaction). The call only drops the pages from
+        // the page table of the process; each later read faults them in from the file.
+        unsafe {
+            madvise(start as *mut std::ffi::c_void, end - start, MADV_DONTNEED);
+        }
+    }
+}
+
 /// The value of an entry: the format key, a line end, the key text, a line end, the payload.
 fn join_value(format: &str, key: &str, payload: &[u8]) -> Vec<u8> {
     let mut value = Vec::with_capacity(format.len() + key.len() + payload.len() + 2);
@@ -338,7 +452,7 @@ pub(crate) const DB_PHASE: &str = "the database of the store";
 /// [R88.6-1] The phase name of the counts of the new work of a command in the timing lines:
 /// the bodies from the index and the bodies decoded, the files from the store and the files
 /// parsed, the trees written, and the cargo commands run.
-pub(crate) const WORK_PHASE: &str = "the new work of the command";
+pub(crate) const WORK_PHASE: &str = semilla_core::timing::WORK_PHASE;
 
 /// [R88.6-1] Adds the counts of the new work since the last timing lines: each of the six counts
 /// has a value, also 0.
@@ -351,6 +465,10 @@ pub(crate) fn count_work() {
     semilla_core::timing::count(WORK_PHASE, "files parsed", 0);
     semilla_core::timing::count(WORK_PHASE, "trees written", 0);
     semilla_core::timing::count(WORK_PHASE, "cargo commands run", semilla_normal::cargo::CARGO_RUNS.swap(0, Relaxed));
+    // [R89.5-1] The counts of each stored kind of design 89: from the store, and computed.
+    for name in [semilla_verify::OPAQUE_FROM_STORE, semilla_verify::OPAQUE_COMPUTED] {
+        semilla_core::timing::count(WORK_PHASE, name, 0);
+    }
 }
 
 /// [R88.1-1] The entries by content next to the record folders (design 88, F5): the syntax data
@@ -372,6 +490,54 @@ impl ContentStore for FileStore {
             Some(db) => db.put(vec![(kind, key.to_string(), format, payload)]),
             None => Ok(()),
         }
+    }
+}
+
+/// [R89.1-1] The format key of a stored construction of the opaque inputs: the JSON list of the
+/// queries of the rule of the build configuration with their answers, a line end, and the JSON
+/// form of the construction.
+pub(crate) const OPAQUE_FORMAT: &str = "semilla-opaque-1";
+
+/// [R89.1-1] The store of the phase results of the verifier in the database of a cache folder.
+pub(crate) struct PhaseDb {
+    db: Arc<Db>,
+}
+
+impl PhaseDb {
+    /// The store of the database of a cache folder, or `None` (no database).
+    pub(crate) fn of(cache: &Path) -> Option<Arc<dyn semilla_verify::PhaseStore>> {
+        let db = database_for(cache)?;
+        Some(Arc::new(PhaseDb { db }))
+    }
+
+    fn kind(kind: semilla_verify::PhaseKind) -> (Kind, &'static str, &'static str) {
+        match kind {
+            semilla_verify::PhaseKind::Opaque => (Kind::Opaque, "opaque", OPAQUE_FORMAT),
+        }
+    }
+}
+
+impl semilla_verify::PhaseStore for PhaseDb {
+    /// The key text: the name of the kind, the digest of the inputs (each with its length), and
+    /// the identity of the Semilla binary (the code of the phase).
+    fn key(&self, kind: semilla_verify::PhaseKind, inputs: &[&[u8]]) -> String {
+        let mut all = Vec::with_capacity(inputs.iter().map(|input| input.len() + 8).sum());
+        for input in inputs {
+            all.extend_from_slice(&(input.len() as u64).to_le_bytes());
+            all.extend_from_slice(input);
+        }
+        let digest: String = semilla_normal::index::digest_bytes(&all).iter().map(|byte| format!("{byte:02x}")).collect();
+        format!("{} {digest} {}", PhaseDb::kind(kind).1, crate::store::binary_identity())
+    }
+
+    fn get(&self, kind: semilla_verify::PhaseKind, key: &str) -> Option<Vec<u8>> {
+        let (kind, _, format) = PhaseDb::kind(kind);
+        self.db.get(kind, key, format, |payload| Some(payload.to_vec()))
+    }
+
+    fn put(&self, kind: semilla_verify::PhaseKind, key: &str, payload: Vec<u8>) {
+        let (kind, _, format) = PhaseDb::kind(kind);
+        let _ = self.db.put(vec![(kind, key.to_string(), format, payload)]);
     }
 }
 
@@ -634,11 +800,18 @@ mod tests {
     }
 
     fn entries(prefix: &str, count: usize) -> Vec<Put> {
-        (0..count).map(|at| (Kind::Syntax, format!("{prefix} {at}"), "test-format-1", format!("{prefix} payload {at}").repeat(50).into_bytes())).collect()
+        (0..count).map(|at| (kind_of(at), format!("{prefix} {at}"), "test-format-1", format!("{prefix} payload {at}").repeat(50).into_bytes())).collect()
+    }
+
+    /// [R89.1-1] The kind of the test entry with this number: the kinds of the tree entries in
+    /// turn, so that the tests of R88.4-2 and R88.4-3 write and read each kind.
+    fn kind_of(at: usize) -> Kind {
+        [Kind::Syntax, Kind::Opaque][at % 2]
     }
 
     fn read(db: &Db, key: &str) -> Option<Vec<u8>> {
-        db.get(Kind::Syntax, key, "test-format-1", |payload| Some(payload.to_vec()))
+        let at: usize = key.rsplit(' ').next().and_then(|number| number.parse().ok()).unwrap_or(0);
+        db.get(kind_of(at), key, "test-format-1", |payload| Some(payload.to_vec()))
     }
 
     // [R88.1-1] The database keeps an entry by its key; another key text or another kind gives
@@ -945,5 +1118,202 @@ mod tests {
         let dir = folder(r#"{"unit":{"target":"k.lib.1","cfg":[],"files":[]}}"#, 1_000);
         assert!(read_expansions(dir.path()).is_none());
         assert!(generic_expansions(dir.path()).is_none());
+    }
+
+    /// The unit line of a folder with a list of the expanded items, and one site.
+    const MADE_UNIT: &str = "{\"unit\":{\"target\":\"k.lib.1\",\"cfg\":[\"unix\"],\"files\":[],\"made\":[{\"file\":\"src/lib.rs\",\"line\":1,\"col\":0,\"text\":\"fn f() {}\"}]}}";
+
+    /// [R89.3-2] The store reads the expanded items of a folder one time in a process: a second
+    /// read gives the value in memory, also after a change of the file with no new build.
+    // rule+ R89.3-2
+    #[test]
+    fn the_expanded_items_of_a_folder_are_read_one_time() {
+        let store = FileStore::default();
+        let dir = folder(MADE_UNIT, 1_000);
+        let first = store.made(dir.path()).unwrap();
+        assert_eq!(first.items.len(), 1);
+        let mut full = semilla_normal::Made::default();
+        assert!(semilla_normal::read_made(dir.path(), &mut full));
+        assert_eq!(*first, full);
+        std::fs::write(dir.path().join("k.lib.1.jsonl"), "{\"unit\":{\"target\":\"k.lib.1\"}}\n").unwrap();
+        assert!(Arc::ptr_eq(&store.made(dir.path()).unwrap(), &first));
+    }
+
+    /// [R89.3-2] The negative case: a build that makes the folder again (a new time of
+    /// `.complete`) gives a new read, and a folder with no list of the items has no items.
+    // rule- R89.3-2
+    #[test]
+    fn a_folder_that_a_build_makes_again_has_its_new_expanded_items() {
+        let store = FileStore::default();
+        let dir = folder(MADE_UNIT, 1_000);
+        assert!(store.made(dir.path()).is_some());
+        std::fs::write(dir.path().join("k.lib.1.jsonl"), "{\"unit\":{\"target\":\"k.lib.1\"}}\n").unwrap();
+        std::fs::File::options().write(true).open(dir.path().join(COMPLETE)).unwrap().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(2_000)).unwrap();
+        assert!(store.made(dir.path()).is_none());
+    }
+
+    /// The count of the index entries of the database whose key text starts with a text.
+    fn index_entries(db: &Db, start: &str) -> usize {
+        let txn = db.env.begin_ro_txn().unwrap();
+        let table = txn.open_table(None).unwrap();
+        let mut cursor = txn.cursor(&table).unwrap();
+        cursor
+            .iter_from::<std::borrow::Cow<'_, [u8]>, std::borrow::Cow<'_, [u8]>>(&[Kind::Index.byte()])
+            .map(|entry| entry.unwrap())
+            .take_while(|(key, _)| key.first() == Some(&Kind::Index.byte()))
+            .filter(|(_, value)| split_value(value).is_some_and(|((_, text), _)| text.starts_with(start.as_bytes())))
+            .count()
+    }
+
+    /// [R89.4-1] The remove of a folder removes the index entries of its files in one write
+    /// transaction; the entries of a different folder stay.
+    // rule+ R89.4-1
+    #[test]
+    fn a_removed_folder_has_no_entries_in_the_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let folder = indexed_folder(dir.path(), RECORDS);
+        let other = dir.path().join("shared/k/mir/tree/n0-s1x");
+        let store = FileStore::default();
+        store.create(&other).unwrap();
+        std::fs::write(other.join("k.lib.1.jsonl"), RECORDS).unwrap();
+        store.complete(&other).unwrap();
+        assert_eq!(index_entries(&db, "index shared/k/mir/tree/n0-s1/"), 1);
+        store.remove(&folder);
+        assert_eq!(index_entries(&db, "index shared/k/mir/tree/n0-s1/"), 0);
+        assert_eq!(index_entries(&db, "index shared/k/mir/tree/n0-s1x/"), 1, "the entry of the other folder stays");
+    }
+
+    /// The child of the stop test of a remove: it stops after the first removed entry.
+    #[test]
+    fn child_stop_in_the_middle_of_a_remove() {
+        let Ok(dir) = std::env::var("SEMILLA_RECSTORE_TEST_DIR") else { return };
+        if !std::env::var(CHILD).is_ok_and(|role| role.starts_with("stop-after-")) {
+            return;
+        }
+        let db = open_database(Path::new(&dir)).unwrap();
+        let _ = db.remove_where(Kind::Index, &|_| true);
+        std::process::exit(3);
+    }
+
+    /// [R89.4-1] The negative case: a process that stops in the middle of a remove leaves
+    /// each entry (one transaction), and a remove of a folder with no entry removes nothing.
+    // rule- R89.4-1
+    #[test]
+    fn a_stop_in_the_middle_of_a_remove_leaves_each_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let db = Db::open(dir.path()).unwrap();
+            let puts = (0..3).map(|at| (Kind::Index, format!("index shared/x/{at}.jsonl"), "test-format-1", b"p".to_vec())).collect();
+            db.put(puts).unwrap();
+            assert_eq!(db.remove_where(Kind::Index, &|key| key.starts_with("index shared/y/")).unwrap(), 0);
+        }
+        let status = child("recstore::tests::child_stop_in_the_middle_of_a_remove", "stop-after-0", dir.path()).wait().unwrap();
+        assert_eq!(status.code(), Some(0), "the child stops at its stop point");
+        let db = open_database(dir.path()).unwrap();
+        assert_eq!(index_entries(&db, "index shared/x/"), 3);
+    }
+
+    /// [R89.4-2] `semilla cache --clean` removes the index of a record file that is not there
+    /// and the tree entries of another Semilla binary.
+    // rule+ R89.4-2
+    #[test]
+    fn the_clean_removes_each_entry_that_no_folder_can_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let folder = indexed_folder(dir.path(), RECORDS);
+        db.put(vec![(Kind::Opaque, "opaque 00 other-binary".to_string(), OPAQUE_FORMAT, b"x".to_vec()), (Kind::Syntax, "syntax t m other-binary".to_string(), "f", b"x".to_vec())]).unwrap();
+        // The folder goes with no call of the store (as the clean of the build code cache).
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(clean_database(dir.path()).unwrap(), 3);
+        assert_eq!(index_entries(&db, "index "), 0);
+        assert!(db.get(Kind::Opaque, "opaque 00 other-binary", OPAQUE_FORMAT, |_| Some(())).is_none());
+    }
+
+    /// [R89.4-2] The negative case: the clean keeps the index of each record file that is there
+    /// and each tree entry of this binary.
+    // rule- R89.4-2
+    #[test]
+    fn the_clean_keeps_each_entry_that_a_folder_can_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let _folder = indexed_folder(dir.path(), RECORDS);
+        let own = format!("opaque 00 {}", crate::store::binary_identity());
+        db.put(vec![(Kind::Opaque, own.clone(), OPAQUE_FORMAT, b"x".to_vec())]).unwrap();
+        assert_eq!(clean_database(dir.path()).unwrap(), 0);
+        assert_eq!(index_entries(&db, "index "), 1);
+        assert!(db.get(Kind::Opaque, &own, OPAQUE_FORMAT, |_| Some(())).is_some());
+    }
+
+    /// [R89.1-1] The key of a stored construction has the digest of each input and the
+    /// identity of the binary: another input (one byte, or a byte that moves to the next
+    /// input) gives another key, and an entry of another format is not read.
+    // rule+ R89.1-1
+    #[test]
+    fn the_key_of_a_phase_result_has_each_input_and_the_binary() {
+        use semilla_verify::PhaseStore as _;
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let store = PhaseDb { db: db.clone() };
+        let key = store.key(semilla_verify::PhaseKind::Opaque, &[b"ab", b"c"]);
+        assert!(key.starts_with("opaque ") && key.ends_with(&format!(" {}", crate::store::binary_identity())));
+        assert_ne!(key, store.key(semilla_verify::PhaseKind::Opaque, &[b"a", b"bc"]));
+        assert_ne!(key, store.key(semilla_verify::PhaseKind::Opaque, &[b"ab", b"d"]));
+        store.put(semilla_verify::PhaseKind::Opaque, &key, b"payload".to_vec());
+        assert_eq!(store.get(semilla_verify::PhaseKind::Opaque, &key).as_deref(), Some(&b"payload"[..]));
+        db.put(vec![(Kind::Opaque, key.clone(), "semilla-opaque-0", b"old".to_vec())]).unwrap();
+        assert!(store.get(semilla_verify::PhaseKind::Opaque, &key).is_none());
+    }
+
+    /// The resident pages of the files that the process maps, in kB.
+    fn file_pages() -> u64 {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        status.lines().find_map(|line| line.strip_prefix("RssFile:")).and_then(|rest| rest.trim().trim_end_matches(" kB").trim().parse().ok()).unwrap_or(0)
+    }
+
+    /// The two tests of the resident pages run one at a time: the measure is of the process.
+    static PAGES: Mutex<()> = Mutex::new(());
+
+    /// A database with one entry of 48 MB, and the sum of its bytes.
+    fn large_entry(dir: &Path) -> (Arc<Db>, u64) {
+        let db = open_database(dir).unwrap();
+        let payload: Vec<u8> = (0..48u32 << 20).map(|at| (at % 251) as u8).collect();
+        let sum = payload.iter().map(|byte| u64::from(*byte)).sum();
+        db.put(vec![(Kind::Syntax, "large".to_string(), "test-format-1", payload)]).unwrap();
+        (db, sum)
+    }
+
+    /// [R89.7-1] A read of a value gives its pages back after the read: the resident pages of
+    /// the map do not grow by the size of the value, and a second read gives the same bytes.
+    // rule+ R89.7-1
+    #[test]
+    fn a_read_of_the_database_keeps_no_pages_of_the_value() {
+        let _one = PAGES.lock().unwrap_or_else(|error| error.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let (db, sum) = large_entry(dir.path());
+        let before = file_pages();
+        let read = || db.get(Kind::Syntax, "large", "test-format-1", |payload| Some(payload.iter().map(|byte| u64::from(*byte)).sum::<u64>()));
+        assert_eq!(read(), Some(sum));
+        let grown = file_pages().saturating_sub(before);
+        assert!(grown < 16 << 10, "the map keeps {grown} kB");
+        assert_eq!(read(), Some(sum));
+    }
+
+    /// [R89.7-1] The negative case: a read of the map with no release keeps the pages of the
+    /// value (the measure of the positive case sees them).
+    // rule- R89.7-1
+    #[test]
+    fn a_read_with_no_release_keeps_the_pages_of_the_value() {
+        let _one = PAGES.lock().unwrap_or_else(|error| error.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let (db, sum) = large_entry(dir.path());
+        let before = file_pages();
+        let txn = db.env.begin_ro_txn().unwrap();
+        let table = txn.open_table(None).unwrap();
+        let value: std::borrow::Cow<'_, [u8]> = txn.get(&table, Db::key(Kind::Syntax, "large")).unwrap().unwrap();
+        let (_, payload) = split_value(&value).unwrap();
+        assert_eq!(payload.iter().map(|byte| u64::from(*byte)).sum::<u64>(), sum);
+        let grown = file_pages().saturating_sub(before);
+        assert!(grown > 32 << 10, "the map keeps only {grown} kB");
     }
 }

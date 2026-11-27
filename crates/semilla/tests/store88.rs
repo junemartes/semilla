@@ -148,3 +148,33 @@ fn a_step_with_a_new_tree_counts_its_new_work() {
     assert_eq!(counts["files parsed"], 1, "{other}");
     assert!(counts["trees written"] >= 1 && counts["cargo commands run"] >= 1, "{other}");
 }
+
+// [R89.5-1] Design 89: the timing line of the new work counts each stored kind. A warm step
+// (the same step again, with the cache of the first) takes each construction of the opaque
+// inputs from the store and computes none.
+// rule+ R89.5-1
+#[test]
+fn a_warm_step_takes_the_opaque_inputs_from_the_store() {
+    let dir = common::TestDir::new();
+    let repo = repository(dir.path(), OLD, ONE);
+    let (code, first) = step(&repo, "one");
+    assert_eq!(code, Some(0), "{first}");
+    std::fs::remove_dir_all(repo.join(".semilla")).unwrap();
+    let (code, warm) = step(&repo, "one");
+    assert_eq!(code, Some(0), "{warm}");
+    let counts = work(&warm);
+    assert!(counts["opaque inputs from the store"] >= 1, "{warm}");
+    assert_eq!(counts["opaque inputs computed"], 0, "{warm}");
+}
+
+// rule- R89.5-1
+#[test]
+fn the_first_step_computes_the_opaque_inputs() {
+    let dir = common::TestDir::new();
+    let repo = repository(dir.path(), OLD, ONE);
+    let (code, first) = step(&repo, "one");
+    assert_eq!(code, Some(0), "{first}");
+    let counts = work(&first);
+    assert!(counts["opaque inputs computed"] >= 1, "{first}");
+    assert_eq!(counts["opaque inputs from the store"], 0, "{first}");
+}

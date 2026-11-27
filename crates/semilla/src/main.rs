@@ -969,6 +969,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             if let Some(size) = app.clean_build_check()? {
                 println!("removed the folder of the build check: {} freed (the next build check builds each dependency again)", app::size_text(size));
             }
+            // [R89.4-2] The entries of the database that no folder of the cache can use. The
+            // output of the command does not change.
+            let _ = crate::recstore::clean_database(&app.repo.cache_dir());
         }
         Command::Show => println!("{}", app.check(None, false)?.tree.render()),
         Command::Tag { commit, again, .. } => {
