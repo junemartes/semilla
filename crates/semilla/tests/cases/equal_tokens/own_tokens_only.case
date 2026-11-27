@@ -20,26 +20,35 @@ pub fn run() -> impl std::future::Future<Output = u32> {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f1, f2)
       in: depot::run
       lines: src/lib.rs:2-3, src/lib.rs:-2-3
-      to state it: --change 'depot::run=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::run=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, --same 'rewrite async move { 1 } => async { 2 }' --same 'rewrite 1 => 2'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed async: `async move {▫}` → `async {▫}` at `depot::run/tail` [semantics]
-  ◆ f2 derived: changed literal `1` → `2` at `depot::run/tail/body/tail` [semantics]
+  ◆ f2 derived: changed literal `1` → `2` at `depot::run/tail/body/tail` [semantics · code different]
+      affected bodies: depot::run
+      equivalence: `depot::run`: not decided alone (the body has 2 edits); the body: not decided: a coroutine value: async move { 1 } (src/lib.rs:-2) (the same line for f1)
+      equivalence: `depot::run::{closure#0} async { 2 }`: not decided alone: a coroutine body; the body: not decided: a coroutine body
+      reaches: 1 public function: depot::run (semilla expand --step 0)
+  ◆ f1 derived: changed async: `async move {▫}` → `async {▫}` at `depot::run/tail` [semantics · code equal]
+      equivalence: the same line as f2
+      equivalence: `depot::run::{closure#0} async { 2 }`: equivalent alone (proved by equal MIR); the body: not decided: a coroutine body
+      reaches: 1 public function: depot::run (semilla expand --step 0)
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::run (src/lib.rs:1): same graph (the edit keeps the control flow); not decided (a coroutine value: async move { 1 } (src/lib.rs:-2))
+    depot::run::{closure#0} async { 2 } (src/lib.rs:2): same graph (the edit keeps the control flow); not decided (a coroutine body)
+    reached bodies: 1
+      depot::run (src/lib.rs:1): reached through depot::run::{closure#0}, not decided (a coroutine value: async move { 1 } (src/lib.rs:-2))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   note: `▫` is in place of a child of the node (a condition, a block, an argument). It is not a cut: each edit in the child has its own fact.
 
 === positions
-◆ f1 derived: changed async: `async move {▫}` → `async {▫}` at `depot::run/tail` [semantics]
-    lines: src/lib.rs:2, src/lib.rs:-2
-◆ f2 derived: changed literal `1` → `2` at `depot::run/tail/body/tail` [semantics]
+◆ f2 derived: changed literal `1` → `2` at `depot::run/tail/body/tail` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:-3
+◆ f1 derived: changed async: `async move {▫}` → `async {▫}` at `depot::run/tail` [semantics · code equal]
+    lines: src/lib.rs:2, src/lib.rs:-2

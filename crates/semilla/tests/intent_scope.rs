@@ -18,8 +18,6 @@ fn semilla_env(repo: &Path, args: &[&str]) -> Output {
     command.current_dir(repo).args(args);
     command.env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"));
     command.env("SEMILLA_CACHE_DIR", repo.parent().unwrap().join("cache"));
-    command.env("SEMILLA_COMPILED", "0");
-    command.env("SEMILLA_NO_CHECK", "1");
     command.output().unwrap()
 }
 
@@ -143,7 +141,7 @@ fn semantic_section(text: &str) -> String {
 fn a_claim_on_a_scope_gives_one_line_for_each_item_and_explains_the_bodies_of_its_proofs() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
-    let text = run(&repo, &["step", "cache the length", "--intent", ".semilla/intent/pr.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "cache the length", "--intent", ".semilla/intent/pr.rs"], 0);
     // R80.1-1: a relation is a hint (not a claim of the count), and the claims use it.
     let relation = claim_block(&text, "i2");
     assert!(relation.contains("hint: a relation of an old type and a new type"), "{text}");
@@ -199,7 +197,7 @@ fn a_scope_path_with_no_definition_is_an_error_and_a_claimed_item_explains_nothi
     // R80.3-2 (negative): with no relation, each method of the changed type is "claimed", so
     // the claim explains no body of the scope.
     write(&repo, ".semilla/intent/pr.rs", "#[same(impl shop::Cart)]\nfn cart_methods() {}\n");
-    let text = run(&repo, &["step", "cache the length", "--intent", ".semilla/intent/pr.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "cache the length", "--intent", ".semilla/intent/pr.rs"], 0);
     let cart = claim_block(&text, "i1");
     assert!(cart.contains("claimed: 5 item(s) of the scope `impl shop::Cart`: 0 proved, 0 false, 5 claimed"), "{cart}");
     let section = semantic_section(&text);

@@ -27,7 +27,7 @@ impl T {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -37,12 +37,28 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::T::a=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::T::a=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `1` → `7` at `depot::T::a/tail` [semantics]
+  ◆ f1 derived: changed literal `1` → `7` at `depot::T::a/tail` [semantics · code different]
+      affected bodies: depot::T::a
+      equivalence: different: for self = &T: before returns 1, after returns 7 (suggested test `semilla_test_a_58679f`)
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::T::a (src/lib.rs:6): same graph (the edit keeps the control flow); different (for self = &T: before returns 1, after returns 7; suggested test `semilla_test_a_58679f`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_a_58679f`: add it to `src/lib.rs`, in the module of `depot::T::a` (line 3); run it: `cargo test -p depot semilla_test_a_58679f`; also: `cargo test -p depot --release semilla_test_a_58679f`
+      #[cfg(test)]
+      mod semilla_test_a_58679f {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 7.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let arg1 = crate::T;
+              let got = crate::T::a(&arg1);
+              assert_eq!(got, 1);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed literal `1` → `7` at `depot::T::a/tail` [semantics]
+◆ f1 derived: changed literal `1` → `7` at `depot::T::a/tail` [semantics · code different]
     lines: src/lib.rs:6-8, src/lib.rs:-3-5

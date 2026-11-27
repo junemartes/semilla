@@ -679,7 +679,7 @@ const MAX_SCOPE_ITEMS: usize = 64;
 /// callers of an item are the bodies whose callees have its definition. Only an item with a
 /// body record in a version is an item of the scope.
 fn scope_items(text: &str, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], compiled: Option<&semilla_normal::intent::Compiled>) -> Result<Vec<String>, String> {
-    let Some(compiled) = compiled else { return Err(format!("the scope `{text}` needs the compiled intent crate (`--compiled`)")) };
+    let Some(compiled) = compiled else { return Err(format!("the scope `{text}` needs the compiled intent crate (the intent crate did not compile)")) };
     let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let link = |path: &str| -> Option<&semilla_normal::intent::Link> {
         let path: String = path.chars().filter(|c| !c.is_whitespace()).collect();

@@ -17,8 +17,6 @@ fn semilla_env(repo: &Path, args: &[&str]) -> Output {
     command.current_dir(repo).args(args);
     command.env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"));
     command.env("SEMILLA_CACHE_DIR", repo.parent().unwrap().join("cache"));
-    command.env("SEMILLA_COMPILED", "0");
-    command.env("SEMILLA_NO_CHECK", "1");
     command.output().unwrap()
 }
 
@@ -92,7 +90,7 @@ fn counts(text: &str) -> [usize; 3] {
 fn the_compiled_claims_anchor_an_item_through_a_relation_function_and_the_fields_of_a_relation() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
-    let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
     let full = run(&repo, &["expand", "--step", "0"], 0);
     // The claim calls `f` through `f_relation` (a function of the intent crate).
     assert!(full.contains("anchor: i2: same `shop::f` → `shop::f`"), "{full}");
@@ -104,17 +102,15 @@ fn the_compiled_claims_anchor_an_item_through_a_relation_function_and_the_fields
 
 // rule- R79.2-1
 #[test]
-fn the_default_mode_takes_the_anchors_from_the_warm_check_of_the_two_trees_only() {
+fn a_step_with_no_intent_file_has_no_anchor_of_a_claim() {
+    // Design 83: each step compiles its intent files. A step with no intent file has no
+    // compiled claim, so no node is mapped by a claim; with the file, the claims map the nodes
+    // with no `semilla intent check` before the step.
     let (_dir, repo) = setup();
-    write(&repo, ".semilla/intent/pr.rs", INTENT);
-    // No `semilla intent check` before the step: the default mode builds nothing for the claims.
-    let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
+    let text = run(&repo, &["step", "the change"], 0);
     assert_eq!(counts(&text)[0], 0, "{text}");
-    assert!(text.contains("the claims give no anchor: the anchors come from the claims that rustc compiles"), "{text}");
     run(&repo, &["undo"], 0);
-    // The check of the same two trees: the step reads it, with no build.
-    let check = run(&repo, &["intent", "check", ".semilla/intent/pr.rs"], 0);
-    assert!(check.contains("0 error(s) of rustc, 0 error(s) of Semilla"), "{check}");
+    write(&repo, ".semilla/intent/pr.rs", INTENT);
     let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
     assert!(counts(&text)[0] >= 4, "{text}");
 }
@@ -124,7 +120,7 @@ fn the_default_mode_takes_the_anchors_from_the_warm_check_of_the_two_trees_only(
 fn a_body_that_semilla_proves_equivalent_stays_equivalent_with_a_node_that_is_not_mapped() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
-    let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
     // `caller` keeps its behavior (Semilla proves it), and its two new statements are not mapped:
     // the map is a review aid, so the proof result stays, with the fact of the map next to it.
     let line = text.lines().find(|line| line.contains("`shop::caller` (src/lib.rs:")).unwrap_or_else(|| panic!("{text}"));
@@ -138,7 +134,7 @@ fn a_body_that_semilla_proves_equivalent_stays_equivalent_with_a_node_that_is_no
 fn a_proof_does_not_remove_the_request_of_a_node_that_is_not_mapped() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
-    let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
     assert!(text.lines().any(|line| line.trim_start().starts_with("equivalent (Semilla): `shop::caller`")), "{text}");
     // The request lines of the two nodes of `caller` stay, also when Semilla proves the body.
     for at in ["shop::caller/S0", "shop::caller/S1"] {
@@ -155,7 +151,7 @@ fn templates(text: &str) -> Vec<String> {
 #[test]
 fn each_template_of_a_node_that_is_not_mapped_passes_the_check_of_the_intent_files() {
     let (_dir, repo) = setup();
-    run(&repo, &["step", "the change", "--compiled"], 0);
+    run(&repo, &["step", "the change"], 0);
     let full = run(&repo, &["expand", "--step", "0"], 0);
     let found = templates(&full);
     // A changed function, an added function that a changed body reaches, a removed function
@@ -176,7 +172,7 @@ fn each_template_of_a_node_that_is_not_mapped_passes_the_check_of_the_intent_fil
 fn the_json_and_the_full_text_give_the_same_map() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
-    let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs", "--compiled"], 0);
+    let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
     let short = counts(&text);
     // The step passes with nodes that are not mapped.
     assert!(short[2] > 0, "{text}");

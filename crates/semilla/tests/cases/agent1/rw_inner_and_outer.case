@@ -51,28 +51,39 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
       places: depot::both/tail/lhs/args[0]/lhs
-    ◆ f2 stated: changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics]
+    ◆ f2 stated: changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
+        affected bodies: depot::both (with 1 other edit of this body)
+        control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: c.total() + 1`
+        control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-8, src/lib.rs:8)
+        control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-8, src/lib.rs:8)
+        control flow: … 3 more (semilla expand --step 0)
+        equivalence: equivalent alone (proved by SMT after inlining `depot::Cart::total`, `depot::wrap`); the body: equivalent (proved by SMT after inlining `depot::Cart::total`, `depot::wrap`, `depot::wrap2`)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed path `wrap` → `wrap2` (f1)
       in: depot::both
       lines: src/lib.rs:8, src/lib.rs:-8
-      to state it: --change 'depot::both=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::both=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::both=TEXT'; if it does not change, --same 'rewrite wrap => wrap2'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics]
+  ◆ f1 derived: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code different]
+      affected bodies: depot::both (with 1 other edit of this body)
+      control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: c.total() + 1`
+      control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-8, src/lib.rs:8)
+      control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-8, src/lib.rs:8)
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: equivalent alone (proved by SMT after inlining `depot::wrap`, `depot::wrap2`); the body: equivalent (proved by SMT after inlining `depot::Cart::total`, `depot::wrap`, `depot::wrap2`)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::both (src/lib.rs:8): graph changes: +1 call, 1 changed call target, 2 changed checks, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `depot::Cart::total`, `depot::wrap`, `depot::wrap2`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 stated: changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics]
+◆ f2 stated: changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:-8
-◆ f1 derived: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics]
+◆ f1 derived: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:-8

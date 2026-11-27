@@ -1,6 +1,5 @@
 note: batch 11b (R70.2-1): `use b as c; pub use c::Block;` and a private `a::Block` whose fields change: the effective visibility of the compiler says that no different crate can use the fields, so no line "the public API can change" (before: the name rule of the text, since R68.4-1 did not follow a name that a `use` line brings)
 rule+: R70.2-1
-build_check: on
 must_not_match: the public API can change
 === both Cargo.toml
 [package]
@@ -64,14 +63,16 @@ pub fn make() -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: type `u8` → `u16` in 2 places: `shop::a::Block.x`, `shop::a::Block.y` [declaration]
+  ◆ f1 derived: type `u8` → `u16` in 2 places: `shop::a::Block.x`, `shop::a::Block.y` [declaration · code different]
+      affected bodies: shop::a::Block::new, shop::a::Block::sum
+      through: `shop::a::Block` (2 bodies), `shop::a::Block.x` (2 bodies), `shop::a::Block::new` (1 body)
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: type `u8` → `u16` in 2 places: `shop::a::Block.x`, `shop::a::Block.y` [declaration]
+◆ f1 derived: type `u8` → `u16` in 2 places: `shop::a::Block.x`, `shop::a::Block.y` [declaration · code different]
     lines: src/lib.rs:3-4, src/lib.rs:-3-4

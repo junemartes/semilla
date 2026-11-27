@@ -277,7 +277,7 @@ pub fn compare(old: &Expansion, new: &Expansion, crate_name: &str, exprs: &dyn E
     let load = |dir: &Path| Workspace::load(dir).map_err(|error| format!("{error:#}"));
     let before = load(&write("old", old).map_err(|error| error.to_string())?)?;
     let after = load(&write("new", new).map_err(|error| error.to_string())?)?;
-    let step = Step { index: 0, intent: "expansion".into(), claims: Vec::new(), tree_before: "old".into(), tree_after: "new".into(), reasons: Default::default(), compiled: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+    let step = Step { index: 0, intent: "expansion".into(), claims: Vec::new(), tree_before: "old".into(), tree_after: "new".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new() };
     let outcome = crate::verify_step_with(&StepInput { step: &step, before: &before, after: &after }, &NoOracle, exprs, true);
     let module = if new.module.is_empty() { String::new() } else { format!("::{}", new.module) };
     let function = format!("{name}{module}::expansion");
@@ -647,11 +647,6 @@ pub struct Link {
 /// The changed expansions of a step (R63.9-5), for the owner pass: only a pair of two calls
 /// with two different texts. An added or a removed call is an edit of the call or of its item.
 pub fn links(step: &Step, trees: [&Workspace; 2], bodies: &dyn crate::BodyOracle, renames: &BTreeMap<String, String>) -> Vec<Link> {
-    // The evidence rule of a body (R63.9-5) is a rule of the compiled mode: the default mode has
-    // no body result to own (R65.8-1).
-    if !step.compiled {
-        return Vec::new();
-    }
     let Some([old_units, new_units]) = bodies.expansions(step) else { return Vec::new() };
     let map = |path: &str| renames.get(path).cloned().unwrap_or_else(|| path.to_string());
     let (sites, _) = pair_sites([&old_units, &new_units], trees, &map, false);
@@ -686,14 +681,9 @@ pub fn links(step: &Step, trees: [&Workspace; 2], bodies: &dyn crate::BodyOracle
     out
 }
 
-/// Adds the facts of the expanded code to a step (R63.2-1 to R63.3-5). A step of the default
-/// mode has the records of its build check (R65.8-1), or one line with the cause why it has
-/// none (R65.8-2).
+/// Adds the facts of the expanded code to a step (R63.2-1 to R63.3-5).
 pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &dyn ExprOracle, outcome: &mut StepOutcome) {
     let Some([old_units, new_units]) = bodies.expansions(input.step) else {
-        if !input.step.compiled {
-            outcome.report.expansion_gap = bodies.expansion_gap(input.step);
-        }
         return;
     };
     let map = |path: &str| outcome.renames.items.get(path).cloned().unwrap_or_else(|| path.to_string());
@@ -1038,7 +1028,7 @@ pub const LARGE_EXPANSION: usize = 50_000;
 /// sizes and the count of the lines that differ): the fact rules do not run on the text, and
 /// the line gives each changed line with its line number in the text (a long run shows its
 /// changed tokens), the sizes, and the command that prints the full text. The words are not a
-/// compare result (R50.1-1: the line is in the default mode too).
+/// compare result (the line is in the syntax-only check too, R83.1-3).
 fn large_text(old: &Expansion, new: &Expansion, step: usize) -> String {
     let place = if new.file.is_empty() { NO_PLACE.to_string() } else { format!("{}:{}", new.file, new.line) };
     // R76.1-1: the command names the step, so that it works in each state after the step.
@@ -1394,7 +1384,7 @@ mod tests {
             (dir, ws)
         };
         let ((_a, before), (_b, after)) = (write(old), write(new));
-        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), compiled: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new() };
         let outcome = crate::verify_step_with(&StepInput { step: &step, before: &before, after: &after }, &NoOracle, &NoOracle, true);
         outcome.report.facts.iter().map(|fact| format!("{} [{}]", one_line(&fact.description).replace("`shop::f/", "`expansion/").replace("`shop::f`", "`expansion`"), fact.category.name())).collect()
     }
@@ -1605,7 +1595,7 @@ mod tests {
         let (old_lock, old_input, old_call, old_text) = old;
         let (new_lock, new_input, new_call, new_text) = new;
         let ((_a, before), (_b, after)) = (dependency_tree(&lock(old_lock), old_input), dependency_tree(&lock(new_lock), new_input));
-        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), compiled: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new() };
         let oracle = Records([dependency_units(old_call, old_text), dependency_units(new_call, new_text)]);
         let outcome = crate::verify_step_with(&StepInput { step: &step, before: &before, after: &after }, &oracle, &NoOracle, true);
         let flow = outcome.report.flow.clone().unwrap_or_default();
@@ -1669,7 +1659,7 @@ mod tests {
     /// `ids` on each side (R73.1-1, R73.3-1). The lock file and the input do not change.
     fn identity_sites(def: &str, ids: [&[&str]; 2]) -> Vec<ExpansionSite> {
         let ((_a, before), (_b, after)) = (dependency_tree(&lock("1.0.0"), "1"), dependency_tree(&lock("1.0.0"), "1"));
-        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), compiled: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new() };
         let units = |text: &str, ids: &[&str]| {
             let mut units = dependency_units("depot::m!(1)", text);
             units[0].list[0].def = def.to_string();

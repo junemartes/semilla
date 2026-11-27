@@ -52,7 +52,6 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ fact a1 of the agent is false: `--same 'rewrite $a.total => $a.total()'`
 
@@ -62,14 +61,19 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: added `depot::fresh` (the public API changes: a different crate can now use the item) [added]
+  ◆ f1 derived: added `depot::fresh` (the public API changes: a different crate can now use the item) [added · code different]
+      affected bodies: depot::fresh
+      control flow: + graph of `depot::fresh`: 3 points, 2 arrows (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
   cover: each of the 1 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::fresh (src/lib.rs:10): graph added: 3 points, 2 arrows
+  expansions: 1 changed, 1 equal
+    `#[test]` at `depot::tests::t_limit` (src/lib.rs:20): expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f1 derived: added `depot::fresh` (the public API changes: a different crate can now use the item) [added]
+◆ f1 derived: added `depot::fresh` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:10

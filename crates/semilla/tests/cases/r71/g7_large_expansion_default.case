@@ -1,6 +1,5 @@
 note: batch 11c, verification correction: the default mode with the build check: an expansion over 50 kB changes in one operator; the line gives the changed line with the words of the size rule and no compare result word (R50.1-1, property 13 of the case runner)
 rule+: R71.1-1
-build_check: on
 must_match: expansion: `x12!\(v\)` at `shop::mix/tail` \(src/lib.rs:[0-9]+\): expansion changed: the text is too large for the fact rules \(over 50 kB\): .* \(a large text: .*; the full text: semilla expand src/lib.rs:[0-9]+ --step 0\)
 must_not_match: no compare
 === both Cargo.toml
@@ -151,11 +150,12 @@ pub fn mix(v: u64) -> u64 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro `x12`: `macro_rules! x12 { ($e:expr) => { x11!($e) ^ x11!($e) }; }` → `macro_rules! x12 { ($e:expr) => { x11!($e) | x11!($e) }; }` [declaration]
+  ◆ f1 derived: changed macro `x12`: `macro_rules! x12 { ($e:expr) => { x11!($e) ^ x11!($e) }; }` → `macro_rules! x12 { ($e:expr) => { x11!($e) | x11!($e) }; }` [declaration · code different]
+      affected bodies: shop::mix
       expansion: `x12!(v)` at `shop::mix/tail` (src/lib.rs:68): expansion changed: the text is too large for the fact rules (over 50 kB): `^ (v.wrapping_add·2048(1) ^ v.wrapping_add·2049(1) ^` → `| v.wrapping_add·2048(1) ^ v.wrapping_add·2049(1) ^` (line 1026), `(v.wrapping_add·4094(1) ^ v.wrapping_add·4095(1))))))))))))` → `(v.wrapping_add·4094(1) ^ v.wrapping_add·4095(1)))))))))))` (line 2051) (a large text: 2052 → 2051 lines, 191.5 kB → 191.4 kB; 2 changed parts; the full text: semilla expand src/lib.rs:68 --step 0)
   cover: each of the 2 changed line(s) is in a fact
   expansions: 1 changed
@@ -163,5 +163,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro `x12`: `macro_rules! x12 { ($e:expr) => { x11!($e) ^ x11!($e) }; }` → `macro_rules! x12 { ($e:expr) => { x11!($e) | x11!($e) }; }` [declaration]
+◆ f1 derived: changed macro `x12`: `macro_rules! x12 { ($e:expr) => { x11!($e) ^ x11!($e) }; }` → `macro_rules! x12 { ($e:expr) => { x11!($e) | x11!($e) }; }` [declaration · code different]
     lines: src/lib.rs:63, src/lib.rs:-63

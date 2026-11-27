@@ -35,7 +35,7 @@ impl Code {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -45,17 +45,33 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::Code::INTERNAL_START=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::Code::INTERNAL_START=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: value of `depot::Code::INTERNAL_START` changed: 1 << 31 → 1 << 30 (the public API can change: a different crate can use the item) [semantics]
+  ◆ f1 derived: value of `depot::Code::INTERNAL_START` changed: 1 << 31 → 1 << 30 (the public API can change: a different crate can use the item) [semantics · code different]
+      affected bodies: depot::Code::INTERNAL_START
+      equivalence: different: for each input: before returns 2147483648, after returns 1073741824 (suggested test `semilla_test_internal_start_adea44`)
+      ! public API: the compare does not cover the code of a different crate
       docs of `depot::Code::INTERNAL_START`, no edit in this step (src/lib.rs:8-9):
           | /// Codes below this point are OS errors.
           | /// The crates use the codes above it.
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   cover: each of the 8 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::Code::INTERNAL_START (src/lib.rs:10): same graph (the edit keeps the control flow); different (for each input: before returns 2147483648, after returns 1073741824; suggested test `semilla_test_internal_start_adea44`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_internal_start_adea44`: add it to `src/lib.rs`, in the module of `depot::Code::INTERNAL_START` (line 6); run it: `cargo test -p depot semilla_test_internal_start_adea44`; also: `cargo test -p depot --release semilla_test_internal_start_adea44`
+      #[cfg(test)]
+      mod semilla_test_internal_start_adea44 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 2147483648; the new version returns 1073741824.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let got = &crate::Code::INTERNAL_START;
+              assert_eq!(*got, 2147483648);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: value of `depot::Code::INTERNAL_START` changed: 1 << 31 → 1 << 30 (the public API can change: a different crate can use the item) [semantics]
+◆ f1 derived: value of `depot::Code::INTERNAL_START` changed: 1 << 31 → 1 << 30 (the public API can change: a different crate can use the item) [semantics · code different]
     lines: src/lib.rs:8-11, src/lib.rs:-4-7

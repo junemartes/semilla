@@ -1,6 +1,5 @@
 note: G2: an attribute macro that changes the item moves after a derive: before, the derives were calls in the expansion of the attribute macro; the calls of one definition in one item pair (the identity), so each derive has a changed expansion, not an added one and a silent one
 rule+: R72.1-1
-build_check: on
 must_match: derived `Debug` of `shop::Item`: expansion changed
 must_not_match: expansion added
 === both Cargo.toml
@@ -45,12 +44,12 @@ pub struct Item {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: attributes of `shop::Item`: `#[depot::tag] #[derive(Debug, Clone)]` → `#[derive(Debug, Clone)] #[depot::tag]` [attribute]
+  ◆ f1 derived: attributes of `shop::Item`: `#[depot::tag] #[derive(Debug, Clone)]` → `#[derive(Debug, Clone)] #[depot::tag]` [attribute · code different]
+      ! the compiled code changes: <shop::Item as std::fmt::Debug>::fmt
       expansion: derived `Debug` of `shop::Item`: expansion changed: attributes of `shop::impl <Item as ::core::fmt::Debug>`: removed `#[allow(dead_code)]` [attribute]
       expansion: derived `Clone` of `shop::Item`: expansion changed: attributes of `shop::impl <Item as ::core::clone::Clone>`: removed `#[allow(dead_code)]` [attribute]
       ✗ spotlight: an attribute macro moves across a derive (`#[depot::tag]`, `#[derive(Debug,Clone)]`): the macro gets the item before the derive or after it, so the input of the derive can change; it needs a reason: --reason 'shop::Item=…'
@@ -62,5 +61,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'shop::Item=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::Item=the reason of the test'
-◆ f1 derived: attributes of `shop::Item`: `#[depot::tag] #[derive(Debug, Clone)]` → `#[derive(Debug, Clone)] #[depot::tag]` [attribute]
+◆ f1 derived: attributes of `shop::Item`: `#[depot::tag] #[derive(Debug, Clone)]` → `#[derive(Debug, Clone)] #[depot::tag]` [attribute · code different]
     lines: shop/src/lib.rs:2, shop/src/lib.rs:-1

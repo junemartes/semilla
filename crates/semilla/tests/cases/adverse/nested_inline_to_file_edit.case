@@ -28,7 +28,7 @@ pub fn deep() -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -38,15 +38,30 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::outer::inner::deep=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::outer::inner::deep=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `1` → `2` at `depot::outer::inner::deep/tail/rhs` [semantics]
-  ◆ f2 derived: source place of `depot::outer::inner`: a block in `src/outer.rs` → file `src/outer/inner.rs`; 0 of 1 item and 6 old lines and 4 new lines keep their tokens [move]
+  ◆ f1 derived: changed literal `1` → `2` at `depot::outer::inner::deep/tail/rhs` [semantics · code different]
+      affected bodies: depot::outer::inner::deep
+      equivalence: different: for each input: before returns 5, after returns 6 (suggested test `semilla_test_deep_f32c6e`)
+  ◆ f2 derived: source place of `depot::outer::inner`: a block in `src/outer.rs` → file `src/outer/inner.rs`; 0 of 1 item and 6 old lines and 4 new lines keep their tokens [move · no code]
   cover: each of the 13 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::outer::inner::deep (src/outer/inner.rs:2): same graph (the edit keeps the control flow); different (for each input: before returns 5, after returns 6; suggested test `semilla_test_deep_f32c6e`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_deep_f32c6e`: add it to `src/outer.rs`, in the module of `depot::outer::inner::deep` (line 3); run it: `cargo test -p depot semilla_test_deep_f32c6e`; also: `cargo test -p depot --release semilla_test_deep_f32c6e`
+      #[cfg(test)]
+      mod semilla_test_deep_f32c6e {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 5; the new version returns 6.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let got = crate::outer::inner::deep();
+              assert_eq!(got, 5);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed literal `1` → `2` at `depot::outer::inner::deep/tail/rhs` [semantics]
+◆ f1 derived: changed literal `1` → `2` at `depot::outer::inner::deep/tail/rhs` [semantics · code different]
     lines: src/outer.rs:-5, src/outer/inner.rs:4
-◆ f2 derived: source place of `depot::outer::inner`: a block in `src/outer.rs` → file `src/outer/inner.rs`; 0 of 1 item and 6 old lines and 4 new lines keep their tokens [move]
+◆ f2 derived: source place of `depot::outer::inner`: a block in `src/outer.rs` → file `src/outer/inner.rs`; 0 of 1 item and 6 old lines and 4 new lines keep their tokens [move · no code]
     lines: src/outer.rs:1, src/outer.rs:-1-4, src/outer.rs:-6-7, src/outer/inner.rs:1-3, src/outer/inner.rs:5

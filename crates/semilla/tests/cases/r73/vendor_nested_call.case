@@ -1,6 +1,5 @@
 note: batch 11e, test case 2: `mkfn!(made, depot::add!(4; 5))` where only the inner macro of the path dependency changes; the chain of the outer call has the definition of `depot::add` (R63.9-4), whose file changes, so the file fact owns the two lines and the body that the outer call makes; before, each line said "no changed definition, no changed input of the call, …"
 rule+: R73.2-1
-option: --compiled
 must_match: from `macro_rules! depot::add` \(vendor/depot/src/lib\.rs:2\) through the inner call `depot::add!\(4; 5\)`
 must_match: affected bodies: shop::made
 must_not_match: indirect change that Semilla cannot explain|no changed definition
@@ -65,8 +64,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     `mkfn!(made, depot::add!(4; 5))` at `shop::mkfn!#0` (shop/src/lib.rs:3): expansion changed: `macro_rules! mkfn` (shop/src/lib.rs:1): changed operator `4 + 5` → `4 * 5` at `shop::made/tail` [semantics]; from `macro_rules! depot::add` (vendor/depot/src/lib.rs:2) through the inner call `depot::add!(4; 5)`
     `depot::add!(4; 5)` at `shop::mkfn!#0` (shop/src/lib.rs:3): expansion changed: `macro_rules! depot::add` (vendor/depot/src/lib.rs:2): changed operator `4 + 5` → `4 * 5` at `expansion` [semantics]; from `macro_rules! depot::add` (vendor/depot/src/lib.rs:2)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'vendor/depot/src/lib.rs:=<why>' --compiled
+run again: semilla step 'the change' --reason 'vendor/depot/src/lib.rs:=<why>'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'vendor/depot/src/lib.rs:=the reason of the test' --compiled
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'vendor/depot/src/lib.rs:=the reason of the test'
 ◆ f1 derived: vendor/depot/src/lib.rs: changed [file · code different]
     lines: vendor/depot/src/lib.rs:2, vendor/depot/src/lib.rs:-2

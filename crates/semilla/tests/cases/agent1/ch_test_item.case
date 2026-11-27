@@ -51,19 +51,28 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); assert
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 change: `t_limit` "one more assert" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
       places: depot::tests::t_limit/S1
-    ◆ f1 stated: added macro statement `assert!(limit() > 2);` at `depot::tests::t_limit/S1` [semantics]
+    ◆ f1 stated: added macro statement `assert!(limit() > 2);` at `depot::tests::t_limit/S1` [semantics · code different]
+        affected bodies: depot::tests::t_limit
+        equivalence: `depot::tests::t_limit`: not decided: a value of a type that the check does not model: fn t_limit() { assert_eq!(limit(), 10); } (src/lib.rs:-19)
+        equivalence: `depot::tests::t_limit::{closure#0} #[test]`: not decided: a value of a type that the check does not model: fn t_limit() { assert_eq!(limit(), 10); } (src/lib.rs:-19)
+        reaches: 1 body, no public function: depot::tests::t_limit::{closure#0} (semilla expand --step 0)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::tests::t_limit (src/lib.rs:19): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn t_limit() { assert_eq!(limit(), 10); } (src/lib.rs:-19))
+    depot::tests::t_limit::{closure#0} #[test] (src/lib.rs:19): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn t_limit() { assert_eq!(limit(), 10); } (src/lib.rs:-19))
+    reached bodies: 1
+      depot::tests::t_limit::{closure#0} (src/lib.rs:19): reached through depot::tests::t_limit, not decided (a value of a type that the check does not model: fn t_limit() { assert_eq!(limit(), 10); } (src/lib.rs:-19))
+  expansions: 1 added, 2 equal
+    `assert!(limit() > 2)` at `depot::tests::t_limit/S1` (src/lib.rs:19): expansion added: `macro assert` (crate core): 3 line(s) of code; the step adds the call or its input
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: added macro statement `assert!(limit() > 2);` at `depot::tests::t_limit/S1` [semantics]
+◆ f1 stated: added macro statement `assert!(limit() > 2);` at `depot::tests::t_limit/S1` [semantics · code different]
     lines: src/lib.rs:19, src/lib.rs:-19

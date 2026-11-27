@@ -834,8 +834,8 @@ fn own_cfg(item: &Item, shadow: &Shadow) -> bool {
 /// The crates whose `derive` names have the meaning of their name: the crates of the standard
 /// library (R65.3-7). A crate of a registry is not on the list: a manifest can give its name to
 /// a different package (`serde = { package = "x" }`), and its derives are proc macros whose code
-/// the default mode does not see. The compiled mode reads the definition of each derive from its
-/// expansion record (R65.2-1).
+/// a check with no compiler data does not see. The compiled check reads the definition of each
+/// derive from its expansion record (R65.2-1).
 const TRUSTED_CRATES: &[&str] = semilla_core::names::STD_CRATES;
 
 /// The `derive` names of the allow list that can have a different meaning (batch 5q, part

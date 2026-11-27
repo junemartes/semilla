@@ -58,18 +58,23 @@ pub fn make2() -> Cart { Cart { total: 2, items: Vec::new(), tag: 0 } }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-  AST changes: 0 mapped by claims, 3 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: field `depot::Cart.tag` added: `u8` (the public API can change: a different crate can use the item) [added]
+  ◆ f1 derived: field `depot::Cart.tag` added: `u8` (the public API can change: a different crate can use the item) [added · code different]
       1 site(s): add the field `tag : 7 + 1` (in depot::make)
       1 site(s): add the field `tag : 0` (in depot::make2)
+      affected bodies: depot::make, depot::make2
+      equivalence: `depot::make`: not decided: the return type changes
+      equivalence: `depot::make2`: not decided: the return type changes
+      ! public API: the compare does not cover the code of a different crate
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::make (src/lib.rs:20): same graph (the edit keeps the control flow); not decided (the return type changes)
+    depot::make2 (src/lib.rs:21): same graph (the edit keeps the control flow); not decided (the return type changes)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: field `depot::Cart.tag` added: `u8` (the public API can change: a different crate can use the item) [added]
+◆ f1 derived: field `depot::Cart.tag` added: `u8` (the public API can change: a different crate can use the item) [added · code different]
     lines: src/lib.rs:1, src/lib.rs:20-21, src/lib.rs:-1, src/lib.rs:-20-21

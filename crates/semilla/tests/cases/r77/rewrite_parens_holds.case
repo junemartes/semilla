@@ -1,6 +1,5 @@
 note: batch 13a, test case "a rewrite that finds 0 places": the variable `$x` has the value `(a + b)` in the old code and `a + b` in the new code; the parentheses are not a part of the form, so the rewrite holds
 rule+: R77.3-6
-option: --compiled
 option: --same
 option: rewrite $x.min($y) => std::cmp::min($x, $y)
 must_match: ✓ a1 same: rewrite `\$x\.min\(\$y\)` => `std::cmp::min\(\$x, \$y\)` \(the form holds: 1 site
@@ -20,7 +19,7 @@ pub fn f(a: u32, b: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rewrite `$x.min($y)` => `std::cmp::min($x, $y)` (the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)

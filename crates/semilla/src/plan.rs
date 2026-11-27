@@ -527,7 +527,7 @@ impl App {
             let renames = semilla_verify::hints::likely_renames(&plain, &before_ws, &after_ws);
             let mut claims = semilla_verify::hints::suggest_claims_with_renames(&[], &[], &renames);
             claims.extend(semilla_verify::hints::local_rename_claims(&semilla_verify::hints::likely_local_renames(&plain, &before_ws, &after_ws)));
-            let rename_step = semilla_core::Step { index: 0, intent: String::new(), claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default(), compiled: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+            let rename_step = semilla_core::Step { index: 0, intent: String::new(), claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new() };
             let mut map = semilla_verify::checks::renames(&rename_step, &before_ws);
             semilla_verify::sites::resolve(&mut map, &before_ws, &after_ws);
             let edits = semilla_syntax::diff(&before_ws, &after_ws, &map);
@@ -686,7 +686,7 @@ impl App {
 
     /// Applies a whole plan: starts again from the base of the replay, runs each step, and checks
     /// the change set (phase 1, or both phases with `full`).
-    pub fn replay_apply(&mut self, plan: &Plan, full: bool, no_check: bool) -> Result<Applied> {
+    pub fn replay_apply(&mut self, plan: &Plan, full: bool) -> Result<Applied> {
         let mut session = self.load_session()?;
         let replay = session.replay.clone().context("no replay is in progress; start one with `semilla replay begin`")?;
         let base = session.changeset.base_tree.clone();
@@ -776,8 +776,7 @@ impl App {
             // is a problem of the plan. A check that cannot run is a problem too, with its cause.
             let mut notes: Vec<String> = Vec::new();
             let mut build_text = String::new();
-            let compiled_step = self.load_session()?.open.as_ref().is_some_and(|open| open.compiled);
-            match self.build_check(crate::buildcheck::skip_cause(no_check), &before, &after, !compiled_step) {
+            match self.build_check(&before, &after) {
                 crate::buildcheck::Outcome::Stored { record, lines } => {
                     let mut session = self.load_session()?;
                     if let Some(open) = session.open.as_mut() {
@@ -874,8 +873,8 @@ impl App {
         } else {
             let build = match build_stops {
                 (0, 0) => "",
-                (_, 0) => "; a step that does not build needs a change of the plan, or `--no-check` (the record then says `build check: not run`)",
-                _ => "; for a build check that cannot run, correct the environment, or use `--no-check` (the record then says `build check: not run`)",
+                (_, 0) => "; a step that does not build needs a change of the plan",
+                _ => "; for a build check that cannot run, correct the environment",
             };
             format!("fix the plan and run `semilla replay apply` again (it starts again from the base){build}\n")
         });

@@ -53,13 +53,8 @@ pub struct StepRequest {
     /// Each tag of the agent (design 55.3): `PLACE[,PLACE]=NAME`.
     pub tags: Vec<String>,
     pub tree: bool,
-    /// Phase 1 only; phase 2 runs in the background (B1). Only with `compiled`.
+    /// Phase 1 only; phase 2 runs in the background (B1).
     pub fast: bool,
-    /// The step gets the compiled check (design 50): the build, the MIR compare, and a compare
-    /// result on each fact.
-    pub compiled: bool,
-    /// The build check of the step does not run (design 53).
-    pub no_check: bool,
 }
 
 /// One more place where a `--reason` text can split into a key and a reason (design 37.6).
@@ -155,14 +150,8 @@ impl StepRequest {
         for reason in self.reasons.iter().chain(extra) {
             parts.push(format!("--reason {}", quote(reason)));
         }
-        if self.compiled {
-            parts.push("--compiled".into());
-        }
         if self.fast {
             parts.push("--fast".into());
-        }
-        if self.no_check {
-            parts.push("--no-check".into());
         }
         parts.join(" ")
     }
@@ -426,32 +415,13 @@ impl App {
         // indirect change with no known cause). With `--fast`, phase 2 runs now only when a
         // property claim or an identity candidate needs it.
         let property = claims.iter().find(|c| semilla_core::ops::op(&c.op).is_some_and(|i| i.kind == semilla_core::OpKind::Property)).map(|c| c.op.clone());
-        // Design 50: the syntax tree gives the facts of a step. The compiled check (the build,
-        // the MIR compare, a compare result on each fact) runs only for a step that asks for it:
-        // the option `--compiled`, the variable `SEMILLA_COMPILED`, or a property claim (its
-        // proof comes from the compiled code).
-        let asked = request.compiled || crate::app::compiled_env();
-        let compiled = asked || property.is_some();
-        let mut mode_lines = String::new();
-        if let (Some(op), false) = (&property, asked) {
-            put_line(&mut mode_lines, &format!("note: the claim `{op}` is a property claim, so this step runs the compiled check (as with `--compiled`)"));
-        }
-        if request.fast && !compiled {
-            put_line(&mut mode_lines, "note: `--fast` has an effect only with `--compiled`; this step has no compiled check");
-        }
-        let mut full = !compiled || !request.fast || property.is_some();
+        // Design 83: each step builds the two trees and has their MIR (the compiled check: the
+        // build, the MIR compare, a compare result on each fact).
+        let mut full = !request.fast || property.is_some();
         let index = session.changeset.steps.len();
         let claim_count = claims.len();
         let claim_anchors: Vec<String> = claims.iter().filter_map(|claim| claim.at.as_ref().map(|at| at.to_string())).collect();
-        // R65.8-1: a step of the default mode runs the build check before the syntax phase. The
-        // build writes the expansion records of the two trees, and the syntax phase reads them
-        // (the expansion section and the lines of design 63). The output order does not change.
-        let early_build = if compiled { None } else { Some(self.build_check(crate::buildcheck::skip_cause(request.no_check), &before, &tree, true)) };
-        let early_record = match &early_build {
-            Some(crate::buildcheck::Outcome::Stored { record, .. }) => Some(record.clone()),
-            _ => None,
-        };
-        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, compiled, build_check: early_record, agent, tags: request.tags.clone() });
+        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, build_check: None, agent, tags: request.tags.clone() });
         // The session to restore when the step is not stored: the counter of the stored claims.
         let mut saved = session.clone();
         saved.last_claim = highest;
@@ -522,11 +492,7 @@ impl App {
         // result of a tree that builds is in the cache: the next command does not build again.
         // Rule 9: a compiled check of this command that does not accept the step built the new
         // tree, or it has a different cause for the reject. No second build runs.
-        let build = match early_build {
-            Some(outcome) => Some(outcome),
-            None if compiled && !request.fast && !accepted => None,
-            None => Some(self.build_check(crate::buildcheck::skip_cause(request.no_check), &before, &tree, false)),
-        };
+        let build = if !request.fast && !accepted { None } else { Some(self.build_check(&before, &tree)) };
         let (build_record, build_lines, build_stop) = match build {
             None => (None, Vec::new(), None),
             Some(crate::buildcheck::Outcome::Stored { record, lines }) => (Some(record), lines, None),
@@ -658,7 +624,6 @@ impl App {
             for line in &build_lines {
                 put_line(&mut text, line);
             }
-            text.push_str(&mode_lines);
             text.push_str(&base_line);
             text.push_str(&sandbox_line);
             if closed.is_none() {
@@ -746,13 +711,10 @@ impl App {
             }
             let mut again = None;
             if let (Some((fails, _)), true) = (&build_stop, blocked.is_empty()) {
-                // Design 53: the two ways out. Each command has each missing reason, as the
-                // command to run again.
-                let mut unchecked = corrected.clone();
-                unchecked.no_check = true;
+                // Design 53: the way out. The command has each missing reason, as the command to
+                // run again. Design 83: no option turns the build check off.
                 let first = if *fails { "the code after the step does not build: correct the code" } else { "correct the environment (the cause is above)" };
                 put_line(&mut text, &format!("{first}, then run: {}", corrected.command(&missing)));
-                put_line(&mut text, &format!("or store the step with no build check (the record and the review then say `build check: not run`): {}", unchecked.command(&missing)));
             } else if blocked.is_empty() {
                 let what = match (corrected.claims.len() < request.claims.len(), !widened.is_empty()) {
                     (true, true) => " (without the claim that failed, and with the complete list of `calls`)",
@@ -847,20 +809,16 @@ impl App {
         // Design 37.21: a change set of one step has its full result in this process. The step
         // stores it, so the background check and `semilla review` do not check the step again.
         // A failure here is not a failure of the step: the background check does the work.
-        // A step with no compiled check (design 50) stores no result and starts no background
-        // check: `semilla status` computes its result from the trees.
         // [R77.3-3] A full compiled step stores the result of its change set also with more
         // than one step: `semilla status --verbose` then shows the result of this check (the
         // budgets in solver steps give the same result in each check, R77.2-1), and no
         // background worker starts. Only a step that stores no result queues the check. A change
         // set with a step of `--fast` keeps the background check (the earlier rule): the state of
         // that step comes from the background result (D7).
-        if compiled {
-            let fast_steps = self.load_session().map(|session| !session.fast_steps.is_empty()).unwrap_or(true);
-            let stored = full && !self.no_bodies && (stored_set.steps.len() == 1 || !fast_steps) && self.store_session_result(&stored_set).is_ok();
-            if !stored {
-                self.queue_session(&stored_set)?;
-            }
+        let fast_steps = self.load_session().map(|session| !session.fast_steps.is_empty()).unwrap_or(true);
+        let result_stored = full && !self.no_bodies && (stored_set.steps.len() == 1 || !fast_steps) && self.store_session_result(&stored_set).is_ok();
+        if !result_stored {
+            self.queue_session(&stored_set)?;
         }
         // B4: a commit between the steps makes `tag` fail. Say it now, with the fix.
         if index > 0 {
@@ -880,7 +838,7 @@ impl App {
         let mut first_rejected = None;
         let mut final_lines = String::new();
         for earlier in session.fast_steps.keys().copied().collect::<Vec<_>>() {
-            let report = if full && compiled {
+            let report = if full {
                 match self.check(Some(earlier), false) {
                     Ok(result) => result.report.steps.first().cloned(),
                     Err(error) => {
@@ -917,7 +875,6 @@ impl App {
         for line in &build_lines {
             put_line(&mut text, line);
         }
-        text.push_str(&mode_lines);
         text.push_str(&base_line);
         text.push_str(&sandbox_line);
         text.push_str(&fast_lines);
@@ -1013,7 +970,7 @@ impl App {
                 stored.reasons.insert(key.clone(), reason.clone());
             }
         }
-        let (intent, compiled) = (stored.intent.clone(), stored.compiled);
+        let intent = stored.intent.clone();
         self.save_session(&session)?;
         let mut result = match self.check(Some(index), false) {
             Ok(result) => result,
@@ -1097,10 +1054,9 @@ impl App {
             put_line(&mut text, "correct each false fact, then run the command again. A missing fact is not a reject: the gap list names the items.");
             return Ok((text, false));
         }
-        // The stored result of a step with the compiled check is for the old record: this
-        // process stores the result of the new record (R77.3-3), else the background check
-        // makes it.
-        if compiled && (self.no_bodies || self.store_session_result(&session.changeset).is_err()) {
+        // The stored result of a step is for the old record: this process stores the result of
+        // the new record (R77.3-3), else the background check makes it.
+        if self.no_bodies || self.store_session_result(&session.changeset).is_err() {
             self.queue_session(&session.changeset)?;
         }
         let new_tags = if tags.is_empty() { String::new() } else { format!(" and {tag_count} new tag(s)") };

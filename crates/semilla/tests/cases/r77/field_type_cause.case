@@ -1,6 +1,5 @@
 note: batch 13a, test case "a changed field type": the element `*x as u32` of `first` (no edit) changes because the element type of the field `items` changes; the facts of the changed definitions are its cause, so it needs no reason
 rule+: R77.3-5
-option: --compiled
 must_match: the cause: a changed definition that the body uses \(f1, f2\)
 must_not_match: --reason 'shop::Bits::first
 === both Cargo.toml
@@ -25,7 +24,7 @@ impl Bits {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:

@@ -35,23 +35,24 @@ pub fn last_item() -> u32 { 0 }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed match, see f1 (f1)
       in: depot::pick
       lines: src/lib.rs:8
-      to state it: --change 'depot::pick=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::pick=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pick=TEXT'; if it does not change, --same 'rewrite match n { 0 => 1, 1 => 2, _ => 3, } => match n { 0 => 1, #[cfg(all())] 1 => 2, _ => 3, }'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed match: `match ▫ { ▫ => ▫, ▫ => ▫, ▫ => ▫, }` → `match ▫ { ▫ => ▫, #[cfg(all())] ▫ => ▫, ▫ => ▫, }` at `depot::pick/S0` [semantics]
+  ◆ f1 derived: changed match: `match ▫ { ▫ => ▫, ▫ => ▫, ▫ => ▫, }` → `match ▫ { ▫ => ▫, #[cfg(all())] ▫ => ▫, ▫ => ▫, }` at `depot::pick/S0` [semantics · code equal]
+      equivalence: equivalent (proved by equal MIR)
+      note: this body uses `#[cfg(all())]`, which Semilla did not check (`depot::pick`)
   cover: each of the 1 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::pick (src/lib.rs:5): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   note: `▫` is in place of a child of the node (a condition, a block, an argument). It is not a cut: each edit in the child has its own fact.
 
 === positions
-◆ f1 derived: changed match: `match ▫ { ▫ => ▫, ▫ => ▫, ▫ => ▫, }` → `match ▫ { ▫ => ▫, #[cfg(all())] ▫ => ▫, ▫ => ▫, }` at `depot::pick/S0` [semantics]
+◆ f1 derived: changed match: `match ▫ { ▫ => ▫, ▫ => ▫, ▫ => ▫, }` → `match ▫ { ▫ => ▫, #[cfg(all())] ▫ => ▫, ▫ => ▫, }` at `depot::pick/S0` [semantics · code equal]
     lines: src/lib.rs:8

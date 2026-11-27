@@ -1,7 +1,7 @@
 note: Only the docs of the call item change. The step has the docs fact and no fact "changed macro call".
 rule-: R57.2-3
 exit: 0
-must_match: changed docs `/// The table\.` → `/// The table of the depot\.` \[docs\]
+must_match: changed docs `/// The table\.` → `/// The table of the depot\.` \[docs · no code\]
 must_not_match: changed macro call
 === both Cargo.toml
 [package]
@@ -29,16 +29,14 @@ table!(
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed docs `/// The table.` → `/// The table of the depot.` [docs]
+  ◆ f1 derived: changed docs `/// The table.` → `/// The table of the depot.` [docs · no code]
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed docs `/// The table.` → `/// The table of the depot.` [docs]
+◆ f1 derived: changed docs `/// The table.` → `/// The table of the depot.` [docs · no code]
     lines: src/lib.rs:5, src/lib.rs:-5

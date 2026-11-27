@@ -5,7 +5,6 @@ option: shop::<Dog as Speak>::name=the dog has a name of its own
 must_match: `shop::<Dog as Speak>::name` now overrides the default body of `shop::Speak::name`: `fn name\(&self\) -> u32 \{ 1 \}` → `fn name\(&self\) -> u32 \{ 2 \}`
 must_not_match: added `shop::<Dog as Speak>::name`
 must_match: holds: the behavior of existing code can change
-build_check: on
 === both Cargo.toml
 [package]
 name = "shop"
@@ -38,17 +37,21 @@ impl Speak for Dog {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 change: `shop::<Dog as Speak>::name` "the dog has a name of its own" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 6 changed line(s))
       places: shop::<Dog as Speak>::name
-    ◆ f1 stated: `shop::<Dog as Speak>::name` now overrides the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 1 }` → `fn name(&self) -> u32 { 2 }` [semantics]
+    ◆ f1 stated: `shop::<Dog as Speak>::name` now overrides the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 1 }` → `fn name(&self) -> u32 { 2 }` [semantics · code different]
+        affected bodies: shop::<Dog as Speak>::name
+        control flow: + graph of `<shop::Dog as shop::Speak>::name`: 2 points, 1 arrow (semilla expand --step 0)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 6 changed line(s) is in a fact
+  control flow: 1 body
+    <shop::Dog as shop::Speak>::name (src/lib.rs:10): graph added: 2 points, 1 arrow
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: `shop::<Dog as Speak>::name` now overrides the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 1 }` → `fn name(&self) -> u32 { 2 }` [semantics]
+◆ f1 stated: `shop::<Dog as Speak>::name` now overrides the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 1 }` → `fn name(&self) -> u32 { 2 }` [semantics · code different]
     lines: src/lib.rs:9-13, src/lib.rs:-9

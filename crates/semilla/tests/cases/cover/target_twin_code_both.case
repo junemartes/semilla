@@ -59,7 +59,7 @@ fn one() { assert_eq!(first(&[1]), 1); }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -69,20 +69,58 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::list::first=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::list::first=TEXT'
   tests and benches, filled in by Semilla:
-  ◆ f1 derived: changed literal `0` → `2` at `depot (test "list")::first/tail/index` [semantics]
+  ◆ f1 derived: changed literal `0` → `2` at `depot (test "list")::first/tail/index` [semantics · code different]
+      affected bodies: depot (test "list")::first
+      control flow: ~ check `bounds: v[0]` → `bounds: v[2]` (tests/list.rs:-4, tests/list.rs:4)
+      equivalence: different: for v = &[0]: before returns 0, after panics (bounds) (suggested test `semilla_test_first_2cac5d`)
+      reaches: 2 bodies, no public function: list::one, list::one::{closure#0} (semilla expand --step 0)
       docs of `depot (test "list")::first`, no edit in this step (tests/list.rs:3): `/// The first element.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   other facts, filled in by Semilla:
-  ◆ f2 derived: changed literal `0` → `1` at `depot::list::first/tail/index` [semantics]
+  ◆ f2 derived: changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
+      affected bodies: depot::list::first
+      control flow: ~ check `bounds: v[0]` → `bounds: v[1]` (src/list.rs:-8, src/list.rs:8)
+      equivalence: different: for v = &[0]: before returns 0, after panics (bounds) (suggested test `semilla_test_first_9e69fd`)
       docs of `depot::list::first`, no edit in this step (src/list.rs:7): `/// The first element.`
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::list::first (src/list.rs:8): same structure: 1 changed check; different (for v = &[0]: before returns 0, after panics (bounds); suggested test `semilla_test_first_9e69fd`)
+    list::first (tests/list.rs:4): same structure: 1 changed check; different (for v = &[0]: before returns 0, after panics (bounds); suggested test `semilla_test_first_2cac5d`)
+    reached bodies: 2
+      list::one (tests/list.rs:6): reached through list::first, list::one::{closure#0}, not decided (a value of a type that the check does not model: fn one() { assert_eq!(first(&[1]), 1); } (tests/list.rs:-7))
+      list::one::{closure#0} (tests/list.rs:6): reached through list::one, not decided (a value of a type that the check does not model: fn one() { assert_eq!(first(&[1]), 1); } (tests/list.rs:-7))
+  suggested tests: 2 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_first_9e69fd`: add it to `src/list.rs`, in the module of `depot::list::first` (line 8); run it: `cargo test -p depot semilla_test_first_9e69fd`; also: `cargo test -p depot --release semilla_test_first_9e69fd`
+      #[cfg(test)]
+      mod semilla_test_first_9e69fd {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 0; the new version panics (bounds).
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let v = [0];
+              let got = crate::list::first(&v);
+              assert_eq!(got, 0);
+          }
+      }
+    `semilla_test_first_2cac5d`: add it to `tests/list.rs`, in the module of `list::first` (line 4); run it: `cargo test -p depot semilla_test_first_2cac5d`; also: `cargo test -p depot --release semilla_test_first_2cac5d`
+      #[cfg(test)]
+      mod semilla_test_first_2cac5d {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 0; the new version panics (bounds).
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let v = [0];
+              let got = crate::first(&v);
+              assert_eq!(got, 0);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 2 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: changed literal `0` → `2` at `depot (test "list")::first/tail/index` [semantics]
+◆ f1 derived: changed literal `0` → `2` at `depot (test "list")::first/tail/index` [semantics · code different]
     lines: tests/list.rs:4, tests/list.rs:-4
-◆ f2 derived: changed literal `0` → `1` at `depot::list::first/tail/index` [semantics]
+◆ f2 derived: changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
     lines: src/list.rs:8, src/list.rs:-8

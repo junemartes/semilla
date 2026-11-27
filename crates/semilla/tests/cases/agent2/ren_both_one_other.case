@@ -111,17 +111,21 @@ pub fn guard(v: &mut Vec<u8>) -> usize {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rename Mode State (holds: Semilla derives the rename from the syntax tree)
       places: depot::Mode, depot::State
-    ◆ f1 stated: renamed `depot::Mode` → `depot::State` [rename]
-    ◆ f4 stated: public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename]
+    ◆ f1 stated: renamed `depot::Mode` → `depot::State` [rename · code equal]
+        control flow: + arrow branch `m` (src/lib.rs:23) → return (src/lib.rs:23) (depot::State::Rest)
+        control flow: + arrow branch `m` (src/lib.rs:23) → return (src/lib.rs:23) (depot::State::Busy)
+        control flow: − arrow branch `m` (src/lib.rs:-23) → return (src/lib.rs:-23) (depot::Mode::Idle)
+        control flow: … 1 more (semilla expand --step 0)
+    ◆ f4 stated: public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename · no code]
   ✓ a2 same: rename Mode::Idle State::Rest (holds: Semilla derives the rename from the syntax tree)
       places: depot::Mode::Idle, depot::State::Rest
-    ◆ f2 stated: renamed `depot::Mode::Idle` → `depot::State::Rest` [rename]
-    ◆ f5 stated: public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename]
+    ◆ f2 stated: renamed `depot::Mode::Idle` → `depot::State::Rest` [rename · code equal]
+    ◆ f5 stated: public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename · no code]
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed path `Mode::Idle` → `State::Busy` (f3)
@@ -130,20 +134,36 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::start=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::start=TEXT'
   other facts, filled in by Semilla:
-  ◆ f3 derived: changed path `Mode::Idle` → `State::Busy` at `depot::start/tail` [semantics]
+  ◆ f3 derived: changed path `Mode::Idle` → `State::Busy` at `depot::start/tail` [semantics · code different]
+      affected bodies: depot::start
+      equivalence: different: for each input: before returns Idle, after returns Busy (suggested test `semilla_test_start_171f9c`)
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::mode_name (src/lib.rs:23): graph changes: +2 arrows, −2 arrows; no edit in the body; equivalent (proved by equal MIR)
+    depot::start (src/lib.rs:24): same graph (the edit keeps the control flow); different (for each input: before returns Idle, after returns Busy; suggested test `semilla_test_start_171f9c`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_start_171f9c`: add it to `src/lib.rs`, in the module of `depot::start` (line 24); run it: `cargo test -p depot semilla_test_start_171f9c`; also: `cargo test -p depot --release semilla_test_start_171f9c`
+      #[cfg(test)]
+      mod semilla_test_start_171f9c {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns Idle; the new version returns Busy.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let got = crate::start();
+              assert!(matches!(got, crate::Mode::Idle));
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: renamed `depot::Mode` → `depot::State` [rename]
+◆ f1 stated: renamed `depot::Mode` → `depot::State` [rename · code equal]
     lines: src/lib.rs:22-23, src/lib.rs:-22-23
-◆ f4 stated: public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename]
+◆ f4 stated: public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename · no code]
     no position
-◆ f2 stated: renamed `depot::Mode::Idle` → `depot::State::Rest` [rename]
+◆ f2 stated: renamed `depot::Mode::Idle` → `depot::State::Rest` [rename · code equal]
     no position
-◆ f5 stated: public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename]
+◆ f5 stated: public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename · no code]
     no position
-◆ f3 derived: changed path `Mode::Idle` → `State::Busy` at `depot::start/tail` [semantics]
+◆ f3 derived: changed path `Mode::Idle` → `State::Busy` at `depot::start/tail` [semantics · code different]
     lines: src/lib.rs:24, src/lib.rs:-24

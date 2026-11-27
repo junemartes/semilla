@@ -110,19 +110,25 @@ pub fn guard(v: &mut Vec<u8>) -> usize {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 change: `< Price as Display >::fmt` "the text has a dollar sign" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
       places: depot::money::<Price as fmt::Display>::fmt/tail/args[1]
-    ◆ f1 stated: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics]
+    ◆ f1 stated: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different]
+        affected bodies: depot::money::<Price as fmt::Display>::fmt
+        control flow: ~ construct `{}` (src/lib.rs:-6, src/lib.rs:6): callees −`Arguments::<'_>::new::<2, 1>` +`Arguments::<'_>::new::<4, 1>`
+        equivalence: not decided: an array
+        expansion: `write!(f, "${}", self.0)` at `depot::money::<Price as fmt::Display>::fmt/tail` (src/lib.rs:6): expansion changed: changed literal `"{0}"` → `"${0}"` at `expansion/args[0]/args[0]` [semantics]
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    <depot::money::Price as std::fmt::Display>::fmt (src/lib.rs:6): same structure: 1 changed `construct` point; not decided (an array)
+  expansions: 1 changed, 2 equal
+    `write!(f, "${}", self.0)` at `depot::money::<Price as fmt::Display>::fmt/tail` (src/lib.rs:6): expansion changed: `macro write` (crate core): changed literal `"{0}"` → `"${0}"` at `expansion/args[0]/args[0]` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics]
+◆ f1 stated: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different]
     lines: src/lib.rs:6, src/lib.rs:-6

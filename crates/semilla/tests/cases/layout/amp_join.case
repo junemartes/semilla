@@ -49,22 +49,27 @@ impl Shape for Pair {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: change condition `a & &*b` → `a && *b` (f1)
       in: depot::total
       lines: src/lib.rs:8, src/lib.rs:-8
-      to state it: --change 'depot::total=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::total=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a & &$b => $a && $b'
   other facts, filled in by Semilla:
-  ◆ f1 derived: change condition `a & &*b` → `a && *b` at `depot::total/S1/cond` [semantics]
+  ◆ f1 derived: change condition `a & &*b` → `a && *b` at `depot::total/S1/cond` [semantics · code different]
+      affected bodies: depot::total
+      control flow: + branch `a` (src/lib.rs:8): false → call `str::<impl str>::len`, true → branch `*b`
+      control flow: + branch `*b` (src/lib.rs:8): false → call `str::<impl str>::len`, true → check `overflow: n += 1`
+      control flow: − call `<bool as BitAnd<&bool>>::bitand` (src/lib.rs:-8): return → branch `a & &*b`
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: not decided: a deref of a value that is not a reference (a `Box`, a raw pointer): s (src/lib.rs:-10)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::total (src/lib.rs:6): graph changes: +2 branches, −1 branch, −1 call, +5 arrows, −4 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a deref of a value that is not a reference (a `Box`, a raw pointer): s (src/lib.rs:-10))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: change condition `a & &*b` → `a && *b` at `depot::total/S1/cond` [semantics]
+◆ f1 derived: change condition `a & &*b` → `a && *b` at `depot::total/S1/cond` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:-8

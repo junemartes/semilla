@@ -25,27 +25,25 @@ pub fn last_item() -> u32 { 0 }
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: type of `depot::Count`: `type Count = u32;` → `#[cfg(all())] type Count = u32;` (the public API can change: a different crate can use the item) [declaration]
+  ◆ f1 derived: type of `depot::Count`: `type Count = u32;` → `#[cfg(all())] type Count = u32;` (the public API can change: a different crate can use the item) [declaration · code equal]
+      ! public API: the compare does not cover the code of a different crate
       docs of `depot::Count`, no edit in this step (src/lib.rs:5): `/// The old doc.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   other facts, filled in by Semilla:
-  ◆ f2 derived: attributes of `depot::Count`: added `#[cfg(all())]` [attribute]
+  ◆ f2 derived: attributes of `depot::Count`: added `#[cfg(all())]` [attribute · code equal]
       ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::Count=…'
   cover: each of the 1 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
   ! spotlight: cfg attribute: depot::Count
 run again: semilla step 'the change' --reason 'depot::Count=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::Count=the reason of the test'
-◆ f1 derived: type of `depot::Count`: `type Count = u32;` → `#[cfg(all())] type Count = u32;` (the public API can change: a different crate can use the item) [declaration]
+◆ f1 derived: type of `depot::Count`: `type Count = u32;` → `#[cfg(all())] type Count = u32;` (the public API can change: a different crate can use the item) [declaration · code equal]
     lines: src/lib.rs:6
-◆ f2 derived: attributes of `depot::Count`: added `#[cfg(all())]` [attribute]
+◆ f2 derived: attributes of `depot::Count`: added `#[cfg(all())]` [attribute · code equal]
     lines: src/lib.rs:6

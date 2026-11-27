@@ -1,7 +1,7 @@
 note: The docs of a macro call have the text `macro_rules!`. The item is a call, not a definition: the step has the fact of the call and the spotlight.
 rule-: R57.2-5
-exit: 1
-must_match: changed macro call `table!\( A = 1, \)` → `table!\( A = 2, \)` \(makes items that Semilla cannot list\)
+exit: 0
+must_match: changed macro call `table!\( A = 1, \)` → `table!\( A = 2, \)` \(makes: `pub const A`\)
 must_not_match: changed macro `table`
 must_not_match: added macro `table`
 === both Cargo.toml
@@ -28,24 +28,22 @@ table!(
     A = 2,
 );
 === expected
-exit: 1
-rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro call `table!( A = 1, )` → `table!( A = 2, )` (makes items that Semilla cannot list) [declaration]
-      ✗ spotlight: the macro call `table!( A = 2, )` makes items that Semilla cannot list; it needs a reason: --reason 'depot::table!#0=…'
+  ◆ f1 derived: changed macro call `table!( A = 1, )` → `table!( A = 2, )` (makes: `pub const A`) [declaration · code equal]
+      expansion: `table!( A = 2, )` at `depot::table!#0` (src/lib.rs:6): expansion changed: value of `depot::A` changed: 1 → 2 (the public API can change: a different crate can use the item) [semantics]
       docs of `depot::table!#0`, no edit in this step (src/lib.rs:5): `/// Like macro_rules! of the std.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  expansions: 1 changed
+    `table!( A = 2, )` at `depot::table!#0` (src/lib.rs:6): expansion changed: `macro_rules! table` (src/lib.rs:1): value of `depot::A` changed: 1 → 2 (the public API can change: a different crate can use the item) [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
-run again: semilla step 'the change' --reason 'depot::table!#0=<why>'
+
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::table!#0=the reason of the test'
-◆ f1 derived: changed macro call `table!( A = 1, )` → `table!( A = 2, )` (makes items that Semilla cannot list) [declaration]
+◆ f1 derived: changed macro call `table!( A = 1, )` → `table!( A = 2, )` (makes: `pub const A`) [declaration · code equal]
     lines: src/lib.rs:7, src/lib.rs:-7

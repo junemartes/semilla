@@ -1,6 +1,5 @@
 note: a bench and a test with one crate name `probe` (the bench needs the feature `fast`), each with its own `fn hash`; the step changes only the `hash` of the bench: its line has its own graph change only, with no point of `tests/probe.rs`, and the walk reaches only the callers of the bench (design 61.16)
 rule+: R61.16-1
-option: --compiled
 must_match: probe::hash \(benches/probe\.rs:1\): graph changes
 must_not_match: tests/probe\.rs
 === both Cargo.toml
@@ -72,7 +71,7 @@ fn test_hash() {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   tests and benches, filled in by Semilla:

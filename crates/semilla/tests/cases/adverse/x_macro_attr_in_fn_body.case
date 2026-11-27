@@ -24,24 +24,30 @@ pub fn f() -> u32 {
     A
 }
 === expected
-exit: 0
-accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+exit: 1
+rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: replace macro input, see f1 (f1)
       in: depot::f
       lines: src/lib.rs:5, src/lib.rs:-5
-      to state it: --change 'depot::f=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::f=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::f=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
-  ◆ f1 derived: replace macro input `table!( A = 1, #[cfg(unix)] B = 2, );` → `table!( A = 1, #[cfg(windows)] B = 2, );` at `depot::f/S0` [macro]
+  ◆ f1 derived: replace macro input `table!( A = 1, #[cfg(unix)] B = 2, );` → `table!( A = 1, #[cfg(windows)] B = 2, );` at `depot::f/S0` [macro · no compare]
+      equivalence: equivalent (proved by equal MIR)
+      expansion: `table!( A = 1, #[cfg(windows)] B = 2, )` at `depot::f/S0` (src/lib.rs:3): expansion changed: deleted statement `pub const B: u32 = 2;` at `expansion/S1` [semantics]
+      note: this body uses `#[cfg(unix)]`, `#[cfg(windows)]`, which Semilla did not check (`depot::f`); no compare: no checked configuration compiles `depot::f`
+      ✗ spotlight: inactive code: Semilla cannot see if a checked configuration compiles the changed code (the input of `table!` at src/lib.rs:3 has a `cfg` condition), so Semilla did not compare the edit; it needs a reason: --reason 'depot::f/S0=…'
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::f (src/lib.rs:2): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
+  expansions: 1 changed
+    `table!( A = 1, #[cfg(windows)] B = 2, )` at `depot::f/S0` (src/lib.rs:3): expansion changed: `macro_rules! table` (src/lib.rs:1): deleted statement `pub const B: u32 = 2;` at `expansion/S1` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-
+run again: semilla step 'the change' --reason 'depot::f=<why>'
 === positions
-◆ f1 derived: replace macro input `table!( A = 1, #[cfg(unix)] B = 2, );` → `table!( A = 1, #[cfg(windows)] B = 2, );` at `depot::f/S0` [macro]
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::f=the reason of the test'
+◆ f1 derived: replace macro input `table!( A = 1, #[cfg(unix)] B = 2, );` → `table!( A = 1, #[cfg(windows)] B = 2, );` at `depot::f/S0` [macro · no compare]
     lines: src/lib.rs:5, src/lib.rs:-5

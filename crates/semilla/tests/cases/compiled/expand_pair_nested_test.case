@@ -5,7 +5,6 @@ must_not_match: \((tests|examples|benches)/sets\.rs:-?\d+\): expansion (added|re
 must_match: `bump!\(v\)` at `shop::keep/tail` \(src/lib\.rs:4\): expansion added
 must_match: `bump!\(v\)` at `shop::pick/tail` \(src/lib\.rs:-3\): expansion removed
 must_match: \n      expansion: `bump!\(v\)` at `shop::base/tail` \(src/lib\.rs:5\): expansion changed
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -73,7 +72,7 @@ fn main() {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 4 not mapped (no intent file; the full text of the step lists each node)
   not stated: 2 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states

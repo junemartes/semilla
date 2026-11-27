@@ -35,22 +35,19 @@ fn g() {}
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: -x.txt: changed [file]
-  ◆ f2 derived: src/--help.rs: changed [file]
+  ◆ f1 derived: -x.txt: changed [file · no code]
+  ◆ f2 derived: src/--help.rs: changed [file · no code]
       ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/--help.rs:=…'
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'src/--help.rs:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/--help.rs:=the reason of the test'
-◆ f1 derived: -x.txt: changed [file]
+◆ f1 derived: -x.txt: changed [file · no code]
     lines: -x.txt:1, -x.txt:-1
-◆ f2 derived: src/--help.rs: changed [file]
+◆ f2 derived: src/--help.rs: changed [file · no code]
     lines: src/--help.rs:1, src/--help.rs:-1

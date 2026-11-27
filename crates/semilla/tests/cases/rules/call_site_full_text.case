@@ -54,7 +54,7 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -64,17 +64,44 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::uses_limit=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::uses_limit=TEXT'
   declarations, filled in by Semilla:
-  ◆ f1 derived: parameter of `depot::wrap` added: `by: u32` (the public API can change: a different crate can use the item) [declaration]
+  ◆ f1 derived: parameter of `depot::wrap` added: `by: u32` (the public API can change: a different crate can use the item) [declaration · code different]
       1 site(s): add the argument `limit () * 3` (in depot::both)
+      affected bodies: depot::both, depot::wrap
+      control flow: + call `limit` (src/lib.rs:8): return → check `overflow: limit() * 3`
+      control flow: + check `overflow: limit() * 3` (src/lib.rs:8): ok → call `wrap`, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:8)
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: equivalent in dev (proved by SMT after inlining `depot::limit`, `depot::wrap`); equivalent in release (proved by SMT after inlining `depot::wrap`)
+      ! public API: the compare does not cover the code of a different crate
   other facts, filled in by Semilla:
-  ◆ f2 derived: added operand `+ 1` at `depot::uses_limit/tail` [semantics]
+  ◆ f2 derived: added operand `+ 1` at `depot::uses_limit/tail` [semantics · code different]
+      affected bodies: depot::uses_limit
+      control flow: + check `overflow: limit() + limit() + 1` (src/lib.rs:12): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:12)
+      control flow: + arrow check `overflow: limit() + limit()` (src/lib.rs:12) → check `overflow: limit() + limit() + 1` (src/lib.rs:12) (ok)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: different: for each input: before returns 20, after returns 21 (suggested test `semilla_test_uses_limit_49291a`)
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::both (src/lib.rs:8): graph changes: +1 call, +1 check, +1 panic, 1 changed check, +4 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent in dev (proved by SMT after inlining `depot::limit`, `depot::wrap`); equivalent in release (proved by SMT after inlining `depot::wrap`)
+    depot::uses_limit (src/lib.rs:12): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for each input: before returns 20, after returns 21; suggested test `semilla_test_uses_limit_49291a`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_uses_limit_49291a`: add it to `src/lib.rs`, in the module of `depot::uses_limit` (line 12); run it: `cargo test -p depot semilla_test_uses_limit_49291a`; also: `cargo test -p depot --release semilla_test_uses_limit_49291a`
+      #[cfg(test)]
+      mod semilla_test_uses_limit_49291a {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 20; the new version returns 21.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let got = crate::uses_limit();
+              assert_eq!(got, 20);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: parameter of `depot::wrap` added: `by: u32` (the public API can change: a different crate can use the item) [declaration]
+◆ f1 derived: parameter of `depot::wrap` added: `by: u32` (the public API can change: a different crate can use the item) [declaration · code different]
     lines: src/lib.rs:8-9, src/lib.rs:-8-9
-◆ f2 derived: added operand `+ 1` at `depot::uses_limit/tail` [semantics]
+◆ f2 derived: added operand `+ 1` at `depot::uses_limit/tail` [semantics · code different]
     lines: src/lib.rs:12, src/lib.rs:-12

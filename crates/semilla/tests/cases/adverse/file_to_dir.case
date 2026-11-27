@@ -31,22 +31,19 @@ a note
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: notes: removed [file]
+  ◆ f1 derived: notes: removed [file · no code]
       ✗ spotlight: a file that is not on the allow list of files that no tool reads to build or to test (docs, license texts, images); it needs a reason: --reason 'notes:=…'
-  ◆ f2 derived: notes/one.txt: added [file]
+  ◆ f2 derived: notes/one.txt: added [file · no code]
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'notes:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'notes:=the reason of the test'
-◆ f1 derived: notes: removed [file]
+◆ f1 derived: notes: removed [file · no code]
     lines: notes:-1
-◆ f2 derived: notes/one.txt: added [file]
+◆ f2 derived: notes/one.txt: added [file · no code]
     lines: notes/one.txt:1

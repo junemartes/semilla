@@ -42,28 +42,39 @@ pub fn total(v: &[u32], live: bool) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 3 places: 3 different edits (f3, f1, f2)
       in: depot::total
       lines: src/lib.rs:11-12, src/lib.rs:14, src/lib.rs:-11-15
-      to state it: --change 'depot::total=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::total=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
-  ◆ f1 derived: moved statement `for x in v { n += x; }` from `depot::total/S1/then/S0` to `depot::total/S1` [semantics]
-  ◆ f2 derived: moved statement `n += 1` from `depot::total/S1/then/S1` to `depot::total/S2` [semantics]
-  ◆ f3 derived: deleted statement `if live { for x in v { n += x; } n += 1; }` (each inner statement is a moved statement of the body) at `depot::total/S1` [semantics]
+  ◆ f1 derived: moved statement `for x in v { n += x; }` from `depot::total/S1/then/S0` to `depot::total/S1` [semantics · code different]
+      affected bodies: depot::total (with 1 other edit of this body)
+      control flow: − branch `live` (src/lib.rs:-11): false → return, true → for `v`
+      control flow: + arrow entry (src/lib.rs:9) → for `v` (src/lib.rs:11)
+      control flow: − arrow entry (src/lib.rs:-9) → branch `live` (src/lib.rs:-11)
+      equivalence: equivalent alone (proved by equal MIR); the body: not decided: a call that returns a reference (to a value): v (src/lib.rs:-12) (the same line for f2)
+  ◆ f3 derived: deleted statement `if live { for x in v { n += x; } n += 1; }` (each inner statement is a moved statement of the body) at `depot::total/S1` [semantics · code different]
+      affected bodies: depot::total (with 1 other edit of this body)
+      control flow: − branch `live` (src/lib.rs:-11): false → return, true → for `v`
+      control flow: − arrow entry (src/lib.rs:-9) → branch `live` (src/lib.rs:-11)
+      equivalence: not decided alone (the body has 3 edits; an edit of the fact adds or removes a node); the body: not decided: a call that returns a reference (to a value): v (src/lib.rs:-12)
+  ◆ f2 derived: moved statement `n += 1` from `depot::total/S1/then/S1` to `depot::total/S2` [semantics · code equal]
+      control flow: − branch `live` (src/lib.rs:-11): false → return, true → for `v`
+      control flow: − arrow entry (src/lib.rs:-9) → branch `live` (src/lib.rs:-11)
+      equivalence: the same line as f1
   cover: each of the 8 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::total (src/lib.rs:9): graph changes: −1 branch, +1 arrow, −3 arrows; not decided (a call that returns a reference (to a value): v (src/lib.rs:-12))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: moved statement `for x in v { n += x; }` from `depot::total/S1/then/S0` to `depot::total/S1` [semantics]
+◆ f1 derived: moved statement `for x in v { n += x; }` from `depot::total/S1/then/S0` to `depot::total/S1` [semantics · code different]
     lines: src/lib.rs:11-12, src/lib.rs:14, src/lib.rs:-11-15
-◆ f2 derived: moved statement `n += 1` from `depot::total/S1/then/S1` to `depot::total/S2` [semantics]
-    lines: src/lib.rs:14, src/lib.rs:-11-15
-◆ f3 derived: deleted statement `if live { for x in v { n += x; } n += 1; }` (each inner statement is a moved statement of the body) at `depot::total/S1` [semantics]
+◆ f3 derived: deleted statement `if live { for x in v { n += x; } n += 1; }` (each inner statement is a moved statement of the body) at `depot::total/S1` [semantics · code different]
     lines: src/lib.rs:-11-15
+◆ f2 derived: moved statement `n += 1` from `depot::total/S1/then/S1` to `depot::total/S2` [semantics · code equal]
+    lines: src/lib.rs:14, src/lib.rs:-11-15

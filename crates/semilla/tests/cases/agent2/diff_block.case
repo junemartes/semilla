@@ -109,17 +109,16 @@ pub fn guard(v: &mut Vec<u8>) -> usize {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed item, see f1 (f1)
       in: depot::guard
       lines: src/lib.rs:41, src/lib.rs:-41
-      to state it: --change 'depot::guard=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::guard=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::guard=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed item: [1] (line diff: `-` old, `+` new) at `depot::guard/S1` [semantics]
+  ◆ f1 derived: changed item: [1] (line diff: `-` old, `+` new) at `depot::guard/S1` [semantics · code different]
         [1]   impl Drop for G<'_> {
                   fn drop(&mut self) {
                       let mut index = 0;
@@ -133,11 +132,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
                       }
                   }
               }
+      affected bodies: depot::guard
+      equivalence: `<depot::guard::G<'_> as std::ops::Drop>::drop`: different: for self = &G { a reference } (a bounded run of at most 4 loop iterations): before returns () with `**self.0` = [0], after returns () with `**self.0` = [1] (no suggested test: a `&mut` reference inside an input: a test cannot see it)
+      equivalence: `depot::guard`: equivalent (proved by equal MIR)
+      equivalence: `depot::guard::G struct G<'a>`: equivalent (proved by equal MIR)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 3 bodies
+    <depot::guard::G<'_> as std::ops::Drop>::drop (src/lib.rs:35): same graph (the edit keeps the control flow); different (for self = &G { a reference } (a bounded run of at most 4 loop iterations): before returns () with `**self.0` = [0], after returns () with `**self.0` = [1]; no suggested test: a `&mut` reference inside an input: a test cannot see it)
+    depot::guard (src/lib.rs:32): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
+    depot::guard::G struct G<'a> (src/lib.rs:33): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed item: [1] (line diff: `-` old, `+` new) at `depot::guard/S1` [semantics]
+◆ f1 derived: changed item: [1] (line diff: `-` old, `+` new) at `depot::guard/S1` [semantics · code different]
     lines: src/lib.rs:41, src/lib.rs:-41

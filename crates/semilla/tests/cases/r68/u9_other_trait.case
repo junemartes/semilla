@@ -2,7 +2,6 @@ note: U9: `impl std::ops::Add for X` becomes `impl core::ops::Sub for X`: a diff
 rule-: R70.2-1
 must_match: trait impl `<X as std::ops::Add>` removed
 must_match: trait impl `<X as core::ops::Sub>` added
-build_check: on
 === both Cargo.toml
 [package]
 name = "shop"
@@ -29,17 +28,26 @@ impl core::ops::Sub for X {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 6 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: trait impl `<X as std::ops::Add>` removed with: `type Output`, `fn add` (the public API can change: a different crate can use the item) [removed]
-  ◆ f2 derived: trait impl `<X as core::ops::Sub>` added with: `type Output`, `fn sub` (the public API can change: a different crate can use the item) [added]
+  ◆ f1 derived: trait impl `<X as std::ops::Add>` removed with: `type Output`, `fn add` (the public API can change: a different crate can use the item) [removed · code different]
+      affected bodies: shop::<X as std::ops::Add>::add
+      control flow: − graph of `<shop::X as std::ops::Add>::add`: 4 points, 3 arrows (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  ◆ f2 derived: trait impl `<X as core::ops::Sub>` added with: `type Output`, `fn sub` (the public API can change: a different crate can use the item) [added · code different]
+      affected bodies: shop::<X as core::ops::Sub>::sub
+      control flow: + graph of `<shop::X as std::ops::Sub>::sub`: 4 points, 3 arrows (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
   cover: each of the 6 changed line(s) is in a fact
+  control flow: 2 bodies
+    <shop::X as std::ops::Add>::add (src/lib.rs:5): graph removed: 4 points, 3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0)
+    <shop::X as std::ops::Sub>::sub (src/lib.rs:5): graph added: 4 points, 3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: trait impl `<X as std::ops::Add>` removed with: `type Output`, `fn add` (the public API can change: a different crate can use the item) [removed]
+◆ f1 derived: trait impl `<X as std::ops::Add>` removed with: `type Output`, `fn add` (the public API can change: a different crate can use the item) [removed · code different]
     lines: src/lib.rs:-3, src/lib.rs:-5-6
-◆ f2 derived: trait impl `<X as core::ops::Sub>` added with: `type Output`, `fn sub` (the public API can change: a different crate can use the item) [added]
+◆ f2 derived: trait impl `<X as core::ops::Sub>` added with: `type Output`, `fn sub` (the public API can change: a different crate can use the item) [added · code different]
     lines: src/lib.rs:3, src/lib.rs:5-6

@@ -126,38 +126,63 @@ pub fn alpha(v: &[u32]) -> u32 {
     n
 }
 === expected
-exit: 0
-accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+exit: 1
+rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 6 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f3, f4)
       in: depot::<Source as Draw>::sample
       lines: src/lib.rs:14-26, src/lib.rs:28, src/lib.rs:-14
-      to state it: --change 'depot::<Source as Draw>::sample=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::<Source as Draw>::sample=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::<Source as Draw>::sample=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: trait impl `<Other as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
-  ◆ f2 derived: trait impl `<Third as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+  ◆ f1 derived: trait impl `<Other as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added · code different]
+      affected bodies: depot::<Other as Draw>::sample
+      control flow: + graph of `<depot::Other as depot::Draw<depot::Small>>::sample`: 3 points, 2 arrows (semilla expand --step 0)
+      control flow: + graph of `<depot::Other as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); }`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:41); no checked configuration compiles the changed code (`#[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]` at src/lib.rs:45), so Semilla did not compare the edit; it needs a reason: --reason 'depot::impl <Other as Draw>=…'
+  ◆ f2 derived: trait impl `<Third as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added · code different]
+      affected bodies: depot::<Third as Draw>::sample
+      control flow: + graph of `<depot::Third as depot::Draw<depot::Small>>::sample`: 3 points, 2 arrows (semilla expand --step 0)
+      control flow: + graph of `<depot::Third as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); }`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
   other facts, filled in by Semilla:
-  ◆ f3 derived: deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics]
-  ◆ f4 derived: added `const_block` `const { assert!(true); }` at `depot::<Source as Draw>::sample/S0` [semantics]
+  ◆ f3 derived: deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics · code different]
+      affected bodies: depot::<Source as Draw>::sample (with 1 other edit of this body)
+      control flow: − call `check` (src/lib.rs:-14): return → call `Small::new`
+      control flow: − arrow entry (src/lib.rs:-13) → call `check` (src/lib.rs:-14)
+      equivalence: equivalent (proved by SMT)
+  ◆ f4 derived: added `const_block` `const { assert!(true); }` at `depot::<Source as Draw>::sample/S0` [semantics · code different]
+      affected bodies: depot::<Source as Draw>::sample (with 1 other edit of this body)
+      control flow: + arrow entry (src/lib.rs:13) → call `Small::new` (src/lib.rs:28)
+      control flow: + graph of `<depot::Source as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); }`: 2 points, 1 arrow (semilla expand --step 0)
+      equivalence: equivalent (proved by SMT)
+      ✗ spotlight of f3, f4: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:18); no checked configuration compiles the changed code (`#[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]` at src/lib.rs:22), so Semilla did not compare the edit; it needs a reason: --reason 'depot::<Source as Draw>::sample/S0=…'
   cover: each of the 50 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 6 bodies
+    <depot::Other as depot::Draw<depot::Small>>::sample (src/lib.rs:34): graph added: 3 points, 2 arrows
+    <depot::Other as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); } (src/lib.rs:35): graph added: 2 points, 1 arrow
+    <depot::Source as depot::Draw<depot::Small>>::sample (src/lib.rs:13): graph changes: −1 call, +1 arrow, −2 arrows; equivalent (proved by SMT)
+    <depot::Source as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); } (src/lib.rs:14): graph added: 2 points, 1 arrow
+    <depot::Third as depot::Draw<depot::Small>>::sample (src/lib.rs:57): graph added: 3 points, 2 arrows
+    <depot::Third as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); } (src/lib.rs:58): graph added: 2 points, 1 arrow
+  expansions: 3 added
+    3 calls: expansion added: `macro assert` (crate core): 1 line(s) of code; the step adds the call or its input: `depot::<Source as Draw>::sample/S0/body/S0`, `depot::<Other as Draw>::sample/S0/body/S0`, `depot::<Third as Draw>::sample/S0/body/S0` (semilla expand --step 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::<Other as Draw>::sample
   ! spotlight: cfg attribute: depot::<Third as Draw>::sample
   ! spotlight: cfg attribute: depot::impl <Other as Draw>
   ! spotlight: cfg attribute: depot::impl <Third as Draw>
-
+run again: semilla step 'the change' --reason 'depot::impl <Other as Draw>=<why>' --reason 'depot::<Source as Draw>::sample=<why>'
 === positions
-◆ f1 derived: trait impl `<Other as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::impl <Other as Draw>=the reason of the test' --reason 'depot::<Source as Draw>::sample=the reason of the test'
+◆ f1 derived: trait impl `<Other as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added · code different]
     lines: src/lib.rs:27, src/lib.rs:29-54
-◆ f2 derived: trait impl `<Third as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+◆ f2 derived: trait impl `<Third as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added · code different]
     lines: src/lib.rs:55-62
-◆ f3 derived: deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics]
+◆ f3 derived: deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics · code different]
     lines: src/lib.rs:-14
-◆ f4 derived: added `const_block` `const { assert!(true); }` at `depot::<Source as Draw>::sample/S0` [semantics]
+◆ f4 derived: added `const_block` `const { assert!(true); }` at `depot::<Source as Draw>::sample/S0` [semantics · code different]
     lines: src/lib.rs:14-26, src/lib.rs:28

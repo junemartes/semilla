@@ -1,6 +1,5 @@
 note: batch 13a: a step with 5 single edits in one body has 10 variants (2 configurations); at most 8 build, in the order of R66.11-3 (each fact in the first configuration first), so 2 facts are not checked alone in `release`; a count of builds, the same in each run
 rule+: R77.2-2
-option: --compiled
 must_match: not checked alone in release \(the budget of the step\)
 === both Cargo.toml
 [package]
@@ -26,7 +25,7 @@ pub fn f(x: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 5 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 5 place(s) that can change the behavior of existing code and that no fact of the agent states

@@ -1,11 +1,12 @@
-//! The shared name lists of the default mode (batch 10n, design 65.4).
+//! The shared name lists of the checks with no compiler data (batch 10n, design 65.4).
 //!
-//! The default mode (no `--compiled`) has no data of the compiler: it reads the text of the
-//! source. Some of its rules need the meaning of a name that the language or the standard
-//! library gives: a macro of the standard prelude, a built-in attribute, a trait that the
-//! compiler calls with no call in the text. Each such list is a fact of the language or of the
-//! tool chain, and it is here, one list for each concept. Before batch 10n, six macro lists in
-//! five files had different contents.
+//! Phase 1 of a step and the syntax-only check (R83.1-3) have no data of the compiler: they read
+//! the text of the source. Before design 83 this was the default mode, and the registry of the
+//! name lists keeps the kind name `default mode`. Some of the rules need the meaning of a name
+//! that the language or the standard library gives: a macro of the standard prelude, a built-in
+//! attribute, a trait that the compiler calls with no call in the text. Each such list is a fact
+//! of the language or of the tool chain, and it is here, one list for each concept. Before batch
+//! 10n, six macro lists in five files had different contents.
 //!
 //! Each list of the source (`&[&str]`, `[&str; N]`, and each `matches!` of three or more
 //! names) has an entry in the registry `docs/name-lists.md` with its reason; the test

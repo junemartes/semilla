@@ -1,6 +1,5 @@
 note: batch 10n2, part A (the decision of the user, 2026-11-25: the order of the derives does not change a derived impl): a new order of the derives of a type; each expansion of the type has the same text in the two trees, so the fact has no spotlight and no expansion line
 rule-: R65.9-2
-build_check: on
 must_match: attributes of `shop::Point`
 must_not_match: spotlight
 must_not_match: expansion changed|expansion added|expansion removed
@@ -24,14 +23,14 @@ pub struct Point {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: attributes of `shop::Point`: changed `#[derive(Debug, Clone, PartialEq)]` → `#[derive(Clone, PartialEq, Debug)]` [attribute]
+  ◆ f1 derived: attributes of `shop::Point`: changed `#[derive(Debug, Clone, PartialEq)]` → `#[derive(Clone, PartialEq, Debug)]` [attribute · code equal]
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: attributes of `shop::Point`: changed `#[derive(Debug, Clone, PartialEq)]` → `#[derive(Clone, PartialEq, Debug)]` [attribute]
+◆ f1 derived: attributes of `shop::Point`: changed `#[derive(Debug, Clone, PartialEq)]` → `#[derive(Clone, PartialEq, Debug)]` [attribute · code equal]
     lines: src/lib.rs:1, src/lib.rs:-1

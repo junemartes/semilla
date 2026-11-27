@@ -1,6 +1,5 @@
 note: U8, now a case of R71.3-1 (batch 11c): a closure is inlined; the compiled check does not decide if the behavior changes: the gap line offers the two forms in neutral words, with the concrete pattern of the edit that Semilla has (`get($a) => v[$a]`), and the one command of the step does not choose `--change`
 rule+: R71.3-1
-option: --compiled
 must_match: to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, --same 'rewrite get\(\$a\) => v\[\$a\]', and a `--same` fact \(rename, move, or rewrite\) that explains each other edit
 must_not_match: to state them
 === both Cargo.toml
@@ -20,7 +19,7 @@ pub fn pick(v: &[u32], i: usize) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states

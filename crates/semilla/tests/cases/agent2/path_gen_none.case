@@ -112,7 +112,6 @@ pub fn guard(v: &mut Vec<u8>) -> usize {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ fact a1 of the agent is false: `--change '<Price as Scale>::scale=one more'`
 
@@ -128,14 +127,35 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::money::<Price as Scale>::scale#0=TEXT'
   to state them, add these options to the command of the step: --change 'depot::money::<Price as Scale>::scale#0=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed expression `self.0 * by` → `self.0 * by + 1` at `depot::money::<Price as Scale>::scale#0/tail/args[0]` [semantics]
+  ◆ f1 derived: changed expression `self.0 * by` → `self.0 * by + 1` at `depot::money::<Price as Scale>::scale#0/tail/args[0]` [semantics · code different]
+      affected bodies: depot::money::<Price as Scale>::scale#0
+      control flow: + check `overflow: self.0 * by + 1` (src/lib.rs:11): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:11)
+      control flow: + arrow check `overflow: self.0 * by` (src/lib.rs:11) → check `overflow: self.0 * by + 1` (src/lib.rs:11) (ok)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: different: for self = &Price { 0 }, by = 0: before returns Price { 0 }, after returns Price { 1 } (suggested test `semilla_test_scale_fb53a7`)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    <depot::money::Price as depot::money::Scale<u64>>::scale (src/lib.rs:11): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for self = &Price { 0 }, by = 0: before returns Price { 0 }, after returns Price { 1 }; suggested test `semilla_test_scale_fb53a7`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_scale_fb53a7`: add it to `src/lib.rs`, in the module of `<depot::money::Price as depot::money::Scale<u64>>::scale` (line 11); run it: `cargo test -p depot semilla_test_scale_fb53a7`; also: `cargo test -p depot --release semilla_test_scale_fb53a7`
+      #[cfg(test)]
+      mod semilla_test_scale_fb53a7 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns Price { 0 }; the new version returns Price { 1 }.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let arg1 = crate::money::Price(0);
+              let by = 0;
+              let got = <crate::money::Price as crate::money::Scale<u64>>::scale(&arg1, by);
+              assert!(matches!(got, crate::money::Price(0)));
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --change 'depot::money::<Price as Scale>::scale#0=the text of the test'
-◆ f1 stated: changed expression `self.0 * by` → `self.0 * by + 1` at `depot::money::<Price as Scale>::scale#0/tail/args[0]` [semantics]
+◆ f1 stated: changed expression `self.0 * by` → `self.0 * by + 1` at `depot::money::<Price as Scale>::scale#0/tail/args[0]` [semantics · code different]
     lines: src/lib.rs:11, src/lib.rs:-11

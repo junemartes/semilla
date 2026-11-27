@@ -1,6 +1,5 @@
 note: U7, now a case of R71.2-1 (batch 11c): an index check moves out of a closure into the body: the check and its panic are moves between the bodies of the item, not new points; the counts of each body leave them out, and the lines name the other body
 rule+: R71.2-1
-option: --compiled
 must_match: shop::pick \(src/lib.rs:1\): graph changes: −1 call, \+3 arrows, −2 arrows; moved in from `shop::pick::\{closure#0\}`: 1 check, 1 panic;
 must_match: graph removed: 4 points, 3 arrows; moved out to `shop::pick`: 1 check, 1 panic
 must_match: control flow: moved check `bounds: v\[i\]` \(src/lib.rs:2\) from `shop::pick::\{closure#0\}`
@@ -23,7 +22,7 @@ pub fn pick(v: &[u32], i: usize) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states

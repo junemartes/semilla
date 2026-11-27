@@ -41,20 +41,15 @@ pub fn helper(a: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: moved `depot::unix::helper` → `depot::util::helper` [move]
-  ◆ f2 derived: public API: a different crate can no longer use `depot::unix::helper` [move]
+  ◆ f1 derived: moved `depot::unix::helper` → `depot::util::helper` [move · code equal]
   cover: each of the 8 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: module of a macro input: `depot::unix` (`src/unix.rs`) has its line `mod unix;` in the input of the macro call `depot::pick!#0` (`src/lib.rs:6`); Semilla does not expand the macro, so it does not know if the build has this module
 
 === positions
-◆ f1 derived: moved `depot::unix::helper` → `depot::util::helper` [move]
+◆ f1 derived: moved `depot::unix::helper` → `depot::util::helper` [move · code equal]
     lines: src/lib.rs:8, src/unix.rs:-4-7, src/util.rs:1-3
-◆ f2 derived: public API: a different crate can no longer use `depot::unix::helper` [move]
-    no position

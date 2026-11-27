@@ -62,9 +62,9 @@ const RULE_USE: &str = "R79.3-5";
 const RULE_CONTAINER: &str = "R79.3-6";
 const RULE_REQUEST: &str = "R79.5-1";
 
-/// The cause of a step with intent files and no compiled claims (the default mode with no warm
-/// check of `semilla intent check` for its two trees).
-pub const NO_COMPILED: &str = "the anchors come from the claims that rustc compiles: run `semilla intent check` for the two trees of the step, or the step with `--compiled`";
+/// The cause of a step with intent files and no compiled claims (phase 1 of a step: the compiled
+/// check gives them in phase 2).
+pub const NO_COMPILED: &str = "the anchors come from the claims that rustc compiles: the compiled check of the step gives them (phase 2)";
 
 /// [R79.1-1] True for an edit of a node of a syntax tree. A file edit (a file that the loader
 /// does not parse: a file that is not Rust, a binary file, a build script, a new mode) has no

@@ -1,6 +1,5 @@
 note: batch 11c, G7: a test gets `#[ignore]`: the expansion of `#[test]` changes in a value that does not move with the call (`ignore: false` → `ignore: true`), so the line of the compare stays under the fact of the edit and in the step section
 rule-: R71.1-1
-build_check: on
 must_match: expansion: `#\[test\]` at `shop::tests::two` \(src/lib.rs:[0-9]+\): expansion changed: .*false.*true
 must_not_match: 2 calls: expansion changed
 === both Cargo.toml
@@ -46,12 +45,12 @@ mod tests {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   tests and benches, filled in by Semilla:
-  ◆ f1 derived: attributes of `shop::tests::two`: added `#[ignore]` [attribute]
+  ◆ f1 derived: attributes of `shop::tests::two`: added `#[ignore]` [attribute · code different]
+      ! the compiled code changes: shop::tests::two
       expansion: `#[test]` at `shop::tests::two` (src/lib.rs:12): expansion changed: changed code `false,\n ignore_message: ::core::option::Option::None,\n source_file: "src/lib.rs",\n start_line: 13usize,\n start_col: 8usize,\n end_line: 13usize` → `true,\n ignore_message: ::core::option::Option::None,\n source_file: "src/lib.rs",\n start_line: 14usize,\n start_col: 8usize,\n end_line: 14usize`
       ✗ spotlight: a changed attribute that can change the behavior: `ignore`; it needs a reason: --reason 'shop::tests::two=…'
   cover: each of the 1 changed line(s) is in a fact
@@ -61,5 +60,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'shop::tests::two=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::tests::two=the reason of the test'
-◆ f1 derived: attributes of `shop::tests::two`: added `#[ignore]` [attribute]
+◆ f1 derived: attributes of `shop::tests::two`: added `#[ignore]` [attribute · code different]
     lines: src/lib.rs:13

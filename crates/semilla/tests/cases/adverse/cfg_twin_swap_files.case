@@ -33,10 +33,10 @@ pub fn value() -> u32 {
     k + 1
 }
 === expected
-exit: 0
-accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+exit: 1
+rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f1)
@@ -47,17 +47,55 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: depot::imp#1::value
       lines: src/imp_win.rs:3, src/imp_win.rs:-3
       to state it: --change 'depot::imp#1::value=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::imp#0::value=TEXT' --change 'depot::imp#1::value=TEXT'
+  to state them, add these options to the command of the step: --change 'depot::imp#0::value=TEXT' --change 'depot::imp#1::value=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `1` → `2` at `depot::imp#0::value/tail/rhs` [semantics]
-  ◆ f2 derived: changed literal `2` → `1` at `depot::imp#1::value/tail/rhs` [semantics]
+  ◆ f1 derived: changed literal `1` → `2` at `depot::imp#0::value/tail/rhs` [semantics · code different]
+      affected bodies: depot::imp#0::value
+      equivalence: different: for each input: before returns 5, after returns 6 (suggested test `semilla_test_value_ba4092`)
+      reaches: 1 public function: depot::top (semilla expand --step 0)
+  ◆ f2 derived: changed literal `2` → `1` at `depot::imp#1::value/tail/rhs` [semantics · no compare]
+      note: no compare: no checked configuration compiles `depot::imp#1::value`
+  ◆ f3 derived: src/imp_win.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
+      note: no compare: no checked configuration compiles `src/imp_win.rs`
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/imp_win.rs`: `#[cfg(windows)]` at `depot::imp#1`), so Semilla did not compare the edit; it needs a reason: --reason 'src/imp_win.rs=…'
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::imp::value (src/imp_unix.rs:1): same graph (the edit keeps the control flow); different (for each input: before returns 5, after returns 6; suggested test `semilla_test_value_ba4092`)
+    reached bodies: 1
+      depot::top (src/lib.rs:8): different through depot::imp::value: for each input: before returns 5, after returns 6 (suggested test `semilla_test_top_abf658`)
+  suggested tests: 2 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_value_ba4092`: add it to `src/imp_unix.rs`, in the module of `depot::imp::value` (line 1); run it: `cargo test -p depot semilla_test_value_ba4092`; also: `cargo test -p depot --release semilla_test_value_ba4092`
+      #[cfg(test)]
+      mod semilla_test_value_ba4092 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 5; the new version returns 6.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let got = crate::imp::value();
+              assert_eq!(got, 5);
+          }
+      }
+    `semilla_test_top_abf658`: add it to `src/lib.rs`, in the module of `depot::top` (line 8); run it: `cargo test -p depot semilla_test_top_abf658`; also: `cargo test -p depot --release semilla_test_top_abf658`
+      #[cfg(test)]
+      mod semilla_test_top_abf658 {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 5; the new version returns 6.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let got = crate::top();
+              assert_eq!(got, 5);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-
+  ! spotlight: inactive code: src/imp_win.rs (no checked unit reads the file)
+run again: semilla step 'the change' --reason 'src/imp_win.rs=<why>'
 === positions
-◆ f1 derived: changed literal `1` → `2` at `depot::imp#0::value/tail/rhs` [semantics]
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/imp_win.rs=the reason of the test' --change 'depot::imp#0::value=the text of the test' --change 'depot::imp#1::value=the text of the test'
+◆ f1 stated: changed literal `1` → `2` at `depot::imp#0::value/tail/rhs` [semantics · code different]
     lines: src/imp_unix.rs:3, src/imp_unix.rs:-3
-◆ f2 derived: changed literal `2` → `1` at `depot::imp#1::value/tail/rhs` [semantics]
+◆ f2 stated: changed literal `2` → `1` at `depot::imp#1::value/tail/rhs` [semantics · no compare]
     lines: src/imp_win.rs:3, src/imp_win.rs:-3
+◆ f3 derived: src/imp_win.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
+    no position

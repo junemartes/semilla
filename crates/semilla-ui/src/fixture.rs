@@ -57,7 +57,7 @@ fn step(index: usize, intent: &str, claims: Vec<Claim>) -> Step {
         tree_before: format!("{:040x}", index * 0x1111),
         tree_after: format!("{:040x}", (index + 1) * 0x1111),
         reasons: Default::default(),
-        compiled: true,
+        syntax_only: false,
         build_check: None,
         agent: Default::default(),
         tags: Vec::new(),

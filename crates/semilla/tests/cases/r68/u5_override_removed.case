@@ -3,7 +3,6 @@ rule+: R70.2-1
 must_match: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name\(&self\) -> u32 \{ 2 \}` → `fn name\(&self\) -> u32 \{ 1 \}`
 must_match: to state it: --change 'shop::<Dog as Speak>::name=TEXT'
 must_not_match: removed `shop::<Dog as Speak>::name`
-build_check: on
 === both Cargo.toml
 [package]
 name = "shop"
@@ -36,7 +35,7 @@ impl Speak for Dog {}
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -46,10 +45,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'shop::<Dog as Speak>::name=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::<Dog as Speak>::name=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 1 }` [semantics]
+  ◆ f1 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 1 }` [semantics · code different]
+      affected bodies: shop::<Dog as Speak>::name
+      control flow: − graph of `<shop::Dog as shop::Speak>::name`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 6 changed line(s) is in a fact
+  control flow: 1 body
+    <shop::Dog as shop::Speak>::name (src/lib.rs:10): graph removed: 2 points, 1 arrow
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 1 }` [semantics]
+◆ f1 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 1 }` [semantics · code different]
     lines: src/lib.rs:9, src/lib.rs:-9-13

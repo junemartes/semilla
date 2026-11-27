@@ -4173,12 +4173,14 @@ The six pull requests of 48.6 have 437 facts with the compiled compare.
 - [R49.3-2] A `same` claim is correct if each edit that it covers maps exactly under the claim.
 - [R49.3-3] A `change` fact is correct if each of its items has an edit that no `same` claim covers. An item can also be a new or a removed item; then the check is that the item fact exists.
 - [R49.3-4] The gap list is each item with an edit that no `same` claim covers and no `change` fact names.
-- [R49.3-5] A step has no result `code equal` or `code different`. The result is the list of the facts and the gap list.
+- (R49.3-5, removed by 83) A step has no result `code equal` or `code different`. The result is the list of the facts and the gap list.
 
 ### 49.4 The optional compiled check
 
-- [R49.4-1] An option of the `step` command runs the compare of today.
-- Decided by Claude: [R49.4-2] a property claim (`tested-by`, `no-panic`, `no-unsafe`, `no-io`, `calls-only`) needs the compiled code, so it starts the check for its step.
+Rule index: no rule: the rules of this subsection are removed by 83 (each step has the compiled check).
+
+- (R49.4-1, removed by 83) An option of the `step` command runs the compare of today.
+- Decided by Claude: (R49.4-2, removed by 83) a property claim (`tested-by`, `no-panic`, `no-unsafe`, `no-io`, `calls-only`) needs the compiled code, so it starts the check for its step.
 - Decided by Claude: the check gets no new attribution rule and no new normal form rule, with one exception (49.6).
 - Later (not in batch 9a): the output of the check becomes one list for the step, the bodies that change with no edit.
 
@@ -4247,11 +4249,15 @@ Rule index: no rule: the subsection is a plan.
 
 ## 50. Batch 9a: the syntax tree model is the default
 
+**Removed by 83.** Semilla has one mode since batch 14a: each step builds the two trees and has their MIR. This section is the history of the default mode. Its rules for the facts of the syntax tree stay; the rules of the mode itself are marked "removed by 83". The syntax-only check of R83.1-3 keeps the rules of a fact with no compare result.
+
 Batch 9a. This section is the code change of the decision of section 49. The model of 49.3 stays. The rule above each rule of this section: no difference of the syntax tree is without a fact, and no fact text says less than the difference. Each detail below that section 49 did not decide has the mark **Decided by Claude**.
 
 ### 50.1 The two modes
 
-- **The default mode.** `semilla step "<intent>"` makes the facts from the syntax phase only. Since section 53, it then runs the build check of the new tree (`cargo check`): the syntax phase starts no process of the Rust tool chain, and the build check does. With `--no-check`, the step starts no build and no process of the Rust tool chain. A fact line ends with the category: "… [semantics]". [R50.1-1] No output of this mode has a compare result (`code equal`, `code different`, `no compare`, `no code`, `pending`, `not checked`), an `indirect` fact, or a line "affected bodies:", "branches:", "through:", or "! the compiled code changes:". A tree that does not build is rejected by the build check (section 53). With `--no-check` it is accepted, and the record says `build check: not run`.
+Rule index: no rule: the rules of this subsection are removed by 83 (one mode).
+
+- **The default mode.** `semilla step "<intent>"` makes the facts from the syntax phase only. Since section 53, it then runs the build check of the new tree (`cargo check`): the syntax phase starts no process of the Rust tool chain, and the build check does. With `--no-check`, the step starts no build and no process of the Rust tool chain. A fact line ends with the category: "… [semantics]". (R50.1-1, removed by 83) No output of this mode has a compare result (`code equal`, `code different`, `no compare`, `no code`, `pending`, `not checked`), an `indirect` fact, or a line "affected bodies:", "branches:", "through:", or "! the compiled code changes:". A tree that does not build is rejected by the build check (section 53). With `--no-check` it is accepted, and the record says `build check: not run`.
 - **The compiled check.** `semilla step "<intent>" --compiled` also runs phase 2 (the build, the MIR compare, the compare result on each fact). Its rules are the rules of the sections 35 to 47. The only changes of its output are the corrected rules of 50.3 and 50.4.
 - **Decided by Claude:** the variable `SEMILLA_COMPILED` (not empty and not `0`) gives the same as `--compiled`. The tests of the compiled check set it in their helper.
 - **Decided by Claude:** `--fast` has an effect only with a compiled check. Else the step prints one note: "note: `--fast` has an effect only with `--compiled`; this step has no compiled check".
@@ -4303,8 +4309,8 @@ Before this batch, three rules could put a difference under a rename or move fac
 | A `use` line under a rename or a move | `checks.rs`, `imports_follow_map`, `ImportMap::forced` | corrected (50.3, rules 2 to 4); it relied on phase 2 | `a_use_line_with_a_second_difference_gets_its_own_fact`, `an_import_that_a_moved_item_needs_goes_under_the_move_fact`, `a_use_line_that_the_map_does_not_change_keeps_its_fact` |
 | A site of a field in a pattern | `facts.rs`, `pattern_site` | corrected (50.3, rule 5) | `a_pattern_site_names_the_exact_edit` |
 | A note "no compare: …" in a step with no compare | `lib.rs`, `no_compare_result` | [R50.4-1] corrected: the default mode has no such note | `a_doc_test_fact_of_the_default_mode_has_no_note_about_the_compare` |
-| The pair warning of a pair that waits for phase 2 | `lib.rs`, `verify_changeset_cached` | [R50.4-2] corrected: a default step waits for nothing | `a_pair_that_the_default_mode_does_not_derive_has_its_pair_warning` |
-| The list of items under a fact (the sites of a generic item, the items that read a changed file) | `views.rs` | [R50.4-3] exact: the list comes from the syntax tree; the default mode names it "items with a use:" | `the_item_list_of_a_default_step_comes_from_the_syntax_tree` |
+| The pair warning of a pair that waits for phase 2 | `lib.rs`, `verify_changeset_cached` | (R50.4-2, removed by 83) corrected: a default step waits for nothing | `a_pair_that_the_default_mode_does_not_derive_has_its_pair_warning` |
+| The list of items under a fact (the sites of a generic item, the items that read a changed file) | `views.rs` | (R50.4-3, removed by 83) exact: the list comes from the syntax tree; the default mode names it "items with a use:" | `the_item_list_of_a_default_step_comes_from_the_syntax_tree` |
 | A use of a removed or an added member that changes to a different member | `facts.rs` | [R50.4-4] exact | `a_use_that_changes_to_a_different_variant_gets_its_own_fact` |
 | A call site of a parameter fact, a literal site of a field fact | `facts.rs`, `call_site`, `literal_site` | [R50.4-5] exact: the site line has the full text of the argument or the field | cases `add_param_calls`, `rm_param_calls`, `add_field_literals`, `rm_field_uses` |
 | The fold "N site(s): …" of equal facts | `edits.rs`, `fold` | [R50.4-6] exact: only facts with equal full texts fold | case `p4_fold_sites` |
@@ -4690,6 +4696,8 @@ Rule index: no rule: the subsection has limits and open questions.
 
 ## 53. Batch 9a4: the build check of a step
 
+**Changed by 83.** The option `--no-check` and the variable `SEMILLA_NO_CHECK` are gone (R53.1-4 and R53.3-6 are removed by 83). The build of the compiled check is the build check when it builds each target (rule 9, R53.5-1); `cargo check` runs for a step of `--fast`, a tag after the commit, a replay, `old-step end`, and a tree where the compiled build does not check `dev` for each target. The record `not run` of an earlier version stays readable (R83.1-2).
+
 Date: 2026-11-21. Since batch 9a, `semilla step` runs only the syntax phase, so it accepts a step that does not compile (50.6). The user did not expect this. The decision of the user:
 
 > "Let's make the code check mandatory per step, we could remove it with --no-check"
@@ -4703,7 +4711,7 @@ Batch 9a4b (the same date) corrected five items of the check: the three states o
 1. **The check.** Each command that stores a step runs `cargo check` on the new tree of the step, after the syntax phase. The routes: `semilla step`, the MCP tool `step`, the plan route (`semilla replay apply`, the MCP tool `replay_apply`), and the hidden command `old-step end`.
 2. [R53.1-2] **`passes`.** Each target of the tree builds. The step is stored as before. The output has one more line, after the first line: "build check: passes (1.2 s)". The fact lines do not change.
 3. [R53.1-3] **`fails`.** The step is rejected, and nothing is stored. The message shows the first errors of the compiler, with file and line, and the two ways out.
-4. [R53.1-4] **`not run`.** With `--no-check`, the check does not run. The step is stored. The record keeps the result `not run`. The step output, `semilla status`, and the review show it.
+4. (R53.1-4, removed by 83) **`not run`.** With `--no-check`, the check does not run. The step is stored. The record keeps the result `not run`. The step output, `semilla status`, and the review show it.
 5. **The variable `SEMILLA_NO_CHECK`** (not empty and not `0`) gives the same as `--no-check`. The MCP tools `step` and `replay_apply` have the argument `no_check`.
 6. **The record.** The step record keeps the result (`Step.build_check`). A reviewer command reads the record. It does not run the check again.
 7. [R53.1-7] **A check that cannot run** (no tool chain, a dependency that is not in the cargo cache, no space on the disk): the step is not stored. The words are "not stored" and "cannot run", not "rejected": the cause is the machine, not the code. Cargo runs with `--offline`.
@@ -4772,7 +4780,7 @@ or store the step with no build check (the record and the review then say `build
 ```
 
 - Each of the two commands has each missing reason of the syntax phase (`--reason '…=<why>'`). [R53.3-5] The exit code is 1. The record of the rejected step (`session.rejected`) has the cause "the build check fails: the code after the step does not build".
-- **`not run`:** [R53.3-6] the line "build check: not run (`--no-check`)" or "build check: not run (`SEMILLA_NO_CHECK`)" after the first line. No process of the tool chain starts.
+- **`not run`:** (R53.3-6, removed by 83) the line "build check: not run (`--no-check`)" or "build check: not run (`SEMILLA_NO_CHECK`)" after the first line. No process of the tool chain starts.
 - **Cannot run:**
 
 ```text
@@ -6424,7 +6432,7 @@ The pair and the diff are in `semilla-verify/src/flow.rs` (no compiler link). Th
 2. [R60.4-2] **The step section.** `control flow: N bodies` lists each body with a line (R60.3-6), one line for each body: `shop::order (src/lib.rs:10): graph changes: +1 branch, +3 arrows, −1 arrow`; `shop::tax (src/lib.rs:13): same structure: 1 changed condition`; `shop::mask (src/lib.rs:30): same graph (the edit keeps the control flow)`. A step with no body with a line has no section (Decided by Claude: no new line in each compiled step).
 3. [R60.4-3] **`status --verbose`.** Below the line of each body, each result with its configurations, then one line for each changed point (with its place and its text on the old side or the new side) and one line for each arrow that is not shared (with its label): `+ arrow branch `qty == 0` (src/lib.rs:8) → return (src/lib.rs:11) (true)`. A pair with equal texts and a shared arrow have no line.
 4. [R60.4-4] **The Markdown review.** The section "Control flow changes" has a part for each body whose graph changes (`graph changes`, `graph added`, `graph removed`): the step line, the diff list (each element with a link to its line in the repository, `[src/lib.rs:8](src/lib.rs#L8)`; a line of the old tree has no link), and a Mermaid flowchart of the changed part: the changed points, the ends of the arrows that are not shared, and the points next to them. An added element has the mark `+` and a green class (an added arrow is a thick line); a removed element has the mark `−`, a red class, and a dashed line. A changed part with more than 40 points has only the list. A body with `same structure` or `same graph` has no part. A fact item of the review has its lines `control flow:` in place of `branches:`.
-5. [R60.4-5] **The default mode.** A step with no compiled check has no line of the graph.
+5. (R60.4-5, removed by 83) **The default mode.** A step with no compiled check has no line of the graph.
 6. [R60.4-6] **The property of the case set.** For each case with the graph data, the count of the bodies of the section of `status --verbose` is the count in its first line, and for each result of a body, the counts of its summary are the counts of its lines of points and arrows (property 9 of the runner).
 7. [R60.4-7] **The short form of a callee in a fact line** (batch 10a2; Decided by Claude). A fact line shows the text of a callee (a call that the MIR resolves, a direct panic call, the callees of a point) in its short form: each path loses its module part, the segments that start with a lowercase letter and that a name or `{` follows (`<shop::Food as shop::Tax>::rate` → `<Food as Tax>::rate`, `std::vec::Vec::<u32>::push` → `Vec::<u32>::push`, `shop::price` → `price`). A changed point shows the short forms only if they differ, else the full texts (`a::Food::new` → `b::Food::new`): the short form never hides a change. `status --verbose`, the step section, and the flowchart have the full texts. A changed point with equal texts and changed callees shows them: `~ for `make()` (…): callees −`<Food as Iterator>::next` +`<Fuel as Iterator>::next``; `status --verbose` has the callees of each point.
 
@@ -6610,7 +6618,7 @@ The soundness of this part: a variant is checked with the rules of part C, so an
 1. [R61.6-1] **The line of a fact.** Each fact with an edit in a body with a check gets one line `equivalence: …` after its `control flow:` lines (in the step output, `status --verbose`, and the Markdown review: "; equivalence: …" at the end of the fact item). A fact in more than one checked body (a closure and its parent) has the name of each body first. In the Markdown review, the line of each body in the section "Control flow changes" ends with its result.
 2. [R61.6-2] **The step section.** The line of each body in `control flow:` ends with its result: "shop::quote (src/lib.rs:1): same structure: 1 changed condition, 1 changed check; different in dev (for n = 20, p = 5: before returns 100, after returns 95); different in release (…)".
 3. [R61.6-3] **`status --verbose`.** Each body has a line for each configuration with its result, the inlined callees, the count of the solver queries, and the time: "equivalence (in dev): equivalent (proved by SMT after inlining `shop::ship`); inlined: `shop::ship`; 1 solver query; 12 ms".
-4. [R61.6-4] **The default mode** has no `equivalence:` line and no new cost: the oracle of a step with no compiled check gives no answer.
+4. (R61.6-4, removed by 83) **The default mode** has no `equivalence:` line and no new cost: the oracle of a step with no compiled check gives no answer.
 
 ### 61.7 The tests
 
@@ -6871,7 +6879,9 @@ Before this batch, `semilla tag <rev>` rejected a commit with no change set ("co
 
 ### 62.9 The options
 
-1. [R62.9-1] `--compiled` and `--no-check` work as for `semilla step`, also the variables `SEMILLA_COMPILED` and `SEMILLA_NO_CHECK`. For a change set of the agent, the three options are an error: each step keeps its own mode.
+**Changed by 83.** The options `--compiled` and `--no-check` are gone (R62.9-1 is removed by 83; R83.1-1).
+
+1. (R62.9-1, removed by 83) `--compiled` and `--no-check` work as for `semilla step`, also the variables `SEMILLA_COMPILED` and `SEMILLA_NO_CHECK`. For a change set of the agent, the three options are an error: each step keeps its own mode.
 2. [R62.9-2; no negative case: the tool calls the function of the command] The MCP tool `tag` gets the arguments `commit` (a revision or a range), `compiled`, `no_check`, and `again`. An open item is not a tool error: the text names it.
 
 ### 62.10 The other commands
@@ -7229,8 +7239,8 @@ Rule index: the identities are below.
 1. [R65.3-1; no negative case: a crate of the workspace or of a registry is never a crate of the sysroot, and a name that both have is not a name of the standard library] **The crates of the standard library** in the driver are the crates that the compiler loaded from the sysroot of the tool chain (`used_crate_source`), not a name list. A name that a crate outside the sysroot has too (the workspace `hashbrown` and the copy of `hashbrown` that `std` uses) is not a name of the standard library. The lists of `expand.rs`, `instances.rs`, `ir.rs` (two), `reach.rs`, and `effects.rs` use it. Case: `compiled/two_targets_test_change` (a value of the crate `test` is now a type of the standard library: "a value of a type that the check does not model").
 2. [R65.3-2] **A check of the profile in a macro of the standard library** (`debug_assert!`) gets no spotlight: the found source is `cfg!(debug_assertions)` and the macro is of the sysroot. Before, a name list (`debug_assert`, `debug_assert_eq`, `debug_assert_ne`) decided it. Test: the e2e test `a_proof_holds_for_each_build_configuration` (positive: the `debug_assert!` cases; negative: `if !cfg!(unix)` has the note).
 3. [R65.3-3] **A member order change** needs a reason if the type has `#[repr]`, a derive (any name), or an attribute macro: the code that it makes reads the members in order. Before, a name list (`PartialOrd`, `Ord`, `Hash`) missed `Debug`, `serde` derives, and each derive of a third crate. The compiled mode compares the expansion of each derive (R63.3-8). Cases: `names/order_debug`, `names/order_third_party` (a derive of the proc macro crate `depot`), and the negative `names/order_no_derive`.
-4. [R65.3-4] **A file that the code reads at build time is not inert**, whatever its kind: the spotlight "a file that the code reads at build time (in `src/lib.rs`)". The default mode finds the read in the text (`include_str!`, `include_bytes!`); the compiled mode has the files that the compiler reads (R63.9-6, R65.1-2). Before, the extension list (`md`, `txt`, …) made a `.txt` file that `include_str!` reads inert. Tests: the unit test `each_file_spotlight_text_fits_its_fact`, case `names/read_text_file`.
-5. [R65.3-5] **A package key that the code reads** (`env!("CARGO_PKG_DESCRIPTION")`) is a build input in the default mode: cargo gives each package key to the build as the variable `CARGO_PKG_<KEY>`, and the rule makes the variable name from the key (no list). In the compiled mode, the evidence rule (brief 5h, B3) and the changed expansion (R65.1-2) decide. Cases: `names/manifest_env_read`, the negative `names/manifest_no_read`.
+4. (R65.3-4, removed by 83) **A file that the code reads at build time is not inert**, whatever its kind: the spotlight "a file that the code reads at build time (in `src/lib.rs`)". The default mode finds the read in the text (`include_str!`, `include_bytes!`); the compiled mode has the files that the compiler reads (R63.9-6, R65.1-2). Before, the extension list (`md`, `txt`, …) made a `.txt` file that `include_str!` reads inert. Tests: the unit test `each_file_spotlight_text_fits_its_fact`, case `names/read_text_file`.
+5. (R65.3-5, removed by 83) **A package key that the code reads** (`env!("CARGO_PKG_DESCRIPTION")`) is a build input in the default mode: cargo gives each package key to the build as the variable `CARGO_PKG_<KEY>`, and the rule makes the variable name from the key (no list). In the compiled mode, the evidence rule (brief 5h, B3) and the changed expansion (R65.1-2) decide. Cases: `names/manifest_env_read`, the negative `names/manifest_no_read`.
 6. [R65.3-6] **An `impl` under `cfg` of a trait of another crate gets the coarse rule**: code of that crate can call the trait with no name in the text of the workspace (`==` calls `PartialEq::eq`, `{}` calls `Display::fmt`, `sort` calls `Ord::cmp`). Only a trait of the workspace has each of its uses in the text. Before, a list of 44 silent traits decided it, and it had no `PartialEq`: the unit test `an_impl_under_cfg_of_a_trait_of_another_crate_makes_its_type_opaque` gave a false proof (`a == b` → `b == a` kept "equal" with an `impl PartialEq` that is not symmetric in another configuration).
 7. [R65.3-7] **A derive name has its meaning only for a crate of the standard library.** `serde` and `serde_derive` are not trusted crates any more, and the table of known traits has no `Serialize` and `Deserialize`: a manifest can give the name `serde` to a different package, and a derive of a registry crate is a proc macro whose code the default mode does not see. The compiled mode reads the definition of each derive from its record. Tests: `a_derive_that_semilla_does_not_know_makes_the_type_opaque` (positive), `a_derive_name_that_an_import_can_hide_makes_the_type_opaque` (negative: a derive of the standard library keeps its meaning).
 8. [R65.3-8] **A panic is a structural fact**: a callee that never returns (the return type `!`) and has `#[track_caller]` only stops. Before, a name prefix (`core::panicking::`, `std::panicking::`, `std::rt::begin_panic`) decided it, and a function of `std::panicking` that is not a panic (`catch_unwind`, `set_hook`, `take_hook`) matched. Test: `tests/effects.rs` (`caught_order`, `caught_twice`, `hook_order`, `set_order`, `hook_pure`, `fail_order`, and the form checks).
@@ -7336,12 +7346,16 @@ Rule index: no rule: the subsection has the results and the limits.
 
 ### 65.8 Batch 10n2: the expansion records in the default mode (part B)
 
+Rule index: no rule: the rules of this subsection are removed by 83 (the compiled build gives the records).
+
+**Removed by 83.** The build check writes no expansion records: each step has the records of its compiled build. R65.8-1 and R65.8-2 are removed; the driver has no level `ex`.
+
 Rule index: the identities are below.
 
 **The decision of the user** (2026-11-24: "the default mode expands macros: yes"; 2026-11-25: "now", not in the speed phase). Section 65.6 stopped part D for its size: the default mode ran no driver. This batch gets the records from the build that the default mode already does: the build check of design 53.
 
-1. [R65.8-1] **The build check writes the expansion records.** In a step of the default mode, the driver of Semilla is the wrapper of the compiler (`RUSTC_WORKSPACE_WRAPPER`) of `cargo check` of the build check, at the new level `ex`: the driver writes only the unit record with the expansion of each macro call (R63.2-1, R65.1-1 to R65.2-1), it adds no flag of the compiler, it changes no query (no MIR pass of design 61), and it sets the option of the compiler that gives the short paths in the messages (the plain `rustc` sets it in its own callbacks), so the result and the errors of the build check are the result and the errors of a plain `cargo check`. The build check builds the tree before the step first (a stored build of the tree is used), then the tree after the step in the same build folder (a delta build). The records of each tree go to `check/expansions/` of the cache, by the tree, the key of the build settings (53.2), and the driver. The syntax phase of the step reads them: the expansion section, the `expansion:` lines under the owner facts, the proof line, and the owner rules of design 63 and 65 show in the default mode as in the compiled mode. The evidence rule of a body (R63.9-5) stays a rule of the compiled mode: the default mode has no body result. `semilla status`, `review`, and `verify` read the records from the cache and start no build. Cases: `expand_default/macro_changed` (positive), `expand_default/no_check` (negative: no record, no line).
-2. [R65.8-2] **A step of the default mode with no records says so in one line** of the step section: "expansions: not read: CAUSE". The causes: "the build check did not run, so no build made the expansion records" (`--no-check`, `SEMILLA_NO_CHECK`); "the tree after the step: the targets … do not build in this tree, so the tree has no full set of expansion records"; "the build check uses the toolchain `stable` (…), and the driver of Semilla that writes the expansion records needs the toolchain `nightly-2026-10-25`; `--compiled` or `semilla expand` builds them"; "the cache has no expansion records of the tree `abc1234` (…)". A step of the compiled mode has its own records and no such line. Cases: `expand_default/no_check` (positive; each case with no build check has the line now), `expand_default/macro_changed` (negative).
+1. (R65.8-1, removed by 83) **The build check writes the expansion records.** In a step of the default mode, the driver of Semilla is the wrapper of the compiler (`RUSTC_WORKSPACE_WRAPPER`) of `cargo check` of the build check, at the new level `ex`: the driver writes only the unit record with the expansion of each macro call (R63.2-1, R65.1-1 to R65.2-1), it adds no flag of the compiler, it changes no query (no MIR pass of design 61), and it sets the option of the compiler that gives the short paths in the messages (the plain `rustc` sets it in its own callbacks), so the result and the errors of the build check are the result and the errors of a plain `cargo check`. The build check builds the tree before the step first (a stored build of the tree is used), then the tree after the step in the same build folder (a delta build). The records of each tree go to `check/expansions/` of the cache, by the tree, the key of the build settings (53.2), and the driver. The syntax phase of the step reads them: the expansion section, the `expansion:` lines under the owner facts, the proof line, and the owner rules of design 63 and 65 show in the default mode as in the compiled mode. The evidence rule of a body (R63.9-5) stays a rule of the compiled mode: the default mode has no body result. `semilla status`, `review`, and `verify` read the records from the cache and start no build. Cases: `expand_default/macro_changed` (positive), `expand_default/no_check` (negative: no record, no line).
+2. (R65.8-2, removed by 83) **A step of the default mode with no records says so in one line** of the step section: "expansions: not read: CAUSE". The causes: "the build check did not run, so no build made the expansion records" (`--no-check`, `SEMILLA_NO_CHECK`); "the tree after the step: the targets … do not build in this tree, so the tree has no full set of expansion records"; "the build check uses the toolchain `stable` (…), and the driver of Semilla that writes the expansion records needs the toolchain `nightly-2026-10-25`; `--compiled` or `semilla expand` builds them"; "the cache has no expansion records of the tree `abc1234` (…)". A step of the compiled mode has its own records and no such line. Cases: `expand_default/no_check` (positive; each case with no build check has the line now), `expand_default/macro_changed` (negative).
 
 **Decided by Claude.**
 
@@ -8092,9 +8106,13 @@ Rule index: the identities are below.
 
 ### 70.3 The records for each project (part A)
 
+Rule index: no rule: the rule of this subsection is removed by 83 (no second build of the records).
+
+**Removed by 83.** No second build of the records runs: the compiled build has the toolchain of the driver. R70.3-1 is removed.
+
 Rule index: the identities are below.
 
-1. [R70.3-1] **When the toolchain of the build check is not the toolchain of the driver, a second check build of each tree with the toolchain of the driver makes the records** (the expansion records and the name record), with the driver as the wrapper at the level `ex`, in its own target folder (`check/target-own`) and records folder (`check/records-own`) of the cache. The build check of the project stays the result of the build check. Before, such a step had "expansions: not read: the build check uses the toolchain `stable` (…)". Case `names70/second_build_stable` (the tree names the toolchain `stable` in `rust-toolchain.toml`).
+1. (R70.3-1, removed by 83) **When the toolchain of the build check is not the toolchain of the driver, a second check build of each tree with the toolchain of the driver makes the records** (the expansion records and the name record), with the driver as the wrapper at the level `ex`, in its own target folder (`check/target-own`) and records folder (`check/records-own`) of the cache. The build check of the project stays the result of the build check. Before, such a step had "expansions: not read: the build check uses the toolchain `stable` (…)". Case `names70/second_build_stable` (the tree names the toolchain `stable` in `rust-toolchain.toml`).
 
    **A second build that fails where the build check passes says so in one line**: "expansions: not read: the second build with the toolchain `nightly-2026-10-25` of the driver of Semilla, which makes the records: the target … does not build", and the line of R70.1-1. The text rules apply. A second build that cannot run gives "… cannot run: CAUSE". Case `names70/second_build_fails` (a build script that stops on a nightly compiler).
 
@@ -9250,7 +9268,7 @@ Rule index: no rule: the subsection has the limits and the open questions.
 
 **Limits.**
 
-- The default mode reads the anchors only from the warm check of `semilla intent check` for the same two trees. `semilla intent check` with no `--step` checks `HEAD` against the working tree, so a later step of a change set in the default mode has no anchors (the line says why); `--compiled` has them.
+- (Removed by 83: each step compiles the intent crate.) The default mode reads the anchors only from the warm check of `semilla intent check` for the same two trees. `semilla intent check` with no `--step` checks `HEAD` against the working tree, so a later step of a change set in the default mode has no anchors (the line says why); `--compiled` has them.
 - A changed node with a partner (a pair of the matcher, also a pair at one place) is mapped by Semilla: the map says which nodes correspond, not that they are equivalent. The proof pass decides.
 - A relation reads a field through a projection of the MIR of the claim: a field that the claim reads through a method (a getter), and a variant that a `match` reads only through its discriminant, are not anchors.
 - The rules of the readers (R79.3-3, R79.3-4, R79.3-5) need the name record for their exact form; with no record (`SEMILLA_NO_CHECK` in the default mode) a word with the name of the item is a reader (the safe side: more nodes are not mapped), and a `use` line is not mapped.
@@ -9606,3 +9624,124 @@ The coordinator rebased this batch onto `7585c0a` (batch L1, design 79: the AST 
 - A merge with no text conflict that changed a rule: the template of an added or a removed item (`version_template`, R79.5-1) reads the same signature. With the places of R82.3-2 it declared a value and passed it with no `&mut`, so rustc refused the template. The template now declares `mut NAME: T` and passes `&mut NAME` (R82.3-2 for R79.5-1). Test: `a_template_of_an_item_with_mut_has_a_place_of_each_version`.
 - A "not mapped" node of an item with `&mut self` or a `&mut T` parameter now has a template. Before, the line was "no template: the method takes `&mut self` (a claim reads values only)".
 - `INDEXED` is `48..=82`. Section 81 (the control-flow pass) has no batch yet.
+
+## 83. Batch 14a: one mode: each step builds the two trees and has their MIR
+
+Date: 2026-11-27. The decisions of the user:
+
+> "Let's remove the default mode and use mir everywhere."
+> "let's keep the mir compiler for the intent language in L1/2. We would loose too much otherwise."
+
+The default mode of section 50 (the facts of the syntax tree only, with the build check of section 53) goes away. Each step has the compiled check of today (`--compiled` of `2fde4bf`, with the build check on). The syntax tree stays: it is what the reviewer reads, and it gives the facts of the nodes with no MIR (comments, docs, attributes, code that a `cfg` removes, macro definitions, signatures with no body). This batch does not change the syntax diff, the matcher, the equivalence check, the claim engine, the graphs, or the AST pass. A later batch (14b) makes the solver run only for claims; a later batch uses the MIR to build the map of the AST pass.
+
+### 83.1 The rule
+
+Rule index: the identities are below.
+
+**Semilla has one mode. Each step builds the two trees and has their MIR. This batch changes no result: the output of a step is the output of `--compiled` of `2fde4bf` with the build check on.**
+
+1. [R83.1-1] **A removed option of the mode is one error line.** `--compiled` and `--no-check` (of `step`, `tag`, `replay apply`, `old-step end`), the variables `SEMILLA_COMPILED` and `SEMILLA_NO_CHECK` (a value that is not empty and not `0`), and the MCP arguments `compiled` and `no_check` (of `step`, `tag`, `replay_apply`) give one error line that names the change: "error: the option `--no-check` is gone (design 83): each step runs the build check, and a step that does not build is not stored. Remove it." The exit code is 2 (a form error), and the command does nothing else. An empty value and `0` of a variable are no error. **Decided by Claude** (the brief asked for one error line): the options stay in the parser as hidden options, so the line names the option, not "an unknown argument"; the variable is checked for each command, so a shell with an old setting gets the line at once.
+2. [R83.1-2] **A stored record of an earlier version stays readable.** A step with the field `compiled` (`false` in the default mode) reads as a step of the one mode: the reader ignores the field, and the reviewer commands build the two trees as for each other step. A step with the build check result `not run` keeps it, and its lines stay ("! build check of step 1: not run: the author turned the check off, …"). A new step has no field of a mode. An open step of the session with the field reads the same way.
+3. [R83.1-3] **The syntax-only check.** Two checks have no compiler data in the one mode, and keep the rules of the default mode for their facts (no compare result, the proof of a rename from the syntax tree, the pair warning at once): the check of the virtual crate of an expansion compare (design 63; it always had a step with no compiled check), and a tag after the commit whose compiled check stops with an error (R62.5-3). The step has the field `syntax_only` for them; the field is not stored. A step of the author never has it.
+
+### 83.2 A digest never depends on the folder of the build or of the binary
+
+Rule index: the identities are below.
+
+1. [R83.2-1] **The digest of a constant (design 66) has only the data of the source and of the tool chain.** The defect of `2fde4bf`: the text `definition #HASH` of the constant `IndexMapCore::MAX_ENTRIES_CAPACITY` of `pr-indexmap-424` changed with the folder of the binary (2 lines of the step output). The cause: the text of the declaration of an ADT in the digest had `ReprOptions` in its debug form, and that form has `field_shuffle_seed`. The compiler derives the seed from the identity of the crate (the stable crate id), and cargo makes that identity (`-C metadata`) from the package, the folders, and the wrapper of the compiler: the path of the driver of Semilla. The rule: the text of the `repr` has each part that the source gives: each field of the compiler type but the seed of the field order. **Decided by Claude** (the review of the batch): the code names each field in a pattern, so a new field of the compiler type is a build error, and the text never drops a part of the source without a decision. No name list. Test: one fixture with a driver in two folders gives equal output; a change of the `repr` alone changes the digest.
+
+### 83.3 What goes away, and what stays
+
+Rule index: no rule: the subsection has the lists of the removed rules and of the paths that stay.
+
+**The rule identities that this batch removes** (16; each old text stays, with the mark "removed by 83"):
+
+| Identity | The rule | Why it goes |
+|---|---|---|
+| R49.3-5 | a step has no result `code equal` or `code different` | each step has the compare result |
+| R49.4-1, R49.4-2 | an option, or a property claim, starts the compiled check | each step has it |
+| R50.1-1 | a fact of the default mode has the category only | no step of the author has the default mode; R83.1-3 keeps the rule for the syntax-only check |
+| R50.4-2 | the pair warning of a default step shows at once | the same; the syntax-only check keeps the code |
+| R50.4-3 | "items with a use:" of a default step | the same |
+| R53.1-4, R53.3-6 | `--no-check` and the line "build check: not run (…)" | the option is gone (R83.1-1); an old record keeps `not run` (R83.1-2) |
+| R60.4-5, R61.6-4 | the default mode has no graph line and no equivalence line | each step has them |
+| R62.9-1 | `--compiled` and `--no-check` of a tag after the commit | the options are gone |
+| R65.3-4, R65.3-5 | the text rules of the default mode for a file that the code reads and for a package key that the code reads | the expansion records and the MIR give the reads; the text rule had a spotlight that the compiled check does not give |
+| R65.8-1, R65.8-2 | the build check writes the expansion records; a step with no records says so | the compiled build gives the records; the driver has no level `ex` |
+| R70.3-1 | the second build of the records with the toolchain of the driver | the compiled build has that toolchain |
+
+**The code paths that go away:**
+
+- `semilla`: the options and the variables of the mode (`main.rs`, `mcp.rs`, `onestep.rs`, `aftertag.rs`, `plan.rs`); `compiled_env`, `compiled_set`, the field `OpenStep.compiled`, the field `cargo` of `App` and `set_compiled` (each command reads the targets from `cargo metadata`; the manifest loader is not used by the app); the expansion records and the warm anchors of a default step in the guard of the body oracle (`default_records`, `default_anchors`, `NO_CHECK_RECORDS`); the result "of the syntax tree (computed now; no step has the compiled check)" of `status`, the commit check and the base line of a change set with no compiled step, the build code state of a step with no compiled check; the notes "the claim … is a property claim, so this step runs the compiled check" and "`--fast` has an effect only with `--compiled`"; the second way out "or store the step with no build check …"; the read of the records of the build check in `semilla expand`.
+- `buildcheck.rs`: `skip_cause`, `no_check_env`, the records of the build check (`records_setup`, `store_records`, `second_build`, `check_expansions`).
+- `semilla-normal`: `CheckRecords`, `CheckRecordFiles`, `driver_toolchain`, `record_files`, the records argument of the build check (`build_check_with` is `build_check`).
+- the driver: the level `ex`.
+- `semilla-verify`: `expansion_gap` (the trait method and the field of the report), the text rules of R65.3-4 and R65.3-5 in `files.rs`, the cause "the check needs `--compiled`" of an intent claim (`NEEDS_COMPILED`), the check of the mode in `expand::links`.
+- `semilla-core`: the field `Step.compiled` and `compiled_default`.
+
+**The paths that stay, with the cause:**
+
+- The syntax-only check (R83.1-3): `Compare::Off`, `no_compare_result`, the proof of a rename from the syntax tree, and the pair warning at once. The virtual crate of an expansion compare and a tag whose compiled check stops reach it.
+- `cargo check` of the build check, with the tool chain of the tree, rule 8 of design 53, and R68.12-1: a step with `--fast`, a tag after the commit, a replay, `old-step end`, and a tree whose compiled build does not check `dev` for each target (a target that does not build before the step).
+- The fall-back of the names (R70.1-1, "names from the text"): records of an earlier driver, and each place that the compiler did not build (code that a `cfg` removes in each checked configuration, a macro definition, a file that no unit compiles).
+- A file that the loader does not parse keeps its `file` fact (design 37.5).
+- `BuildCheck::NotRun` and its lines: a stored record of an earlier version (R83.1-2).
+- The name lists of the kind "default mode" of `docs/name-lists.md` (5 rows): phase 1 of a step (`--fast`) and the syntax-only check use them. **Decided by Claude:** the kind keeps its name in this batch (the test `names.rs` reads it).
+- `Workspace::load` (the targets from the manifests) stays in `semilla-syntax`: the virtual crate of an expansion compare and the library tests use it.
+
+### 83.4 The results
+
+Rule index: no rule: the subsection has the results of the measures.
+
+**Rule 5 on the case set.** Each of the 675 cases of `2fde4bf` ran one step with the base binaries (`--compiled`, the build check on) and with the binaries of this batch. 658 outputs are equal. The 17 others differ only in the name of a cache folder in the message of a build that fails (the folder name has the identity of the binaries) and in the order of two lines of cargo ("could not compile … (lib)" and "(lib test)"). No line differs for a cause of the mode.
+
+**The fixtures** (Decided by Claude, the rule of the brief): 659 fixtures build. 16 do not build:
+
+- 11 got the missing lines and build now (a default value of a trait item in 4 cases of `cover`, a trait that changes with its impl in 2, a function `check` in 2, `const _` items in `twins/equal_calls_one_gone`, the call of `fact_text/call_semicolon` in a body, and in `layout/macro_order` the macro moves to the top, before its use);
+- 5 cases of `macro_module` (the negative cases of R59.1-1, R59.1-2, R59.1-5, R59.1-6, R59.1-8: a `mod` line with no file or in a wrong place) are tests of the loader in `semilla-verify/src/tests83.rs` now, with no step;
+- 5 cases are gone with their rules: `names70/second_build_fails`, `names70/pub_use_no_record`, `expand_default/no_check`, `compiled/equiv_default_mode`, `compiled/expand_default_mode`.
+
+The case set has 665 cases. Each case runs in the one mode; 658 expected texts changed. The classes of the changes (one case can have more than one): a compare result after the category (465 cases), the lines of the compiled check (623), the line "build check: not run (`SEMILLA_NO_CHECK`)" → "build check: passes (the build of the compiled check)" (617), the lines of the default mode with no compiler data (478: "expansions: not read", "names from the text"), a gap line in the two forms of R71.3-1 (72), an accept or a reject that the compiled records change (76: a macro call whose items the records list, an inactive-code spotlight), the facts of the macro result (32), and the 11 fixtures above. Each new text is the output of the compiled mode of `2fde4bf` (the compare above).
+
+**The suite time.** The case set: 169 s before (most cases in the default mode with no build), 413 s after (2.4 times, on a quiet machine; 12 threads). The full suite (`cargo test --workspace`): 821 s before (on a busy machine), 855 s after (1.04 times).
+
+**The training set** (a fresh copy, an empty cache, `step "the change"`; the base binaries with `--compiled` and the build check on, and the binaries of this batch, the two runs at the same time):
+
+| PR | Exit | Base (s) | This batch (s) | Diff of the output |
+|---|---|---|---|---|
+| `pr-bitflags-465` | 1 | 35.7 | 35.5 | none |
+| `pr-hashbrown-693` | 0 | 43.0 | 42.6 | none |
+| `pr-indexmap-424` | 0 | 83.7 | 83.9 | 27 lines of rule 6 |
+| `pr-itertools-1086` | 0 | 74.5 | 75.0 | none |
+| `pr-num-traits-334` | 1 | 55.3 | 55.0 | none |
+| `pr-uuid-932` | 1 | 103.0 | 103.0 | none |
+| `pr-winnow-891` | 1 | 427.7 | 428.4 | none |
+
+The time of each phase (`SEMILLA_TIMING`) is equal within 1 s: the builds of the configurations take most of the time (`pr-winnow-891`: the build `n0-release` of one tree takes 177 s), and "verify the change set" takes 35 to 102 s. The default mode of `2fde4bf` with the build check took less than 4 s for these steps (design 50.5 and 53); the one mode has the cost of `--compiled`.
+
+**The class of rule 6.** On `pr-indexmap-424`, the constant `IndexMapCore::MAX_ENTRIES_CAPACITY` has equal digests in the two trees now: the base showed a changed constant only because the seeds of the two trees differed (each tree builds in its own folder). The line of the constant goes away, and the walk of the callers (design 61.10) has more budget: 6 lines `reaches:` name one more caller, and 6 lines of the walk limit change. The same binaries in a second folder give the same output (0 lines).
+
+**The runs of cargo and rustc** (rule 2), with `strace` on three cases: `rules/call_site_full_text` 9 cargo runs (4 `cargo check`) and 22 runs of rustc and of the driver; `compiled/feature_breaks_before` 14 (8) and 54; `cover/target_twin_docs_ex` 15 (8) and 47. These are the counts of `--compiled` of `2fde4bf`: the accepted step already has one build, and `cargo check` runs only where the compiled build does not check `dev` for each target. The default mode of `2fde4bf` had 2 to 4 cargo runs and 12 to 14 runs of rustc and of the driver.
+
+**The three numbers.** Rules with an identity: −12 (584 → 572: 16 removed, R83.1-1 to R83.1-3 and R83.2-1 new). Rows of `docs/name-lists.md`: 0 (101). Code paths that decide by a name: 0 (the list of tool names in `removed_argument` was a new one; it is gone, the function reads the argument names). Code lines: `crates/*/src` 128535 → 128156 (−379 with the new tests in `src`), the test folders 22226 → 22143, and the case files −10.
+
+**The mutation check.** `removed_option` gives no error → `a_removed_option_of_the_mode_is_one_error_line` fails; `deny_unknown_fields` on `Step` → `a_stored_step_of_the_mode_of_design_50_stays_readable` fails; the syntax-only check keeps the compare result → `a_fact_of_the_default_mode_has_no_compare_result` fails; the debug form of `ReprOptions` in the digest → `a_digest_does_not_depend_on_the_folder_of_the_binary_or_of_the_build` fails. Each change is undone.
+
+### 83.5 Limits and open questions
+
+Rule index: no rule: the subsection has the limits and the open questions.
+
+**Limits.**
+
+- Each step needs the nightly tool chain of the driver and each dependency in the cargo cache. A tree that does not build with that tool chain (a build script that stops on a nightly compiler) cannot store a step: the compiled check rejects it. The case `names70/second_build_fails` is gone for this cause.
+- A dependency that is not in the cargo cache stops the command with the error of `cargo metadata` (exit code 2: "Semilla has no result: cargo cannot read the dependency graph …, run `cargo fetch`"). Before, the build check of the default mode said "not stored: … the build check cannot run". The compiled mode of `2fde4bf` gives the same error, so rule 5 holds.
+- The lines of R68.12-1 (changed code under a `cfg` of the target) come only from a run of `cargo check`: a step whose compiled build checks `dev` for each target shows the inactive code of the compiled check instead.
+- Two cases keep a known failure of the property of R76.1-1 (`cover/assert_args`, `rules/filled_groups`): the step cuts the expansion line of an `assert!` call, and `semilla expand --step 0` has no full line for it. The compiled mode of `2fde4bf` has the same output; the case set did not run these cases in the compiled mode before.
+- `status --verbose` of a stored step shows the result of phase 1 (`pending`) when a binary of Semilla changes between the step and the status: the stored result has the key of the tools (the path, the size, and the file time of `semilla`, of the driver, and of the solver), and a result of other tools is stale. A second build of the workspace during a run of the case set gives such a change: a write run of the case set next to the e2e tests stored such texts in 9 cases. The cause is confirmed by a test (the review of the batch): a new file time of the driver gives "phase 1 (computed now)". Do not build the workspace again while the case set runs. The compiled mode of `2fde4bf` has the same behavior.
+- The kind `default mode` of `docs/name-lists.md` keeps its name.
+
+**Open questions for the user.**
+
+- Should a dependency that is not in the cargo cache give "not stored: the build check cannot run" again (the words of R53.1-7), in place of the error of `cargo metadata`?
+- Should the kind `default mode` of the registry of the name lists get a new name ("no compiler data": phase 1 and the syntax-only check)?
+- Should a later batch correct the full text of a cut expansion line (the known failure of R76.1-1 above)?

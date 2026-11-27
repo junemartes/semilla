@@ -2055,9 +2055,9 @@ pub(crate) fn reads_files(body_index: &BodyIndex, item: &str) -> bool {
 /// derive or an attribute macro makes from the type reads its members in the order of the text
 /// (`Debug` prints them so, `PartialOrd` compares them so, a derive of a third crate can write
 /// them so), and `#[repr]` gives the layout the order. A built-in attribute that is not a
-/// derive and not `#[repr]` does not read the members. No name of a derive decides it: the
-/// default mode does not see the code of a derive. The compiled mode compares the expansion of
-/// each derive (R63.3-8, R65.2-1).
+/// derive and not `#[repr]` does not read the members. No name of a derive decides it: a check
+/// with no compiler data does not see the code of a derive. The compiled check compares the
+/// expansion of each derive (R63.3-8, R65.2-1).
 pub(crate) fn order_reader(attrs: &str) -> Option<String> {
     let mut found: Vec<String> = Vec::new();
     for attribute in split_attributes(attrs) {

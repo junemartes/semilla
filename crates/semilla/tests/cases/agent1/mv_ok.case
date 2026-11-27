@@ -52,26 +52,24 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: move idle conf::idle (holds: Semilla derives the move from the syntax tree)
       places: depot::idle, depot::conf::idle
-    ◆ f1 stated: moved `depot::idle` → `depot::conf::idle` [move]
-    ◆ f3 stated: public API: `depot::idle` is now `depot::conf::idle` (a `pub use` line can keep the old path) [move]
+    ◆ f1 stated: moved `depot::idle` → `depot::conf::idle` [move · code equal]
+    ◆ f3 stated: public API: `depot::idle` is now `depot::conf::idle` (a `pub use` line can keep the old path) [move · no code]
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   other facts, filled in by Semilla:
-  ◆ f2 derived: added `use` line: `pub use conf::idle;` in `depot`: added the public name `depot::idle` (`depot::conf::idle`) [import]
+  ◆ f2 derived: added `use` line: `pub use conf::idle;` in `depot`: added the public name `depot::idle` (`depot::conf::idle`) [import · code equal]
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: moved `depot::idle` → `depot::conf::idle` [move]
+◆ f1 stated: moved `depot::idle` → `depot::conf::idle` [move · code equal]
     lines: src/lib.rs:16-17, src/lib.rs:-13-14, src/lib.rs:-17
-◆ f3 stated: public API: `depot::idle` is now `depot::conf::idle` (a `pub use` line can keep the old path) [move]
+◆ f3 stated: public API: `depot::idle` is now `depot::conf::idle` (a `pub use` line can keep the old path) [move · no code]
     no position
-◆ f2 derived: added `use` line: `pub use conf::idle;` in `depot`: added the public name `depot::idle` (`depot::conf::idle`) [import]
+◆ f2 derived: added `use` line: `pub use conf::idle;` in `depot`: added the public name `depot::idle` (`depot::conf::idle`) [import · code equal]
     lines: src/lib.rs:13

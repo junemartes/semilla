@@ -49,23 +49,21 @@ fn main() {
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  ! build code changed in step 0: build.rs. It runs in the sandbox during each check, and it can change each result from step 0 on. Each result `code equal` and each verified claim that depends on it has the mark (with the build code of step 0).
 
   ! build code changed in this step; read this change first
-  ◆ f1 derived: build.rs: changed [build code]
+  ◆ f1 derived: build.rs: changed [build code · no code]
       ✗ spotlight: build script: this file is code of the build script of `depot`. Cargo runs it before each build of the package, and it can change the code and the result of the build; it needs a reason: --reason 'build.rs:=…'
       diff:
         @@ line 3 @@
         +     println!("cargo:rustc-cfg=fast");
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   cover: each of the 1 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: build script: build.rs
 run again: semilla step 'the change' --reason 'build.rs:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'build.rs:=the reason of the test'
-◆ f1 derived: build.rs: changed [build code]
+◆ f1 derived: build.rs: changed [build code · no code]
     lines: build.rs:3

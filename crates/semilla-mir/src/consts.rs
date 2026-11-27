@@ -535,7 +535,7 @@ fn digest_of(tcx: rustc_middle::ty::TyCtxt<'_>, def: rustc_hir::def_id::DefId, p
                     && adts.insert(adt.did())
                 {
                     let fields: Vec<String> = adt.all_fields().map(|field| format!("{}: {}", field.name, tcx.type_of(field.did).instantiate_identity().skip_norm_wip())).collect();
-                    let text = format!("{:?} {:?} {}", adt.repr(), adt.variants().iter().map(|variant| format!("{:?}", variant.discr)).collect::<Vec<_>>(), fields.join(", "));
+                    let text = format!("{} {:?} {}", repr_text(&adt.repr()), adt.variants().iter().map(|variant| format!("{:?}", variant.discr)).collect::<Vec<_>>(), fields.join(", "));
                     found.push((format!("the declaration of {}", tcx.def_path_str(adt.did())), short_hash(&text)));
                 }
             }
@@ -543,6 +543,18 @@ fn digest_of(tcx: rustc_middle::ty::TyCtxt<'_>, def: rustc_hir::def_id::DefId, p
     }
     found.sort();
     found
+}
+
+/// [R83.2-1] The text of the `repr` of an ADT for a digest: each part that the source gives.
+/// The seed of the field order is not a part: the compiler derives it from the identity of the
+/// crate, and cargo makes that identity from the folders and the tools of the build. A digest
+/// never depends on the folder of the build or of the binary.
+///
+/// The pattern names each field: a new field of the compiler type is a build error here, so the
+/// text never drops a part of the source without a decision.
+fn repr_text(repr: &rustc_abi::ReprOptions) -> String {
+    let rustc_abi::ReprOptions { int, align, pack, flags, scalable, field_shuffle_seed: _ } = repr;
+    format!("int {int:?} align {align:?} pack {pack:?} flags {flags:?} scalable {scalable:?}")
 }
 
 /// The most elements of a static value with a text of each element (R68.6-1). A larger value

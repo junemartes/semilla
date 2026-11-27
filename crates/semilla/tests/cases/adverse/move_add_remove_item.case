@@ -41,7 +41,7 @@ pub fn last(v: &[u32]) -> u32 { v[v.len() - 1] }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -51,25 +51,45 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::list::last=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::list::last=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: renamed `depot::list::first` → `depot::list::last` [rename]
+  ◆ f3 derived: changed expression `0` → `v.len() - 1` at `depot::list::last/tail/index` [semantics · code different]
+      affected bodies: depot::list::last
+      control flow: + call `slice::<impl [u32]>::len` (src/list/mod.rs:13): return → check `overflow: v.len() - 1`
+      control flow: + check `overflow: v.len() - 1` (src/list/mod.rs:13): ok → check `bounds: v[v.len() - 1]`, fail → panic `overflow`
+      control flow: + panic `overflow` (src/list/mod.rs:13)
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: different in dev: for v = &[]: before panics (bounds), after panics (overflow sub) (no suggested test: the two versions panic, and the model does not give two messages that a test can tell apart); different in release: for v = &[1, 0]: before returns 1, after returns 0 (suggested test `semilla_test_first_bfaddf`)
       docs of `depot::list::first`, removed in this step: see f2
-  ◆ f3 derived: changed expression `0` → `v.len() - 1` at `depot::list::last/tail/index` [semantics]
-  ◆ f4 derived: public API: `depot::list::first` is now `depot::list::last` (a different crate can no longer use the old path) [rename]
-  ◆ f5 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 12 lines keep their tokens [move]
-  ◆ f2 derived: removed docs `/// The first element.` [docs]
+  ◆ f1 derived: renamed `depot::list::first` → `depot::list::last` [rename · code equal]
+  ◆ f2 derived: removed docs `/// The first element.` [docs · no code]
+  ◆ f4 derived: public API: `depot::list::first` is now `depot::list::last` (a different crate can no longer use the old path) [rename · no code]
+  ◆ f5 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 12 lines keep their tokens [move · no code]
   cover: each of the 27 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::list::last (src/list/mod.rs:13): graph changes… (88 characters more; `semilla expand --step 0` shows the full line) …lt(s) in other configurations: semilla expand --step 0); different in dev (for v = &[]: before panics (bounds), after panics (overflow sub); no suggested test: the two versions panic, and the model does not give two messages that a test can tell apart); different in release (for v = &[1, 0]: before returns 1, after returns 0; suggested test `semilla_test_first_bfaddf`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_first_bfaddf`: add it to `src/list.rs`, in the module of `depot::list::first` (line 8); run it: `cargo test -p depot --release semilla_test_first_bfaddf`
+      #[cfg(test)]
+      mod semilla_test_first_bfaddf {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 1; the new version returns 0.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let v = [1, 0];
+              let got = crate::list::first(&v);
+              assert_eq!(got, 1);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: renamed `depot::list::first` → `depot::list::last` [rename]
-    no position
-◆ f3 derived: changed expression `0` → `v.len() - 1` at `depot::list::last/tail/index` [semantics]
+◆ f3 derived: changed expression `0` → `v.len() - 1` at `depot::list::last/tail/index` [semantics · code different]
     lines: src/list.rs:-8, src/list/mod.rs:13
-◆ f4 derived: public API: `depot::list::first` is now `depot::list::last` (a different crate can no longer use the old path) [rename]
+◆ f1 derived: renamed `depot::list::first` → `depot::list::last` [rename · code equal]
     no position
-◆ f5 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 12 lines keep their tokens [move]
-    lines: src/list.rs:-1-6, src/list.rs:-9-14, src/list/mod.rs:1-12
-◆ f2 derived: removed docs `/// The first element.` [docs]
+◆ f2 derived: removed docs `/// The first element.` [docs · no code]
     lines: src/list.rs:-7
+◆ f4 derived: public API: `depot::list::first` is now `depot::list::last` (a different crate can no longer use the old path) [rename · no code]
+    no position
+◆ f5 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 12 lines keep their tokens [move · no code]
+    lines: src/list.rs:-1-6, src/list.rs:-9-14, src/list/mod.rs:1-12

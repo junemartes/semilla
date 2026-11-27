@@ -1,6 +1,5 @@
 note: batch 12b, G4: an `async fn` whose body changes a value: the coroutine body has the graph of its MIR before the coroutine transform, so the step shows the changed check and its result, and not "graph not shown"
 rule+: R76.2-1
-option: --compiled
 must_match: shop::total::\{closure#0\} .*: same structure: 1 changed check
 must_match: control flow: ~ check `overflow: v \* 2` → `overflow: v \* 3`
 must_not_match: graph not shown
@@ -30,7 +29,7 @@ pub async fn total(a: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

@@ -4,7 +4,6 @@ must_match: generics of `shop::impl <X as core::ops::Add>`: `impl std::ops::Add 
 must_not_match: removed
 must_not_match: added
 must_not_match: generic arguments go by position
-build_check: on
 === both Cargo.toml
 [package]
 name = "shop"
@@ -31,14 +30,15 @@ impl core::ops::Add for X {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: generics of `shop::impl <X as core::ops::Add>`: `impl std::ops::Add for X { }` → `impl core::ops::Add for X { }` (the public API can change: a different crate can use the item) [declaration]
+  ◆ f1 derived: generics of `shop::impl <X as core::ops::Add>`: `impl std::ops::Add for X { }` → `impl core::ops::Add for X { }` (the public API can change: a different crate can use the item) [declaration · code equal]
+      ! public API: the compare does not cover the code of a different crate
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: generics of `shop::impl <X as core::ops::Add>`: `impl std::ops::Add for X { }` → `impl core::ops::Add for X { }` (the public API can change: a different crate can use the item) [declaration]
+◆ f1 derived: generics of `shop::impl <X as core::ops::Add>`: `impl std::ops::Add for X { }` → `impl core::ops::Add for X { }` (the public API can change: a different crate can use the item) [declaration · code equal]
     lines: src/lib.rs:3, src/lib.rs:-3

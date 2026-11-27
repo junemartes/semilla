@@ -1,7 +1,7 @@
 note: A doc comment in the input is a token of the input. The text of the fact shows it.
 rule+: R57.2-2
 rule-: R57.2-4
-exit: 1
+exit: 0
 must_match: /// The first\. A = 1
 must_match: /// The first entry\. A = 1
 === both Cargo.toml
@@ -28,21 +28,19 @@ table!(
     A = 1,
 );
 === expected
-exit: 1
-rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro call `table!( /// The first. A = 1, )` → `table!( /// The first entry. A = 1, )` (makes items that Semilla cannot list) [declaration]
-      ✗ spotlight: the macro call `table!( /// The first entry. A = 1, )` makes items that Semilla cannot list; it needs a reason: --reason 'depot::table!#0=…'
+  ◆ f1 derived: changed macro call `table!( /// The first. A = 1, )` → `table!( /// The first entry. A = 1, )` (makes: `pub const A`) [declaration · code equal]
+      expansion: `table!( /// The first entry. A = 1, )` at `depot::table!#0` (src/lib.rs:5): expansion changed: changed docs `/// The first.` → `/// The first entry.` [docs]
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  expansions: 1 changed
+    `table!( /// The first entry. A = 1, )` at `depot::table!#0` (src/lib.rs:5): expansion changed: `macro_rules! table` (src/lib.rs:1): changed docs `/// The first.` → `/// The first entry.` [docs]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'depot::table!#0=<why>'
+
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::table!#0=the reason of the test'
-◆ f1 derived: changed macro call `table!( /// The first. A = 1, )` → `table!( /// The first entry. A = 1, )` (makes items that Semilla cannot list) [declaration]
+◆ f1 derived: changed macro call `table!( /// The first. A = 1, )` → `table!( /// The first entry. A = 1, )` (makes: `pub const A`) [declaration · code equal]
     lines: src/lib.rs:6, src/lib.rs:-6

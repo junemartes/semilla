@@ -25,40 +25,51 @@ pub fn new_tax(x: u32, y: u32) -> u32 { x / 5 + y }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression `x / 10` → `x / 5 + y` (f5)
       in: shop::new_tax
       lines: src/lib.rs:5, src/lib.rs:-5
-      to state it: --change 'shop::new_tax=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::new_tax=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::new_tax=TEXT'; if it does not change, --same 'rewrite $a / 10 => $a / 5 + y'
   declarations, filled in by Semilla:
-  ◆ f2 derived: parameter of `shop::new_tax` added: `y: u32` (the public API can change: a different crate can use the item) [declaration]
+  ◆ f2 derived: parameter of `shop::new_tax` added: `y: u32` (the public API can change: a different crate can use the item) [declaration · code different]
+      affected bodies: shop::new_tax (with 1 other edit of this body)
+      control flow: + check `overflow: x / 5 + y` (src/lib.rs:5): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:5)
+      control flow: + arrow entry (src/lib.rs:5) → check `overflow: x / 5 + y` (src/lib.rs:5)
+      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: not decided: the parameters change
+      ! public API: the compare does not cover the code of a different crate
       docs of `shop::new_tax`, changed in this step: see f3
       comment in the attributes of `shop::new_tax`, changed in this step: see f4
   other facts, filled in by Semilla:
-  ◆ f1 derived: renamed `shop::old_tax` → `shop::new_tax` [rename]
-  ◆ f5 derived: changed expression `x / 10` → `x / 5 + y` at `shop::new_tax/tail` [semantics]
-  ◆ f6 derived: public API: `shop::old_tax` is now `shop::new_tax` (a different crate can no longer use the old path) [rename]
-  ◆ f3 derived: changed docs `/// Gives the old tax.` → `/// Gives the new tax.` [docs]
-  ◆ f4 derived: changed comment `// It is 10 percent.` → `// It is 20 percent.` [docs]
+  ◆ f5 derived: changed expression `x / 10` → `x / 5 + y` at `shop::new_tax/tail` [semantics · code different]
+      affected bodies: shop::new_tax (with 1 other edit of this body)
+      control flow: + check `overflow: x / 5 + y` (src/lib.rs:5): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:5)
+      control flow: + arrow entry (src/lib.rs:5) → check `overflow: x / 5 + y` (src/lib.rs:5)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: not decided alone: the variant with only this edit does not compile; the body: not decided: the parameters change
+  ◆ f1 derived: renamed `shop::old_tax` → `shop::new_tax` [rename · code equal]
+  ◆ f3 derived: changed docs `/// Gives the old tax.` → `/// Gives the new tax.` [docs · no code]
+  ◆ f4 derived: changed comment `// It is 10 percent.` → `// It is 20 percent.` [docs · no code]
+  ◆ f6 derived: public API: `shop::old_tax` is now `shop::new_tax` (a different crate can no longer use the old path) [rename · no code]
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    shop::new_tax (src/lib.rs:5): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (the parameters change)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 derived: parameter of `shop::new_tax` added: `y: u32` (the public API can change: a different crate can use the item) [declaration]
+◆ f2 derived: parameter of `shop::new_tax` added: `y: u32` (the public API can change: a different crate can use the item) [declaration · code different]
     lines: src/lib.rs:5
-◆ f1 derived: renamed `shop::old_tax` → `shop::new_tax` [rename]
-    no position
-◆ f5 derived: changed expression `x / 10` → `x / 5 + y` at `shop::new_tax/tail` [semantics]
+◆ f5 derived: changed expression `x / 10` → `x / 5 + y` at `shop::new_tax/tail` [semantics · code different]
     lines: src/lib.rs:5, src/lib.rs:-5
-◆ f6 derived: public API: `shop::old_tax` is now `shop::new_tax` (a different crate can no longer use the old path) [rename]
+◆ f1 derived: renamed `shop::old_tax` → `shop::new_tax` [rename · code equal]
     no position
-◆ f3 derived: changed docs `/// Gives the old tax.` → `/// Gives the new tax.` [docs]
+◆ f3 derived: changed docs `/// Gives the old tax.` → `/// Gives the new tax.` [docs · no code]
     lines: src/lib.rs:3, src/lib.rs:-3
-◆ f4 derived: changed comment `// It is 10 percent.` → `// It is 20 percent.` [docs]
+◆ f4 derived: changed comment `// It is 10 percent.` → `// It is 20 percent.` [docs · no code]
     lines: src/lib.rs:4, src/lib.rs:-4
+◆ f6 derived: public API: `shop::old_tax` is now `shop::new_tax` (a different crate can no longer use the old path) [rename · no code]
+    no position

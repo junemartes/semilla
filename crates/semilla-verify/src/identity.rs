@@ -378,8 +378,8 @@ pub(crate) fn derive<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exp
     let (mut stated, mut causes) = crate::agent::stated_pairs(input);
     // The order of the options is not important: the pairs have the order of their paths.
     stated.sort_by(|a, b| (&a.1.old, &a.1.new).cmp(&(&b.1.old, &b.1.new)));
-    // Phase 1 of a step with the compiled check has no MIR: phase 2 tries each pair.
-    if plain.bodies.is_empty() && input.step.compiled {
+    // Phase 1 of a step has no MIR: phase 2 tries each pair.
+    if plain.bodies.is_empty() && !input.step.syntax_only {
         stated.clear();
     }
     if stated.is_empty() {
@@ -556,9 +556,9 @@ fn search<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn Ex
         plain.report.notes.push(format!("{} show(s) as removed and added: Semilla does not derive the rename or the move (the pairs have more than {MAX_MAPS} name maps)", pair_text(&pairs)));
         return Err(plain);
     };
-    // Phase 1 of a step with the compiled check has no MIR: the derivation waits for phase 2. A
-    // step with no compiled check derives from the syntax tree (design 50).
-    if plain.bodies.is_empty() && input.step.compiled {
+    // Phase 1 of a step has no MIR: the derivation waits for phase 2. A syntax-only check (the
+    // virtual crate of an expansion compare, R83.1-3) derives from the syntax tree (design 50).
+    if plain.bodies.is_empty() && !input.step.syntax_only {
         plain.report.notes.push(format!("a rename or a move is possible ({}): phase 2 tries the derivation", pair_text(&maps[0])));
         return Err(plain);
     }

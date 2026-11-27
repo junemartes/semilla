@@ -49,16 +49,15 @@ pub fn larger(a: u32, b: u32) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: no new failure found (<TIME>)
+  ! build check: the target `depot` (example "list") does not build before the step and after it, so Semilla did not check a new error of the step in this target, or in a target that needs it
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed docs `//! Tools for lists. //! A second line.` → `//! Tools for lists and more. //! A second line.` [docs]
+  ◆ f1 derived: changed docs `//! Tools for lists. //! A second line.` → `//! Tools for lists and more. //! A second line.` [docs · no code]
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed docs `//! Tools for lists. //! A second line.` → `//! Tools for lists and more. //! A second line.` [docs]
+◆ f1 derived: changed docs `//! Tools for lists. //! A second line.` → `//! Tools for lists and more. //! A second line.` [docs · no code]
     lines: src/list.rs:1, src/list.rs:-1

@@ -165,7 +165,7 @@ fn run79(before: &[(&str, &str)], after: &[(&str, &str)], intent: Option<&str>, 
         old.names.set(Some(std::sync::Arc::new(record_of(&old))));
         new.names.set(Some(std::sync::Arc::new(record_of(&new))));
     }
-    let mut step = Step { index: 0, intent: "test".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), compiled: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+    let mut step = Step { index: 0, intent: "test".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new() };
     if let Some(text) = intent {
         step.agent.intent = vec![IntentFile { path: "claims.rs".into(), text: text.into() }];
     }
@@ -276,7 +276,7 @@ fn the_anchor_comes_from_the_definition_that_rustc_resolved_never_from_the_text(
     // No compiled claims: no anchor, and the map says why.
     let run = run79(&files(&lib(OLD)), &files(&lib(NEW)), Some(CLAIM_F), None, false);
     assert_eq!(run.entry("added", "demo::f/S1").state, AstState::NotMapped);
-    assert!(run.map().gap.as_deref().is_some_and(|gap| gap.contains("semilla intent check")), "{:?}", run.map().gap);
+    assert!(run.map().gap.as_deref().is_some_and(|gap| gap.contains("the claims that rustc compiles")), "{:?}", run.map().gap);
     // The scope text `demo::f` resolves (by rustc) to `demo::g`: the anchor is `g`.
     let data = compiled(&[("before::demo::f", Some("before::demo::g")), ("after::demo::f", Some("after::demo::g"))], &[("f_same", &["demo::g"], &["demo::g"])], &[]);
     let run = run79(&files(&lib(OLD)), &files(&lib(NEW)), Some(CLAIM_F), Some(Ok(data)), false);

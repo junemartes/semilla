@@ -1,8 +1,7 @@
 note: batch 10n2, part A: a field order change under a derive of the proc macro crate `depot` whose code does not read the fields; with the build check, the expansion records show the same code in the two trees, so the order change needs no reason (the fact has a note); with no build check, the case `names/order_third_party` keeps the spotlight
 rule+: R65.9-1
-build_check: on
 must_match: member order of `shop::Item`: `a, b` → `b, a`
-must_match: note: the member order needs no reason: each macro of the type \(`Marker`\) makes the same code in the two versions
+must_match: the member order needs no reason: each macro of the type \(`Marker`\) makes the same code in the two versions
 must_not_match: spotlight
 === both Cargo.toml
 [workspace]
@@ -49,15 +48,15 @@ pub struct Item {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
-  ◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
-      note: the member order needs no reason: each macro of the type (`Marker`) makes the same code in the two versions (the expansion records, R65.9-1)
+  ◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration · no compare]
+      note: no compare: the MIR bodies do not show each effect of a member order; the member order needs no reason: each macro of the type (`Marker`) makes the same code in the two versions (the expansion records, R65.9-1)
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
+◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration · no compare]
     lines: shop/src/lib.rs:4, shop/src/lib.rs:-3

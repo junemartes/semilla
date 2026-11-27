@@ -54,13 +54,20 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
       places: depot::a/tail/lhs, depot::b/tail/lhs
-    ◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics]
+    ◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
         in: depot::a, depot::b
+        affected bodies: depot::a, depot::b
+        control flow: + call `Cart::total` (src/lib.rs:6): return → check `overflow: c.total() + 1`
+        control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-6, src/lib.rs:6)
+        control flow: + arrow entry (src/lib.rs:6) → call `Cart::total` (src/lib.rs:6)
+        control flow: … 5 more (semilla expand --step 0)
+        equivalence: `depot::a`: equivalent (proved by SMT after inlining `depot::Cart::total`)
+        equivalence: `depot::b`: equivalent alone (proved by SMT after inlining `depot::Cart::total`); the body: different: for c = &Cart { 1, [] }: before returns 2, after returns 3 (suggested test `semilla_test_b_9d7f1c`)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `2` → `3` (f2)
@@ -69,14 +76,35 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::b=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::b=TEXT'
   other facts, filled in by Semilla:
-  ◆ f2 derived: changed literal `2` → `3` at `depot::b/tail/rhs` [semantics]
+  ◆ f2 derived: changed literal `2` → `3` at `depot::b/tail/rhs` [semantics · code different]
+      affected bodies: depot::b (with 1 other edit of this body)
+      control flow: + call `Cart::total` (src/lib.rs:7): return → check `overflow: c.total() * 3`
+      control flow: ~ check `overflow: c.total * 2` → `overflow: c.total() * 3` (src/lib.rs:-7, src/lib.rs:7)
+      control flow: + arrow entry (src/lib.rs:7) → call `Cart::total` (src/lib.rs:7)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: different alone: for c = &Cart { 1, [] }: before returns 2, after returns 3 (suggested test `semilla_test_b_9d7f1c`); the body: different: for c = &Cart { 1, [] }: before returns 2, after returns 3 (suggested test `semilla_test_b_9d7f1c`)
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::a (src/lib.rs:6): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `depot::Cart::total`)
+    depot::b (src/lib.rs:7): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for c = &Cart { 1, [] }: before returns 2, after returns 3; suggested test `semilla_test_b_9d7f1c`)
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_b_9d7f1c`: add it to `src/lib.rs`, in the module of `depot::b` (line 7); run it: `cargo test -p depot semilla_test_b_9d7f1c`; also: `cargo test -p depot --release semilla_test_b_9d7f1c`
+      #[cfg(test)]
+      mod semilla_test_b_9d7f1c {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 2; the new version returns 3.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let c = crate::Cart { total: 1, items: vec![] };
+              let got = crate::b(&c);
+              assert_eq!(got, 2);
+          }
+      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics]
+◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
     lines: src/lib.rs:6-7, src/lib.rs:-6-7
-◆ f2 derived: changed literal `2` → `3` at `depot::b/tail/rhs` [semantics]
+◆ f2 derived: changed literal `2` → `3` at `depot::b/tail/rhs` [semantics · code different]
     lines: src/lib.rs:7, src/lib.rs:-7

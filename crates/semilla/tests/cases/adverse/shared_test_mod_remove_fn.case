@@ -49,19 +49,27 @@ pub fn setup() -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   tests and benches, filled in by Semilla:
-  ◆ f1 derived: removed `depot (test "a")::common::extra` [removed]
-  ◆ f2 derived: removed `depot (test "b")::common::extra` [removed]
+  ◆ f1 derived: removed `depot (test "a")::common::extra` [removed · code different]
+      affected bodies: depot (test "a")::common::extra
+      control flow: − graph of `a::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
+      control flow: − graph of `b::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
+  ◆ f2 derived: removed `depot (test "b")::common::extra` [removed · code different]
+      affected bodies: depot (test "a")::common::extra
+      control flow: − graph of `a::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
+      control flow: − graph of `b::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    a::common::extra (tests/common/mod.rs:6): graph removed: 2 points, 1 arrow
+    b::common::extra (tests/common/mod.rs:6): graph removed: 2 points, 1 arrow
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: inactive code: depot (test "b")::common::extra (no checked configuration compiles `depot (test "b")::common::extra`)
 
 === positions
-◆ f1 derived: removed `depot (test "a")::common::extra` [removed]
+◆ f1 derived: removed `depot (test "a")::common::extra` [removed · code different]
     lines: tests/common/mod.rs:-5-6
-◆ f2 derived: removed `depot (test "b")::common::extra` [removed]
+◆ f2 derived: removed `depot (test "b")::common::extra` [removed · code different]
     lines: tests/common/mod.rs:-6

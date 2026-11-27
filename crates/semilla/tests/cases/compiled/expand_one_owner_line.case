@@ -2,7 +2,6 @@ note: batch 10c2, item 3: a test helper macro whose code has the place of the ca
 rule+: R63.9-8
 rule-: R63.9-7
 must_not_match: \n      expansion: `check_here
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -87,9 +86,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     2 calls: expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes: `shop::one`, `shop::two` (semilla expand --step 0)
     3 calls: expansion changed: `macro_rules! check_here` (src/lib.rs:9): only the context of the call changes: a value that the macro makes at the call (`concat!("failed at ", file!(), ":", line!())`); the context of the call changes: `shop::one/S1`, `shop::two/S1`, `shop::two/S2` (semilla expand --step 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'shop::Meters=<why>' --compiled
+run again: semilla step 'the change' --reason 'shop::Meters=<why>'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::Meters=the reason of the test' --compiled
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::Meters=the reason of the test'
 ◆ f1 derived: parameter of `shop::<Meters as From>::from` `v: u32` → `v: u64` (the public API can change: a different crate can use the item) [declaration · code different]
     lines: src/lib.rs:4-6, src/lib.rs:-4
 ◆ f2 derived: the tuple fields of `shop::Meters` changed: `(u32)` → `(u64)` (the public API can change: a different crate can use the item) [declaration · code different]

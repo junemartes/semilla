@@ -1,4 +1,4 @@
-note: NOT layout: the macro is now after its use
+note: NOT layout: the macro moves to the top, across items before its use (its textual scope changes)
 rule+: R56.5-1
 rule-: R55.5-4 R56.5-2
 === both Cargo.toml
@@ -28,6 +28,7 @@ impl Shape for Pair {
     fn sides(&self) -> u32 { 2 }
 }
 === new src/lib.rs
+macro_rules! twice { ($e:expr) => { $e * 2 }; }
 pub enum Mode { Idle, Busy, Done }
 pub struct Pair { pub left: u32, pub right: u8 }
 #[derive(PartialEq, PartialOrd)]
@@ -47,26 +48,24 @@ impl Shape for Pair {
     fn area(&self) -> u32 { self.left }
     fn sides(&self) -> u32 { 2 }
 }
-macro_rules! twice { ($e:expr) => { $e * 2 }; }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: moved, see f1 (f1)
       in: depot::twice!
-      lines: src/lib.rs:20, src/lib.rs:-14
+      lines: src/lib.rs:1, src/lib.rs:-14
       to state it: --change 'depot::twice!=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::twice!=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: moved `depot::twice!` (it can give a macro) past 3 items: `depot::double`, `depot::Shape`, `depot::impl <Pair as Shape>`; a macro has a textual scope: a macro call in these items can have a new meaning [macro]
+  ◆ f1 derived: moved `depot::twice!` (it can give a macro) past 5 items: `depot::Mode`, `depot::Pair`, `depot::Level`, `depot::limit`, `depot::total`; a macro has a textual scope: a macro call in these items can have a new meaning [macro · no code]
+      expansion: the call that uses `twice!` has an equal expansion
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: moved `depot::twice!` (it can give a macro) past 3 items: `depot::double`, `depot::Shape`, `depot::impl <Pair as Shape>`; a macro has a textual scope: a macro call in these items can have a new meaning [macro]
-    lines: src/lib.rs:20, src/lib.rs:-14
+◆ f1 derived: moved `depot::twice!` (it can give a macro) past 5 items: `depot::Mode`, `depot::Pair`, `depot::Level`, `depot::limit`, `depot::total`; a macro has a textual scope: a macro call in these items can have a new meaning [macro · no code]
+    lines: src/lib.rs:1, src/lib.rs:-14

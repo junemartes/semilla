@@ -1,7 +1,7 @@
 note: A new macro call whose docs have the text `macro_rules!`. The item is a call, not a definition.
 rule-: R57.2-5
-exit: 1
-must_match: added macro call `table!\( A = 2, \)` \(makes items that Semilla cannot list\)
+exit: 0
+must_match: added macro call `table!\( A = 2, \)` \(makes: `pub const A`\)
 must_not_match: changed macro `table`
 must_not_match: added macro `table`
 === both Cargo.toml
@@ -24,21 +24,19 @@ table!(
     A = 2,
 );
 === expected
-exit: 1
-rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: added macro call `table!( A = 2, )` (makes items that Semilla cannot list) [added]
-      ✗ spotlight: the macro call `table!( A = 2, )` makes items that Semilla cannot list; it needs a reason: --reason 'depot::table!#0=…'
+  ◆ f1 derived: added macro call `table!( A = 2, )` (makes: `pub const A`) [added · no code]
+      expansion: `table!( A = 2, )` at `depot::table!#0` (src/lib.rs:6): expansion added: makes `depot::A`
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  expansions: 1 added
+    `table!( A = 2, )` at `depot::table!#0` (src/lib.rs:6): expansion added: `macro_rules! table` (src/lib.rs:1): makes `depot::A`; the step adds the call or its input
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'depot::table!#0=<why>'
+
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::table!#0=the reason of the test'
-◆ f1 derived: added macro call `table!( A = 2, )` (makes items that Semilla cannot list) [added]
+◆ f1 derived: added macro call `table!( A = 2, )` (makes: `pub const A`) [added · no code]
     lines: src/lib.rs:5-8

@@ -1,3 +1,4 @@
+known_failure: full_text: the compiled check of 2fde4bf cuts the expansion line of `assert_eq!`, and `semilla expand --step 0` has no full line for it (a defect of the compiled mode; batch 14a changes no result)
 === both Cargo.toml
 [package]
 name = "depot"
@@ -46,16 +47,26 @@ fn check() {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   tests and benches, filled in by Semilla:
-  ◆ f1 derived: replace macro input `assert_eq!( v.iter().sum::<u32>(), 6 );` → `assert_eq!( v.iter().copied().sum::<u32>(), 6, "the sum" );` at `depot::check/S1` [macro]
+  ◆ f1 derived: replace macro input `assert_eq!( v.iter().sum::<u32>(), 6 );` → `assert_eq!( v.iter().copied().sum::<u32>(), 6, "the sum" );` at `depot::check/S1` [macro · code different]
+      affected bodies: depot::check
+      equivalence: `depot::check`: not decided: a value of a type that the check does not model: fn check() { let v = [1, 2, 3]; assert_eq!( v.it… (src/lib.rs:-10)
+      equivalence: `depot::check::{closure#0} #[test]`: not decided: a value of a type that the check does not model: fn check() { let v = [1, 2, 3]; assert_eq!( v.it… (src/lib.rs:-10)
+      expansion: `assert_eq!( v.iter().copied().sum::<u32>(), 6, "the sum" )` at `depot::check/S1` (src/lib.rs:12): expansion changed: changed expression `v.iter()` → `v.iter().copied()` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/recv` [semantics]; changed expression `::core::option::Option::None` → `::core::option::Option::Some(format_args!("the sum"))` at `expansion/S0/body/S0/arm[0].body/S0/then/S1/args[3]` [semantics]
+      reaches: 1 body, no public function: depot::check::{closure#0} (semilla expand --step 0)
   cover: each of the 10 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::check (src/lib.rs:10): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn check() { let v = [1, 2, 3]; assert_eq!( v.it… (src/lib.rs:-10))
+    depot::check::{closure#0} #[test] (src/lib.rs:9): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn check() { let v = [1, 2, 3]; assert_eq!( v.it… (src/lib.rs:-10))
+    reached bodies: 1
+      depot::check::{closure#0} (src/lib.rs:9): reached through depot::check, not decided (a value of a type that the check does not model: fn check() { let v = [1, 2, 3]; assert_eq!( v.it… (src/lib.rs:-10))
+  expansions: 1 changed, 2 equal
+    `assert_eq!( v.iter().copied().sum::<u32>(), 6, "the sum" )` at `depot::check/S1` (src/lib.rs:12): expansion changed: `macro assert_eq` (crate core): changed expression `v.iter()` → `v.iter().copied()` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/recv` [semantics]; changed expression `::c… (131 characters more; `semilla expand --step 0` shows the full line) …1/args[3]` [semantics]; the input of the call changes; the two calls are a pair by similarity (0.82)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: replace macro input `assert_eq!( v.iter().sum::<u32>(), 6 );` → `assert_eq!( v.iter().copied().sum::<u32>(), 6, "the sum" );` at `depot::check/S1` [macro]
+◆ f1 derived: replace macro input `assert_eq!( v.iter().sum::<u32>(), 6 );` → `assert_eq!( v.iter().copied().sum::<u32>(), 6, "the sum" );` at `depot::check/S1` [macro · code different]
     lines: src/lib.rs:13-15, src/lib.rs:17, src/lib.rs:-13-18

@@ -52,11 +52,13 @@ pub struct Step {
     /// reason`). Free text for the reviewer.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub reasons: std::collections::BTreeMap<String, String>,
-    /// The mode of the step (design 50). True: the step has the compiled check (phase 2), and
-    /// each fact has a compare result. False: the step has the syntax check only. A stored step
-    /// with no field is a step of an earlier version: it has the compiled check.
-    #[serde(default = "compiled_default", skip_serializing_if = "is_true")]
-    pub compiled: bool,
+    /// [R83.1-3] True only for the check of the virtual crate of an expansion compare (design
+    /// 63): a check with no compiler data, so no fact gets a compare result. A step of the
+    /// author has no mode (design 83): each step builds the two trees and has their MIR. The
+    /// field is not stored. A stored step of an earlier version can have the field `compiled`
+    /// (the mode of design 50); the reader ignores it.
+    #[serde(skip)]
+    pub syntax_only: bool,
     /// The result of the build check of the new tree of the step (design 53), from the machine
     /// of the author. A stored step with no field is a step of an earlier version: it has no
     /// result.
@@ -126,7 +128,8 @@ impl AgentFacts {
 pub enum BuildCheck {
     /// Each target of the new tree builds.
     Passes,
-    /// The check did not run (`--no-check`, `SEMILLA_NO_CHECK`).
+    /// The check did not run. Only a stored step of an earlier version has this result: the
+    /// option that turned the check off is gone (design 83).
     NotRun,
     /// Some targets of the new tree do not build, and Semilla found no failure that the step
     /// makes (rule 8 of design 53). The JSON name stays `base_fails`.
@@ -242,14 +245,6 @@ pub fn build_check_lines(steps: &[Step]) -> Vec<String> {
         .collect()
 }
 
-/// The mode of a stored step that has no `compiled` field.
-pub fn compiled_default() -> bool {
-    true
-}
-
-fn is_true(value: &bool) -> bool {
-    *value
-}
 
 /// The kind of a group. Some kinds have rules that the verifier checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -424,6 +419,30 @@ mod tests {
         assert_eq!(claim.at.unwrap().to_string(), "a::f/S0");
     }
 
+    // rule+ R83.1-2
+    #[test]
+    fn a_stored_step_of_the_mode_of_design_50_stays_readable() {
+        // A step of the default mode of design 50: `"compiled": false` and a build check that
+        // did not run. It reads as a step of the one mode, and it keeps its record.
+        let json = r#"{"index":0,"intent":"a","claims":[],"tree_before":"x","tree_after":"y","compiled":false,"build_check":{"result":"not_run"}}"#;
+        let old: Step = serde_json::from_str(json).unwrap();
+        assert!(!old.syntax_only);
+        assert_eq!(old.build_check, Some(BuildCheck::NotRun));
+        assert_eq!(build_check_lines(std::slice::from_ref(&old)), ["! build check of step 0: not run: the author turned the check off, so Semilla did not check that this code builds"]);
+        let set: ChangeSet = serde_json::from_str(&format!(r#"{{"base_tree":"x","head_tree":"y","steps":[{json}]}}"#)).unwrap();
+        assert_eq!(set.steps.len(), 1);
+    }
+
+    // rule- R83.1-2
+    #[test]
+    fn a_new_step_has_no_field_of_a_mode() {
+        let mut step: Step = serde_json::from_str(r#"{"index":0,"intent":"a","claims":[],"tree_before":"x","tree_after":"y"}"#).unwrap();
+        // The syntax-only check of R83.1-3 is not stored.
+        step.syntax_only = true;
+        let stored = serde_json::to_string(&step).unwrap();
+        assert!(!stored.contains("compiled") && !stored.contains("syntax_only"), "{stored}");
+    }
+
     // rule+ R53.4-8 R53.6-1 R53.6-3 R53.6-4
     // rule- R53.6-1 R53.6-3 R53.6-4
     #[test]
@@ -478,7 +497,7 @@ mod tests {
             tree_before: String::new(),
             tree_after: String::new(),
             reasons: Default::default(),
-            compiled: false,
+            syntax_only: false,
             build_check: None,
             agent: Default::default(),
             tags: Vec::new(),

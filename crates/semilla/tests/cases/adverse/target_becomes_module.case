@@ -44,7 +44,7 @@ pub mod extra;
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -54,23 +54,28 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::extra::value=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::extra::value=TEXT'
   new and removed items, filled in by Semilla:
-  ◆ f3 derived: added `depot::extra` (the public API changes: a different crate can now use the item) [added]
+  ◆ f3 derived: added `depot::extra` (the public API changes: a different crate can now use the item) [added · no code]
+      ! public API: the compare does not cover the code of a different crate
   tests and benches, filled in by Semilla:
-  ◆ f1 derived: moved `depot (test "extra")::value` → `depot::extra::value` [move]
+  ◆ f1 derived: moved `depot (test "extra")::value` → `depot::extra::value` [move · code equal]
+      control flow: + graph of `depot::extra::value`: 2 points, 1 arrow (semilla expand --step 0)
   other facts, filled in by Semilla:
-  ◆ f2 derived: changed literal `1` → `2` at `depot::extra::value/tail/rhs` [semantics]
-  ◆ f4 derived: public API: a different crate can now use `depot::extra::value` [move]
+  ◆ f2 derived: changed literal `1` → `2` at `depot::extra::value/tail/rhs` [semantics · code different]
+      affected bodies: depot::extra::value
+      control flow: + graph of `depot::extra::value`: 2 points, 1 arrow (semilla expand --step 0)
+  ◆ f4 derived: public API: a different crate can now use `depot::extra::value` [move · no code]
   cover: each of the 9 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::extra::value (src/extra.rs:1): graph added: 2 points, 1 arrow (in dev, release; 1 more result(s) in other configurations: semilla expand --step 0)
+    extra::{test-harness-main} (no place): no graph data: a record of the driver has no graph; no edit in the body
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f3 derived: added `depot::extra` (the public API changes: a different crate can now use the item) [added]
+◆ f3 derived: added `depot::extra` (the public API changes: a different crate can now use the item) [added · no code]
     lines: src/lib.rs:6
-◆ f1 derived: moved `depot (test "extra")::value` → `depot::extra::value` [move]
+◆ f1 derived: moved `depot (test "extra")::value` → `depot::extra::value` [move · code equal]
     lines: src/extra.rs:1-2, tests/extra.rs:-1-2
-◆ f2 derived: changed literal `1` → `2` at `depot::extra::value/tail/rhs` [semantics]
+◆ f2 derived: changed literal `1` → `2` at `depot::extra::value/tail/rhs` [semantics · code different]
     lines: src/extra.rs:3-4, tests/extra.rs:-3-4
-◆ f4 derived: public API: a different crate can now use `depot::extra::value` [move]
+◆ f4 derived: public API: a different crate can now use `depot::extra::value` [move · no code]
     no position

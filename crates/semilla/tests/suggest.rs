@@ -29,7 +29,7 @@ fn semilla(dir: &Path, repo: &Path, args: &[&str]) -> String {
     let mut command = Command::new(env!("CARGO_BIN_EXE_semilla"));
     command.current_dir(repo).args(args);
     command.env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"));
-    command.env("SEMILLA_CACHE_DIR", dir.join("cache")).env("SEMILLA_NO_CHECK", "1").env_remove("SEMILLA_COMPILED").env_remove("SEMILLA_TEST_RULE_OFF");
+    command.env("SEMILLA_CACHE_DIR", dir.join("cache")).env_remove("SEMILLA_COMPILED").env_remove("SEMILLA_TEST_RULE_OFF");
     let z3 = root.join(".semilla/tools/z3");
     if z3.exists() {
         command.env("SEMILLA_Z3", z3);
@@ -51,7 +51,7 @@ fn step(dir: &Path, old: &str, new: &str, args: &[&str]) -> String {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "old"]);
     std::fs::write(repo.join("src/lib.rs"), new).unwrap();
-    let mut all = vec!["step", "the change", "--compiled"];
+    let mut all = vec!["step", "the change"];
     all.extend(args);
     semilla(dir, &repo, &all)
 }

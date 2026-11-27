@@ -3,7 +3,6 @@ rule-: R70.2-1
 must_match: added `shop::impl <Cat as Speak>`|trait impl `<Cat as Speak>` added
 must_match: added `shop::<Dog as Speak>::id`
 must_not_match: overrides the default body
-build_check: on
 === both Cargo.toml
 [package]
 name = "shop"
@@ -48,20 +47,32 @@ impl Speak for Cat {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 4 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: trait impl `<Cat as Speak>` added with: `fn name`, `fn id` (the public API can change: a different crate can use the item) [added]
-  ◆ f2 derived: added `shop::<Dog as Speak>::id` (the public API changes: a different crate can now use the item) [added]
-  ◆ f3 derived: added `shop::Speak::id` (the public API changes: a different crate can now use the item) [added]
+  ◆ f1 derived: trait impl `<Cat as Speak>` added with: `fn name`, `fn id` (the public API can change: a different crate can use the item) [added · code different]
+      affected bodies: shop::<Cat as Speak>::id, shop::<Cat as Speak>::name
+      control flow: + graph of `<shop::Cat as shop::Speak>::id`: 2 points, 1 arrow (semilla expand --step 0)
+      control flow: + graph of `<shop::Cat as shop::Speak>::name`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  ◆ f2 derived: added `shop::<Dog as Speak>::id` (the public API changes: a different crate can now use the item) [added · code different]
+      affected bodies: shop::<Dog as Speak>::id
+      control flow: + graph of `<shop::Dog as shop::Speak>::id`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  ◆ f3 derived: added `shop::Speak::id` (the public API changes: a different crate can now use the item) [added · no code]
+      ! public API: the compare does not cover the code of a different crate
   cover: each of the 16 changed line(s) is in a fact
+  control flow: 3 bodies
+    <shop::Cat as shop::Speak>::id (src/lib.rs:21): graph added: 2 points, 1 arrow
+    <shop::Cat as shop::Speak>::name (src/lib.rs:18): graph added: 2 points, 1 arrow
+    <shop::Dog as shop::Speak>::id (src/lib.rs:12): graph added: 2 points, 1 arrow
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: trait impl `<Cat as Speak>` added with: `fn name`, `fn id` (the public API can change: a different crate can use the item) [added]
+◆ f1 derived: trait impl `<Cat as Speak>` added with: `fn name`, `fn id` (the public API can change: a different crate can use the item) [added · code different]
     lines: src/lib.rs:16-24
-◆ f2 derived: added `shop::<Dog as Speak>::id` (the public API changes: a different crate can now use the item) [added]
+◆ f2 derived: added `shop::<Dog as Speak>::id` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:11-15, src/lib.rs:-10
-◆ f3 derived: added `shop::Speak::id` (the public API changes: a different crate can now use the item) [added]
+◆ f3 derived: added `shop::Speak::id` (the public API changes: a different crate can now use the item) [added · no code]
     lines: src/lib.rs:5

@@ -37,19 +37,24 @@ impl Cart {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: added `depot::Cart::zero` (the public API changes: a different crate can now use the item) [added]
-  ◆ f2 derived: added `depot::impl Cart#0` with: `fn zero` [added]
+  ◆ f1 derived: added `depot::Cart::zero` (the public API changes: a different crate can now use the item) [added · code different]
+      affected bodies: depot::Cart::zero
+      control flow: + graph of `depot::Cart::zero`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  ◆ f2 derived: added `depot::impl Cart#0` with: `fn zero` [added · code different]
+      affected bodies: depot::Cart::zero
+      control flow: + graph of `depot::Cart::zero`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 5 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::Cart::zero (src/lib.rs:3): graph added: 2 points, 1 arrow
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: added `depot::Cart::zero` (the public API changes: a different crate can now use the item) [added]
+◆ f1 derived: added `depot::Cart::zero` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:3-5
-◆ f2 derived: added `depot::impl Cart#0` with: `fn zero` [added]
+◆ f2 derived: added `depot::impl Cart#0` with: `fn zero` [added · code different]
     lines: src/lib.rs:2-6

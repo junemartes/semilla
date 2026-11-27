@@ -1,6 +1,5 @@
 note: batch 11c, G7: two tests move one line down, and one of them has an edit in its body: the expansion of `#[test]` changes only by the place of the item (each changed value moves with the call), so no line goes under the fact of the edit, and the step section has one line for the two calls of the macro
 rule+: R71.1-1
-build_check: on
 must_match: 2 calls: expansion changed: `attribute macro test` \(crate core\): only the context of the call changes
 must_not_match: expansion: `#\[test\]`
 must_not_match: changed code `13usize
@@ -48,22 +47,32 @@ mod tests {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (<TIME>)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   tests and benches, filled in by Semilla:
-  ◆ f1 derived: extracted variable `x` = `2` (1 use) at `shop::tests::two/S0` [move]
+  ◆ f1 derived: extracted variable `x` = `2` (1 use) at `shop::tests::two/S0` [move · code different]
+      ! the compiled code changes: shop::tests::two
+      equivalence: `shop::tests::two`: not decided: a value of a type that the check does not model: fn two() { assert_eq!(super::add(2), 3); } (src/lib.rs:-13)
+      equivalence: `shop::tests::two::{closure#0} #[test]`: not decided: a value of a type that the check does not model: fn two() { assert_eq!(super::add(2), 3); } (src/lib.rs:-13)
       expansion: `assert_eq!(super::add(x), 3)` at `shop::tests::two/S1` (src/lib.rs:16): expansion changed: changed expression `2` → `x` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/args[0]` [semantics]
+      reaches: 1 body, no public function: shop::tests::two::{closure#0} (semilla expand --step 0)
   other facts, filled in by Semilla:
-  ◆ f2 derived: added comment `// a comment` [docs]
+  ◆ f2 derived: added comment `// a comment` [docs · no code]
   cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::tests::two (src/lib.rs:14): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn two() { assert_eq!(super::add(2), 3); } (src/lib.rs:-13))
+    shop::tests::two::{closure#0} #[test] (src/lib.rs:13): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn two() { assert_eq!(super::add(2), 3); } (src/lib.rs:-13))
+    reached bodies: 2
+      shop::tests::one::{closure#0} (src/lib.rs:8): reached through shop::tests::one, not decided (a value of a type that the check does not model: fn one() { assert_eq!(super::add(1), 2); } (src/lib.rs:-8))
+      shop::tests::two::{closure#0} (src/lib.rs:13): reached through shop::tests::two, not decided (a value of a type that the check does not model: fn two() { assert_eq!(super::add(2), 3); } (src/lib.rs:-13))
   expansions: 3 changed, 1 equal
     2 calls: expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes: `shop::tests::one`, `shop::tests::two` (semilla expand --step 0)
     `assert_eq!(super::add(x), 3)` at `shop::tests::two/S1` (src/lib.rs:16): expansion changed: `macro assert_eq` (crate core): changed expression `2` → `x` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/args[0]` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: extracted variable `x` = `2` (1 use) at `shop::tests::two/S0` [move]
+◆ f1 derived: extracted variable `x` = `2` (1 use) at `shop::tests::two/S0` [move · code different]
     lines: src/lib.rs:15-16, src/lib.rs:-14
-◆ f2 derived: added comment `// a comment` [docs]
+◆ f2 derived: added comment `// a comment` [docs · no code]
     lines: src/lib.rs:2

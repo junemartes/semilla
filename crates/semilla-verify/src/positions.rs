@@ -1692,7 +1692,7 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
     for (index, files) in lines_of.iter().enumerate() {
         report.facts[index].positions = files.iter().flat_map(|(file, lines)| position_list(&diffs, file, lines)).collect();
     }
-    let compare = if input.step.compiled { Compare::NoCode } else { Compare::Off };
+    let compare = if input.step.syntax_only { Compare::Off } else { Compare::NoCode };
     let add = |facts: &mut Vec<Fact>, file: &str, part: &str, category: Category, description: String, positions: Vec<Position>| {
         let id = format!("f{}", facts.len() + 1);
         facts.push(Fact { id, file: Some(file.to_string()), part: part.to_string(), description, status: "derived".into(), category, compare, positions, ..Default::default() });

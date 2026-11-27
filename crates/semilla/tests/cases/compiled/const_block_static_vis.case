@@ -1,6 +1,5 @@
 note: a visibility edit and a doc edit of a static item are not edits of its bodies: a body with the same graph gets no line
 rule-: R71.2-1
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -42,7 +41,7 @@ pub fn width() -> usize {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:

@@ -3,7 +3,6 @@ rule+: R65.1-3
 rule-: R65.1-3 R65.1-4
 must_not_match: only the context of the call changes
 must_match: from `proc macro depot::here` \(depot/src/lib\.rs:4\)
-option: --compiled
 === both Cargo.toml
 [workspace]
 members = ["shop", "depot"]
@@ -92,9 +91,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   expansions: 1 changed
     `depot::here!(1)` at `shop::one/tail` (shop/src/lib.rs:4): expansion changed: `proc macro depot::here` (depot/src/lib.rs:4): changed literal `2u32` → `5u32` at `expansion/elems[1]` [semantics]; from `proc macro depot::here` (depot/src/lib.rs:4)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'depot/src/lib.rs:=<why>' --compiled
+run again: semilla step 'the change' --reason 'depot/src/lib.rs:=<why>'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot/src/lib.rs:=the reason of the test' --compiled
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot/src/lib.rs:=the reason of the test'
 ◆ f1 derived: changed expression `Span::call_site().line() as u32` → `Span::call_site().line() as u32 + 1` at `depot::here/S0/init` [semantics · code different]
     lines: depot/src/lib.rs:5, depot/src/lib.rs:-5
 ◆ f2 derived: depot/src/lib.rs: changed [build code · no code]

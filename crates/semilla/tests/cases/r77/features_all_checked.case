@@ -1,6 +1,5 @@
 note: batch 13a: the configuration with all features builds, so each feature is enabled in a checked configuration, and the step has no line of the features
 rule-: R77.3-8
-option: --compiled
 must_not_match: features that no checked configuration enables
 === both Cargo.toml
 [package]
@@ -22,7 +21,7 @@ pub fn base() -> u32 { 30 }
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

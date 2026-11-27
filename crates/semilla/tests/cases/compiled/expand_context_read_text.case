@@ -2,7 +2,6 @@ note: batch 10n, part A: a macro reads a `.txt` file with `include_str!`; the st
 rule+: R65.1-2
 must_match: only the context of the call changes: the file `notes\.txt` \(`include_str!\("\.\./notes\.txt"\)`\); changed code
 must_match: the code of the call reads `notes\.txt`, which the step changes
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -23,7 +22,7 @@ open at ten
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:

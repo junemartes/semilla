@@ -1,6 +1,5 @@
 note: batch 11e, the negative case of the cause of an indirect element: the body `price` also holds the call of a macro whose definition changes, so the text of the body is not its only changed input; the indirect fact keeps its text with no cause
 rule-: R73.2-1
-option: --compiled
 must_match: the compiled code of `shop::price` changes with no edit at its place: `scale\(k\)`
 must_not_match: the cause: the edit of this body
 === both Cargo.toml
@@ -39,7 +38,7 @@ pub fn price(n: u32) -> u64 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

@@ -447,7 +447,7 @@ pub trait BodyOracle {
     /// each query, `None` if the oracle cannot check it. `renames` is the rename map of the step
     /// (old path to new path).
     /// The check of the claims of the intent files of a step (design 67): one answer for each
-    /// query. `None`: the oracle has no compiler data (the default mode, or phase 1).
+    /// query. `None`: the oracle has no compiler data (the syntax-only check, or phase 1).
     fn intent(&self, _step: &Step, _renames: &BTreeMap<String, String>, _queries: &[intent::Query]) -> Option<Vec<intent::Answer>> {
         None
     }
@@ -483,28 +483,18 @@ pub trait BodyOracle {
     }
 
     /// The expansion of each macro call in each compiled target of each checked configuration
-    /// of the tree before the step and of the tree after it (design 63). `None`: no data. A
-    /// step of the default mode has the records of its build check (R65.8-1).
+    /// of the tree before the step and of the tree after it (design 63). `None`: no data.
     fn expansions(&self, _step: &Step) -> Option<[Vec<expand::ExpansionUnit>; 2]> {
         None
     }
 
-    /// Why a step of the default mode has no expansion records (R65.8-2): the build check did
-    /// not run, or it could not write the records. `None`: the step has the records, or it is a
-    /// step of the compiled mode.
-    fn expansion_gap(&self, _step: &Step) -> Option<String> {
-        None
-    }
-
     /// The name records of the two trees of the step (design 70, R70.1-1): the records of the
-    /// units of the expansion records. A step with no record gets the cause (R70.1-1); an oracle
-    /// with no data (a virtual crate of an expansion compare) gets neither.
+    /// units of the expansion records. Records of an earlier driver with no name record give the
+    /// cause (R70.1-1); an oracle with no data (a virtual crate of an expansion compare, a
+    /// configuration that does not build) gives neither.
     fn names(&self, step: &Step) -> NameState {
         let Some([old, new]) = self.expansions(step) else {
-            return match self.expansion_gap(step) {
-                Some(cause) => NameState::Gap(cause),
-                None => NameState::None,
-            };
+            return NameState::None;
         };
         if !old.iter().chain(&new).any(|unit| unit.names.is_some()) {
             return NameState::Gap("the records of the compiler have no name record (a record of an earlier driver)".to_string());
@@ -844,10 +834,11 @@ fn twin_notes(moves: &[identity::TwinPair], report: &mut StepReport) {
     }
 }
 
-/// A step with no compiled check (design 50): no fact has a compare result. This is the last
-/// pass, so a fact that a later rule made (a derived rename, a folded fact) has none too.
+/// A syntax-only check (the virtual crate of an expansion compare, R83.1-3): no fact has a
+/// compare result. This is the last pass, so a fact that a later rule made (a derived rename, a
+/// folded fact) has none too.
 fn no_compare_result(step: &Step, report: &mut StepReport) {
-    if !step.compiled {
+    if step.syntax_only {
         for fact in &mut report.facts {
             fact.compare = Compare::Off;
             // No note gives a cause for a compare that Semilla did not make.
@@ -1889,7 +1880,7 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     report.api_changes = api_changes;
 
     // The compare result of each fact (design 35).
-    set_compare(&mut report, &body_index, input.before, input.after, &renames, build_failed, &truths, step.compiled);
+    set_compare(&mut report, &body_index, input.before, input.after, &renames, build_failed, &truths, step.syntax_only);
 
     // An edit in code that no checked configuration compiles has no compare (batch 5w, part A).
     if body_index.available {
@@ -1927,7 +1918,6 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
 
 /// Sets the compare result of each fact (design 35, "Decided by Claude").
 ///
-/// 0. A step with no compiled check (design 50): no fact has a compare result.
 /// 1. A fact with the result `not checked` keeps it.
 /// 2. A doc test: `no compare`. Semilla does not compile a doc test.
 /// 3. A failed build: `no compare`, with the cause.
@@ -1938,7 +1928,7 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
 /// 7. A doc text, a comment, a manifest key, and a file with no changed body: `no code`.
 /// 8. Each other fact: `code equal`.
 #[allow(clippy::too_many_arguments)]
-fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: &Workspace, after: &Workspace, renames: &semilla_syntax::Renames, build_failed: bool, truths: &[Vec<ConfigTruth>; 2], compiled: bool) {
+fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: &Workspace, after: &Workspace, renames: &semilla_syntax::Renames, build_failed: bool, truths: &[Vec<ConfigTruth>; 2], syntax_only: bool) {
     let twin_compiled = |function: &str| twin_compiled(before, after, truths, function);
     let note = |fact: &mut semilla_core::Fact, text: String| {
         fact.note = Some(match fact.note.take() {
@@ -1973,9 +1963,9 @@ fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: 
         };
     }
     for fact in report.facts.iter_mut() {
-        // A step with no compiled check (design 50): no fact has a compare result, and no note
-        // gives a cause for a compare that Semilla did not make.
-        if !compiled {
+        // A syntax-only check (R83.1-3): no fact has a compare result, and no note gives a cause
+        // for a compare that Semilla did not make.
+        if syntax_only {
             fact.compare = Compare::Off;
             continue;
         }
@@ -2336,10 +2326,10 @@ fn identity_step(
         }
         owners[index] = results.iter().position(|(claim, outcome)| claim.op == "move-item" && outcome.status.is_verified() && claim.arg_str("to").is_some_and(|to| to.strip_prefix(module.path.as_str()).is_some_and(|rest| rest.starts_with("::") && !rest[2..].contains("::"))));
     }
-    // A step with no compiled check (design 50): the syntax tree is the proof of a derived
-    // rename or move. The check of the claim made the name map, and each edit that the map does
-    // not give keeps its own fact (`with_changes`).
-    if !body_index.available && with_changes && !step.compiled {
+    // A syntax-only check (R83.1-3): the syntax tree is the proof of a derived rename or move.
+    // The check of the claim made the name map, and each edit that the map does not give keeps
+    // its own fact (`with_changes`).
+    if !body_index.available && with_changes && step.syntax_only {
         return Some((ClaimStatus::Verified { proof: "syntax tree".into() }, None));
     }
     if !body_index.available {
@@ -3453,10 +3443,9 @@ pub fn verify_changeset_cached(
                 };
                 // Phase 1 has no MIR: the identity proof of a rename or a move waits for phase 2.
                 // Phase 2 proves the identity (then the pair is one item), or it gives the pair
-                // warning. Phase 1 gives no warning for such a pair.
-                // A step with no compiled check has its final result now (design 50): its pair
-                // warning shows.
-                if step.compiled && outcome.report.identity_candidates && outcome.bodies.is_empty() && matches!(bodies.facts(step), Ok(None)) {
+                // warning. Phase 1 gives no warning for such a pair. A syntax-only check (R62.5-3,
+                // R83.1-3) has its final result now: its pair warning shows.
+                if !step.syntax_only && outcome.report.identity_candidates && outcome.bodies.is_empty() && matches!(bodies.facts(step), Ok(None)) {
                     pending_pairs.extend(identity::candidates(&before, &after).0.into_iter().map(|pair| (pair.old, pair.new)));
                 }
                 // The removed and added items of the derived facts are pair candidates too.
@@ -3567,3 +3556,5 @@ mod tests70;
 mod tests71;
 #[cfg(test)]
 mod tests79;
+#[cfg(test)]
+mod tests83;

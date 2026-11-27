@@ -1,6 +1,5 @@
 note: a raw pointer deref of a generic container with an associated type in a field: the `dev` build has the alignment check casts, and the layout note of the cast normalizes the field type (design 61.14, defect 3)
 rule+: R61.14-3
-option: --compiled
 === both Cargo.toml
 [package]
 name = "store"
@@ -77,7 +76,7 @@ impl<Id: Hash + Eq + Clone, D: Data<Id = Id>, S: BuildHasher> DataContainer<Id, 
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

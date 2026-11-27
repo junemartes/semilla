@@ -1,7 +1,6 @@
 note: a generic body whose text does not change and that reads an associated constant of a generic impl with a changed definition (`rows`) gets a line in the step section, and its result is not a proof by an equal MIR text; a body that reads a generic constant with no change (`cells`) gets no line
 rule+: R66.3-2
 rule-: R66.3-2
-option: --compiled
 === both Cargo.toml
 [package]
 name = "shop"
@@ -40,7 +39,7 @@ pub fn cells<T>(x: usize) -> usize {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

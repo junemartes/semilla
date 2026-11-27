@@ -1,6 +1,5 @@
 note: batch 11e, test case 9: in `price`, the edited `let k = n` gives `k` a new type, and the later call `scale(k)` resolves to a new instance; the element of the call has no exact cause, so it keeps its indirect fact at its own line, and the fact names the place of its owner: the step changes no other input of the body, so the edit of the body is the cause
 rule+: R73.2-1
-option: --compiled
 must_match: the compiled code of `shop::price` changes with no edit at its place: `scale\(k\)`
 must_match: the cause: the edit of this body at src/lib\.rs:6 \(the step changes no other input of the body\)
 === both Cargo.toml
@@ -35,7 +34,7 @@ pub fn price(n: u32) -> u64 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states

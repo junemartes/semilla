@@ -4,7 +4,6 @@ rule+: R73.2-1
 rule+: R71.1-1
 rule-: R68.6-1
 rule-: R73.2-1
-option: --compiled
 must_match: shop::look \(src/lib.rs:6\): same graph; reads a changed constant: `shop::TABLE` \(\[2\] 3 → 9 \(1 of 8 elements differ\)\)
 must_match: affected bodies: shop::TABLE, shop::look
 must_match: shop::api \(src/lib.rs:10\): reached through shop::look
@@ -60,7 +59,7 @@ pub fn count() -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states

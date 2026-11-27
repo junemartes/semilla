@@ -50,16 +50,19 @@ impl Shape for Pair {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
-  ◆ f1 derived: added `depot::wide` (the public API changes: a different crate can now use the item) [added]
+  ◆ f1 derived: added `depot::wide` (the public API changes: a different crate can now use the item) [added · code different]
+      affected bodies: depot::wide
+      control flow: + graph of `depot::wide`: 3 points, 2 arrows (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
   cover: each of the 1 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    depot::wide (src/lib.rs:6): graph added: 3 points, 2 arrows
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: added `depot::wide` (the public API changes: a different crate can now use the item) [added]
+◆ f1 derived: added `depot::wide` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:6

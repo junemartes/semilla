@@ -35,27 +35,29 @@ pub fn total(prices: &[u32]) -> u32 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `10` → `5` (f1)
       in: shop::total
       lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: --change 'shop::total=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::total=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, --same 'rewrite 10 => 5'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `10` → `5` at `shop::total/S1/body/S0/rhs/rhs/rhs` [semantics]
+  ◆ f1 derived: changed literal `10` → `5` at `shop::total/S1/body/S0/rhs/rhs/rhs` [semantics · code different]
+      affected bodies: shop::total
+      control flow: ~ check `overflow: sum += price + price / 10` → `overflow: sum += price + price / 5` (src/lib.rs:-7, src/lib.rs:7)
+      equivalence: not decided: a call that returns a reference (to a value): prices (src/lib.rs:-5)
       docs of `shop::total`, no edit in this step (src/lib.rs:1): `/// Gives the sum of the prices with the tax.`
       comment above line 5, no edit in this step (src/lib.rs:4): `// Add each price one time.`
       comment above line 7, no edit in this step (src/lib.rs:6): `// The tax is 10 percent.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 1 body
+    shop::total (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a call that returns a reference (to a value): prices (src/lib.rs:-5))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 3 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: changed literal `10` → `5` at `shop::total/S1/body/S0/rhs/rhs/rhs` [semantics]
+◆ f1 derived: changed literal `10` → `5` at `shop::total/S1/body/S0/rhs/rhs/rhs` [semantics · code different]
     lines: src/lib.rs:7, src/lib.rs:-7

@@ -52,7 +52,6 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 === expected
 exit: 1
 rejected: step 0 "the change" is not stored
-build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ fact a1 of the agent is false: `--change 'depth=more'`
 
@@ -60,7 +59,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 change: `depth` "more" (false: the tag `change` does not agree with the edit that Semilla sees)
       `depth` names 2 items: give more of the path
       candidates: `depot::conf::depth`, `depot::other::depth`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
+  AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `4` → `5` (f1)
       in: depot::conf::depth
@@ -68,18 +67,41 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       to state it: --change 'depot::conf::depth=TEXT'
   to state them, add these options to the command of the step: --change 'depot::conf::depth=TEXT'
   new and removed items, filled in by Semilla:
-  ◆ f2 derived: added `depot::other` (the public API changes: a different crate can now use the item) [added]
+  ◆ f2 derived: added `depot::other` (the public API changes: a different crate can now use the item) [added · code different]
+      affected bodies: depot::other::depth
+      control flow: + graph of `depot::other::depth`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `4` → `5` at `depot::conf::depth/tail` [semantics]
+  ◆ f1 derived: changed literal `4` → `5` at `depot::conf::depth/tail` [semantics · code different]
+      affected bodies: depot::conf::depth
+      equivalence: different: for each input: before returns 4, after returns 5 (suggested test `semilla_test_depth_6725db`)
   cover: each of the 3 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
-  names from the text: the build check did not run, so no build made the expansion records
+  control flow: 2 bodies
+    depot::conf::depth (src/lib.rs:18): same graph (the edit keeps the control flow); different (for each input: before returns 4, after returns 5; suggested test `semilla_test_depth_6725db`)
+    depot::other::depth (src/lib.rs:10): graph added: 2 points, 1 arrow
+    reached bodies: 1
+      depot::tests::t_limit::{closure#0} (src/lib.rs:20): reached through depot::tests::t_limit, not decided (a value of a type that the check does not model: fn t_limit() { assert_eq!(limit(), 10); } (src/lib.rs:-19))
+  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
+    `semilla_test_depth_6725db`: add it to `src/lib.rs`, in the module of `depot::conf::depth` (line 17); run it: `cargo test -p depot semilla_test_depth_6725db`; also: `cargo test -p depot --release semilla_test_depth_6725db`
+      #[cfg(test)]
+      mod semilla_test_depth_6725db {
+          // Semilla (design 75): the two versions differ for this input.
+          // The old version returns 4; the new version returns 5.
+          // This test passes on the old code and fails on the new code.
+          #[test]
+          fn old_outcome() {
+              let got = crate::conf::depth();
+              assert_eq!(got, 4);
+          }
+      }
+  expansions: 1 changed, 1 equal
+    `#[test]` at `depot::tests::t_limit` (src/lib.rs:20): expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --change 'depot::conf::depth=the text of the test'
-◆ f1 stated: changed literal `4` → `5` at `depot::conf::depth/tail` [semantics]
+◆ f1 stated: changed literal `4` → `5` at `depot::conf::depth/tail` [semantics · code different]
     lines: src/lib.rs:18, src/lib.rs:-17
-◆ f2 derived: added `depot::other` (the public API changes: a different crate can now use the item) [added]
+◆ f2 derived: added `depot::other` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:10
