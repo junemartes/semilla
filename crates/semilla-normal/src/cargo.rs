@@ -222,6 +222,10 @@ pub fn outer_configs(build_base: &Path) -> Vec<PathBuf> {
     configs
 }
 
+/// [R88.6-1] The count of the cargo commands that this process started (a timing line reads
+/// it).
+pub static CARGO_RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The key of the build settings that are not in the tree: the cargo configuration files of the
 /// parent folders of the build folder and of the cargo home, the path of the cargo home, the
 /// toolchain (its name, its folder, and its compiler binary), the MIR driver binary (its path,
@@ -712,6 +716,7 @@ pub fn intent_second_build(workspace: &Path, target_dir: &Path, names: &[String]
     let target_dir = std::fs::canonicalize(target_dir)?;
     let temporary = target_dir.join("tmp");
     std::fs::create_dir_all(&temporary)?;
+    CARGO_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut command = Command::new(root.join("bin/cargo"));
     command.args(["check", "--workspace", "--quiet", "--offline", "--message-format=json"]);
     command.arg("--target-dir").arg(&target_dir).current_dir(workspace);
@@ -960,6 +965,7 @@ fn metadata_command(workspace: &Path, graph: Graph, sandbox: &crate::sandbox::Sa
 
 /// As [`metadata_command`], with the cargo of the toolchain folder `root`.
 fn metadata_command_with(root: &Path, workspace: &Path, graph: Graph, sandbox: &crate::sandbox::Sandbox) -> Result<serde_json::Value> {
+    CARGO_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut command = Command::new(root.join("bin/cargo"));
     command.arg("metadata");
     match graph {
@@ -1240,6 +1246,7 @@ pub fn build_check(workspace: &Path, target_dir: &Path, toolchain: &CheckToolcha
     let target_dir = std::fs::canonicalize(target_dir)?;
     let temporary = target_dir.join("tmp");
     std::fs::create_dir_all(&temporary).with_context(|| format!("cannot create {}", temporary.display()))?;
+    CARGO_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut command = Command::new(root.join("bin/cargo"));
     command.args(["check", "--workspace", "--quiet", "--offline", "--all-targets", "--keep-going", "--message-format=json"]);
     command.arg("--target-dir").arg(&target_dir).current_dir(workspace);
@@ -1373,6 +1380,7 @@ fn run_check_once(
     // program of the build that looks for a file of the user finds an empty folder.
     let temporary = target_dir.join("tmp");
     std::fs::create_dir_all(&temporary)?;
+    CARGO_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut command = Command::new(root.join("bin/cargo"));
     // `--offline`: the check build does not download (the sandbox stops the network). Without the
     // flag, cargo tries to update the registry for a tree with no lock file (a library that

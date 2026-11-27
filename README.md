@@ -16,6 +16,8 @@ cargo build                 # the workspace uses the pinned nightly in rust-tool
 scripts/fetch-z3.sh         # optional: installs Z3 in .semilla/tools/ of this workspace for the SMT checks
 ```
 
+The build needs libclang (for example the package `libclang-dev`): the crate `libmdbx` makes the bindings of the C library of its database with `bindgen` (design 88).
+
 The binaries are in `target/debug/`:
 
 - `semilla`: the command line, the MCP server, and the review UI.

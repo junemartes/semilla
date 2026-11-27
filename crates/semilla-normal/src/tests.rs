@@ -39,6 +39,7 @@ fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
         inst: Vec::new(),
         dyn_casts: Vec::new(),
         unit: String::new(),
+        known: Default::default(),
     }
 }
 
@@ -944,4 +945,81 @@ fn a_change_of_a_shared_list_copies_it_and_leaves_the_other_reader() {
     assert!(!changed.same_list(&records));
     assert_eq!(records[0].text, "a");
     assert_eq!(changed[0].text, "b");
+}
+
+/// A record with the facts of the index.
+fn indexed(mut record: BodyRecord) -> BodyRecord {
+    record.known = index::Known::index(std::sync::Arc::new(index::TextFacts::of(&record.text, &record.shape)));
+    record
+}
+
+/// The count of the bodies that the index decided, and the result of a compare.
+fn compare_counted(before: Vec<BodyRecord>, after: Vec<BodyRecord>) -> (u64, Vec<BodyComparison>) {
+    let start = FROM_INDEX.load(std::sync::atomic::Ordering::SeqCst);
+    let result = compare(&group_levels(before), &group_levels(after), &BTreeMap::new(), &[]);
+    (FROM_INDEX.load(std::sync::atomic::Ordering::SeqCst) - start, result)
+}
+
+// [R88.3-1] The N0 compare reads the digests of the index first: equal digests give "equal at
+// N0" with no compare of the texts.
+// rule+ R88.3-1
+#[test]
+fn equal_digests_of_the_index_give_equal_at_n0() {
+    let (counted, result) = compare_counted(vec![indexed(record("k::f", "n0", "fn f() -> u32 { 1 }", &[]))], vec![indexed(record("k::f", "n0", "fn f() -> u32 { 1 }", &[]))]);
+    assert!(counted >= 1);
+    assert_eq!(result[0].status, BodyStatus::Equal { level: "n0".into(), proof: vec![] });
+    assert!(same_text(&indexed(record("k::f", "n0", "a", &[])), &indexed(record("k::g", "n0", "a", &[]))));
+}
+
+// rule- R88.3-1
+#[test]
+fn records_with_no_index_or_other_digests_are_compared_by_their_texts() {
+    // Other digests: the texts are other texts, so N0 is not equal.
+    let (_, result) = compare_counted(vec![indexed(record("k::f", "n0", "fn f() -> u32 { 1 }", &[]))], vec![indexed(record("k::f", "n0", "fn f() -> u32 { 2 }", &[]))]);
+    assert!(!matches!(&result[0].status, BodyStatus::Equal { level, .. } if level == "n0"));
+    // No facts of the index on one side: the texts decide, and the index decides no body.
+    let (counted, result) = compare_counted(vec![record("k::g", "n0", "fn g() {}", &[])], vec![indexed(record("k::g", "n0", "fn g() {}", &[]))]);
+    assert_eq!(result[0].status, BodyStatus::Equal { level: "n0".into(), proof: vec![] });
+    assert_eq!(counted, 0);
+    assert!(!same_text(&indexed(record("k::f", "n0", "a", &[])), &indexed(record("k::f", "n0", "b", &[]))));
+}
+
+// [R88.3-2] The equal-MIR test after the rename map: the digests decide if no key of the map
+// can match a path of the old text; else the renamed text decides.
+// rule+ R88.3-2
+#[test]
+fn the_digests_decide_the_renamed_text_when_no_key_can_match() {
+    let renames = vec![("k::old".to_string(), "k::new".to_string())];
+    let (a, b) = (indexed(record("k::f", "n0", "fn f() { k::g(); }", &[])), indexed(record("k::f", "n0", "fn f() { k::g(); }", &[])));
+    assert!(same_after_renames(&a, &b, &renames));
+    assert_eq!(renamed_digest(&a, &renames), a.facts().text);
+    // A key that matches: the renamed text decides.
+    let (old, new) = (indexed(record("k::f", "n0", "fn f() { k::old(); }", &[])), indexed(record("k::f", "n0", "fn f() { k::new(); }", &[])));
+    assert!(same_after_renames(&old, &new, &renames));
+    assert_eq!(renamed_digest(&old, &renames), new.facts().text);
+}
+
+// rule- R88.3-2
+#[test]
+fn equal_texts_with_a_renamed_name_are_not_equal_after_the_rename_map() {
+    let renames = vec![("k::old".to_string(), "k::new".to_string())];
+    // The two texts are equal, but the old text names a renamed body: after the map it names
+    // the new body, so the texts differ.
+    let (old, new) = (indexed(record("k::f", "n0", "fn f() { k::old(); }", &[])), indexed(record("k::f", "n0", "fn f() { k::old(); }", &[])));
+    assert!(!same_after_renames(&old, &new, &renames));
+    assert_ne!(renamed_digest(&old, &renames), new.facts().text);
+}
+
+// [R88.7-1] The property of the case runner compares the result with the facts of the index
+// and the result of the full read. An index with a wrong digest gives another result, so the
+// property finds such a defect.
+// rule- R88.7-1
+#[test]
+fn a_wrong_digest_in_the_index_gives_another_compare() {
+    let plain = || record("k::f", "n0", "fn f() -> u32 { 1 }", &[]);
+    let full = compare(&group_levels(vec![plain()]), &group_levels(vec![plain()]), &BTreeMap::new(), &[]);
+    let mut wrong = plain();
+    wrong.known = index::Known::index(std::sync::Arc::new(index::TextFacts::of("fn f() -> u32 { 2 }", &wrong.shape)));
+    let by_wrong = compare(&group_levels(vec![wrong]), &group_levels(vec![indexed(plain())]), &BTreeMap::new(), &[]);
+    assert_ne!(full, by_wrong);
 }

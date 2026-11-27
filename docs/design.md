@@ -10106,6 +10106,8 @@ The CPU time that is left in a warm step is in proportion to the size of the cra
 
 **Limits.** The two core checks of a step with a derived identity stay two runs. The equal-output check covers the 7 training pull requests and the case set.
 
+**Batch 14f (design 88) does a part of this design.** Item 1: the index of each record file, with the format key `semilla-index-1` (R88.2-1, R88.2-2); Semilla makes it from the record files, not the driver, and it has the names of the paths of each text, not the names of the expanded code in a list of their own (they are in the JSON object of the small members). Item 2, a part: the N0 compare and the equal-MIR check decide by the digests of the index (R88.3-1, R88.3-2); each record is still decoded from the index, because the passes over all bodies read its small members, the content hash of N1 reads each text, and the graph of each body goes to the verifier (88.9). Items 3 and 4 are open.
+
 ## 87. Batch 14e: a printed claim template is a checked claim template
 
 Date: 2026-11-27. The brief of the user: Semilla prints a claim template only after the check of the intent files accepts it. On a held-out set of 9 pull requests, 50 of 123 printed templates did not pass `semilla intent check` (each `{ … }` replaced by `{ true }`): a scope path with no item (20), a type with no generic arguments (8), a panic of the compiler (7), a template that is not valid Rust (6), a type name with no path (6), the facade (2), a type that rustc cannot infer (1). The batch builds general mechanisms, not one rule for each cause. Code: `semilla-verify/src/template.rs` (the names, the offers, the gate), `semilla/src/gate.rs` (the compiles of the gate), `semilla/src/intentcrate.rs` (`compile_sources`, `clean_panic`), `semilla-intent/src/parse.rs` (`Names`, `same_template_named`, `version_template_named`), `semilla-intent/src/heads.rs` (`bad_scope_path`, S0113, S0121), `semilla-mir/src/open.rs` (`Link::also`), `semilla-verify/src/intent.rs` (`body_template`, `later_claims`), `semilla-core/src/report.rs` (`CoverState::Later`).
@@ -10212,3 +10214,136 @@ Rule index: no rule: the subsection has the decisions, the limits, and the open 
 - Should a renamed or a twin pair get a template with the two paths (for example a `#[rename(OLD, NEW)]` hint and a property claim on the new path), when the language has a form for it?
 - Should the intent crate link the dependencies of the members, so a type of a dependency in a signature has a path in a claim?
 - Is the cold cost of the gate (87.7) acceptable, or should the gate run only for the templates that the short output shows?
+
+## 88. Batch 14f: the store by content (a warm step does work in proportion to the change)
+
+Date: 2026-11-27. The decisions of the user:
+
+> 2026-11-24: "store the incremental data of each diff, reuse the compilation cache as much as possible"; the target: "a full check/review of a given step is a couple of seconds when cached". The database: libmdbx.
+> 2026-11-27: "We should have a way to avoid parsing manually and instead store and reuse the compiler info".
+
+**This batch changes no output.** Each output of a step stays equal byte for byte, but for the time values and the timing lines of `SEMILLA_TIMING`. The driver does not change. Code: `crates/semilla/src/recstore.rs` (the database, the index read), `crates/semilla-normal/src/index.rs` (the index of a record file), `crates/semilla-normal/src/lib.rs` (the compare by digests), `crates/semilla-syntax/src/stored.rs` (the stored form of a workspace), `App::workspace` in `crates/semilla/src/app.rs`.
+
+### 88.1 One database behind the store (F1)
+
+Rule index: the identities are below.
+
+1. [R88.1-1] **One database (libmdbx) in the cache folder of a repository holds each entry that Semilla makes from a build or a tree.** The folder is `store/` in the cache folder of the repository (`$SEMILLA_CACHE_DIR/<hash of the repository path>/store/`). Only `recstore.rs` opens it: `RecordStore` reads the index of the record folders, and `ContentStore` (next to it) reads and writes the entries of a tree (the syntax data, the output of `cargo metadata`). A process opens a database one time. A database that does not open gives one note on stderr, and the store reads the record files with no index. The crate is `libmdbx = "=0.9.0"` with no default feature; it builds the C library with `bindgen`, so a build needs libclang. Tests: `the_database_gives_the_entry_of_a_key`, `only_the_store_names_the_database_crate` (positive); `another_key_or_another_kind_gives_no_entry` (negative; `recstore.rs`).
+
+**The form of an entry.** The key in the database is one byte of the kind (`i` the index of a record file, `s` the syntax data of a tree, `m` the output of `cargo metadata`) and the first 16 bytes of the SHA-256 digest of the key text (a key of the database has a limit of size). The value is the format key, a line end, the full key text, a line end, and the payload. A read checks the format key and the key text.
+
+**The settings.** A commit does not sync the disk (`SafeNoSync`): a stop of the machine can lose the last transactions, but the database stays whole, and each entry is data that Semilla can make again. A stop of a process loses no committed transaction. The file grows in steps of 64 MB, to at most 1 TB (a map of the address space, not of the disk). The database of a small step has 264 KB.
+
+### 88.2 The index of a record file (F2, F3)
+
+Rule index: the identities are below.
+
+| Entry | Key text | Format key | Payload |
+|---|---|---|---|
+| the index of a record file | `index <path of the file from the cache folder>`: the folder set (the key of the build code), the tree hash, the level, the configuration, and the tool settings (`-s…`: the driver, the toolchain, the cargo configuration outside the tree), then the file name (the unit) | `semilla-index-1` | the state of the file (its size, its time, and the time of the `.complete` file of its folder, in nanoseconds), then the index |
+| the syntax data of a tree | `syntax <tree hash> <digest of the output of cargo metadata> <identity of the Semilla binary>` | `semilla-workspace-1` | the stored form of the workspace (88.5) |
+| the output of `cargo metadata --no-deps` | `metadata <tree hash> <settings of the folder of the snapshots>` | `semilla-metadata-1` | the JSON text |
+
+**The index of one record file** has the build settings of the unit (as `BodyRecord::unit`), and for each line of a body record: the name, the level, and the target (the identity of design 70: the key that the record carries), the place of the line in the file, the state of the forms `q` and `qx` (no member, `null`, or the place of the text), the digest of the text and the digest of the shape (the first 16 bytes of SHA-256), the paths of the text (each maximal run of identifier characters and `:` with `::` in it), and the other members of the line as one JSON object (the small members that the passes over all bodies read: the callees, the span, the `adts`, the names of the expanded code, the configuration uses, the constant values, and the text).
+
+1. [R88.2-1] **The index gives the records of the file.** Each record from the index is equal to the record of the full read (`read_records`), and it has the digests and the paths of the index (`BodyRecord::known`; not a member of the line). The forms `q` and `qx` load at their places on their first read (R86.2-1). A line that is not of the plain form of R86.2-1 gives no index: the file takes the full parse, with its errors. The record files of a folder decode in parallel threads, and the records join in the order of the files. The two trees of a step read in parallel when no build is necessary. Tests: `the_records_of_the_index_are_the_records_of_the_full_read` (positive), `a_line_that_is_not_of_the_plain_form_gives_no_index` (negative; `index.rs`).
+2. [R88.2-2] **Semilla writes the index one time: when the build completes, or at the first read of a folder with no index (a folder of BASE).** The state of the file is a part of the entry: a build that makes the folder again (a new time of `.complete`) gives a new index, and the entry of the earlier build is not read. **Decided by Claude:** Semilla makes the digests from the record files; the driver does not change (F3). Tests: `a_complete_build_has_its_index_and_the_read_uses_it` (positive), `a_folder_that_a_build_makes_again_gets_a_new_index` (negative; also the first read of a folder of BASE; `recstore.rs`).
+
+A step N+1 has the old tree of step N as its new tree: the record folders of that tree and their index are in the store (F2), and step N+1 reads them with no build (R88.5-2).
+
+### 88.3 The compare reads the index first (F4)
+
+Rule index: the identities are below.
+
+1. [R88.3-1] **The N0 compare reads the digests of the index first.** A group of records of one name with the digests of the index on each record (and a text that the normal form of the test positions does not change) has the digests of its raw texts by target. Two such groups with equal digests are "equal at N0" with no compare of the texts; other digests are other texts. A group with a record that has no digest of the index takes the texts. The same rule gives `same_text` (the closures that move, the span of the changed target of R61.16-2) and `changed_names` (the start set of the closure of R84.1-2): a digest names one text. Tests: `equal_digests_of_the_index_give_equal_at_n0` (positive), `records_with_no_index_or_other_digests_are_compared_by_their_texts` (negative; `semilla-normal/src/tests.rs`).
+2. [R88.3-2] **A text with no path that a key of the rename map can match is its own renamed text.** A key of `paths::rename` matches only where a path starts. So a match of a key whose path part `P` (its first characters that are identifier characters or `:`) has `::` is in a path of the text that starts with `P`. With no such path, the renamed old text is the old text, and the digests decide the equal-MIR check of R84.1-1 (`same_after_renames`) and the digest of a renamed text (`renamed_digest`). A key whose path part has no `::` (a generic key, a key that starts with `<`) can match: the text decides. Tests: `a_key_that_the_rename_map_can_match_is_in_the_paths`, `the_digests_decide_the_renamed_text_when_no_key_can_match` (positive); `a_key_that_no_path_of_the_text_starts_with_cannot_rename_the_text`, `equal_texts_with_a_renamed_name_are_not_equal_after_the_rename_map` (negative).
+
+The callees of the closure of R84.1-2 and the inputs of the marks of the joint rule and of the opaque inputs (the span, the `adts`, the names, the target) come from the index: they are members of the JSON object of the index, and the passes read no other part of a record.
+
+### 88.4 A stored entry is never read wrong (F6)
+
+Rule index: the identities are below.
+
+1. [R88.4-1] **Each entry has a format key; an entry with another format key is not read, and the caller builds it again.** The timing line of the database counts "entries of another format". Tests: `an_entry_of_this_format_is_read` (positive), `an_entry_of_another_format_is_not_read` (negative; `recstore.rs`).
+2. [R88.4-2] **A write is one transaction.** The index of each file of a record folder, the entries of one read, and each entry of a tree are one write each. A process that stops in the middle of a write leaves the old state; the next run reads it and writes again. Tests: `a_stop_in_the_middle_of_a_write_leaves_the_old_state` (positive: a child process stops after the third of five entries, with the transaction open), `a_write_that_completes_has_each_entry` (negative).
+3. [R88.4-3] **Two processes on one cache give correct results.** libmdbx serves each process with its lock file; one write transaction at a time. Two writes of one key give the same payload (an entry is a function of its key). Tests: `two_processes_write_and_read_one_database` (positive: two child processes write 200 entries each and read the entries of the other), `a_process_that_opens_the_database_again_gets_the_one_database` (negative: one process opens a database one time).
+
+### 88.5 Parse only what changes (F5)
+
+Rule index: the identities are below.
+
+1. [R88.5-1] **The syntax data of a tree is stored with its key, and a stored workspace is the workspace.** `App::workspace` reads the output of `cargo metadata --no-deps` and the workspace of a tree from the store. With the two, no tree is written and no cargo command runs. The stored form has each member of the workspace, also the members that the JSON form does not have (the columns, the display texts, the editions, the byte ranges of the nodes); the index of the body items and the name record are made again at their first use. The key has the identity of the Semilla binary (its path, its size, and its time): the version of the parser and of the loader. The oracle reads the stored output of `cargo metadata` for the feature lists (R85). Tests: `the_stored_form_of_a_workspace_is_the_workspace` (positive), `bytes_that_are_not_a_whole_workspace_give_no_workspace` (negative; `stored.rs`).
+2. [R88.5-2] **A step after a step builds and parses nothing of the tree of the step before.** The new tree of step N is the old tree of step N+1: its record folders, its index, its workspace, and its metadata are in the store. Step N+1 builds and parses only the new tree. Tests: `a_step_after_a_step_builds_and_parses_nothing_of_the_tree_before` (positive), `the_first_step_parses_and_builds_each_tree` (negative; `tests/store88.rs`).
+
+**Decided by Claude (a part of F5 that this batch does not do):** the syntax data is stored for each tree, not for each file by its blob hash. The items of a file depend on its module path, its crate, its edition, and the `mod` lines of other files, and the loader makes them in one recursive pass with reads of the folder; a store for each file needs a loader in two parts (the items of a file with no context, then the module tree). So the new tree of a step is parsed in full: a file with the same blob as a stored one is parsed again if its tree is new. The tree of the step before is never parsed again.
+
+### 88.6 The timing lines show the new work (F7)
+
+Rule index: the identities are below.
+
+1. [R88.6-1] **The timing lines count the new work of a command.** The line `count of the new work of the command (…)` has six counts: the bodies from the index (the N0 groups that the digests decide, R88.3-1), the bodies decoded (the records that a read decodes from the index or from a file), the files from the store and the files parsed (the parsed files of the stored and of the new workspaces), the trees written (a snapshot and a build folder), and the cargo commands run. The line of the reads has "units from the index", "units indexed now", and "units with the full parse"; the line of the database has its reads, its writes, and "entries of another format". Tests: `a_warm_step_has_no_new_work_in_its_timing_lines` (positive), `a_step_with_a_new_tree_counts_its_new_work` (negative; `tests/store88.rs`).
+
+### 88.7 The index path equals the full path
+
+Rule index: the identities are below.
+
+1. [R88.7-1] **On each case of the case set, the compare with the facts of the index gives the result of the compare with a decode of each record.** Property 15 of the case runner: for each two complete record folders of one name (two trees) after the step of a case, the records of the index are the records of the full read, and the compare (`semilla_normal::compare`, with no rename map and with the map of `suggest_renames`), `same_text`, and `same_after_renames` give the results of the texts. The check is a part of the test only; the product has no switch for it. A program of the test runs the same check on the cache folders of the training pull requests. Tests: `each_case_gives_its_expected_text_and_keeps_the_properties` (positive, `tests/cases.rs`), `a_wrong_digest_in_the_index_gives_another_compare` (negative: a wrong digest changes the result, so the property finds it).
+
+### 88.8 The results
+
+Rule index: no rule: the subsection has the results of the measures.
+
+**The outputs.** On each of the 7 training pull requests, the 6 outputs of the binaries of this batch (a cold step, a warm step, `status --verbose`, `verify --json`, `review --md` and its Markdown file) are equal to the outputs of BASE, with the time values masked. The case set: the expected texts of the 673 cases are equal (0 written; the 2 known failures of before stay), and property 15 (R88.7-1) holds on each case (1429 record folders, 1652 pairs of folders). The program of R88.7-1 on the cache folders of the 7 pull requests: 0 problems (15 record folders, 18 pairs of folders, 81164 body results, 124668 pairs of records of the text tests).
+
+**A cache folder of BASE.** The binary `semilla` of this batch with the driver of BASE (the key of a record folder has the driver) on the cache of a cold step of BASE: the first warm step makes the index at its first read ("0 units from the index, 22 units indexed now" for `pr-hashbrown-693`, 68 for `pr-winnow-891`; 0.52 s and 2.80 s for the read), the second one reads it ("22 units from the index"; 0.16 s and 0.53 s). The two outputs are equal to the output of BASE.
+
+**The times.** Each pair (BASE, then this batch) ran one after the other on the CPUs 0 to 11 (`taskset`), on a machine with a load of 1.5 to 5.0. Wall time and CPU time (user + system) in seconds, the peak memory (the largest process) in MB, the size of the cache folder in MB. A warm step is the same step again in a fresh clone with the cache of the cold step.
+
+| PR | cold wall BASE → 88 | cold CPU | warm wall BASE → 88 | warm CPU | warm memory | cache | `status --verbose`, `verify --json` (accepted steps) |
+|---|---|---|---|---|---|---|---|
+| `pr-bitflags-465` | 11.9 → 12.1 | 29.0 → 29.4 | 1.4 → 1.1 | 1.5 → 1.4 | 261 → 320 | 251 → 315 | rejected step |
+| `pr-hashbrown-693` | 13.9 → 14.1 | 24.7 → 25.1 | 4.0 → 3.2 | 4.1 → 3.3 | 403 → 493 | 236 → 300 | 1.2 → 0.6, 3.5 → 2.6 |
+| `pr-indexmap-424` | 19.5 → 19.8 | 34.4 → 35.0 | 4.7 → 3.9 | 4.8 → 4.2 | 454 → 554 | 367 → 431 | 1.0 → 0.6, 4.1 → 3.3 |
+| `pr-itertools-1086` | 30.2 → 31.4 | 78.2 → 79.9 | 4.7 → 3.7 | 4.9 → 4.6 | 661 → 874 | 560 → 688 | 1.9 → 0.6, 4.0 → 3.0 |
+| `pr-num-traits-334` | 23.2 → 24.0 | 29.1 → 30.1 | 4.4 → 3.9 | 4.5 → 4.4 | 606 → 730 | 412 → 540 | rejected step |
+| `pr-uuid-932` | 29.3 → 30.2 | 92.7 → 93.0 | 2.0 → 1.5 | 2.0 → 1.7 | 284 → 371 | 597 → 661 | rejected step |
+| `pr-winnow-891` | 58.4 → 61.9 | 275.8 → 278.1 | 12.7 → 11.0 | 13.3 → 12.3 | 1380 → 1695 | 1558 → 1750 | rejected step |
+
+**The new work of a warm step** (R88.6-1; the sum of the timing blocks of the step): 0 cargo commands, 0 files parsed, 0 trees written in each pull request. Bodies decoded / bodies from the index / files from the store: `pr-bitflags-465` 6239 / 1788 / 97, `pr-hashbrown-693` 4904 / 1151 / 74, `pr-indexmap-424` 6158 / 2970 / 68, `pr-itertools-1086` 11191 / 4586 / 148, `pr-num-traits-334` 11174 / 4806 / 40, `pr-uuid-932` 5153 / 1005 / 80, `pr-winnow-891` 14140 / 6426 / 212. A cold step runs 6 to 11 cargo commands and writes 4 to 9 trees.
+
+**A step after a step** (`pr-hashbrown-693`: step 0 is the change of the pull request, step 1 adds one function): step 1 builds only its new tree (`cargo check n0 of tree 3ad64b55`), takes the workspace of the tree of step 0 from the store, reads the record folders of that tree from the index ("22 units from the index, 0 units indexed now"), and parses the 37 files of the new tree only ("74 files from the store, 37 files parsed").
+
+**The target is not met**, but by `pr-bitflags-465` and `pr-uuid-932` (two rejected steps of small crates). What is left in a warm step (the timing lines of this batch): `pr-hashbrown-693` 3.2 s: the check of the change set 2.3 s, of which the calls of the opaque inputs for each record 0.85 s (with their construction 0.63 s), the flow graphs and the equal-MIR checks 0.27 s, the read of the records 0.17 s, the claims of the intent files 0.14 s; the start of the process, git, and the stored results the rest. `pr-winnow-891` 11.0 s: the check of the change set 10.2 s, of which the search for a derived identity 3.0 s (a second core check), the calls of the opaque inputs 3.0 s (with their construction 1.8 s), the N0 compare 0.6 s, the read of the records 0.5 s, the flow graphs 0.5 s, the AST map 0.3 s, the expansions 0.25 s.
+
+**The build of Semilla** (a release build from a copy of the tree into an empty target folder): BASE 73.6 s wall, 589 s user (load 1.0); this batch 76.9 s wall, 646 s user (load 1.9). The new dependencies (`libmdbx` and 31 crates that it needs, with `bindgen` and the C library) add about 3 s of wall time and 57 s of CPU time.
+
+**The memory** of a step is higher: 60 to 315 MB more (the pages of the database, the index of each record file, and the decode in parallel threads). The cache folder is 64 to 192 MB larger (the index has the small members of each record).
+
+### 88.9 Decisions, limits, and open questions
+
+Rule index: no rule: the subsection has the decisions, the limits, and the open questions.
+
+**Decided by Claude.**
+
+- One database for each cache folder of a repository, not one for the user: the record folders are in the cache folder of a repository, and the output of `cargo metadata` has the paths of its folder of snapshots.
+- The record files stay the files of the driver. The database has the data that Semilla makes from them (the index). The small members of a record are one JSON object in the index, so the decoder of a record from the index is the decoder of the line, and a record from the index is equal to the record of the full read.
+- The text stays a member that each read decodes. The passes over all bodies read each text: the content hash of N1 (the hash of each body with one text), the facts of the bodies, the test functions. A text that loads at its first read gives no gain before these passes read the digests.
+- The digest is the first 16 bytes of SHA-256 (`sha2` is a dependency of `semilla-normal` already). Two texts with one digest would give a wrong "equal at N0"; the chance is about 2^-64 for each pair in a step of 2^32 bodies.
+- A commit with no sync of the disk (`SafeNoSync`), see 88.1.
+- The syntax data for each tree, not for each file (88.5). The key has the identity of the Semilla binary: a new build of Semilla parses each tree one time again.
+- The two trees of a step read in parallel only when the two folders are complete: a build of the tree after the step runs only after the build of the tree before it, as before.
+
+**Limits.**
+
+- The target of the brief (a warm step in 2 s plus the time of the bodies and the files that change) is met by no training pull request with a large crate (88.8). The time that is left is in parts that this batch does not change: the construction of the opaque inputs (`Opaque::new`, a function of the two workspaces, two times in a step), the calls of the opaque inputs for each record (`give the records to the build configuration rules`), the passes of the joint rule, the search for a derived identity (a second core check), `dead_edits`, and the flow graphs.
+- Each command decodes each body record of the checked folders (from the index, with no scan of the record files): "bodies decoded" is the count of all records. The passes over all bodies read their small members, the content hash of N1 reads each text, and the graph of each body goes to the verifier. Item 3 and item 4 of 86.7 are open.
+- The new tree of a step is parsed in full (the store is for each tree).
+- `read_made` (the expanded items and the call sites) reads each record file again, and three readers parse the unit line of each file (the units, the expansions, the expanded items): the unit lines are 23 % of the bytes of the record files of `pr-winnow-891`.
+- No entry of the database goes away: the index of a removed folder stays. `semilla cache --clean` does not clean the database.
+- The database file can grow to 1 TB (a map of the address space).
+
+**Open questions for the user.**
+
+- Should a later batch store the syntax data for each file by its blob hash (a loader in two parts: the items of a file with no context, then the module tree)?
+- Should the opaque inputs and the marks of the joint rule get a stored entry for each pair of trees (they are a function of the two workspaces and of the answers of the rule)?
+- Should `semilla cache --clean` remove the entries of the database that no record folder has?

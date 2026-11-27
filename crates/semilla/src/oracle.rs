@@ -587,7 +587,8 @@ impl NormalOracle {
         if let Some(known) = METADATA.lock().ok().and_then(|cache| cache.get(tree).cloned()) {
             return known;
         }
-        let found = self.repo.materialize(tree).ok().and_then(|dir| semilla_normal::cargo::cargo_metadata(&dir).ok());
+        // [R88.5-1] From the store when it has the output.
+        let found = crate::app::tree_metadata(&self.repo, tree).ok();
         if let Ok(mut cache) = METADATA.lock() {
             cache.insert(tree.to_string(), found.clone());
         }
@@ -813,7 +814,23 @@ impl NormalOracle {
         let results: Vec<Result<(String, semilla_normal::Records, semilla_normal::Records)>> = std::thread::scope(|scope| {
             let handles: Vec<_> = levels
                 .iter()
-                .map(|level| scope.spawn(move || Ok((level.to_string(), self.records_with(before, level, features)?, self.records_with(after, level, features)?))))
+                .map(|level| {
+                    scope.spawn(move || {
+                        // [R88.2-1] The two trees read in parallel when no build is necessary:
+                        // a build of the tree after the step runs only after the tree before it
+                        // builds, as before.
+                        let complete = |tree: &str| crate::git::is_empty_tree(tree) || self.cache_folder(tree, level, features).is_ok_and(|(_, cache, _, _)| crate::recstore::store().is_complete(&cache));
+                        if !(complete(before) && complete(after)) {
+                            return Ok((level.to_string(), self.records_with(before, level, features)?, self.records_with(after, level, features)?));
+                        }
+                        let (old, new) = std::thread::scope(|inner| {
+                            let old = inner.spawn(|| self.records_with(before, level, features));
+                            let new = self.records_with(after, level, features);
+                            (old.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a read thread failed"))), new)
+                        });
+                        Ok((level.to_string(), old?, new?))
+                    })
+                })
                 .collect();
             handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a build thread failed")))).collect()
         });
@@ -1069,14 +1086,14 @@ fn first_places<'a>(places: impl Iterator<Item = (&'a str, (String, usize))>) ->
 /// name is the worst status of its targets. So the span of the changed target wins: it is the
 /// body that needs an owner.
 fn changed_target_spans(old: &[semilla_normal::BodyRecord], new: &[semilla_normal::BodyRecord]) -> Vec<(String, (String, usize))> {
-    let texts: BTreeMap<(&str, &str), &str> = old.iter().map(|record| ((record.name.as_str(), record.target.as_str()), record.text.as_str())).collect();
+    let texts: BTreeMap<(&str, &str), &semilla_normal::BodyRecord> = old.iter().map(|record| ((record.name.as_str(), record.target.as_str()), record)).collect();
     let mut targets: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
     for record in new {
         targets.entry(record.name.as_str()).or_default().insert(record.target.as_str());
     }
     new.iter()
         .filter(|record| targets[record.name.as_str()].len() > 1)
-        .filter(|record| texts.get(&(record.name.as_str(), record.target.as_str())) != Some(&record.text.as_str()))
+        .filter(|record| texts.get(&(record.name.as_str(), record.target.as_str())).is_none_or(|old| !semilla_normal::same_text(old, record)))
         .filter_map(|record| record.span.as_ref().map(|span| (record.name.clone(), (span.file.clone(), span.line_start))))
         .collect()
 }
@@ -1105,7 +1122,7 @@ fn with_moved_closures(
                 && !taken.contains(&candidate.name)
                 && added.iter().any(|item| candidate.name.starts_with(&format!("{item}::{{closure")))
                 && candidate.target == record.target
-                && candidate.text == record.text
+                && semilla_normal::same_text(candidate, record)
         });
         if let Some(moved) = moved {
             taken.insert(moved.name.clone());
@@ -1646,9 +1663,10 @@ pub(crate) fn changed_names(old: &EquivSide, new: &EquivSide, renames: &[(String
     for (name, list) in &old.records {
         let renamed_name = rename_text(name);
         seen.insert(renamed_name.clone());
-        let texts: std::collections::BTreeSet<String> = list.iter().map(|record| rename_text(&record.text)).collect();
+        // [R88.3-2] The texts by their digests: a digest names one text.
+        let texts: std::collections::BTreeSet<semilla_normal::index::Digest> = list.iter().map(|record| semilla_normal::renamed_digest(record, renames)).collect();
         let other = new.records.get(renamed_name.as_str());
-        if other.is_none_or(|other| other.iter().map(|record| record.text.clone()).collect::<std::collections::BTreeSet<_>>() != texts) {
+        if other.is_none_or(|other| other.iter().map(|record| semilla_normal::renamed_digest(record, &[])).collect::<std::collections::BTreeSet<_>>() != texts) {
             changed.insert(name.to_string());
             changed.insert(renamed_name);
         }
@@ -1703,7 +1721,7 @@ fn equal_mir(query: &semilla_verify::equiv::Query, old: &EquivSide, new: &EquivS
     let callees = changed_callees(a, b, &closure.must_inline, &closure.trait_methods, &rename_text);
     let consts = changed_consts(Some(&a.cv), Some(&b.cv));
     let quoted = |list: Vec<String>| list.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
-    let verdict = if rename_text(&a.text) != b.text {
+    let verdict = if !semilla_normal::same_after_renames(a, b, if renamed { renames } else { &[] }) {
         Verdict::MirChanges(String::new())
     } else if !callees.is_empty() {
         Verdict::MirChanges(format!("the same MIR text; a changed callee: {}", quoted(callees)))

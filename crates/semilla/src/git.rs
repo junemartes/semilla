@@ -232,6 +232,7 @@ impl Repo {
         std::fs::create_dir_all(&temp)?;
         let entries = self.tree_entries(tree)?;
         let all: Vec<(&String, &FileEntry)> = entries.iter().collect();
+        semilla_core::timing::count(crate::recstore::WORK_PHASE, "trees written", 1);
         self.write_files(&temp, &all)?;
         if std::fs::rename(&temp, &dir).is_err() {
             // Another process put the same tree in place first.
@@ -323,6 +324,7 @@ impl Repo {
         std::fs::create_dir_all(dir)?;
         remove_unknown(dir, dir, &entries)?;
         let stale: Vec<(&String, &FileEntry)> = entries.iter().filter(|(path, entry)| known.get(*path).is_none_or(|state| file_state(&dir.join(path.as_str()), entry).as_deref() != Some(state))).collect();
+        semilla_core::timing::count(crate::recstore::WORK_PHASE, "trees written", 1);
         self.write_files(dir, &stale)?;
         let mut text = String::new();
         for (path, entry) in &entries {

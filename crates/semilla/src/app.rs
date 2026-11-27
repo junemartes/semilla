@@ -681,6 +681,48 @@ pub struct CheckResult {
     pub tree: TreeNode,
 }
 
+/// The format key of a stored output of `cargo metadata` (R88.5-1): the JSON text.
+const METADATA_FORMAT: &str = "semilla-metadata-1";
+
+/// [R88.5-1] The key of the stored syntax data of a tree: the tree, the digest of the output of
+/// `cargo metadata`, and the identity of the Semilla binary (the version of the parser).
+fn syntax_key(tree: &str, metadata: &[u8], binary: &str) -> String {
+    format!("syntax {tree} {} {binary}", crate::store::digest_text(metadata))
+}
+
+/// The key of the stored output of `cargo metadata --no-deps` for a tree: the tree and the
+/// settings of the folder of the snapshots (the cargo configuration outside the tree, the
+/// toolchain, the cargo home).
+fn metadata_key(repo: &crate::git::Repo, tree: &str) -> String {
+    format!("metadata {tree} {}", semilla_normal::cargo::settings_key(&repo.cache_dir().join("snapshots"), None))
+}
+
+/// [R88.5-1] The stored output of `cargo metadata --no-deps` for a tree (the JSON text), or
+/// `None`.
+fn stored_metadata(repo: &crate::git::Repo, tree: &str) -> Option<Vec<u8>> {
+    use crate::recstore::ContentStore as _;
+    crate::recstore::store().content(&repo.cache_dir(), crate::recstore::Kind::Metadata, &metadata_key(repo, tree), METADATA_FORMAT)
+}
+
+/// Runs `cargo metadata --no-deps` in the folder of a tree, and stores the output.
+fn run_metadata(repo: &crate::git::Repo, tree: &str, dir: &std::path::Path) -> Result<(serde_json::Value, Vec<u8>)> {
+    use crate::recstore::ContentStore as _;
+    let metadata = semilla_normal::cargo::cargo_metadata(dir)?;
+    let bytes = serde_json::to_vec(&metadata)?;
+    let _ = crate::recstore::store().put_content(&repo.cache_dir(), crate::recstore::Kind::Metadata, &metadata_key(repo, tree), METADATA_FORMAT, bytes.clone());
+    Ok((metadata, bytes))
+}
+
+/// [R88.5-1] The output of `cargo metadata --no-deps` for a tree: from the store, else from a
+/// run of cargo in the snapshot of the tree.
+pub(crate) fn tree_metadata(repo: &crate::git::Repo, tree: &str) -> Result<serde_json::Value> {
+    if let Some(value) = stored_metadata(repo, tree).and_then(|bytes| serde_json::from_slice(&bytes).ok()) {
+        return Ok(value);
+    }
+    let dir = repo.materialize(tree)?;
+    Ok(run_metadata(repo, tree, &dir)?.0)
+}
+
 impl App {
     pub fn open(dir: &Path) -> Result<App> {
         let repo = Repo::discover(dir)?;
@@ -755,7 +797,8 @@ impl App {
         Ok(())
     }
 
-    /// Loads the workspace of a git tree (cached).
+    /// Loads the workspace of a git tree (cached in the process, and in the database of the
+    /// store, design 88).
     pub fn workspace(&mut self, tree: &str) -> Result<Workspace> {
         if let Some(ws) = self.workspaces.get(tree) {
             return Ok(ws.clone());
@@ -767,18 +810,38 @@ impl App {
             self.workspaces.insert(tree.to_string(), ws.clone());
             return Ok(ws);
         }
+        // [R88.5-1, R88.5-2] The syntax data of the tree and the output of `cargo metadata` from
+        // the database of the store: then no tree is written and no cargo command runs.
+        use crate::recstore::ContentStore as _;
         let started = std::time::Instant::now();
+        let cache = self.repo.cache_dir();
+        let store = crate::recstore::store();
+        let stored_metadata = stored_metadata(&self.repo, tree);
+        let syntax_key = |metadata: &[u8]| syntax_key(tree, metadata, &crate::store::binary_identity());
+        if let Some(bytes) = &stored_metadata {
+            if let Some(ws) = store.content(&cache, crate::recstore::Kind::Syntax, &syntax_key(bytes), semilla_syntax::stored::FORMAT).and_then(|bytes| semilla_syntax::stored::decode(&bytes)) {
+                semilla_core::timing::count(crate::recstore::WORK_PHASE, "files from the store", ws.parsed_files.len() as u64);
+                crate::timing("load the syntax workspace (from the store)", started);
+                self.workspaces.insert(tree.to_string(), ws.clone());
+                return Ok(ws);
+            }
+        }
         let dir = self.repo.materialize(tree)?;
         crate::timing("materialize a tree", started);
         let started = std::time::Instant::now();
         // Cargo gives the packages and the targets of the tree, so Semilla and cargo agree on
         // each root file (I4). The name of a file does not decide if it is Rust code.
-        let metadata = semilla_normal::cargo::cargo_metadata(&dir).with_context(|| format!("read the cargo targets of tree {tree}"))?;
+        let (metadata, metadata_bytes) = match stored_metadata.as_ref().and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok().map(|value| (value, bytes.clone()))) {
+            Some(found) => found,
+            None => run_metadata(&self.repo, tree, &dir).with_context(|| format!("read the cargo targets of tree {tree}"))?,
+        };
         crate::timing("cargo metadata", started);
         let mut ws = Workspace::load_with_metadata(&dir, &metadata).with_context(|| format!("load the workspace of tree {tree}"))?;
         // The git tree has each entry, also a submodule and a file in an ignored folder. Its
         // modes and hashes are exact, so the diff compares them instead of the folder.
         ws.files = self.repo.tree_entries(tree)?;
+        semilla_core::timing::count(crate::recstore::WORK_PHASE, "files parsed", ws.parsed_files.len() as u64);
+        let _ = store.put_content(&cache, crate::recstore::Kind::Syntax, &syntax_key(&metadata_bytes), semilla_syntax::stored::FORMAT, semilla_syntax::stored::encode(&ws));
         crate::timing("load the syntax workspace", started);
         self.workspaces.insert(tree.to_string(), ws.clone());
         Ok(ws)
@@ -2237,6 +2300,7 @@ impl App {
         if loaded > 0 {
             semilla_core::timing::count(crate::recstore::READ_PHASE, "forms loaded on need", loaded);
         }
+        crate::recstore::count_work();
         semilla_core::timing::print_all();
         // The test rule of `tests` groups needs the test items of all trees.
         let test_items: BTreeSet<String> = cache.values().flat_map(|ws| ws.items.values().filter(|i| i.test).map(|i| i.path.clone())).collect();
@@ -3060,4 +3124,19 @@ pub(crate) fn summary_line(report: &Report) -> String {
 fn no_note(commit: &str, error: anyhow::Error) -> anyhow::Error {
     let text = format!("commit {commit} has no semilla note; tag it first");
     if format!("{error:#}").contains("no note found") { anyhow::anyhow!(text) } else { error.context(text) }
+}
+
+#[cfg(test)]
+mod store_tests {
+    // [R88.5-1] The key of the stored syntax data has the tree, the output of `cargo metadata`,
+    // and the identity of the binary: a workspace that another binary stored is not read.
+    // rule- R88.5-1
+    #[test]
+    fn a_stored_workspace_of_another_binary_or_tree_has_another_key() {
+        let one = super::syntax_key("abc", b"{}", "binary-1");
+        assert_ne!(one, super::syntax_key("abc", b"{}", "binary-2"));
+        assert_ne!(one, super::syntax_key("abc", b"{\"a\":1}", "binary-1"));
+        assert_ne!(one, super::syntax_key("abd", b"{}", "binary-1"));
+        assert_eq!(crate::store::binary_identity().len(), 16);
+    }
 }
