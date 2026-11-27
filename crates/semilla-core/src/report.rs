@@ -249,6 +249,32 @@ pub struct StepReport {
     /// text: CAUSE`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub names_gap: Option<String>,
+    /// [R90.2-1] The MIR evidence of each changed node, by the index of its edit (design 90).
+    /// The check of the step uses it to give each node its kind. It is not stored: a stored
+    /// step keeps the kinds on its entries.
+    #[serde(skip)]
+    pub node_mir: std::collections::BTreeMap<usize, NodeMir>,
+}
+
+/// [R90.2-1] The MIR evidence of one changed node of the syntax diff (design 90): the elements
+/// of the MIR alignment that the node owns (the owner rule of design 40.3: the smallest node
+/// that contains the node of the element), and the state of its bodies.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NodeMir {
+    /// The elements that differ that the node owns and that have a partner of the other side
+    /// in their aligned region (R90.1-1), on each side (0: old, 1: new).
+    pub paired: [usize; 2],
+    /// The elements that differ that the node owns with no partner: removed (0) or new (1).
+    pub alone: [usize; 2],
+    /// True: the node is in a body whose MIR is equal, or in a changed body where each element
+    /// that differs has an owner and the node owns none.
+    pub equal: bool,
+    /// True: the node is in a changed body, and the alignment gives no unique answer for it: an
+    /// element that differs has no owner, the owner rule keeps the doubt rule for the node, or
+    /// the body has no element data.
+    pub doubt: bool,
+    /// True: the body of the node is on one side only (an added or a removed function).
+    pub one_side: bool,
 }
 
 /// The control flow graph diff of a step (design 60, part C).
@@ -878,6 +904,16 @@ pub struct AstEntry {
     /// [R79.5-1] The claim template for a node that is not mapped, or the cause why it has none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub template: String,
+    /// [R90.2-1] The kind of the node from the MIR alignment (design 90). `None`: a record of
+    /// an earlier version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<EntryKind>,
+    /// [R90.2-6] True if the node has no MIR element.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub syntax_only: bool,
+    /// [R90.3-1] The entry that holds the node (`f3`), or a claim of `--claim` (its id).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub entry: String,
 }
 
 /// [R79.1-1] The map of the AST pass of a step (design 79).
@@ -917,8 +953,17 @@ impl AstMap {
 
 impl AstEntry {
     /// The line of the entry: the state, what maps it, the rule, the node, and the place.
+    /// [R90.5-1] With a kind: the kind and the entry first.
     pub fn line(&self) -> String {
         let node = format!("{} {} `{}` ({})", self.change, self.node, self.at, self.place);
+        let node = match self.kind {
+            Some(kind) => {
+                let syntax = if self.syntax_only { ", syntax only" } else { "" };
+                let entry = if self.entry.is_empty() { String::new() } else { format!(" in {}", self.entry) };
+                format!("{node}: {}{syntax}{entry}", kind.name())
+            }
+            None => node,
+        };
         match self.state {
             AstState::Claim => format!("mapped by claim {} [{}]: {node}", self.by, self.rule),
             AstState::Semilla => format!("mapped by Semilla ({}) [{}]: {node}", self.by, self.rule),
@@ -1270,6 +1315,119 @@ pub struct Fact {
     /// item, and in a record of an earlier version.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<RelatedComment>,
+    /// [R90.3-1] The kind of the entry of the map of the diff (design 90). `None`: a record of
+    /// an earlier version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<EntryKind>,
+    /// [R90.3-1] The source of the entry: the statements that give it (`a1`: a fact of the
+    /// agent, `i2`: a claim of an intent file). Empty: Semilla gives the entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source: Vec<String>,
+    /// [R90.3-1] The check of the entry: the rule that checked it, and what holds.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub check: String,
+    /// [R90.3-1] The changed nodes of the entry: the numbers `nI` of the map (the order of the
+    /// syntax diff). Empty for an entry with no node (a file, the compiled code of a body with
+    /// no edit, a line of the public API).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<usize>,
+    /// [R90.2-6] True if no node of the entry has a MIR element: the matcher of today gives the
+    /// entry.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub syntax_only: bool,
+    /// [R90.5-2] True for a real edit that no statement of the agent names. The step passes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub not_stated: bool,
+}
+
+/// [R90.2-1] The kind of an entry of the map of the diff (design 90).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryKind {
+    /// The text changes and the MIR does not (a renamed local, a new layout, another sugar
+    /// form).
+    SameCode,
+    /// A definition gets a new name.
+    Rename,
+    /// A node goes to another place.
+    Move,
+    /// An old node becomes a different new node: its MIR changes.
+    Replace,
+    /// A new node with no old partner.
+    Add,
+    /// An old node with no new partner.
+    Delete,
+    /// A signature, a field, or a variant changes.
+    TypeChange,
+    /// The alignment has no unique answer for the node (R90.6-1).
+    NotMapped,
+}
+
+impl EntryKind {
+    /// The name of the kind in an output.
+    pub fn name(self) -> &'static str {
+        match self {
+            EntryKind::SameCode => "same code",
+            EntryKind::Rename => "rename",
+            EntryKind::Move => "move",
+            EntryKind::Replace => "replace",
+            EntryKind::Add => "add",
+            EntryKind::Delete => "delete",
+            EntryKind::TypeChange => "type change",
+            EntryKind::NotMapped => "not mapped",
+        }
+    }
+
+    /// True for a real edit: "replace", "add", "delete", and "type change". The other kinds are
+    /// transformations that the check explains fully.
+    pub fn is_real(self) -> bool {
+        matches!(self, EntryKind::Replace | EntryKind::Add | EntryKind::Delete | EntryKind::TypeChange)
+    }
+}
+
+/// [R90.5-1] The section of an entry in the one list (design 90): the real edits first.
+pub const ENTRY_SECTIONS: &[&str] = &["real edits", "not mapped", "transformations", "syntax only"];
+
+impl Fact {
+    /// [R90.5-1] The section of the entry in the one list: an index of [`ENTRY_SECTIONS`].
+    /// `None`: a record of an earlier version (the groups of today).
+    pub fn section(&self) -> Option<usize> {
+        let kind = self.kind?;
+        Some(if kind == EntryKind::NotMapped {
+            1
+        } else if self.syntax_only {
+            3
+        } else if kind.is_real() {
+            0
+        } else {
+            2
+        })
+    }
+
+    /// [R90.3-1] True for an entry that counts as a real edit in the coverage line: a real kind,
+    /// not syntax only, with a changed node or a file edit of its own.
+    pub fn counts_as_real(&self) -> bool {
+        self.kind.is_some_and(EntryKind::is_real) && !self.syntax_only && (!self.nodes.is_empty() || self.part == "file")
+    }
+
+    /// [R90.5-1] The head of the entry before its text: the kind, the source, and the check.
+    /// `None`: a record of an earlier version.
+    pub fn entry_head(&self) -> Option<String> {
+        let kind = self.kind?;
+        let source = if self.source.is_empty() { "Semilla".to_string() } else { self.source.join(", ") };
+        let syntax = if self.syntax_only && kind != EntryKind::NotMapped { ", syntax only" } else { "" };
+        Some(format!("{}{syntax} ({source}; {})", kind.name(), self.check))
+    }
+}
+
+/// [R90.5-3] The coverage line of the map of the diff (design 90): "changed nodes: N in M
+/// entries; K real edits (S stated by the agent); J not mapped". It replaces the line "AST
+/// changes" of R79.6-1 and the line "not stated" of the gap list.
+pub fn map_coverage_line(map: &AstMap, facts: &[Fact]) -> String {
+    let real: Vec<&Fact> = facts.iter().filter(|fact| fact.counts_as_real()).collect();
+    let stated = real.iter().filter(|fact| !fact.not_stated).count();
+    let open = map.entries.iter().filter(|entry| entry.state == AstState::NotMapped).count();
+    format!("changed nodes: {} in {} entries; {} real edits ({stated} stated by the agent); {open} not mapped", map.nodes, facts.len(), real.len())
 }
 
 /// The state of a comment of a changed item (design 58.4).
@@ -2059,7 +2217,13 @@ impl StepReport {
     /// The lines of the gap list (design 54.4), largest group first. With `limit`, the first
     /// lines and a count of the other lines. Each line starts with two spaces.
     pub fn gap_lines(&self, limit: Option<usize>) -> Vec<String> {
-        let Some(head) = self.gap_line() else { return Vec::new() };
+        // [R90.5-3] The coverage line of the map of the diff replaces the line "not stated" of a
+        // step (design 90). A record of an earlier version keeps its line.
+        let head = match &self.ast {
+            Some(map) if self.facts.iter().any(|fact| fact.kind.is_some()) || map.entries.iter().any(|entry| entry.kind.is_some()) => Some(map_coverage_line(map, &self.facts)),
+            _ => self.gap_line(),
+        };
+        let Some(head) = head else { return Vec::new() };
         let mut lines = vec![format!("  {head}")];
         let shown = limit.unwrap_or(self.gaps.len()).min(self.gaps.len());
         for gap in &self.gaps[..shown] {

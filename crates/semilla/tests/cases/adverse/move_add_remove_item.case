@@ -44,16 +44,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::last` (src/list/mod.rs:13): no template: the step pairs `depot::list::first` with `depot::list::last` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 5 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed expression `0` → `v.len() - 1` (f3)
       in: depot::list::last
       lines: src/list.rs:-8, src/list/mod.rs:13
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::last=TEXT'; if it does not change, --same 'rewrite 0 => v.len() - 1'
-  other facts, filled in by Semilla:
-  ◆ f3 derived: changed expression `0` → `v.len() - 1` at `depot::list::last/tail/index` [semantics · code different]
+  real edits:
+  item `depot::list::last`:
+  ◆ f3 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `0` → `v.len() - 1` at `depot::list::last/tail/index` [semantics · code different] · not stated
       affected bodies: depot::list::last
       control flow: + call `slice::<impl [u32]>::len` (src/list/mod.rs:13): return → check `overflow: v.len() - 1`
       control flow: + check `overflow: v.len() - 1` (src/list/mod.rs:13): ok → check `bounds: v[v.len() - 1]`, fail → panic `overflow`
@@ -61,23 +61,29 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 3 more (semilla expand --step 0)
       equivalence: MIR changes
       docs of `depot::list::first`, removed in this step: see f2
-  ◆ f1 derived: renamed `depot::list::first` → `depot::list::last` [rename · code equal]
-  ◆ f2 derived: removed docs `/// The first element.` [docs · no code]
-  ◆ f4 derived: public API: `depot::list::first` is now `depot::list::last` (a different crate can no longer use the old path) [rename · no code]
-  ◆ f5 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 12 lines keep their tokens [move · no code]
+  transformations:
+  item `depot::list::first`:
+  ◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `depot::list::first` → `depot::list::last` [rename · code equal]
+  item `depot::list::last`:
+  ◆ f4 rename (Semilla; R90.2-5, the pair check holds): public API: `depot::list::first` is now `depot::list::last` (a different crate can no longer use the old path) [rename · no code]
+  item `depot::list`:
+  ◆ f5 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 12 lines keep their tokens [move · no code]
+  syntax only:
+  item `depot::list::last`:
+  ◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): removed docs `/// The first element.` [docs · no code]
   cover: each of the 27 changed line(s) is in a fact
   control flow: 1 body
     depot::list::last (src/list/mod.rs:13): graph changes: +1 call, +1 check, +1 panic, 1 changed check, +4 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f3 derived: changed expression `0` → `v.len() - 1` at `depot::list::last/tail/index` [semantics · code different]
+◆ f3 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `0` → `v.len() - 1` at `depot::list::last/tail/index` [semantics · code different] · not stated
     lines: src/list.rs:-8, src/list/mod.rs:13
-◆ f1 derived: renamed `depot::list::first` → `depot::list::last` [rename · code equal]
+◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `depot::list::first` → `depot::list::last` [rename · code equal]
     no position
-◆ f2 derived: removed docs `/// The first element.` [docs · no code]
-    lines: src/list.rs:-7
-◆ f4 derived: public API: `depot::list::first` is now `depot::list::last` (a different crate can no longer use the old path) [rename · no code]
+◆ f4 rename (Semilla; R90.2-5, the pair check holds): public API: `depot::list::first` is now `depot::list::last` (a different crate can no longer use the old path) [rename · no code]
     no position
-◆ f5 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 12 lines keep their tokens [move · no code]
+◆ f5 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 12 lines keep their tokens [move · no code]
     lines: src/list.rs:-1-6, src/list.rs:-9-14, src/list/mod.rs:1-12
+◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): removed docs `/// The first element.` [docs · no code]
+    lines: src/list.rs:-7

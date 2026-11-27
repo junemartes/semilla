@@ -25,16 +25,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `shop::label` (src/lib.rs:3)
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` (f1)
       in: shop::label
       lines: src/lib.rs:4, src/lib.rs:-4
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::label=TEXT'; if it does not change, --same 'rewrite format!("n = {}", $a) => alloc::format!("n = {}", $a)'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` at `shop::label/tail` [semantics · code equal]
+  transformations:
+  item `shop::label`:
+  ◆ f1 same code (Semilla; R90.2-1, equal MIR): changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` at `shop::label/tail` [semantics · code equal]
       equivalence: equivalent (proved by equal MIR)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
@@ -42,5 +42,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` at `shop::label/tail` [semantics · code equal]
+◆ f1 same code (Semilla; R90.2-1, equal MIR): changed macro: `format!("n = {}", n)` → `alloc::format!("n = {}", n)` at `shop::label/tail` [semantics · code equal]
     lines: src/lib.rs:4, src/lib.rs:-4

@@ -2939,13 +2939,13 @@ fn a_renamed_macro_with_equal_bodies_is_one_rename_fact_with_its_call_sites() {
     assert!(report.accepted(), "{report:#?}");
     // The call sites are under the rename fact.
     let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
-    assert!(text.contains("  ◆ f1 derived: renamed macro `demo::map_either` → `demo::map_both` [rename · code equal]\n      2 site(s): changed macro call `map_either!` → `map_both!` (in demo::one, demo::two)\n"), "{text}");
+    assert!(legacy(&text).contains("  ◆ f1 derived: renamed macro `demo::map_either` → `demo::map_both` [rename · code equal]\n      2 site(s): changed macro call `map_either!` → `map_both!` (in demo::one, demo::two)\n"), "{text}");
     // A call site with one more change keeps its own fact. A changed body shows under the fact.
     let more = after.replace("map_both!(a, y => y * 2)", "map_both!(a, y => y * 3)");
     let report = run_derived(before, &more, &[("demo::one", different(false)), ("demo::two", different(false))]);
     let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
     assert!(text.contains("renamed macro `demo::map_either` → `demo::map_both` [rename · code different]\n      1 site(s): changed macro call `map_either!` → `map_both!` (in demo::one)\n      ! the compiled code changes: demo::one\n"), "{text}");
-    assert!(text.contains("derived: changed macro: `map_either!(a, y => y * 2)` → `map_both!(a, y => y * 3)` at `demo::two/tail` [semantics · code different]"), "{text}");
+    assert!(legacy(&text).contains("derived: changed macro: `map_either!(a, y => y * 2)` → `map_both!(a, y => y * 3)` at `demo::two/tail` [semantics · code different]"), "{text}");
     // A rename with a different body keeps the removed fact and the added fact.
     let other = after.replace("$pattern => $result,", "$pattern => $result,\n            #[allow(unreachable_patterns)]\n            _ => unreachable!(),");
     let report = run_derived(before, &other, &[("demo::one", different(false)), ("demo::two", different(false))]);
@@ -6391,12 +6391,12 @@ fn a_pair_that_is_not_one_item_shows_as_removed_and_added() {
     let texts = descriptions(&report);
     assert!(!texts.iter().any(|text| text.starts_with("renamed ")) && texts.contains(&"change condition `a == 0` → `a > 100` at `demo::caret/S0/cond`".to_string()) && texts.contains(&"change condition `a > 100` → `a == 0` at `demo::tilde/S0/cond`".to_string()), "{texts:?}");
     assert!(report.facts.iter().all(|fact| fact.compare == Compare::CodeDifferent), "{report:#?}");
-    // Two pairs with equal texts: the maps have the same score.
+    // Two pairs with equal texts: one map of the matcher (R90.8-1, ties by the source order).
     let twins = "pub fn one(a: u32) -> u32 {\n    a + 1\n}\npub fn two(a: u32) -> u32 {\n    a + 1\n}\n";
     let after = twins.replace("fn one", "fn first").replace("fn two", "fn second");
     let report = run_derived(twins, &after, &[("demo::first", equal("n0")), ("demo::second", equal("n0"))]);
-    assert_eq!(descriptions(&report), ["removed `demo::one` (the public API changes: a different crate can no longer use the item)", "removed `demo::two` (the public API changes: a different crate can no longer use the item)", "added `demo::first` (the public API changes: a different crate can now use the item)", "added `demo::second` (the public API changes: a different crate can now use the item)"]);
-    assert_eq!(report.notes, ["`demo::one` → `demo::first`, `demo::two` → `demo::second` show(s) as removed and added: Semilla does not derive the rename or the move (more than one name map has the same similar score and the same number of other facts: (`demo::one` → `demo::first`, `demo::two` → `demo::second`) or (`demo::one` → `demo::second`, `demo::two` → `demo::first`))"]);
+    assert!(descriptions(&report).starts_with(&["renamed `demo::one` → `demo::first`".to_string(), "renamed `demo::two` → `demo::second`".to_string()]), "{:#?}", descriptions(&report));
+    assert!(report.notes.is_empty(), "{:#?}", report.notes);
 }
 
 /// Design 36.1, rule 7: a local rename with a second edit in the same body.
@@ -6484,6 +6484,28 @@ fn an_associated_item_has_its_own_fact_and_its_api_line() {
 }
 
 /// The fact texts of a report, with the category.
+/// The heads of design 90 (`◆ fN KIND (SOURCE; CHECK): TEXT … · not stated`) in the form of
+/// before (`◆ fN derived: TEXT …` or `◆ fN stated: TEXT …`), for the tests of the tags, the
+/// positions, and the gap list, which read the text of a fact and not its entry head.
+fn legacy(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        let converted = line.find("◆ f").and_then(|at| {
+            let (pre, rest) = line.split_at(at);
+            let (id, after) = rest["◆ ".len()..].split_once(' ')?;
+            let open = after.find(" (")?;
+            let (source, _) = after[open + 2..].split_once("; ")?;
+            let close = after.find("): ")?;
+            let status = if source.starts_with('a') || source.starts_with('i') { "stated" } else { "derived" };
+            let body = &after[close + 3..];
+            Some(format!("{pre}◆ {id} {status}: {}", body.strip_suffix(" · not stated").unwrap_or(body)))
+        });
+        out.push_str(&converted.unwrap_or_else(|| line.to_string()));
+        out.push('\n');
+    }
+    out
+}
+
 fn fact_lines(report: &StepReport) -> Vec<String> {
     report.facts.iter().map(|fact| format!("{} [{}]", fact.description, fact.category.name())).collect()
 }
@@ -7175,7 +7197,7 @@ fn run_elements(before: &str, after: &str, claims: Vec<Claim>, oracle: &ElementB
 }
 
 fn changed_body(name: &str, old: Vec<MirElement>, new: Vec<MirElement>) -> BodyComparison {
-    BodyComparison { graphs: Vec::new(), name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: Some(MirDiff { old, new, other: false, pairs: Vec::new(), no_symbols: true, own: Vec::new(), evaluated: false }) }
+    BodyComparison { graphs: Vec::new(), name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: Some(MirDiff { old, new, other: false, pairs: Vec::new(), changed: Vec::new(), no_symbols: true, own: Vec::new(), evaluated: false }) }
 }
 
 const COUNT_BEFORE: &str = "pub fn f(v: &Vec<u32>) -> usize {\n    let n = v.len();\n    n + 1\n}\n";
@@ -7956,15 +7978,14 @@ fn a_use_line_with_a_second_difference_gets_its_own_fact() {
     assert!(texts.iter().any(|text| text.contains("`use` line") && text.contains("use cart::a::helper;") && text.contains("use cart::b::helper;")) || (texts.iter().any(|text| text.starts_with("removed `use` line: `use cart::a::helper;`")) && texts.iter().any(|text| text.starts_with("added `use` line: `use cart::b::helper;`"))), "{texts:#?}");
 }
 
-/// Design 50, part 3: two maps pass with the same score. The default mode gives no rename fact.
-// rule+ R50.2-2
-// rule- R50.2-2
+/// Design 50, part 3, and R90.8-1 (design 90, rule M8): two equal candidates have one map of the
+/// matcher (ties by the source order), checked one time; before design 90 a tie gave no rename.
 #[test]
-fn a_tie_of_two_maps_gives_removed_and_added_in_the_default_mode() {
+fn a_tie_of_two_candidates_gives_the_one_map_of_the_matcher_in_the_syntax_only_check() {
     let twins = "fn one(a: u32) -> u32 {\n    a + 1\n}\nfn two(a: u32) -> u32 {\n    a + 1\n}\n";
     let report = run_tree(twins, &twins.replace("fn one", "fn first").replace("fn two", "fn second"));
-    assert_eq!(plain_texts(&report), ["removed `demo::one`", "removed `demo::two`", "added `demo::first`", "added `demo::second`"]);
-    assert!(report.notes.len() == 1 && report.notes[0].contains("show(s) as removed and added: Semilla does not derive the rename or the move (more than one name map"), "{:#?}", report.notes);
+    assert_eq!(plain_texts(&report), ["renamed `demo::one` → `demo::first`", "renamed `demo::two` → `demo::second`"]);
+    assert!(report.notes.is_empty(), "{:#?}", report.notes);
     // One pair has one map: the rename fact shows.
     let report = run_tree(twins, &twins.replace("fn one", "fn first"));
     assert_eq!(plain_texts(&report), ["renamed `demo::one` → `demo::first`"]);
@@ -9228,11 +9249,11 @@ fn the_gap_list_groups_equal_edits_and_gives_the_option_that_covers_them() {
     // The full text has the section of the AST pass first (design 79); this test reads the gap
     // list.
     let all_lines = views::agent_lines(&report, None, &|_| Vec::new());
-    let gap_lines = &all_lines[all_lines.iter().position(|line| line.starts_with("  not stated")).unwrap_or(0)..];
+    // [R90.5-3] The coverage line replaces the line "not stated": the gap list follows it.
+    let gap_lines = &all_lines[all_lines.iter().position(|line| line.starts_with("  changed nodes:")).map_or(0, |at| at + 1)..];
     assert_eq!(
         gap_lines,
         [
-            "  not stated: 5 item(s) with 5 place(s) that can change the behavior of existing code and that no fact of the agent states",
             "  ? 3 places: `$a.total` => `$a.total()` (f1, f2)",
             "      in: demo::a, demo::b, demo::d",
             "      lines: src/lib.rs:11, src/lib.rs:14, src/lib.rs:17, src/lib.rs:-11, src/lib.rs:-14, src/lib.rs:-17",
@@ -9260,7 +9281,8 @@ fn the_gap_list_groups_equal_edits_and_gives_the_option_that_covers_them() {
     // Each item is stated: no list. The count line stays, with the count 0 (design 54.14).
     let full = run_agent(AGENT_BASE, &mixed, &["rewrite $a.total => $a.total()"], &["demo::idle,demo::inner::a=the fees change"]);
     assert!(full.accepted() && full.gaps.is_empty() && full.gap_line().as_deref() == Some("not stated: 0 item(s)"), "{:#?}", full.gaps);
-    assert_eq!(full.gap_lines(None), ["  not stated: 0 item(s)"]);
+    // [R90.5-3] The coverage line replaces the line "not stated: 0 item(s)".
+    assert!(full.gap_lines(None).len() == 1 && full.gap_lines(None)[0].starts_with("  changed nodes: "), "{:?}", full.gap_lines(None));
     // Negative: a step with no fact of the agent and with no gap has no count line.
     let plain = run_agent(AGENT_BASE, AGENT_BASE, &[], &[]);
     assert!(plain.gap_line().is_none() && plain.gap_lines(None).is_empty());
@@ -9442,7 +9464,7 @@ fn a_stated_rename_is_a_candidate_of_the_rename_rule() {
         lines.sort();
         lines
     };
-    assert!(one.accepted() && sorted(&one) == sorted(&report), "{:#?}", fact_lines(&one));
+    assert!(one.accepted() && sorted(&one) == sorted(&report), "{:#?}\n{:#?}", sorted(&one), sorted(&report));
     assert_eq!(one.facts.iter().filter(|fact| fact.category == Category::Rename && fact.status == "stated").count(), 2, "{:#?}", origins(&one));
     // Negative: a stated pair never makes the check weaker. A site that does not follow the
     // stated pairs keeps its own fact, and it is in the gap list.
@@ -9465,11 +9487,12 @@ fn a_stated_rename_is_a_candidate_of_the_rename_rule() {
     assert!(report.facts.iter().all(|fact| fact.category != Category::Rename), "{:#?}", fact_lines(&report));
     // Design 54.16, negative: Semilla derives no rename with an item of the fact. No option.
     assert!(!fact.notes.iter().any(|note| note.contains("a fact that holds")), "{fact:#?}");
-    // Negative: a stated pair does not replace a pair that Semilla derives alone.
+    // Negative: a stated pair does not replace a pair that Semilla derives alone. Since design
+    // 90 (R90.8-1) the hint comes first: its check of the form finds the cause.
     let after = MODES.replace("Mode::Idle", "State::Rest").replace("Mode", "State").replace("    Idle,", "    Rest,");
     let report = run_agent(MODES, &after, &["rename Mode::Idle State::Busy"], &[]);
     let fact = agent_fact(&report, "a1");
-    assert!(!fact.holds && fact.notes.iter().any(|note| note == "the stated pair is no fact: Semilla derives `demo::Mode::Idle` → `demo::State::Rest` from the syntax tree, and an item is in one pair only"), "{fact:#?}");
+    assert!(!fact.holds && fact.notes.iter().any(|note| note == "the stated pair is no fact: `demo::State::Busy` is the item `demo::Mode::Busy` of the old tree: the item stays"), "{fact:#?}");
     assert!(fact_lines(&report).contains(&"renamed `demo::Mode::Idle` → `demo::State::Rest` [rename]".to_string()));
     // Design 54.16: the fact that holds is a complete option.
     assert!(fact.notes.iter().any(|note| note == "a fact that holds: `--same 'rename demo::Mode::Idle demo::State::Rest'`"), "{fact:#?}");
@@ -10182,7 +10205,7 @@ fn a_tag_has_each_fact_whose_edit_is_fully_in_its_lines() {
     assert_eq!(tag_facts(&report), [("first edit".to_string(), vec!["f1".to_string()])]);
     assert!(report.accepted());
     let text = text_of(&report);
-    assert!(text.contains("  tag `first edit` (src/lib.rs:3): 1 fact(s): 1 semantics; 1 changed line(s)\n  ◆ f1 derived: changed literal `1` → `2` at `demo::f/S0/init/rhs` [semantics]\n  not in a tag: 5 fact(s): 4 semantics, 1 added; 11 changed line(s)\n"), "{text}");
+    assert!(legacy(&text).contains("  tag `first edit` (src/lib.rs:3): 1 fact(s): 1 semantics; 1 changed line(s)\n  ◆ f1 derived: changed literal `1` → `2` at `demo::f/S0/init/rhs` [semantics]\n  not in a tag: 5 fact(s): 4 semantics, 1 added; 11 changed line(s)\n"), "{text}");
     // The line of a gap names the tag of its facts.
     assert!(text.contains("      in: demo::f\n      lines: src/lib.rs:3-4, src/lib.rs:-3-5\n      tags: `first edit` (f1), not in a tag (f2, f3)\n"), "{text}");
     assert!(text.contains("      in: demo::g\n      lines: src/lib.rs:11, src/lib.rs:-12\n      not in a tag\n"), "{text}");
@@ -10194,7 +10217,7 @@ fn a_tag_has_each_fact_whose_edit_is_fully_in_its_lines() {
     assert_eq!(tag_facts(&report), [("retry option".to_string(), vec!["f1".to_string(), "f2".to_string(), "f3".to_string(), "f5".to_string()]), ("net".to_string(), vec!["f5".to_string(), "f6".to_string()])]);
     let text = text_of(&report);
     assert!(text.contains("  tag `retry option` (src/lib.rs:3-4, src/net.rs:2): 4 fact(s): 4 semantics; 6 changed line(s)\n"), "{text}");
-    assert!(text.contains("  tag `net` (src/net.rs): 2 fact(s): 1 added, 1 semantics; 6 changed line(s)\n  ◆ f6 derived: added `demo::net::wait` (the public API changes: a different crate can now use the item) [added]\n      also in this tag, shown in a tag above: f5\n  not in a tag: 1 fact(s): 1 semantics; 2 changed line(s)\n"), "{text}");
+    assert!(legacy(&text).contains("  tag `net` (src/net.rs): 2 fact(s): 1 added, 1 semantics; 6 changed line(s)\n  ◆ f6 derived: added `demo::net::wait` (the public API changes: a different crate can now use the item) [added]\n      also in this tag, shown in a tag above: f5\n  not in a tag: 1 fact(s): 1 semantics; 2 changed line(s)\n"), "{text}");
     assert_eq!(text.matches("◆ f5 ").count(), 1, "{text}");
     assert!(text.contains("      tags: `retry option`, `net`\n"), "{text}");
     // Each side of the hunk header `@@ -3,3 +3,2 @@` selects the two sides of the hunk.
@@ -10224,7 +10247,7 @@ fn a_tag_on_a_deleted_statement_uses_the_lines_of_the_old_tree() {
     // The deleted line is the last line of the old side of the hunk `@@ -3,3 +3,2 @@`.
     let report = tag_step(&[], &[], &["src/lib.rs:-5=no log"]);
     assert_eq!(tag_facts(&report), [("no log".to_string(), vec!["f3".to_string()])]);
-    assert!(text_of(&report).contains("  tag `no log` (src/lib.rs:-5): 1 fact(s): 1 semantics; 1 changed line(s)\n  ◆ f3 derived: deleted statement `log(c)` at `demo::f/S2` [semantics]\n"));
+    assert!(legacy(&text_of(&report)).contains("  tag `no log` (src/lib.rs:-5): 1 fact(s): 1 semantics; 1 changed line(s)\n  ◆ f3 derived: deleted statement `log(c)` at `demo::f/S2` [semantics]\n"));
     // The full new side of the hunk selects the old side also (batch 9b4b, P2.1, rule 2).
     let report = tag_step(&[], &[], &["src/lib.rs:2-6=f"]);
     assert_eq!(tag_facts(&report), [("f".to_string(), vec!["f1".to_string(), "f2".to_string(), "f3".to_string()])]);
@@ -10249,7 +10272,7 @@ fn a_fact_with_lines_in_a_tag_and_lines_out_of_it_is_in_the_tag_in_part() {
     assert!(report.accepted());
     assert_eq!(report.tags[0].notes, ["in part: f6 has lines that are not in the tag: src/net.rs:3-4"]);
     let text = text_of(&report);
-    assert!(text.contains("  tag `half` (src/net.rs:5-6): 0 fact(s); 1 fact(s) in part; 2 changed line(s)\n  ◆ f6 derived: added `demo::net::wait` (the public API changes: a different crate can now use the item) [added]\n      in part: f6 has lines that are not in the tag: src/net.rs:3-4\n  not in a tag: 5 fact(s): 5 semantics; 9 changed line(s)\n"), "{text}");
+    assert!(legacy(&text).contains("  tag `half` (src/net.rs:5-6): 0 fact(s); 1 fact(s) in part; 2 changed line(s)\n  ◆ f6 derived: added `demo::net::wait` (the public API changes: a different crate can now use the item) [added]\n      in part: f6 has lines that are not in the tag: src/net.rs:3-4\n  not in a tag: 5 fact(s): 5 semantics; 9 changed line(s)\n"), "{text}");
     // The fact shows one time, and it is not a part of the line "not in a tag".
     assert_eq!(text.matches("◆ f6 ").count(), 1, "{text}");
     assert!(!report.not_in_a_tag().contains(&"f6".to_string()));
@@ -10363,8 +10386,11 @@ fn a_change_fact_and_a_tag_in_one_step_and_the_width_of_a_change_fact() {
     assert_eq!(tag_facts(&tagged), [("f".to_string(), vec!["f1".to_string(), "f2".to_string(), "f3".to_string()]), ("net".to_string(), vec!["f5".to_string(), "f6".to_string()])]);
     let text = text_of(&tagged);
     assert!(text.contains("  ✓ a1 change: `demo::f` \"the factors change\" (holds: the behavior of existing code can change in each item; covers 3 fact(s) in 1 item(s) with 5 changed line(s))\n      places: demo::f/S0/init/rhs, demo::f/S1/init/rhs, demo::f/S2\n      facts, in the groups of the tags below: f1, f2, f3\n"), "{text}");
-    assert!(text.contains("  tag `f` (src/lib.rs:2-5, src/lib.rs:-5): 3 fact(s): 3 semantics; 5 changed line(s)\n  ◆ f1 stated: changed literal `1` → `2` at `demo::f/S0/init/rhs` [semantics]\n"), "{text}");
-    assert!(text.contains("  not in a tag: 1 fact(s): 1 semantics; 2 changed line(s)\n  ◆ f4 derived: changed expression `a` → `a + 1` at `demo::g/tail` [semantics]\n"), "{text}");
+    // Design 90: in a tag, the entries have the order of the one list (the section first).
+    let legacy_text = legacy(&text);
+    let tag_at = legacy_text.find("  tag `f` (src/lib.rs:2-5, src/lib.rs:-5): 3 fact(s): 3 semantics; 5 changed line(s)\n").unwrap_or_else(|| panic!("{text}"));
+    assert!(legacy_text[tag_at..].contains("  ◆ f1 stated: changed literal `1` → `2` at `demo::f/S0/init/rhs` [semantics]\n"), "{text}");
+    assert!(legacy(&text).contains("  not in a tag: 1 fact(s): 1 semantics; 2 changed line(s)\n  ◆ f4 derived: changed expression `a` → `a + 1` at `demo::g/tail` [semantics]\n"), "{text}");
     // The gap list keeps its place and its text; the gap of `demo::g` is in no tag.
     assert_eq!(plain.gap_items(), tagged.gap_items());
     assert!(text.contains("      in: demo::g\n      lines: src/lib.rs:11, src/lib.rs:-12\n      not in a tag\n"), "{text}");
@@ -10988,7 +11014,7 @@ fn a_fact_with_no_position_is_not_a_part_of_the_count_of_the_facts_in_no_tag() {
     assert!(report.not_in_a_tag().is_empty());
     let text = text_of(&report);
     let id = &unplaced[0];
-    assert!(text.contains(&format!("  facts with no position (a tag selects changed lines; these facts have none): 1 fact(s): 1 rename\n  ◆ {id} derived: public API: ")), "{text}");
+    assert!(legacy(&text).contains(&format!("  facts with no position (a tag selects changed lines; these facts have none): 1 fact(s): 1 rename\n  ◆ {id} derived: public API: ")), "{text}");
     assert!(!text.contains("not in a tag"), "{text}");
     assert_eq!(text.matches(&format!("◆ {id} ")).count(), 1, "{text}");
     // With a fact in no tag, the two groups have their own lines and their own counts.

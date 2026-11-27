@@ -71,40 +71,51 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rename limit cap (holds: Semilla derives the rename from the syntax tree)
       places: depot::limit, depot::cap
-    ◆ f2 stated: renamed `depot::limit` → `depot::cap` [rename · code equal]
-        expansion: `assert_eq!(cap(), 10)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: changed path `limit` → `cap` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/callee` [semantics]
-        note: 1 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)
-    ◆ f6 stated: public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
+      entries, in the list below: f2, f6
   ✓ a2 same: move idle conf::idle (holds: Semilla derives the move from the syntax tree)
       places: depot::idle, depot::conf::idle
-    ◆ f1 stated: moved `depot::idle` → `depot::conf::idle` [move · code equal]
-    ◆ f5 stated: public API: `depot::idle` is now `depot::conf::idle` (a different crate can no longer use the old path) [move · no code]
+      entries, in the list below: f1, f5
   ✓ a3 same: rewrite `$a.total` => `$a.total()` (the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
       places: depot::a/tail/lhs, depot::b/tail/lhs
-    ◆ f3 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
-        in: depot::a, depot::b
-        affected bodies: depot::a, depot::b
-        control flow: + call `Cart::total` (src/lib.rs:6): return → check `overflow: c.total() + 1`
-        control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-6, src/lib.rs:6)
-        control flow: + arrow entry (src/lib.rs:6) → call `Cart::total` (src/lib.rs:6)
-        control flow: … 5 more (semilla expand --step 0)
-        equivalence: `depot::a`: MIR changes
-        equivalence: `depot::b`: MIR changes
+      entries, in the list below: f3
   ✓ a4 change: `wrap` "the value is one more" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
       places: depot::wrap/tail
-    ◆ f4 stated: changed expression `x` → `x + 1` at `depot::wrap/tail` [semantics · code different]
-        affected bodies: depot::wrap
-        control flow: + check `overflow: x + 1` (src/lib.rs:9): ok → return, fail → panic `overflow`
-        control flow: + panic `overflow` (src/lib.rs:9)
-        control flow: + arrow entry (src/lib.rs:9) → check `overflow: x + 1` (src/lib.rs:9)
-        control flow: … 1 more (semilla expand --step 0)
-        equivalence: MIR changes
-  AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+      entries, in the list below: f4
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `depot::a` (src/lib.rs:6): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
     MIR changes with no claim: `depot::b` (src/lib.rs:7): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
     MIR changes with no claim: `depot::wrap` (src/lib.rs:9): the full compare: `#[same(depot::wrap)] fn wrap_same() {}`; a difference: `#[change(depot::wrap)] fn wrap_change(x: u32) -> bool { … }` or `#[different(depot::wrap)] fn wrap_different() -> bool { … }`
-  not stated: 0 item(s)
+  changed nodes: 3 in 6 entries; 2 real edits (2 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::a`:
+  ◆ f3 replace (a3; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+      in: depot::a, depot::b
+      affected bodies: depot::a, depot::b
+      control flow: + call `Cart::total` (src/lib.rs:6): return → check `overflow: c.total() + 1`
+      control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-6, src/lib.rs:6)
+      control flow: + arrow entry (src/lib.rs:6) → call `Cart::total` (src/lib.rs:6)
+      control flow: … 5 more (semilla expand --step 0)
+      equivalence: `depot::a`: MIR changes
+      equivalence: `depot::b`: MIR changes
+  item `depot::wrap`:
+  ◆ f4 replace (a4; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 1` at `depot::wrap/tail` [semantics · code different]
+      affected bodies: depot::wrap
+      control flow: + check `overflow: x + 1` (src/lib.rs:9): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:9)
+      control flow: + arrow entry (src/lib.rs:9) → check `overflow: x + 1` (src/lib.rs:9)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes
+  transformations:
+  item `depot::cap`:
+  ◆ f6 rename (a1; R90.2-5, the pair check holds): public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
+  item `depot::conf::idle`:
+  ◆ f5 move (a2; R90.2-5, the pair check holds): public API: `depot::idle` is now `depot::conf::idle` (a different crate can no longer use the old path) [move · no code]
+  item `depot::idle`:
+  ◆ f1 move (a2; R90.2-5, the pair check holds): moved `depot::idle` → `depot::conf::idle` [move · code equal]
+  item `depot::limit`:
+  ◆ f2 rename (a1; R90.2-5, the pair check holds): renamed `depot::limit` → `depot::cap` [rename · code equal]
+      expansion: `assert_eq!(cap(), 10)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: changed path `limit` → `cap` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/callee` [semantics]
+      note: 1 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)
   cover: each of the 18 changed line(s) is in a fact
   control flow: 3 bodies
     depot::a (src/lib.rs:6): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow; MIR changes
@@ -115,15 +126,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 stated: renamed `depot::limit` → `depot::cap` [rename · code equal]
-    lines: src/lib.rs:11-12, src/lib.rs:19, src/lib.rs:-11-12, src/lib.rs:-19
-◆ f6 stated: public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
-    no position
-◆ f1 stated: moved `depot::idle` → `depot::conf::idle` [move · code equal]
-    lines: src/lib.rs:15-17, src/lib.rs:-13-14, src/lib.rs:-17
-◆ f5 stated: public API: `depot::idle` is now `depot::conf::idle` (a different crate can no longer use the old path) [move · no code]
-    no position
-◆ f3 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+◆ f3 replace (a3; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
     lines: src/lib.rs:6-7, src/lib.rs:-6-7
-◆ f4 stated: changed expression `x` → `x + 1` at `depot::wrap/tail` [semantics · code different]
+◆ f4 replace (a4; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 1` at `depot::wrap/tail` [semantics · code different]
     lines: src/lib.rs:9, src/lib.rs:-9
+◆ f6 rename (a1; R90.2-5, the pair check holds): public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
+    no position
+◆ f5 move (a2; R90.2-5, the pair check holds): public API: `depot::idle` is now `depot::conf::idle` (a different crate can no longer use the old path) [move · no code]
+    no position
+◆ f1 move (a2; R90.2-5, the pair check holds): moved `depot::idle` → `depot::conf::idle` [move · code equal]
+    lines: src/lib.rs:15-17, src/lib.rs:-13-14, src/lib.rs:-17
+◆ f2 rename (a1; R90.2-5, the pair check holds): renamed `depot::limit` → `depot::cap` [rename · code equal]
+    lines: src/lib.rs:11-12, src/lib.rs:19, src/lib.rs:-11-12, src/lib.rs:-19

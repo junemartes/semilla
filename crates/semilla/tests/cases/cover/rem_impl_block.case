@@ -29,15 +29,17 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `depot::Tool::size` (src/lib.rs:9): a removed body: the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: removed `depot::Tool::size` (the public API changes: a different crate can no longer use the item) [removed · code different]
+    MIR changes with no claim: `depot::Tool::size` (src/lib.rs:9): a removed body: `#[removed(depot::Tool::size)] fn size_removed(this: &before::depot::Tool) -> bool { let old = before::depot::Tool::size(this); true }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::Tool::size`:
+  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::Tool::size` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
       affected bodies: depot::Tool::size
       control flow: − graph of `depot::Tool::size`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
-  ◆ f2 derived: removed `depot::impl Tool` with: `fn size` [removed · code different]
+  item `depot::impl Tool`:
+  ◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::impl Tool` with: `fn size` [removed · code different] · not stated
       affected bodies: depot::Tool::size
       control flow: − graph of `depot::Tool::size`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 4 changed line(s) is in a fact
@@ -47,7 +49,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! spotlight: cfg attribute: depot::impl Tool
 
 === positions
-◆ f1 derived: removed `depot::Tool::size` (the public API changes: a different crate can no longer use the item) [removed · code different]
+◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::Tool::size` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
     lines: src/lib.rs:-9
-◆ f2 derived: removed `depot::impl Tool` with: `fn size` [removed · code different]
+◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::impl Tool` with: `fn size` [removed · code different] · not stated
     lines: src/lib.rs:-6-9

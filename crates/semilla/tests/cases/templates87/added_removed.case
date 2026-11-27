@@ -26,15 +26,14 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 4 mapped by Semilla, 3 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 6 MIR changes with no claim
-    MIR changes with no claim: `<depot::Bag as depot::Weigh>::tare` (src/lib.rs:7): an added body: `#[new(<depot::Bag as depot::Weigh>::tare)] fn tare_new() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-    MIR changes with no claim: `<depot::Bag as depot::Weigh>::weigh` (src/lib.rs:7): a removed body: `#[removed(<depot::Bag as depot::Weigh>::weigh)] fn weigh_removed() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `<depot::Bag as depot::Weigh>::tare` (src/lib.rs:7): an added body: `#[new(<depot::Bag as depot::Weigh>::tare)] fn tare_new() -> bool { … }`
+    MIR changes with no claim: `<depot::Bag as depot::Weigh>::weigh` (src/lib.rs:7): a removed body: `#[removed(<depot::Bag as depot::Weigh>::weigh)] fn weigh_removed() -> bool { … }`
     MIR changes with no claim: `depot::Bag::fresh_twice` (src/lib.rs:5): no template: the step pairs `depot::Bag::gone_half` with `depot::Bag::fresh_twice` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
     MIR changes with no claim: `depot::Shelf::<V>::fresh_empty` (src/lib.rs:6): no template: the step pairs `depot::Shelf::gone_len` with `depot::Shelf::fresh_empty` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
     MIR changes with no claim: `depot::fresh_sum` (src/lib.rs:4): an added body: `#[new(depot::fresh_sum)] fn fresh_sum_new(x: u32, y: u64) -> bool { let new = after::depot::fresh_sum(x, y); true }`
-    MIR changes with no claim: `depot::gone` (src/lib.rs:4): a removed body: the claim template of the node n5 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  not stated: 4 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `depot::gone` (src/lib.rs:4): a removed body: `#[removed(depot::gone)] fn gone_removed(x: u32) -> bool { let old = before::depot::gone(x); true }`
+  changed nodes: 7 in 11 entries; 7 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: edit, see f4 (f4)
       in: depot::<Bag as Weigh>::weigh
       lines: src/lib.rs:-7
@@ -52,43 +51,52 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       lines: src/lib.rs:7
       to state it: --change 'depot::<Bag as Weigh>::tare=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::<Bag as Weigh>::weigh=TEXT' --change 'depot::<Bag as Weigh>::tare=TEXT'
-  new and removed items, filled in by Semilla:
-  ◆ f7 derived: removed `depot::gone` (the public API changes: a different crate can no longer use the item) [removed · code different]
-      affected bodies: depot::gone
-      control flow: − graph of `depot::gone`: 2 points, 1 arrow (semilla expand --step 0)
-      ! public API: the compare does not cover the code of a different crate
-  ◆ f9 derived: added `depot::fresh_sum` (the public API changes: a different crate can now use the item) [added · code different]
-      affected bodies: depot::fresh_sum
-      control flow: + graph of `depot::fresh_sum`: 4 points, 3 arrows (semilla expand --step 0)
-      ! public API: the compare does not cover the code of a different crate
-  declarations, filled in by Semilla:
-  ◆ f3 derived: return type of `depot::Shelf::fresh_empty` `-> usize` → `-> bool` (the public API can change: a different crate can use the item) [declaration · code different]
-      affected bodies: depot::Shelf::fresh_empty (with 1 other edit of this body)
-      control flow: ~ call `Vec::<V>::len` → `Vec::<V>::is_empty` (src/lib.rs:-6, src/lib.rs:6)
-      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
-      ! public API: the compare does not cover the code of a different crate
-  other facts, filled in by Semilla:
-  ◆ f4 derived: `depot::<Bag as Weigh>::weigh` is removed: the impl now uses the default body of `depot::Weigh::weigh`: `impl Weigh for Bag { fn weigh(&self) -> u32 { self.n } }` → `pub trait Weigh { fn weigh(&self) -> u32 { 0 } fn tare(&self) -> u32 { 0 } }` [semantics · code different]
+  real edits:
+  item `depot::<Bag as Weigh>::tare`:
+  ◆ f8 add (Semilla; R90.2-3, a body of the new MIR only): `depot::<Bag as Weigh>::tare` now overrides the default body of `depot::Weigh::tare`: `pub trait Weigh { fn weigh(&self) -> u32 { 0 } fn tare(&self) -> u32 { 0 } }` → `impl Weigh for Bag { fn tare(&self) -> u32 { 1 } }` [semantics · code different] · not stated
+      affected bodies: depot::<Bag as Weigh>::tare
+      control flow: + graph of `<depot::Bag as depot::Weigh>::tare`: 2 points, 1 arrow (semilla expand --step 0)
+  item `depot::<Bag as Weigh>::weigh`:
+  ◆ f4 delete (Semilla; R90.2-3, a body of the old MIR only): `depot::<Bag as Weigh>::weigh` is removed: the impl now uses the default body of `depot::Weigh::weigh`: `impl Weigh for Bag { fn weigh(&self) -> u32 { self.n } }` → `pub trait Weigh { fn weigh(&self) -> u32 { 0 } fn tare(&self) -> u32 { 0 } }` [semantics · code different] · not stated
       affected bodies: depot::<Bag as Weigh>::weigh
       control flow: − graph of `<depot::Bag as depot::Weigh>::weigh`: 2 points, 1 arrow (semilla expand --step 0)
-  ◆ f5 derived: changed operator `self.n / 2` → `self.n * 2` at `depot::Bag::fresh_twice/tail` [semantics · code different]
+  item `depot::Bag::fresh_twice`:
+  ◆ f5 replace (Semilla; R90.2-2, 2 changed MIR elements): changed operator `self.n / 2` → `self.n * 2` at `depot::Bag::fresh_twice/tail` [semantics · code different] · not stated
       affected bodies: depot::Bag::fresh_twice
       control flow: + check `overflow: self.n * 2` (src/lib.rs:5): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:5)
       control flow: + arrow entry (src/lib.rs:5) → check `overflow: self.n * 2` (src/lib.rs:5)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
-  ◆ f6 derived: changed method_call: `self.items.len()` → `self.items.is_empty()` at `depot::Shelf::fresh_empty/tail` [semantics · code different]
+  item `depot::Shelf::fresh_empty`:
+  ◆ f6 replace (Semilla; R90.2-2, 1 changed MIR element): changed method_call: `self.items.len()` → `self.items.is_empty()` at `depot::Shelf::fresh_empty/tail` [semantics · code different] · not stated
       affected bodies: depot::Shelf::fresh_empty (with 1 other edit of this body)
       control flow: ~ call `Vec::<V>::len` → `Vec::<V>::is_empty` (src/lib.rs:-6, src/lib.rs:6)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
-  ◆ f8 derived: `depot::<Bag as Weigh>::tare` now overrides the default body of `depot::Weigh::tare`: `pub trait Weigh { fn weigh(&self) -> u32 { 0 } fn tare(&self) -> u32 { 0 } }` → `impl Weigh for Bag { fn tare(&self) -> u32 { 1 } }` [semantics · code different]
-      affected bodies: depot::<Bag as Weigh>::tare
-      control flow: + graph of `<depot::Bag as depot::Weigh>::tare`: 2 points, 1 arrow (semilla expand --step 0)
-  ◆ f1 derived: renamed `depot::Bag::gone_half` → `depot::Bag::fresh_twice` [rename · code equal]
-  ◆ f2 derived: renamed `depot::Shelf::gone_len` → `depot::Shelf::fresh_empty` [rename · code equal]
-  ◆ f10 derived: public API: `depot::Bag::gone_half` is now `depot::Bag::fresh_twice` (a different crate can no longer use the old path) [rename · no code]
-  ◆ f11 derived: public API: `depot::Shelf::gone_len` is now `depot::Shelf::fresh_empty` (a different crate can no longer use the old path) [rename · no code]
+  ◆ f3 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): return type of `depot::Shelf::fresh_empty` `-> usize` → `-> bool` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
+      affected bodies: depot::Shelf::fresh_empty (with 1 other edit of this body)
+      control flow: ~ call `Vec::<V>::len` → `Vec::<V>::is_empty` (src/lib.rs:-6, src/lib.rs:6)
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
+      ! public API: the compare does not cover the code of a different crate
+  item `depot::fresh_sum`:
+  ◆ f9 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::fresh_sum` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+      affected bodies: depot::fresh_sum
+      control flow: + graph of `depot::fresh_sum`: 4 points, 3 arrows (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  item `depot::gone`:
+  ◆ f7 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::gone` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
+      affected bodies: depot::gone
+      control flow: − graph of `depot::gone`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  transformations:
+  item `depot::Bag::fresh_twice`:
+  ◆ f10 rename (Semilla; R90.2-5, the pair check holds): public API: `depot::Bag::gone_half` is now `depot::Bag::fresh_twice` (a different crate can no longer use the old path) [rename · no code]
+  item `depot::Bag::gone_half`:
+  ◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `depot::Bag::gone_half` → `depot::Bag::fresh_twice` [rename · code equal]
+  item `depot::Shelf::fresh_empty`:
+  ◆ f11 rename (Semilla; R90.2-5, the pair check holds): public API: `depot::Shelf::gone_len` is now `depot::Shelf::fresh_empty` (a different crate can no longer use the old path) [rename · no code]
+  item `depot::Shelf::gone_len`:
+  ◆ f2 rename (Semilla; R90.2-5, the pair check holds): renamed `depot::Shelf::gone_len` → `depot::Shelf::fresh_empty` [rename · code equal]
   cover: each of the 8 changed line(s) is in a fact
   control flow: 6 bodies
     <depot::Bag as depot::Weigh>::tare (src/lib.rs:7): graph added: 2 points, 1 arrow
@@ -100,25 +108,25 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f7 derived: removed `depot::gone` (the public API changes: a different crate can no longer use the item) [removed · code different]
-    lines: src/lib.rs:-4
-◆ f9 derived: added `depot::fresh_sum` (the public API changes: a different crate can now use the item) [added · code different]
-    lines: src/lib.rs:4
-◆ f3 derived: return type of `depot::Shelf::fresh_empty` `-> usize` → `-> bool` (the public API can change: a different crate can use the item) [declaration · code different]
-    lines: src/lib.rs:6, src/lib.rs:-6
-◆ f4 derived: `depot::<Bag as Weigh>::weigh` is removed: the impl now uses the default body of `depot::Weigh::weigh`: `impl Weigh for Bag { fn weigh(&self) -> u32 { self.n } }` → `pub trait Weigh { fn weigh(&self) -> u32 { 0 } fn tare(&self) -> u32 { 0 } }` [semantics · code different]
-    lines: src/lib.rs:-7
-◆ f5 derived: changed operator `self.n / 2` → `self.n * 2` at `depot::Bag::fresh_twice/tail` [semantics · code different]
-    lines: src/lib.rs:5, src/lib.rs:-5
-◆ f6 derived: changed method_call: `self.items.len()` → `self.items.is_empty()` at `depot::Shelf::fresh_empty/tail` [semantics · code different]
-    lines: src/lib.rs:6, src/lib.rs:-6
-◆ f8 derived: `depot::<Bag as Weigh>::tare` now overrides the default body of `depot::Weigh::tare`: `pub trait Weigh { fn weigh(&self) -> u32 { 0 } fn tare(&self) -> u32 { 0 } }` → `impl Weigh for Bag { fn tare(&self) -> u32 { 1 } }` [semantics · code different]
+◆ f8 add (Semilla; R90.2-3, a body of the new MIR only): `depot::<Bag as Weigh>::tare` now overrides the default body of `depot::Weigh::tare`: `pub trait Weigh { fn weigh(&self) -> u32 { 0 } fn tare(&self) -> u32 { 0 } }` → `impl Weigh for Bag { fn tare(&self) -> u32 { 1 } }` [semantics · code different] · not stated
     lines: src/lib.rs:7
-◆ f1 derived: renamed `depot::Bag::gone_half` → `depot::Bag::fresh_twice` [rename · code equal]
+◆ f4 delete (Semilla; R90.2-3, a body of the old MIR only): `depot::<Bag as Weigh>::weigh` is removed: the impl now uses the default body of `depot::Weigh::weigh`: `impl Weigh for Bag { fn weigh(&self) -> u32 { self.n } }` → `pub trait Weigh { fn weigh(&self) -> u32 { 0 } fn tare(&self) -> u32 { 0 } }` [semantics · code different] · not stated
+    lines: src/lib.rs:-7
+◆ f5 replace (Semilla; R90.2-2, 2 changed MIR elements): changed operator `self.n / 2` → `self.n * 2` at `depot::Bag::fresh_twice/tail` [semantics · code different] · not stated
+    lines: src/lib.rs:5, src/lib.rs:-5
+◆ f6 replace (Semilla; R90.2-2, 1 changed MIR element): changed method_call: `self.items.len()` → `self.items.is_empty()` at `depot::Shelf::fresh_empty/tail` [semantics · code different] · not stated
+    lines: src/lib.rs:6, src/lib.rs:-6
+◆ f3 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): return type of `depot::Shelf::fresh_empty` `-> usize` → `-> bool` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
+    lines: src/lib.rs:6, src/lib.rs:-6
+◆ f9 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::fresh_sum` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+    lines: src/lib.rs:4
+◆ f7 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::gone` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
+    lines: src/lib.rs:-4
+◆ f10 rename (Semilla; R90.2-5, the pair check holds): public API: `depot::Bag::gone_half` is now `depot::Bag::fresh_twice` (a different crate can no longer use the old path) [rename · no code]
     no position
-◆ f2 derived: renamed `depot::Shelf::gone_len` → `depot::Shelf::fresh_empty` [rename · code equal]
+◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `depot::Bag::gone_half` → `depot::Bag::fresh_twice` [rename · code equal]
     no position
-◆ f10 derived: public API: `depot::Bag::gone_half` is now `depot::Bag::fresh_twice` (a different crate can no longer use the old path) [rename · no code]
+◆ f11 rename (Semilla; R90.2-5, the pair check holds): public API: `depot::Shelf::gone_len` is now `depot::Shelf::fresh_empty` (a different crate can no longer use the old path) [rename · no code]
     no position
-◆ f11 derived: public API: `depot::Shelf::gone_len` is now `depot::Shelf::fresh_empty` (a different crate can no longer use the old path) [rename · no code]
+◆ f2 rename (Semilla; R90.2-5, the pair check holds): renamed `depot::Shelf::gone_len` → `depot::Shelf::fresh_empty` [rename · code equal]
     no position

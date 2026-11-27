@@ -60,13 +60,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 change: `limit`, `idle` "more" (false: the tag `change` does not agree with the edit that Semilla sees in 1 of 2 items)
       places: depot::limit/tail
       Semilla sees no edit in `depot::idle`
-    ◆ f1 stated: changed literal `10` → `20` at `depot::limit/tail` [semantics · code different]
-        affected bodies: depot::limit
-        equivalence: MIR changes
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+      entries, in the list below: f1
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::limit` (src/lib.rs:11): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
-  not stated: 0 item(s)
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::limit`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `20` at `depot::limit/tail` [semantics · code different] · not stated
+      affected bodies: depot::limit
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     depot::limit (src/lib.rs:11): same graph (the edit keeps the control flow); MIR changes
@@ -75,5 +77,5 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f1 derived: changed literal `10` → `20` at `depot::limit/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `20` at `depot::limit/tail` [semantics · code different] · not stated
     lines: src/lib.rs:11, src/lib.rs:-11

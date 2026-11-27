@@ -25,19 +25,22 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  other facts, filled in by Semilla:
-  ◆ f2 derived: the compiled code of `depot::f` changes with no edit at its place: `here!()` [indirect · code different]
+  changed nodes: 1 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::f`:
+  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `depot::f` changes with no edit at its place: `here!()` [indirect · code different]
       affected bodies: depot::f
       note: lines 6
       ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'depot::f=…'
-  ◆ f1 derived: added docs `/// Doc.` [docs · no code]
+  syntax only:
+  item `depot::f`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added docs `/// Doc.` [docs · no code]
   cover: each of the 1 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'depot::f=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::f=the reason of the test'
-◆ f2 derived: the compiled code of `depot::f` changes with no edit at its place: `here!()` [indirect · code different]
+◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `depot::f` changes with no edit at its place: `here!()` [indirect · code different]
     no position
-◆ f1 derived: added docs `/// Doc.` [docs · no code]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added docs `/// Doc.` [docs · no code]
     lines: src/lib.rs:5

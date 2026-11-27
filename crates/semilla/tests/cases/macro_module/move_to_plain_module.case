@@ -44,13 +44,14 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: moved `depot::unix::helper` → `depot::util::helper` [move · code equal]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::unix::helper`:
+  ◆ f1 move (Semilla; R90.2-5, the pair check holds): moved `depot::unix::helper` → `depot::util::helper` [move · code equal]
   cover: each of the 8 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: module of a macro input: `depot::unix` (`src/unix.rs`) has its line `mod unix;` in the input of the macro call `depot::pick!#0` (`src/lib.rs:6`); Semilla does not expand the macro, so it does not know if the build has this module
 
 === positions
-◆ f1 derived: moved `depot::unix::helper` → `depot::util::helper` [move · code equal]
+◆ f1 move (Semilla; R90.2-5, the pair check holds): moved `depot::unix::helper` → `depot::util::helper` [move · code equal]
     lines: src/lib.rs:8, src/unix.rs:-4-7, src/util.rs:1-3

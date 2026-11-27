@@ -21,11 +21,12 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::tax` (src/lib.rs:1)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: `depot::tax`: renamed local `w` → `level`, 4 edit(s) [rename · code equal]
+  changed nodes: 4 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::tax`:
+  ◆ f1 same code (Semilla; R90.2-1, equal MIR; 4 nodes): `depot::tax`: renamed local `w` → `level`, 4 edit(s) [rename · code equal]
       equivalence: equivalent (proved by equal MIR)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
@@ -33,5 +34,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: `depot::tax`: renamed local `w` → `level`, 4 edit(s) [rename · code equal]
+◆ f1 same code (Semilla; R90.2-1, equal MIR; 4 nodes): `depot::tax`: renamed local `w` → `level`, 4 edit(s) [rename · code equal]
     lines: src/lib.rs:2-3, src/lib.rs:-2-3

@@ -119,30 +119,34 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       Semilla sees: f2 changed cast: `self.0` → `self.0 as u64` at `depot::money::super::stock::Bin::cents/tail` [semantics]
       Semilla sees: f4 indirect change, cause not known: `depot::money::Price::cents` (the body exists only before the step) [indirect]
       Semilla sees: f5 public API: `depot::money::Price::cents` is now `depot::money::super::stock::Bin::cents` (a different crate can no longer use the old path) [move]
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::money::<impl depot::stock::Bin>::cents` (src/lib.rs:14): no template: the step pairs `depot::money::Price::cents` with `depot::stock::Bin::cents` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
     MIR changes with no claim: `depot::money::Price::cents` (src/lib.rs:13): a removed body: `#[removed(depot::money::Price::cents)] fn cents_removed(this: &before::depot::money::Price) -> bool { let old = before::depot::money::Price::cents(this); true }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 5 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed cast: `self.0` → `self.0 as u64` (f2)
       in: depot::money::super::stock::Bin::cents
       lines: src/lib.rs:13-14, src/lib.rs:-13
       to state it: --change 'depot::money::super::stock::Bin::cents=TEXT'
   to state them, add these options to the command of the step: --change 'depot::money::super::stock::Bin::cents=TEXT'
-  new and removed items, filled in by Semilla:
-  ◆ f3 derived: added `depot::money::impl super::stock::Bin` with: `fn cents` [added · code different]
+  real edits:
+  item `depot::money::Price::cents`:
+  ◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): indirect change, cause not known: `depot::money::Price::cents` (the body exists only before the step) [indirect · code different]
+      affected bodies: depot::money::Price::cents
+      ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'depot::money::Price::cents=…'
+  item `depot::money::impl super::stock::Bin`:
+  ◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::money::impl super::stock::Bin` with: `fn cents` [added · code different] · not stated
       affected bodies: depot::money::super::stock::Bin::cents
       control flow: + graph of `depot::money::<impl depot::stock::Bin>::cents`: 2 points, 1 arrow (semilla expand --step 0) (the same line for f2)
-  other facts, filled in by Semilla:
-  ◆ f2 derived: changed cast: `self.0` → `self.0 as u64` at `depot::money::super::stock::Bin::cents/tail` [semantics · code different]
+  item `depot::money::super::stock::Bin::cents`:
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): changed cast: `self.0` → `self.0 as u64` at `depot::money::super::stock::Bin::cents/tail` [semantics · code different] · not stated
       affected bodies: depot::money::super::stock::Bin::cents
       control flow: the same line as f3
       control flow: − graph of `depot::money::Price::cents`: 2 points, 1 arrow (semilla expand --step 0)
-  ◆ f1 derived: moved `depot::money::Price::cents` → `depot::money::super::stock::Bin::cents` [move · code equal]
-  ◆ f4 derived: indirect change, cause not known: `depot::money::Price::cents` (the body exists only before the step) [indirect · code different]
-      affected bodies: depot::money::Price::cents
-      ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'depot::money::Price::cents=…'
-  ◆ f5 derived: public API: `depot::money::Price::cents` is now `depot::money::super::stock::Bin::cents` (a different crate can no longer use the old path) [move · no code]
+  transformations:
+  item `depot::money::Price::cents`:
+  ◆ f1 move (Semilla; R90.2-5, the pair check holds): moved `depot::money::Price::cents` → `depot::money::super::stock::Bin::cents` [move · code equal]
+  item `depot::money::super::stock::Bin::cents`:
+  ◆ f5 move (Semilla; R90.2-5, the pair check holds): public API: `depot::money::Price::cents` is now `depot::money::super::stock::Bin::cents` (a different crate can no longer use the old path) [move · no code]
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies
     depot::money::<impl depot::stock::Bin>::cents (src/lib.rs:14): graph added: 2 points, 1 arrow
@@ -152,13 +156,13 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change' --reason 'depot::money::Price::cents=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::money::Price::cents=the reason of the test' --change 'depot::money::super::stock::Bin::cents=the text of the test'
-◆ f2 stated: changed cast: `self.0` → `self.0 as u64` at `depot::money::super::stock::Bin::cents/tail` [semantics · code different]
-    lines: src/lib.rs:13-14, src/lib.rs:-13
-◆ f4 stated: indirect change, cause not known: `depot::money::Price::cents` (the body exists only before the step) [indirect · code different]
+◆ f4 replace (a1; R90.3-2, no changed node (the fact of today)): indirect change, cause not known: `depot::money::Price::cents` (the body exists only before the step) [indirect · code different]
     no position
-◆ f3 derived: added `depot::money::impl super::stock::Bin` with: `fn cents` [added · code different]
+◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::money::impl super::stock::Bin` with: `fn cents` [added · code different] · not stated
     lines: src/lib.rs:14
-◆ f1 derived: moved `depot::money::Price::cents` → `depot::money::super::stock::Bin::cents` [move · code equal]
+◆ f2 add (a1; R90.2-3, a body of the new MIR only): changed cast: `self.0` → `self.0 as u64` at `depot::money::super::stock::Bin::cents/tail` [semantics · code different]
+    lines: src/lib.rs:13-14, src/lib.rs:-13
+◆ f1 move (a1; R90.2-5, the pair check holds): moved `depot::money::Price::cents` → `depot::money::super::stock::Bin::cents` [move · code equal]
     no position
-◆ f5 derived: public API: `depot::money::Price::cents` is now `depot::money::super::stock::Bin::cents` (a different crate can no longer use the old path) [move · no code]
+◆ f5 move (Semilla; R90.2-5, the pair check holds): public API: `depot::money::Price::cents` is now `depot::money::super::stock::Bin::cents` (a different crate can no longer use the old path) [move · no code]
     no position

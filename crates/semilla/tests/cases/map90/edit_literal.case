@@ -1,0 +1,58 @@
+note: one changed literal is one real edit on the literal
+rule+: R90.2-2 R90.2-7
+must_match: ; 1 real edits \(
+must_match: replace \(Semilla; R90\.2-2, 1 changed MIR element\): changed literal `2` → `3` at `depot::total/S0/init/args\[0\]/rhs`
+rule-: R90.2-4 R90.2-6 R90.3-2
+must_not_match: type change \(
+must_not_match: syntax only
+must_not_match: R90\.3-2
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+fn keep(x: u32) -> u32 {
+    x
+}
+
+pub fn total(a: u32) -> u32 {
+    let sum = keep(a * 2);
+    sum + 1
+}
+=== new src/lib.rs
+fn keep(x: u32) -> u32 {
+    x
+}
+
+pub fn total(a: u32) -> u32 {
+    let sum = keep(a * 3);
+    sum + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:5): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  ? 1 place: changed literal `2` → `3` (f1)
+      in: depot::total
+      lines: src/lib.rs:6, src/lib.rs:-6
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite 2 => 3'
+  real edits:
+  item `depot::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `depot::total/S0/init/args[0]/rhs` [semantics · code different] · not stated
+      affected bodies: depot::total
+      control flow: ~ check `overflow: a * 2` → `overflow: a * 3` (src/lib.rs:-6, src/lib.rs:6)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:5): same structure: 1 changed check; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `depot::total/S0/init/args[0]/rhs` [semantics · code different] · not stated
+    lines: src/lib.rs:6, src/lib.rs:-6

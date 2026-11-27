@@ -17,13 +17,14 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: attributes of `depot::T`: `#[cfg_attr(test, derive(Debug))] #[derive(Clone)]` → `#[derive(Clone)] #[cfg_attr(test, derive(Debug))]` [attribute · code equal]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::T`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::T`: `#[cfg_attr(test, derive(Debug))] #[derive(Clone)]` → `#[derive(Clone)] #[cfg_attr(test, derive(Debug))]` [attribute · code equal]
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::T (the code has a `cfg` attribute that the compiler did not evaluate in the checked configuration)
 
 === positions
-◆ f1 derived: attributes of `depot::T`: `#[cfg_attr(test, derive(Debug))] #[derive(Clone)]` → `#[derive(Clone)] #[cfg_attr(test, derive(Debug))]` [attribute · code equal]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::T`: `#[cfg_attr(test, derive(Debug))] #[derive(Clone)]` → `#[derive(Clone)] #[cfg_attr(test, derive(Debug))]` [attribute · code equal]
     lines: src/lib.rs:2, src/lib.rs:-1

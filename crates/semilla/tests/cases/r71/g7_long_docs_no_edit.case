@@ -93,11 +93,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:31): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(n: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
     MIR changes with no claim: `shop::tax` (src/lib.rs:36): the full compare: `#[same(shop::tax)] fn tax_same() {}`; a difference: `#[change(shop::tax)] fn tax_change(n: u32) -> bool { … }` or `#[different(shop::tax)] fn tax_different() -> bool { … }`
-  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `2` → `3` (f1)
       in: shop::price
       lines: src/lib.rs:32, src/lib.rs:-32
@@ -106,8 +105,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: shop::tax
       lines: src/lib.rs:37, src/lib.rs:-37
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::tax=TEXT'; if it does not change, --same 'rewrite 1 => 2'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `2` → `3` at `shop::price/tail/rhs` [semantics · code different]
+  real edits:
+  item `shop::price`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `shop::price/tail/rhs` [semantics · code different] · not stated
       affected bodies: shop::price
       control flow: ~ check `overflow: n * 2` → `overflow: n * 3` (src/lib.rs:-32, src/lib.rs:32)
       equivalence: MIR changes
@@ -116,7 +116,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
           | /// Line 1 of the docs of the price: the price of the cart with the tax of the shop.
           | /// Line 2 of the docs of the price: the price of the cart with the tax of the shop.
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  ◆ f2 derived: changed literal `1` → `2` at `shop::tax/tail/rhs` [semantics · code different]
+  item `shop::tax`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::tax/tail/rhs` [semantics · code different] · not stated
       affected bodies: shop::tax
       control flow: ~ check `overflow: n + 1` → `overflow: n + 2` (src/lib.rs:-37, src/lib.rs:37)
       equivalence: MIR changes
@@ -129,7 +130,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 2 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: changed literal `2` → `3` at `shop::price/tail/rhs` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `shop::price/tail/rhs` [semantics · code different] · not stated
     lines: src/lib.rs:32, src/lib.rs:-32
-◆ f2 derived: changed literal `1` → `2` at `shop::tax/tail/rhs` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::tax/tail/rhs` [semantics · code different] · not stated
     lines: src/lib.rs:37, src/lib.rs:-37

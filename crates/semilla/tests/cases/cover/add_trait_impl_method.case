@@ -37,17 +37,17 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `<depot::Sq as depot::Sides>::m` (src/lib.rs:11): an added body: `#[new(<depot::Sq as depot::Sides>::m)] fn m_new() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `<depot::Sq as depot::Sides>::m` (src/lib.rs:11): an added body: `#[new(<depot::Sq as depot::Sides>::m)] fn m_new() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: edit, see f1 (f1)
       in: depot::<Sq as Sides>::m
       lines: src/lib.rs:8-11
       to state it: --change 'depot::<Sq as Sides>::m=TEXT'
   to state them, add these options to the command of the step: --change 'depot::<Sq as Sides>::m=TEXT'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: `depot::<Sq as Sides>::m` now overrides the default body of `depot::Sides::m`: `pub trait Sides { fn m(&self) -> u32 { 0 } fn n(&self) -> u32; }` → `/// The new doc. /// One more line. #[cfg(all())] fn m(&self) -> u32 { 5 }` [semantics · code different]
+  real edits:
+  item `depot::<Sq as Sides>::m`:
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): `depot::<Sq as Sides>::m` now overrides the default body of `depot::Sides::m`: `pub trait Sides { fn m(&self) -> u32 { 0 } fn n(&self) -> u32; }` → `/// The new doc. /// One more line. #[cfg(all())] fn m(&self) -> u32 { 5 }` [semantics · code different] · not stated
       affected bodies: depot::<Sq as Sides>::m
       control flow: + graph of `<depot::Sq as depot::Sides>::m`: 2 points, 1 arrow (semilla expand --step 0)
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::<Sq as Sides>::m`; it needs a reason: --reason 'depot::<Sq as Sides>::m=…'
@@ -59,5 +59,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::<Sq as Sides>::m=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::<Sq as Sides>::m=the reason of the test' --change 'depot::<Sq as Sides>::m=the text of the test'
-◆ f1 stated: `depot::<Sq as Sides>::m` now overrides the default body of `depot::Sides::m`: `pub trait Sides { fn m(&self) -> u32 { 0 } fn n(&self) -> u32; }` → `/// The new doc. /// One more line. #[cfg(all())] fn m(&self) -> u32 { 5 }` [semantics · code different]
+◆ f1 add (a1; R90.2-3, a body of the new MIR only): `depot::<Sq as Sides>::m` now overrides the default body of `depot::Sides::m`: `pub trait Sides { fn m(&self) -> u32 { 0 } fn n(&self) -> u32; }` → `/// The new doc. /// One more line. #[cfg(all())] fn m(&self) -> u32 { 5 }` [semantics · code different]
     lines: src/lib.rs:8-11

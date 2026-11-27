@@ -54,17 +54,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   ! build code changed in this step; read this change first
-  ◆ f1 derived: build.rs: changed [build code · no code]
+  ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): build.rs: changed [build code · no code]
       ✗ spotlight: build script: this file is code of the build script of `depot`. Cargo runs it before each build of the package, and it can change the code and the result of the build; it needs a reason: --reason 'build.rs:=…'
       diff:
         @@ line 3 @@
         +     println!("cargo:rustc-cfg=fast");
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed nodes: 0 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
   cover: each of the 1 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: build script: build.rs
 run again: semilla step 'the change' --reason 'build.rs:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'build.rs:=the reason of the test'
-◆ f1 derived: build.rs: changed [build code · no code]
+◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): build.rs: changed [build code · no code]
     lines: build.rs:3

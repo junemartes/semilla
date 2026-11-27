@@ -30,9 +30,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: removed macro call `table!(B = 2,)` (made: `pub const B`) [removed · no code]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::a::table!#1`:
+  ◆ f1 delete, syntax only (Semilla; R90.2-6, no MIR element; the matcher): removed macro call `table!(B = 2,)` (made: `pub const B`) [removed · no code]
       expansion: `table!(B = 2,)` at `depot::a::table!#1` (src/lib.rs:-6): expansion removed: made `depot::a::B`
   cover: each of the 1 changed line(s) is in a fact
   expansions: 1 removed, 2 equal
@@ -40,5 +41,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: removed macro call `table!(B = 2,)` (made: `pub const B`) [removed · no code]
+◆ f1 delete, syntax only (Semilla; R90.2-6, no MIR element; the matcher): removed macro call `table!(B = 2,)` (made: `pub const B`) [removed · no code]
     lines: src/lib.rs:-6

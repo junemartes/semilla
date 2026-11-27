@@ -38,16 +38,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::pick` (src/lib.rs:5)
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed match, see f1 (f1)
       in: depot::pick
       lines: src/lib.rs:8
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pick=TEXT'; if it does not change, --same 'rewrite match n { 0 => 1, 1 => 2, _ => 3, } => match n { 0 => 1, #[cfg(all())] 1 => 2, _ => 3, }'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed match: `match ▫ { ▫ => ▫, ▫ => ▫, ▫ => ▫, }` → `match ▫ { ▫ => ▫, #[cfg(all())] ▫ => ▫, ▫ => ▫, }` at `depot::pick/S0` [semantics · code equal]
+  transformations:
+  item `depot::pick`:
+  ◆ f1 same code (Semilla; R90.2-1, equal MIR): changed match: `match ▫ { ▫ => ▫, ▫ => ▫, ▫ => ▫, }` → `match ▫ { ▫ => ▫, #[cfg(all())] ▫ => ▫, ▫ => ▫, }` at `depot::pick/S0` [semantics · code equal]
       equivalence: equivalent (proved by equal MIR)
       note: this body uses `#[cfg(all())]`, which Semilla did not check (`depot::pick`)
   cover: each of the 1 changed line(s) is in a fact
@@ -57,5 +57,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   note: `▫` is in place of a child of the node (a condition, a block, an argument). It is not a cut: each edit in the child has its own fact.
 
 === positions
-◆ f1 derived: changed match: `match ▫ { ▫ => ▫, ▫ => ▫, ▫ => ▫, }` → `match ▫ { ▫ => ▫, #[cfg(all())] ▫ => ▫, ▫ => ▫, }` at `depot::pick/S0` [semantics · code equal]
+◆ f1 same code (Semilla; R90.2-1, equal MIR): changed match: `match ▫ { ▫ => ▫, ▫ => ▫, ▫ => ▫, }` → `match ▫ { ▫ => ▫, #[cfg(all())] ▫ => ▫, ▫ => ▫, }` at `depot::pick/S0` [semantics · code equal]
     lines: src/lib.rs:8

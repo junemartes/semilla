@@ -92,19 +92,18 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 17 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 10 MIR changes with no claim
-    MIR changes with no claim: `shop::chk` (src/lib.rs:17): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 3 node(s) of its item not mapped (complete the intent file)]
-    MIR changes with no claim: `shop::diff` (src/lib.rs:26): the claim template of the node n4 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
-    MIR changes with no claim: `shop::fit` (src/lib.rs:30): the claim template of the node n6 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::chk` (src/lib.rs:17): the full compare: `#[same(shop::chk)] fn chk_same() {}`; a difference: `#[change(shop::chk)] fn chk_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::chk)] fn chk_different() -> bool { … }`
+    MIR changes with no claim: `shop::diff` (src/lib.rs:26): the full compare: `#[same(shop::diff)] fn diff_same() {}`; a difference: `#[change(shop::diff)] fn diff_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::diff)] fn diff_different() -> bool { … }`
+    MIR changes with no claim: `shop::fit` (src/lib.rs:30): the full compare: `#[same(shop::fit)] fn fit_same() {}`; a difference: `#[change(shop::fit)] fn fit_change(a: u32) -> bool { … }` or `#[different(shop::fit)] fn fit_different() -> bool { … }`
     MIR changes with no claim: `shop::has` (src/lib.rs:34): the full compare: `#[same(shop::has)] fn has_same() {}`; a difference: `#[change(shop::has)] fn has_change(o: Option<u32>) -> bool { … }` or `#[different(shop::has)] fn has_different() -> bool { … }`
-    MIR changes with no claim: `shop::hi` (src/lib.rs:5): the claim template of the node n9 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
-    MIR changes with no claim: `shop::lo` (src/lib.rs:1): the claim template of the node n11 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
-    MIR changes with no claim: `shop::or_zero` (src/lib.rs:38): the claim template of the node n13 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
-    MIR changes with no claim: `shop::sat` (src/lib.rs:9): the claim template of the node n15 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
-    MIR changes with no claim: `shop::sat_sub` (src/lib.rs:13): the claim template of the node n17 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::hi` (src/lib.rs:5): the full compare: `#[same(shop::hi)] fn hi_same() {}`; a difference: `#[change(shop::hi)] fn hi_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::hi)] fn hi_different() -> bool { … }`
+    MIR changes with no claim: `shop::lo` (src/lib.rs:1): the full compare: `#[same(shop::lo)] fn lo_same() {}`; a difference: `#[change(shop::lo)] fn lo_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::lo)] fn lo_different() -> bool { … }`
+    MIR changes with no claim: `shop::or_zero` (src/lib.rs:38): the full compare: `#[same(shop::or_zero)] fn or_zero_same() {}`; a difference: `#[change(shop::or_zero)] fn or_zero_change(o: Option<u32>) -> bool { … }` or `#[different(shop::or_zero)] fn or_zero_different() -> bool { … }`
+    MIR changes with no claim: `shop::sat` (src/lib.rs:9): the full compare: `#[same(shop::sat)] fn sat_same() {}`; a difference: `#[change(shop::sat)] fn sat_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::sat)] fn sat_different() -> bool { … }`
+    MIR changes with no claim: `shop::sat_sub` (src/lib.rs:13): the full compare: `#[same(shop::sat_sub)] fn sat_sub_same() {}`; a difference: `#[change(shop::sat_sub)] fn sat_sub_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::sat_sub)] fn sat_sub_different() -> bool { … }`
     MIR changes with no claim: `shop::wrap` (src/lib.rs:22): the full compare: `#[same(shop::wrap)] fn wrap_same() {}`; a difference: `#[change(shop::wrap)] fn wrap_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::wrap)] fn wrap_different() -> bool { … }`
-  not stated: 10 item(s) with 19 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 19 in 19 entries; 19 real edits (0 stated by the agent); 0 not mapped
   ? 3 places: 3 different edits (f1, f2, f3)
       in: shop::chk
       lines: src/lib.rs:18-19, src/lib.rs:-18
@@ -126,100 +125,110 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       lines: src/lib.rs:2, src/lib.rs:-2
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::lo=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   and 5 more line(s) with 8 place(s): `semilla expand --step 0` shows each line
-  other facts, filled in by Semilla:
-  ◆ f1 derived: deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different]
+  real edits:
+  item `shop::chk`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different] · not stated
       affected bodies: shop::chk (with 2 other edits of this body)
       control flow: ~ call `num::<impl u32>::checked_add` → `num::<impl u32>::overflowing_add` (src/lib.rs:-18, src/lib.rs:18) (the same line for f2)
       equivalence: MIR changes
-  ◆ f2 derived: added `let` `let (v, o) = a.overflowing_add(b);` at `shop::chk/S0` [semantics · code different]
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added `let` `let (v, o) = a.overflowing_add(b);` at `shop::chk/S0` [semantics · code different] · not stated
       affected bodies: shop::chk (with 2 other edits of this body)
       control flow: the same line as f1
       equivalence: MIR changes
-  ◆ f3 derived: added `if` `if o { None } else { Some(v) }` at `shop::chk/S1` [semantics · code different]
+  ◆ f3 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if o { None } else { Some(v) }` at `shop::chk/S1` [semantics · code different] · not stated
       affected bodies: shop::chk (with 2 other edits of this body)
       control flow: + branch `o` (src/lib.rs:19): false → return, true → return
       control flow: + arrow call `num::<impl u32>::overflowing_add` (src/lib.rs:18) → branch `o` (src/lib.rs:19) (return)
       equivalence: MIR changes
-  ◆ f4 derived: deleted statement `a.abs_diff(b)` at `shop::diff/tail` [semantics · code different]
+  item `shop::diff`:
+  ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.abs_diff(b)` at `shop::diff/tail` [semantics · code different] · not stated
       affected bodies: shop::diff (with 1 other edit of this body)
       control flow: − call `num::<impl u32>::abs_diff` (src/lib.rs:-26): return → return
       control flow: − arrow entry (src/lib.rs:-25) → call `num::<impl u32>::abs_diff` (src/lib.rs:-26)
       equivalence: MIR changes
-  ◆ f5 derived: added `if` `if a > b { a - b } else { b - a }` at `shop::diff/S0` [semantics · code different]
+  ◆ f5 add (Semilla; R90.2-3, 6 new MIR elements): added `if` `if a > b { a - b } else { b - a }` at `shop::diff/S0` [semantics · code different] · not stated
       affected bodies: shop::diff (with 1 other edit of this body)
       control flow: + branch `a > b` (src/lib.rs:27): false → check `overflow: b - a`, true → check `overflow: a - b`
       control flow: + check `overflow: b - a` (src/lib.rs:27): ok → return, fail → panic `overflow`
       control flow: + check `overflow: a - b` (src/lib.rs:27): ok → return, fail → panic `overflow`
       control flow: … 2 more (semilla expand --step 0)
       equivalence: MIR changes
-  ◆ f6 derived: deleted statement `a.clamp(10, 20)` at `shop::fit/tail` [semantics · code different]
+  item `shop::fit`:
+  ◆ f6 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.clamp(10, 20)` at `shop::fit/tail` [semantics · code different] · not stated
       affected bodies: shop::fit (with 1 other edit of this body)
       control flow: − call `impls::<impl Ord for u32>::clamp` (src/lib.rs:-30): return → return
       control flow: − arrow entry (src/lib.rs:-29) → call `impls::<impl Ord for u32>::clamp` (src/lib.rs:-30)
       equivalence: MIR changes
-  ◆ f7 derived: added `if` `if a < 10 { 10 } else if a > 20 { 20 } else { a }` at `shop::fit/S0` [semantics · code different]
+  ◆ f7 add (Semilla; R90.2-3, 8 new MIR elements): added `if` `if a < 10 { 10 } else if a > 20 { 20 } else { a }` at `shop::fit/S0` [semantics · code different] · not stated
       affected bodies: shop::fit (with 1 other edit of this body)
       control flow: + branch `a < 10` (src/lib.rs:31): false → branch `a > 20`, true → return
       control flow: + branch `a > 20` (src/lib.rs:31): false → return, true → return
       control flow: + arrow entry (src/lib.rs:30) → branch `a < 10` (src/lib.rs:31)
       equivalence: MIR changes
-  ◆ f8 derived: changed expression `o.is_some()` → `!o.is_none()` at `shop::has/tail` [semantics · code different]
+  item `shop::has`:
+  ◆ f8 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `o.is_some()` → `!o.is_none()` at `shop::has/tail` [semantics · code different] · not stated
       affected bodies: shop::has
       control flow: ~ call `Option::<u32>::is_some` → `Option::<u32>::is_none` (src/lib.rs:-34, src/lib.rs:35)
       equivalence: MIR changes
-  ◆ f9 derived: deleted statement `a.max(b)` at `shop::hi/tail` [semantics · code different]
+  item `shop::hi`:
+  ◆ f9 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.max(b)` at `shop::hi/tail` [semantics · code different] · not stated
       affected bodies: shop::hi (with 1 other edit of this body)
       control flow: − call `impls::<impl Ord for u32>::max` (src/lib.rs:-6): return → return
       control flow: − arrow entry (src/lib.rs:-5) → call `impls::<impl Ord for u32>::max` (src/lib.rs:-6)
       equivalence: MIR changes
-  ◆ f10 derived: added `if` `if a >= b { a } else { b }` at `shop::hi/S0` [semantics · code different]
+  ◆ f10 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if a >= b { a } else { b }` at `shop::hi/S0` [semantics · code different] · not stated
       affected bodies: shop::hi (with 1 other edit of this body)
       control flow: + branch `a >= b` (src/lib.rs:6): false → return, true → return
       control flow: + arrow entry (src/lib.rs:5) → branch `a >= b` (src/lib.rs:6)
       equivalence: MIR changes
-  ◆ f11 derived: deleted statement `a.min(b)` at `shop::lo/tail` [semantics · code different]
+  item `shop::lo`:
+  ◆ f11 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.min(b)` at `shop::lo/tail` [semantics · code different] · not stated
       affected bodies: shop::lo (with 1 other edit of this body)
       control flow: − call `impls::<impl Ord for u32>::min` (src/lib.rs:-2): return → return
       control flow: − arrow entry (src/lib.rs:-1) → call `impls::<impl Ord for u32>::min` (src/lib.rs:-2)
       equivalence: MIR changes
-  ◆ f12 derived: added `if` `if a <= b { a } else { b }` at `shop::lo/S0` [semantics · code different]
+  ◆ f12 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if a <= b { a } else { b }` at `shop::lo/S0` [semantics · code different] · not stated
       affected bodies: shop::lo (with 1 other edit of this body)
       control flow: + branch `a <= b` (src/lib.rs:2): false → return, true → return
       control flow: + arrow entry (src/lib.rs:1) → branch `a <= b` (src/lib.rs:2)
       equivalence: MIR changes
-  ◆ f13 derived: deleted statement `o.unwrap_or(0)` at `shop::or_zero/tail` [semantics · code different]
+  item `shop::or_zero`:
+  ◆ f13 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `o.unwrap_or(0)` at `shop::or_zero/tail` [semantics · code different] · not stated
       affected bodies: shop::or_zero (with 1 other edit of this body)
       control flow: − call `Option::<u32>::unwrap_or` (src/lib.rs:-38): return → return
       control flow: − arrow entry (src/lib.rs:-37) → call `Option::<u32>::unwrap_or` (src/lib.rs:-38)
       equivalence: MIR changes
-  ◆ f14 derived: added `match` `match o { Some(v) => v, None => 0 }` at `shop::or_zero/S0` [semantics · code different]
+  ◆ f14 add (Semilla; R90.2-3, 6 new MIR elements): added `match` `match o { Some(v) => v, None => 0 }` at `shop::or_zero/S0` [semantics · code different] · not stated
       affected bodies: shop::or_zero (with 1 other edit of this body)
       control flow: + branch `o` (src/lib.rs:39): std::option::Option::None → return, std::option::Option::Some → return
       control flow: + arrow entry (src/lib.rs:38) → branch `o` (src/lib.rs:39)
       equivalence: MIR changes
-  ◆ f15 derived: deleted statement `a.saturating_add(b)` at `shop::sat/tail` [semantics · code different]
-      affected bodies: shop::sat (with 1 other edit of this body)
-      control flow: ~ call `num::<impl u32>::saturating_add` → `num::<impl u32>::checked_add` (src/lib.rs:-10, src/lib.rs:10) (the same line for f16)
-      equivalence: MIR changes
-  ◆ f16 derived: added `match` `match a.checked_add(b) { Some(v) => v, None => u32::MAX }` at `shop::sat/S0` [semantics · code different]
-      affected bodies: shop::sat (with 1 other edit of this body)
-      control flow: + branch `a.checked_add(b)` (src/lib.rs:10): std::option::Option::None → return, std::option::Option::Some → return
-      control flow: the same line as f15
-      control flow: + arrow call `num::<impl u32>::checked_add` (src/lib.rs:10) → branch `a.checked_add(b)` (src/lib.rs:10) (return)
-      equivalence: MIR changes
-  ◆ f17 derived: deleted statement `a.saturating_sub(b)` at `shop::sat_sub/tail` [semantics · code different]
+  item `shop::sat_sub`:
+  ◆ f17 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.saturating_sub(b)` at `shop::sat_sub/tail` [semantics · code different] · not stated
       affected bodies: shop::sat_sub (with 1 other edit of this body)
       control flow: − call `num::<impl u32>::saturating_sub` (src/lib.rs:-14): return → return
       control flow: − arrow entry (src/lib.rs:-13) → call `num::<impl u32>::saturating_sub` (src/lib.rs:-14)
       equivalence: MIR changes
-  ◆ f18 derived: added `if` `if a > b { a - b } else { 0 }` at `shop::sat_sub/S0` [semantics · code different]
+  ◆ f18 add (Semilla; R90.2-3, 5 new MIR elements): added `if` `if a > b { a - b } else { 0 }` at `shop::sat_sub/S0` [semantics · code different] · not stated
       affected bodies: shop::sat_sub (with 1 other edit of this body)
       control flow: + branch `a > b` (src/lib.rs:14): false → return, true → check `overflow: a - b`
       control flow: + check `overflow: a - b` (src/lib.rs:14): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:14)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
-  ◆ f19 derived: changed method_call: `a.wrapping_sub(b)` → `a.wrapping_add(b.wrapping_neg())` at `shop::wrap/tail` [semantics · code different]
+  item `shop::sat`:
+  ◆ f15 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.saturating_add(b)` at `shop::sat/tail` [semantics · code different] · not stated
+      affected bodies: shop::sat (with 1 other edit of this body)
+      control flow: ~ call `num::<impl u32>::saturating_add` → `num::<impl u32>::checked_add` (src/lib.rs:-10, src/lib.rs:10) (the same line for f16)
+      equivalence: MIR changes
+  ◆ f16 add (Semilla; R90.2-3, 6 new MIR elements): added `match` `match a.checked_add(b) { Some(v) => v, None => u32::MAX }` at `shop::sat/S0` [semantics · code different] · not stated
+      affected bodies: shop::sat (with 1 other edit of this body)
+      control flow: + branch `a.checked_add(b)` (src/lib.rs:10): std::option::Option::None → return, std::option::Option::Some → return
+      control flow: the same line as f15
+      control flow: + arrow call `num::<impl u32>::checked_add` (src/lib.rs:10) → branch `a.checked_add(b)` (src/lib.rs:10) (return)
+      equivalence: MIR changes
+  item `shop::wrap`:
+  ◆ f19 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `a.wrapping_sub(b)` → `a.wrapping_add(b.wrapping_neg())` at `shop::wrap/tail` [semantics · code different] · not stated
       affected bodies: shop::wrap
       control flow: + call `num::<impl u32>::wrapping_neg` (src/lib.rs:23): return → call `num::<impl u32>::wrapping_add`
       control flow: ~ call `num::<impl u32>::wrapping_sub` → `num::<impl u32>::wrapping_add` (src/lib.rs:-22, src/lib.rs:23)
@@ -241,41 +250,41 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-18
-◆ f2 derived: added `let` `let (v, o) = a.overflowing_add(b);` at `shop::chk/S0` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added `let` `let (v, o) = a.overflowing_add(b);` at `shop::chk/S0` [semantics · code different] · not stated
     lines: src/lib.rs:18
-◆ f3 derived: added `if` `if o { None } else { Some(v) }` at `shop::chk/S1` [semantics · code different]
+◆ f3 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if o { None } else { Some(v) }` at `shop::chk/S1` [semantics · code different] · not stated
     lines: src/lib.rs:19
-◆ f4 derived: deleted statement `a.abs_diff(b)` at `shop::diff/tail` [semantics · code different]
+◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.abs_diff(b)` at `shop::diff/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-26
-◆ f5 derived: added `if` `if a > b { a - b } else { b - a }` at `shop::diff/S0` [semantics · code different]
+◆ f5 add (Semilla; R90.2-3, 6 new MIR elements): added `if` `if a > b { a - b } else { b - a }` at `shop::diff/S0` [semantics · code different] · not stated
     lines: src/lib.rs:27
-◆ f6 derived: deleted statement `a.clamp(10, 20)` at `shop::fit/tail` [semantics · code different]
+◆ f6 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.clamp(10, 20)` at `shop::fit/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-30
-◆ f7 derived: added `if` `if a < 10 { 10 } else if a > 20 { 20 } else { a }` at `shop::fit/S0` [semantics · code different]
+◆ f7 add (Semilla; R90.2-3, 8 new MIR elements): added `if` `if a < 10 { 10 } else if a > 20 { 20 } else { a }` at `shop::fit/S0` [semantics · code different] · not stated
     lines: src/lib.rs:31
-◆ f8 derived: changed expression `o.is_some()` → `!o.is_none()` at `shop::has/tail` [semantics · code different]
+◆ f8 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `o.is_some()` → `!o.is_none()` at `shop::has/tail` [semantics · code different] · not stated
     lines: src/lib.rs:35, src/lib.rs:-34
-◆ f9 derived: deleted statement `a.max(b)` at `shop::hi/tail` [semantics · code different]
+◆ f9 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.max(b)` at `shop::hi/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-6
-◆ f10 derived: added `if` `if a >= b { a } else { b }` at `shop::hi/S0` [semantics · code different]
+◆ f10 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if a >= b { a } else { b }` at `shop::hi/S0` [semantics · code different] · not stated
     lines: src/lib.rs:6
-◆ f11 derived: deleted statement `a.min(b)` at `shop::lo/tail` [semantics · code different]
+◆ f11 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.min(b)` at `shop::lo/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-2
-◆ f12 derived: added `if` `if a <= b { a } else { b }` at `shop::lo/S0` [semantics · code different]
+◆ f12 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if a <= b { a } else { b }` at `shop::lo/S0` [semantics · code different] · not stated
     lines: src/lib.rs:2
-◆ f13 derived: deleted statement `o.unwrap_or(0)` at `shop::or_zero/tail` [semantics · code different]
+◆ f13 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `o.unwrap_or(0)` at `shop::or_zero/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-38
-◆ f14 derived: added `match` `match o { Some(v) => v, None => 0 }` at `shop::or_zero/S0` [semantics · code different]
+◆ f14 add (Semilla; R90.2-3, 6 new MIR elements): added `match` `match o { Some(v) => v, None => 0 }` at `shop::or_zero/S0` [semantics · code different] · not stated
     lines: src/lib.rs:39
-◆ f15 derived: deleted statement `a.saturating_add(b)` at `shop::sat/tail` [semantics · code different]
-    lines: src/lib.rs:-10
-◆ f16 derived: added `match` `match a.checked_add(b) { Some(v) => v, None => u32::MAX }` at `shop::sat/S0` [semantics · code different]
-    lines: src/lib.rs:10
-◆ f17 derived: deleted statement `a.saturating_sub(b)` at `shop::sat_sub/tail` [semantics · code different]
+◆ f17 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.saturating_sub(b)` at `shop::sat_sub/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-14
-◆ f18 derived: added `if` `if a > b { a - b } else { 0 }` at `shop::sat_sub/S0` [semantics · code different]
+◆ f18 add (Semilla; R90.2-3, 5 new MIR elements): added `if` `if a > b { a - b } else { 0 }` at `shop::sat_sub/S0` [semantics · code different] · not stated
     lines: src/lib.rs:14
-◆ f19 derived: changed method_call: `a.wrapping_sub(b)` → `a.wrapping_add(b.wrapping_neg())` at `shop::wrap/tail` [semantics · code different]
+◆ f15 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.saturating_add(b)` at `shop::sat/tail` [semantics · code different] · not stated
+    lines: src/lib.rs:-10
+◆ f16 add (Semilla; R90.2-3, 6 new MIR elements): added `match` `match a.checked_add(b) { Some(v) => v, None => u32::MAX }` at `shop::sat/S0` [semantics · code different] · not stated
+    lines: src/lib.rs:10
+◆ f19 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `a.wrapping_sub(b)` → `a.wrapping_add(b.wrapping_neg())` at `shop::wrap/tail` [semantics · code different] · not stated
     lines: src/lib.rs:23, src/lib.rs:-22

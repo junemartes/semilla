@@ -57,15 +57,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 change: `t_limit` "one more assert" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
       places: depot::tests::t_limit/S1
-    ◆ f1 stated: added macro statement `assert!(limit() > 2);` at `depot::tests::t_limit/S1` [semantics · code different]
-        affected bodies: depot::tests::t_limit
-        equivalence: `depot::tests::t_limit`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`
-        equivalence: `depot::tests::t_limit::{closure#0} #[test]`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+      entries, in the list below: f1
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::tests::t_limit` (src/lib.rs:19): the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`; no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `depot::tests::t_limit::{closure#0} #[test]` (src/lib.rs:19): the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`; the template of `depot::tests::t_limit` covers its item `depot::tests::t_limit`
-  not stated: 0 item(s)
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::tests::t_limit`:
+  ◆ f1 add (a1; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): added macro statement `assert!(limit() > 2);` at `depot::tests::t_limit/S1` [semantics · code different]
+      affected bodies: depot::tests::t_limit
+      equivalence: `depot::tests::t_limit`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`
+      equivalence: `depot::tests::t_limit::{closure#0} #[test]`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
     depot::tests::t_limit (src/lib.rs:19): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`)
@@ -75,5 +77,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: added macro statement `assert!(limit() > 2);` at `depot::tests::t_limit/S1` [semantics · code different]
+◆ f1 add (a1; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): added macro statement `assert!(limit() > 2);` at `depot::tests::t_limit/S1` [semantics · code different]
     lines: src/lib.rs:19, src/lib.rs:-19

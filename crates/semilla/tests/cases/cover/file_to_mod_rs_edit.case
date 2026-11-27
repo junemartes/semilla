@@ -46,24 +46,26 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::larger` (src/list/mod.rs:11): the full compare: `#[same(depot::list::larger)] fn larger_same() {}`; a difference: `#[change(depot::list::larger)] fn larger_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::list::larger)] fn larger_different() -> bool { … }`
-  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: 2 different edits (f1, f2)
       in: depot::list::larger
       lines: src/list.rs:-12, src/list/mod.rs:12
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::larger=TEXT'; if it does not change, --same 'rewrite a => b' --same 'rewrite b => a'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed path `a` → `b` at `depot::list::larger/S0/init/args[0]` [semantics · code different]
+  real edits:
+  item `depot::list::larger`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `a` → `b` at `depot::list::larger/S0/init/args[0]` [semantics · code different] · not stated
       affected bodies: depot::list::larger (with 1 other edit of this body)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes (the same line for f2)
       docs of `depot::list::larger`, no edit in this step (src/list/mod.rs:10): `/// The larger one.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  ◆ f2 derived: changed path `b` → `a` at `depot::list::larger/S0/init/args[1]` [semantics · code different]
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `b` → `a` at `depot::list::larger/S0/init/args[1]` [semantics · code different] · not stated
       affected bodies: depot::list::larger (with 1 other edit of this body)
       equivalence: the same line as f1
-  ◆ f3 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move · no code]
+  transformations:
+  item `depot::list`:
+  ◆ f3 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move · no code]
   cover: each of the 28 changed line(s) is in a fact
   control flow: 1 body
     depot::list::larger (src/list/mod.rs:11): same graph (the edit keeps the control flow); MIR changes
@@ -71,9 +73,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: changed path `a` → `b` at `depot::list::larger/S0/init/args[0]` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `a` → `b` at `depot::list::larger/S0/init/args[0]` [semantics · code different] · not stated
     lines: src/list.rs:-12, src/list/mod.rs:12
-◆ f2 derived: changed path `b` → `a` at `depot::list::larger/S0/init/args[1]` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `b` → `a` at `depot::list::larger/S0/init/args[1]` [semantics · code different] · not stated
     lines: src/list.rs:-12, src/list/mod.rs:12
-◆ f3 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move · no code]
+◆ f3 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move · no code]
     lines: src/list.rs:-1-11, src/list.rs:-13-14, src/list/mod.rs:1-11, src/list/mod.rs:13-14

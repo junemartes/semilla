@@ -20,11 +20,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::count` (src/lib.rs:4): the full compare: `#[same(depot::count)] fn count_same() {}`; a difference: `#[different(depot::count)] fn count_different() -> bool { … }`
     MIR changes with no claim: `depot::rank` (src/lib.rs:3): the full compare: `#[same(depot::rank)] fn rank_same() {}`; a difference: `#[change(depot::rank)] fn rank_change(o: core::cmp::Ordering) -> bool { … }` or `#[different(depot::rank)] fn rank_different() -> bool { … }`
-  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed expression `m.len()` → `m.len() + 1` (f1)
       in: depot::count
       lines: src/lib.rs:4, src/lib.rs:-4
@@ -33,15 +32,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: depot::rank
       lines: src/lib.rs:3, src/lib.rs:-3
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::rank=TEXT'; if it does not change, --same 'rewrite $a as u32 => $a as u32 + 1'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed expression `m.len()` → `m.len() + 1` at `depot::count/tail` [semantics · code different]
+  real edits:
+  item `depot::count`:
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `m.len()` → `m.len() + 1` at `depot::count/tail` [semantics · code different] · not stated
       affected bodies: depot::count
       control flow: + check `overflow: m.len() + 1` (src/lib.rs:4): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:4)
       control flow: + arrow call `HashMap::<u32, u32>::len` (src/lib.rs:4) → check `overflow: m.len() + 1` (src/lib.rs:4) (return)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
-  ◆ f2 derived: changed expression `o as u32` → `o as u32 + 1` at `depot::rank/tail` [semantics · code different]
+  item `depot::rank`:
+  ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `o as u32` → `o as u32 + 1` at `depot::rank/tail` [semantics · code different] · not stated
       affected bodies: depot::rank
       control flow: + check `overflow: o as u32 + 1` (src/lib.rs:3): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:3)
@@ -55,7 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed expression `m.len()` → `m.len() + 1` at `depot::count/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `m.len()` → `m.len() + 1` at `depot::count/tail` [semantics · code different] · not stated
     lines: src/lib.rs:4, src/lib.rs:-4
-◆ f2 derived: changed expression `o as u32` → `o as u32 + 1` at `depot::rank/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `o as u32` → `o as u32 + 1` at `depot::rank/tail` [semantics · code different] · not stated
     lines: src/lib.rs:3, src/lib.rs:-3

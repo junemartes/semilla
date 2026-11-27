@@ -55,13 +55,14 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  tests and benches, filled in by Semilla:
-  ◆ f1 derived: 2 site(s): added docs `//! Shared code.` [docs · no code]
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot (test "a")::common`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher; 2 nodes): 2 site(s): added docs `//! Shared code.` [docs · no code]
       in: depot (test "a")::common, depot (test "b")::common
   cover: each of the 1 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: 2 site(s): added docs `//! Shared code.` [docs · no code]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher; 2 nodes): 2 site(s): added docs `//! Shared code.` [docs · no code]
     lines: tests/common/mod.rs:1

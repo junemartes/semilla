@@ -1,0 +1,59 @@
+note: a moved item with its uses is a move
+rule+: R90.2-5 R90.7-3
+refactor: yes
+must_match: move \(Semilla; R90\.2-5
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub mod a {
+    pub fn twice(x: u32) -> u32 {
+        x * 2
+    }
+}
+
+pub mod b {}
+
+pub fn four(x: u32) -> u32 {
+    a::twice(a::twice(x))
+}
+=== new src/lib.rs
+pub mod a {}
+
+pub mod b {
+    pub fn twice(x: u32) -> u32 {
+        x * 2
+    }
+}
+
+pub fn four(x: u32) -> u32 {
+    b::twice(b::twice(x))
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
+    equal MIR: `depot::four` (src/lib.rs:9)
+  changed nodes: 2 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::a::twice`:
+  ◆ f1 move (Semilla; R90.2-5, the pair check holds; 2 nodes): moved `depot::a::twice` → `depot::b::twice` [move · code equal]
+      equivalence: equivalent (proved by equal MIR)
+  item `depot::b::twice`:
+  ◆ f2 move (Semilla; R90.2-5, the pair check holds): public API: `depot::a::twice` is now `depot::b::twice` (a different crate can no longer use the old path) [move · no code]
+  ! cover: 6 of the 8 changed line(s) are in no fact (a defect of Semilla: read these lines in the diff)
+  ! changed lines with no fact: src/lib.rs:1-3, src/lib.rs:-1, src/lib.rs:-7-8
+  control flow: 1 body
+    depot::four (src/lib.rs:9): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 move (Semilla; R90.2-5, the pair check holds; 2 nodes): moved `depot::a::twice` → `depot::b::twice` [move · code equal]
+    lines: src/lib.rs:10, src/lib.rs:-10
+◆ f2 move (Semilla; R90.2-5, the pair check holds): public API: `depot::a::twice` is now `depot::b::twice` (a different crate can no longer use the old path) [move · no code]
+    no position

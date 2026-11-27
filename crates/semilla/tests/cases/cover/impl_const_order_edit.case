@@ -38,16 +38,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::Code::INTERNAL_START` (src/lib.rs:10): the full compare: `#[same(depot::Code::INTERNAL_START)] fn internal_start_same() {}`; a difference: `#[change(depot::Code::INTERNAL_START)] fn internal_start_change() -> bool { … }` or `#[different(depot::Code::INTERNAL_START)] fn internal_start_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: value of, see f1 (f1)
       in: depot::Code::INTERNAL_START
       lines: src/lib.rs:8-11, src/lib.rs:-4-7
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::Code::INTERNAL_START=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  other facts, filled in by Semilla:
-  ◆ f1 derived: value of `depot::Code::INTERNAL_START` changed: 1 << 31 → 1 << 30 (the public API can change: a different crate can use the item) [semantics · code different]
+  real edits:
+  item `depot::Code::INTERNAL_START`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `depot::Code::INTERNAL_START` changed: 1 << 31 → 1 << 30 (the public API can change: a different crate can use the item) [semantics · code different] · not stated
       affected bodies: depot::Code::INTERNAL_START
       equivalence: MIR changes
       ! public API: the compare does not cover the code of a different crate
@@ -62,5 +62,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: value of `depot::Code::INTERNAL_START` changed: 1 << 31 → 1 << 30 (the public API can change: a different crate can use the item) [semantics · code different]
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `depot::Code::INTERNAL_START` changed: 1 << 31 → 1 << 30 (the public API can change: a different crate can use the item) [semantics · code different] · not stated
     lines: src/lib.rs:8-11, src/lib.rs:-4-7

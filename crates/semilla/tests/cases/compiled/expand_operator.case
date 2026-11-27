@@ -27,11 +27,12 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::f` (src/lib.rs:6): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro `calc`: [1] → [2] [declaration · code different]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `shop::calc!`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `calc`: [1] → [2] [declaration · code different]
         [1] macro_rules! calc { (add $a:expr, $b:expr) => { $a + $b }; (sub $a:expr, $b:expr) => { $a - $b }; }
         [2] macro_rules! calc { (add $a:expr, $b:expr) => { $a * $b }; (sub $a:expr, $b:expr) => { $a - $b }; }
       affected bodies: shop::f
@@ -44,5 +45,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro `calc`: [1] → [2] [declaration · code different]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `calc`: [1] → [2] [declaration · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

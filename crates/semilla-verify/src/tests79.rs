@@ -545,7 +545,7 @@ fn a_node_that_is_not_mapped_gives_its_texts_and_a_template() {
     assert!(entry.before.is_empty());
     assert_eq!(entry.template, "#[same(demo::f)] fn f(x: u32) -> bool { after::demo::f(x) == before::demo::f(x) }");
     let lines = astmap::lines(run.map(), Some(10), 0).join("\n");
-    assert!(lines.contains("not mapped [R79.5-1]: added `let` `demo::f/S1` (src/lib.rs:4): `let b = a + 0;`"), "{lines}");
+    assert!(lines.contains("not mapped [R79.5-1]: added `let` `demo::f/S1` (src/lib.rs:4): not mapped, syntax only in f3: `let b = a + 0;`"), "{lines}");
     assert!(lines.contains("template: #[same(demo::f)] fn f(x: u32)"), "{lines}");
 }
 
@@ -559,44 +559,45 @@ fn a_node_with_no_claim_form_gives_the_cause_and_no_template() {
     assert!(entry.template.starts_with("no template: "), "{}", entry.template);
 }
 
-// rule+ R79.6-1
+// rule+ R90.5-3
 #[test]
-fn the_ast_line_is_in_the_section_semantic_changes_before_the_line_of_the_bodies() {
+fn the_coverage_line_of_the_map_replaces_the_ast_line_and_the_node_lines_follow_it() {
     let mut run = run79(&files(&lib(OLD)), &files(&lib(NEW)), Some(CLAIM_F), Some(Ok(f_links())), false);
     let lines = intent::semantic_lines(&run.outcome.report, Some(10));
-    let ast = lines.iter().position(|line| line.trim_start().starts_with("AST changes: ") && !line.contains("AST changes: 0 mapped by claims")).unwrap_or_else(|| panic!("{lines:#?}"));
-    let bodies = lines.iter().position(|line| line.trim_start().starts_with("changed bodies: ")).unwrap();
-    assert!(ast < bodies, "{lines:#?}");
-    // A node that is not mapped is no reject: the step passes with K > 0.
+    assert!(!lines.iter().any(|line| line.contains("AST changes")), "{lines:#?}");
+    let gap = run.outcome.report.gap_lines(Some(10));
+    assert!(gap[0].trim_start().starts_with("changed nodes: "), "{gap:#?}");
+    // A node that is not mapped is no reject: the step passes with J > 0.
     assert!(run.map().count(AstState::NotMapped) > 0);
     run.outcome.report.intent_claims.retain(|claim| claim.result != IntentResult::Claimed);
     assert!(run.outcome.report.accepted(), "{:?}", run.outcome.report.errors);
 }
 
-// rule- R79.6-1
+// rule- R90.5-3
 #[test]
-fn a_report_with_no_map_has_no_ast_line() {
+fn a_report_with_no_map_has_no_coverage_line() {
     let mut run = run79(&files(&lib(OLD)), &files(&lib(NEW)), Some(CLAIM_F), Some(Ok(f_links())), false);
     run.outcome.report.ast = None;
     let lines = intent::semantic_lines(&run.outcome.report, Some(10));
-    assert!(!lines.iter().any(|line| line.contains("AST changes")), "{lines:#?}");
+    assert!(!lines.iter().any(|line| line.contains("AST changes") || line.contains("changed nodes:")), "{lines:#?}");
+    assert!(!run.outcome.report.gap_lines(Some(10)).iter().any(|line| line.contains("changed nodes:")));
 }
 
-// rule+ R79.6-2
+// rule+ R90.5-3
 #[test]
-fn a_step_with_no_intent_file_has_the_ast_line_only() {
+fn a_step_with_no_intent_file_has_the_coverage_line_and_the_full_text_lists_each_node() {
     let run = run79(&files(&lib(OLD)), &files(&lib(NEW)), None, None, false);
     let short = intent::semantic_lines(&run.outcome.report, Some(10));
-    assert_eq!(short.len(), 1, "{short:#?}");
-    assert!(short[0].starts_with("  AST changes: 0 mapped by claims, ") && short[0].ends_with("(no intent file; the full text of the step lists each node)"), "{}", short[0]);
+    assert!(!short.iter().any(|line| line.contains("AST changes")), "{short:#?}");
+    assert!(run.outcome.report.gap_lines(Some(10))[0].trim_start().starts_with("changed nodes: "));
     // The full text lists each node with its number.
     let full = intent::semantic_lines(&run.outcome.report, None);
     assert_eq!(full.iter().filter(|line| line.trim_start().starts_with('n')).count(), run.map().nodes, "{full:#?}");
 }
 
-// rule- R79.6-2
+// rule- R90.5-3
 #[test]
-fn a_step_with_no_intent_file_shows_no_claim_section_and_no_node_line_in_the_short_output() {
+fn a_step_with_no_intent_file_shows_no_claim_section_and_no_node_line_in_the_semantic_lines() {
     let run = run79(&files(&lib(OLD)), &files(&lib(NEW)), None, None, false);
     let short = intent::semantic_lines(&run.outcome.report, Some(10)).join("\n");
     assert!(!short.contains("semantic changes") && !short.contains("not mapped [") && !short.contains("template:"), "{short}");

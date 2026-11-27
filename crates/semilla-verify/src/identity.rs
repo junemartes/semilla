@@ -3,21 +3,23 @@
 //! In a step with no identity claim, Semilla finds the candidate pairs: a removed and an added
 //! entity of the same kind. A rename keeps the owner and changes the name. A move keeps the name
 //! and changes the owner. The two texts must be similar ([`crate::PAIR_THRESHOLD`]): the score
-//! does not count a doc comment, an attribute, and a visibility. Semilla makes each name map of
-//! the pairs into `rename` and `move-item` claims, and checks the step with them. The map with
-//! the highest sum of the scores gives the facts "renamed `A` → `B`" or "moved `A` → `B`" with
-//! the compare result (design 35), and the forced edits fold under the fact.
+//! does not count a doc comment, an attribute, and a visibility.
+//!
+//! [R90.8-1] (design 90, rule M8) The pairs come from the hints of the agent first (`#[rename]`,
+//! `#[moved]`, and their short forms), then from the one map of the matcher of G2 over the other
+//! candidates (a minimum-cost assignment by the score). Semilla makes the pairs into `rename` and
+//! `move-item` claims and checks the step one time with them (R90.8-2). It does not try a second
+//! map. A pair that passes gives the facts "renamed `A` → `B`" or "moved `A` → `B`" with the
+//! compare result (design 35), and the forced edits fold under the fact.
 //!
 //! The step can have other changes (design 36.1). Each difference of a pair that the new name
 //! does not force is an edit under the name map, and it has its own fact at the new path. A
 //! changed body goes to the fact of its edit. A changed body with no such fact goes to the
 //! identity fact, which then has `code different` and the mismatch mark.
 //!
-//! Limits: at most 4 removed and 4 added entities of one kind in one owner, and at most
-//! [`MAX_MAPS`] maps. Above a limit, or when two maps have the same highest score and leave the same number of
-//! other facts, Semilla
-//! derives nothing and gives a note. A pair that does not pass shows as removed and added, with
-//! a note that gives the cause.
+//! Limits: at most 4 removed and 4 added entities of one kind in one owner. Above the limit,
+//! Semilla derives nothing and gives a note. A pair that does not pass shows as removed and
+//! added, with a note that gives the cause and a template (R90.8-3).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,13 +32,9 @@ use crate::{BodyOracle, ExprOracle, StepInput, StepOutcome};
 
 /// The most entities of one kind in one owner for the search.
 pub const MAX_GROUP: usize = 4;
-/// The most name maps that the search tries.
-pub const MAX_MAPS: usize = 24;
-/// Two map scores with a smaller difference are equal.
-const SCORE_TIE: f64 = 1e-9;
 
 /// One candidate pair.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Candidate {
     pub old: String,
     pub new: String,
@@ -276,44 +274,32 @@ fn pairs_of(before: &Workspace, after: &Workspace, removed: &[(&str, ItemKind)],
     (found, notes.into_iter().collect())
 }
 
-/// The name maps: the matchings of the pairs with the most pairs (each entity in one pair at most).
-/// `None` when there are more than [`MAX_MAPS`].
-fn maps(pairs: &[Candidate]) -> Option<Vec<Vec<Candidate>>> {
-    fn walk(pairs: &[Candidate], at: usize, used: &mut BTreeSet<String>, current: &mut Vec<Candidate>, out: &mut Vec<Vec<Candidate>>, best: &mut usize) -> bool {
-        if out.len() > MAX_MAPS * 4 {
-            return false;
-        }
-        if at == pairs.len() {
-            if current.len() > *best {
-                *best = current.len();
-                out.clear();
-            }
-            if current.len() == *best && !current.is_empty() {
-                out.push(current.clone());
-            }
-            return true;
-        }
-        let pair = &pairs[at];
-        if !used.contains(&pair.old) && !used.contains(&pair.new) {
-            used.insert(pair.old.clone());
-            used.insert(pair.new.clone());
-            current.push(pair.clone());
-            let ok = walk(pairs, at + 1, used, current, out, best);
-            current.pop();
-            used.remove(&pair.old);
-            used.remove(&pair.new);
-            if !ok {
-                return false;
-            }
-        }
-        walk(pairs, at + 1, used, current, out, best)
-    }
-    let mut out = Vec::new();
-    let mut best = 0;
-    if !walk(pairs, 0, &mut BTreeSet::new(), &mut Vec::new(), &mut out, &mut best) || out.len() > MAX_MAPS {
-        return None;
-    }
-    Some(out)
+/// [R90.8-1] The names of the paths that the step changes (`a::two` → `a::dos`: (`two`, `dos`)):
+/// a use that follows a pair (design 54.17) is an anchor of the one map.
+fn followed_names(edits: &[semilla_syntax::Edit]) -> BTreeSet<(String, String)> {
+    let last = |text: &str| text.rsplit("::").next().unwrap_or("").trim().to_string();
+    edits
+        .iter()
+        .filter(|edit| edit.node_before == Some("path") && edit.node_after == Some("path"))
+        .filter_map(|edit| Some((last(edit.text_before.as_deref()?), last(edit.text_after.as_deref()?))))
+        .collect()
+}
+
+/// [R90.8-1] The one map of the matcher of G2 (design 72) over the candidate pairs: a
+/// minimum-cost assignment by the similar score, ties by the source order. A pair whose uses
+/// follow it (a changed path from the old name to the new name) gets a bonus of 1. Each item is
+/// in one pair at most. Semilla does not try a second map (design 90).
+fn one_map(before: &Workspace, after: &Workspace, pairs: &[Candidate], follows: &BTreeSet<(String, String)>) -> Vec<Candidate> {
+    let olds: Vec<&str> = pairs.iter().map(|pair| pair.old.as_str()).collect::<BTreeSet<_>>().into_iter().collect();
+    let news: Vec<&str> = pairs.iter().map(|pair| pair.new.as_str()).collect::<BTreeSet<_>>().into_iter().collect();
+    let thing = |_: &&str| semilla_core::matcher::Thing { group: String::new(), identity: None, content: None };
+    let (old_things, new_things): (Vec<_>, Vec<_>) = (olds.iter().map(thing).collect(), news.iter().map(thing).collect());
+    let candidate = |i: usize, j: usize| pairs.iter().find(|pair| pair.old == olds[i] && pair.new == news[j]);
+    let score = |i: usize, j: usize| candidate(i, j).map_or(0.0, |pair| similarity(&before.items[&pair.old], &after.items[&pair.new]) + if follows.contains(&(name(&pair.old).to_string(), name(&pair.new).to_string())) { 1.0 } else { 0.0 });
+    let ladder = semilla_core::matcher::Ladder { similarity: &score, threshold: crate::PAIR_THRESHOLD, in_order: None };
+    let mut map: Vec<Candidate> = semilla_core::matcher::pair(&old_things, &new_things, &ladder).into_iter().filter_map(|pair| candidate(pair.old, pair.new).cloned()).collect();
+    map.sort_by_key(|pair| (depth(&pair.old), pair.old.clone()));
+    map
 }
 
 fn pair_text(map: &[Candidate]) -> String {
@@ -334,26 +320,6 @@ fn claims_of(map: &[Candidate]) -> Vec<Claim> {
         .collect()
 }
 
-/// True if the check with the claims of a map proves the identity.
-fn passes(outcome: &StepOutcome, claims: &[Claim]) -> Result<(), String> {
-    let report = &outcome.report;
-    for claim in claims {
-        match report.claims.iter().find(|r| r.claim == claim.id).map(|r| &r.status) {
-            Some(status) if status.is_verified() => {}
-            Some(ClaimStatus::Refuted { reason } | ClaimStatus::Malformed { reason } | ClaimStatus::Pending { reason }) => return Err(reason.clone()),
-            Some(other) => return Err(other.text()),
-            None => return Err("no result".into()),
-        }
-    }
-    if let Some(error) = report.errors.first() {
-        return Err(error.clone());
-    }
-    if !report.uncovered.is_empty() {
-        return Err("an edit has no fact".into());
-    }
-    Ok(())
-}
-
 /// The compare result (true: `code different`) and the affected bodies of a "pair diff" fact
 /// (design 44, FIX 3): the result of the fact of the edit under the name map, as for each other
 /// edit. With no such fact, or a result that is not known, the result of the whole new item
@@ -367,55 +333,26 @@ pub(crate) fn pair_diff_result(report: &semilla_core::StepReport, fact_of: &[Opt
     }
 }
 
-/// Tries the derived identity on the plain outcome of a step with no identity claim.
+/// [R90.8-1] The pairs of the renamed and the moved items of a step (design 90, rule M8): the
+/// hints of the agent first (`#[rename]`, `#[moved]`, and their short forms), then the one map
+/// of the matcher over the items that no hint names. The compiler identity already pairs each
+/// item whose definition keeps its path (design 70). Semilla checks each pair one time: one run
+/// of the core check with the claims of all pairs, and one more run without the pairs that do
+/// not pass (to give their entries "delete" and "add"). It does not try a second map.
 ///
-/// Batch 9b2, F2: a rename or a move that the agent states (`--same 'rename OLD NEW'`) is a
-/// candidate pair too. The search limits do not apply to it (the count of one kind in one
-/// owner, the similar score, two maps with one score). The check is the same check: each
-/// difference that the map does not explain keeps its own fact. A stated pair that does not
-/// pass gives its cause, and the result is the result with no such pair.
+/// Batch 9b2, F2: a stated pair has no limit of the search (the count of one kind in one owner,
+/// the similar score). A stated pair that does not pass gives its cause.
 pub(crate) fn derive<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, plain: StepOutcome, bases: &crate::joint::OpaqueBases<'a>) -> StepOutcome {
     let (mut stated, mut causes) = crate::agent::stated_pairs(input);
     // The order of the options is not important: the pairs have the order of their paths.
     stated.sort_by(|a, b| (&a.1.old, &a.1.new).cmp(&(&b.1.old, &b.1.new)));
-    // Phase 1 of a step has no MIR: phase 2 tries each pair.
+    // Phase 1 of a step has no MIR: phase 2 checks each pair.
     if plain.bodies.is_empty() && !input.step.syntax_only {
         stated.clear();
     }
-    if stated.is_empty() {
-        let (mut outcome, _) = attempt(input, bodies, exprs, plain, &[], bases).unwrap_or_else(|_| unreachable!("no stated pair"));
-        outcome.stated_causes = causes;
-        return outcome;
-    }
-    // The map that Semilla derives alone. A stated pair is a candidate only for two items that
-    // this map does not have: a stated pair cannot replace a pair that Semilla derives.
-    let (own, own_map) = attempt(input, bodies, exprs, plain.clone(), &[], bases).unwrap_or_else(|_| unreachable!("no stated pair"));
-    stated.retain(|(option, pair)| match own_map.iter().find(|other| (other.old == pair.old) != (other.new == pair.new)) {
-        Some(other) => {
-            causes.insert(*option, format!("Semilla derives `{}` → `{}` from the syntax tree, and an item is in one pair only", other.old, other.new));
-            false
-        }
-        None => !own_map.contains(pair),
-    });
-    let mut own = Some(own);
-    loop {
-        if stated.is_empty() {
-            let mut outcome = own.take().expect("the outcome with no stated pair");
-            outcome.stated_causes = causes;
-            return outcome;
-        }
-        let pairs: Vec<Candidate> = stated.iter().map(|(_, pair)| pair.clone()).collect();
-        match attempt(input, bodies, exprs, plain.clone(), &pairs, bases) {
-            Ok((mut outcome, _)) => {
-                outcome.stated_causes = causes;
-                return outcome;
-            }
-            Err((index, cause)) => {
-                let (option, _) = stated.remove(index);
-                causes.insert(option, cause);
-            }
-        }
-    }
+    let mut outcome = pairs_once(input, bodies, exprs, plain, stated, &mut causes, bases);
+    outcome.stated_causes = causes;
+    outcome
 }
 
 /// The path of an item after the pairs of a map.
@@ -438,64 +375,181 @@ fn depth(path: &str) -> usize {
     count
 }
 
-/// One try of the derivation with the stated pairs. `Err`: the index of the stated pair that
-/// does not pass, and the cause.
-fn attempt<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, plain: StepOutcome, stated: &[Candidate], bases: &crate::joint::OpaqueBases<'a>) -> Result<(StepOutcome, Vec<Candidate>), (usize, String)> {
-    let (mut map, mut claims, mut outcome, plain) = match search(input, bodies, exprs, plain, stated, bases) {
-        Ok((map, claims, outcome)) => (map, claims, Some(outcome), None),
-        Err(plain) => (Vec::new(), Vec::new(), None, Some(plain)),
+/// [R90.8-2] The result of each pair of a map in one run of the core check: the index of each
+/// pair that does not pass, with the cause. A stated pair needs its evidence too (design 54.17).
+fn failed_pairs(input: &StepInput, map: &[Candidate], claims: &[Claim], outcome: &StepOutcome, stated: &[Candidate]) -> Vec<(usize, String)> {
+    let report = &outcome.report;
+    // A failure of the step (an error, an edit with no fact) is a failure of each pair.
+    let whole = report.errors.first().cloned().or_else(|| (!report.uncovered.is_empty()).then(|| "an edit has no fact".to_string()));
+    let mut failed = Vec::new();
+    for (index, (pair, claim)) in map.iter().zip(claims).enumerate() {
+        let cause = match report.claims.iter().find(|r| r.claim == claim.id).map(|r| &r.status) {
+            Some(status) if status.is_verified() => whole.clone(),
+            Some(ClaimStatus::Refuted { reason } | ClaimStatus::Malformed { reason } | ClaimStatus::Pending { reason }) => Some(reason.clone()),
+            Some(other) => Some(other.text()),
+            None => Some("no result".into()),
+        };
+        let cause = cause.or_else(|| {
+            (stated.contains(pair) && !evidence(input, map, outcome, pair)).then(|| {
+                let word = if pair.op == "rename" { "rename" } else { "move" };
+                format!("{NO_EVIDENCE_START} {word}, and the declarations are not similar. A stated {word} needs one of the two")
+            })
+        });
+        if let Some(cause) = cause {
+            failed.push((index, cause));
+        }
+    }
+    failed
+}
+
+/// [R90.8-3] The template of a pair that does not pass: `#[rename(before::OLD, after::NEW)]` or
+/// `#[moved(…)]`, if the check of the intent files accepts it (the gate of R87.1-1).
+fn pair_template(input: &StepInput, bodies: &dyn BodyOracle, pair: &Candidate) -> String {
+    let word = if pair.op == "rename" { "rename" } else { "moved" };
+    let function = format!("{}_to_{}", name(&pair.old), name(&pair.new)).to_lowercase();
+    let template = format!("#[{word}(before::{}, after::{})] fn {function}() {{}}", pair.old, pair.new);
+    let ask = crate::template::Ask { forms: vec![template.clone()], expect: Vec::new() };
+    match bodies.check_templates(input.step, std::slice::from_ref(&ask)).and_then(|verdicts| verdicts.into_iter().next()) {
+        Some(Ok(_)) => format!("template: `{template}`"),
+        Some(Err(cause)) => format!("no template: {}", cause.lines().next().unwrap_or("")),
+        None => "no template: the step has no compiled trees for the check of the intent files".into(),
+    }
+}
+
+/// [R90.8-1] [R90.8-2] The one map of a step and its check (see [`derive`]).
+fn pairs_once<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, mut plain: StepOutcome, stated: Vec<(usize, Candidate)>, causes: &mut BTreeMap<usize, String>, bases: &crate::joint::OpaqueBases<'a>) -> StepOutcome {
+    let hints: Vec<Candidate> = stated.iter().map(|(_, pair)| pair.clone()).collect();
+    let (pairs, notes) = candidates_without(input.before, input.after, &hints);
+    plain.report.notes.extend(notes);
+    let follows = followed_names(&plain.edits);
+    let own = if pairs.is_empty() { Vec::new() } else { one_map(input.before, input.after, &pairs, &follows) };
+    if !pairs.is_empty() {
+        plain.report.identity_candidates = true;
+        // Phase 1 of a step has no MIR: the check of the pairs waits for phase 2. A syntax-only
+        // check (the virtual crate of an expansion compare, R83.1-3) checks on the syntax tree.
+        if plain.bodies.is_empty() && !input.step.syntax_only {
+            plain.report.notes.push(format!("a rename or a move is possible ({}): phase 2 tries the derivation", pair_text(&own)));
+            return plain;
+        }
+    }
+    // The hints first: the checks of the form of a hint need no run.
+    let mut map: Vec<Candidate> = own;
+    let mut options: BTreeMap<Candidate, usize> = BTreeMap::new();
+    let mut order: Vec<&(usize, Candidate)> = stated.iter().collect();
+    order.sort_by_key(|(_, pair)| depth(&pair.old));
+    for (option, pair) in order {
+        let all: Vec<Candidate> = map.iter().chain(options.keys()).cloned().collect();
+        let cause = if let Some(other) = all.iter().find(|other| other.old == pair.old || other.new == pair.new) {
+            Some(format!("Semilla derives `{}` → `{}`, and an item is in one pair only", other.old, other.new))
+        } else if pair.op == "rename" && mapped(&all, owner(&pair.old)) != owner(&pair.new) {
+            Some(format!("a rename keeps the owner, and no rename or move gives the owner `{}` the new path `{}`", owner(&pair.old), owner(&pair.new)))
+        } else if input.after.items.contains_key(&mapped(&all, &pair.old)) {
+            Some(format!("the new tree has the item `{}` too: the old item stays", mapped(&all, &pair.old)))
+        } else {
+            input.before.items.keys().find(|path| **path != pair.old && mapped(&all, path) == pair.new).map(|other| format!("`{}` is the item `{other}` of the old tree: the item stays", pair.new))
+        };
+        match cause {
+            Some(cause) => {
+                causes.insert(*option, cause);
+            }
+            None => {
+                options.insert(pair.clone(), *option);
+            }
+        }
+    }
+    map.extend(options.keys().cloned());
+    map.sort_by_key(|pair| (depth(&pair.old), pair.old.clone()));
+    if map.is_empty() {
+        return plain;
+    }
+    let hinted: Vec<Candidate> = options.keys().cloned().collect();
+    // [R90.8-2] Each pair is checked one time: one run with each pair.
+    let (claims, first) = run_map(input, bodies, exprs, &map, bases);
+    let failed = failed_pairs(input, &map, &claims, &first, &hinted);
+    let (map, claims, outcome) = if failed.is_empty() {
+        (map, claims, first)
+    } else {
+        // [R90.8-3] A pair that does not pass stays "delete" and "add": the cause, a template, and
+        // each edit under the name map as its own fact (trial 3, A2).
+        let failed_set: BTreeSet<usize> = failed.iter().map(|(index, _)| *index).collect();
+        let known: BTreeSet<String> = plain.report.facts.iter().map(|f| f.description.clone()).collect();
+        let mut extra = Vec::new();
+        for (index, cause) in &failed {
+            let pair = &map[*index];
+            if let Some(option) = options.get(pair) {
+                causes.insert(*option, if cause.starts_with(NO_EVIDENCE_START) { cause.clone() } else { format!("the check of the pair does not pass: {cause}") });
+                continue;
+            }
+            let what = if pair.op == "move-item" { "move" } else { "rename" };
+            plain.report.notes.push(format!("{} show(s) as removed and added: Semilla does not derive the {what} ({cause})", pair_text(std::slice::from_ref(pair))));
+            plain.report.notes.push(format!("the hint of the pair {}: {}", pair_text(std::slice::from_ref(pair)), pair_template(input, bodies, pair)));
+            extra.extend(pair_diff_facts(&first, pair, &known));
+        }
+        let start = plain.report.facts.len();
+        for (index, mut fact) in extra.into_iter().enumerate() {
+            fact.id = format!("f{}", start + index + 1);
+            plain.report.facts.push(fact);
+        }
+        let kept: Vec<Candidate> = map.iter().enumerate().filter(|(index, _)| !failed_set.contains(index)).map(|(_, pair)| pair.clone()).collect();
+        if kept.is_empty() {
+            return plain;
+        }
+        // One more run with the pairs that pass: it checks no pair a second time.
+        let (claims, outcome) = run_map(input, bodies, exprs, &kept, bases);
+        let again = failed_pairs(input, &kept, &claims, &outcome, &hinted);
+        if !again.is_empty() {
+            for (index, cause) in again {
+                if let Some(option) = options.get(&kept[index]) {
+                    causes.insert(*option, if cause.starts_with(NO_EVIDENCE_START) { cause.clone() } else { format!("the check of the pair does not pass: {cause}") });
+                } else {
+                    plain.report.notes.push(format!("{} show(s) as removed and added: Semilla does not derive the {} ({cause})", pair_text(std::slice::from_ref(&kept[index])), if kept[index].op == "move-item" { "move" } else { "rename" }));
+                }
+            }
+            return plain;
+        }
+        (kept, claims, outcome)
     };
-    let mut order: Vec<usize> = (0..stated.len()).collect();
-    order.sort_by_key(|&index| depth(&stated[index].old));
-    for index in order {
-        let pair = &stated[index];
-        if map.contains(pair) {
+    let (map, claims, mut outcome) = with_children(input, bodies, exprs, map, claims, outcome, bases);
+    // The notes of the candidates and of the failed pairs stay.
+    outcome.report.identity_candidates |= plain.report.identity_candidates;
+    for note in plain.report.notes {
+        if !outcome.report.notes.contains(&note) {
+            outcome.report.notes.push(note);
+        }
+    }
+    convert(input, &map, &claims, outcome)
+}
+
+/// The facts of a pair that does not pass: each edit inside the new item under the name map is
+/// a real difference (trial 3, A2). The map hides the forced edits of the name.
+fn pair_diff_facts(failed: &StepOutcome, pair: &Candidate, known: &BTreeSet<String>) -> Vec<Fact> {
+    let inside = |item: &str| item == pair.new || item.starts_with(&format!("{}::", pair.new)) || item.starts_with(&format!("{}.", pair.new));
+    let changed = failed.bodies.iter().any(|b| inside(&b.name) && !matches!(b.status, crate::BodyStatus::Equal { .. }));
+    let mut extra = Vec::new();
+    for (edit_index, edit) in failed.edits.iter().enumerate().filter(|(_, e)| e.anchor().is_some_and(|a| inside(&a.item)) && !matches!(e.kind, EditKind::ItemAdded | EditKind::ItemRemoved)) {
+        let text = crate::edits::display_text(edit);
+        if known.iter().any(|k| k.ends_with(&text)) {
             continue;
         }
-        if let Some(other) = map.iter().find(|other| other.old == pair.old || other.new == pair.new) {
-            return Err((index, format!("Semilla derives `{}` → `{}`, and an item is in one pair only", other.old, other.new)));
-        }
-        // A rename keeps the owner. The owner can have a new path from a pair of the map.
-        if pair.op == "rename" && mapped(&map, owner(&pair.old)) != owner(&pair.new) {
-            return Err((index, format!("a rename keeps the owner, and no rename or move gives the owner `{}` the new path `{}`", owner(&pair.old), owner(&pair.new))));
-        }
-        // An item that stays is no side of a pair: the old item with its path after the map,
-        // and a different old item that has the new path after the map.
-        let stays = mapped(&map, &pair.old);
-        if input.after.items.contains_key(&stays) {
-            return Err((index, format!("the new tree has the item `{stays}` too: the old item stays")));
-        }
-        if let Some(other) = input.before.items.keys().find(|path| **path != pair.old && mapped(&map, path) == pair.new) {
-            return Err((index, format!("`{}` is the item `{other}` of the old tree: the item stays", pair.new)));
-        }
-        let mut next = map.clone();
-        next.push(pair.clone());
-        next.sort_by_key(|pair| depth(&pair.old));
-        match check_map(input, bodies, exprs, &next, bases) {
-            Ok((next_claims, result)) => {
-                if !evidence(input, &next, &result, pair) {
-                    let word = if pair.op == "rename" { "rename" } else { "move" };
-                    return Err((index, format!("{NO_EVIDENCE_START} {word}, and the declarations are not similar. A stated {word} needs one of the two")));
-                }
-                (map, claims, outcome) = (next, next_claims, Some(result))
-            }
-            Err(cause) => return Err((index, format!("the check of the pair does not pass: {cause}"))),
-        }
+        // A doc test is code (brief 5h, B1). Semilla does not compile it: the fact has no
+        // compare, with the cause.
+        let doc_test = edit.anchor().and_then(|anchor| crate::facts::doc_test_fact(&anchor.item, edit));
+        let (changed, affected) = pair_diff_result(&failed.report, &failed.fact_of, edit_index, changed, &pair.new);
+        extra.push(Fact {
+            at: edit.anchor().cloned(),
+            file: edit.file.clone(),
+            part: "pair diff".into(),
+            description: format!("`{}` differs from the removed `{}`: {text}", name(&pair.new), name(&pair.old)),
+            status: "derived".into(),
+            content: doc_test.as_ref().map(|(_, content)| content.clone()),
+            category: if doc_test.is_some() { Category::Docs } else { edit_category(edit) },
+            compare: if doc_test.is_some() { Compare::NoCompare } else if changed { Compare::CodeDifferent } else { Compare::CodeEqual },
+            note: doc_test.as_ref().map(|_| format!("{} Semilla does not compile a doc test", crate::uncompiled::NO_COMPARE)),
+            affected,
+            ..Default::default()
+        });
     }
-    let Some(outcome) = outcome else { return Ok((plain.expect("the plain outcome"), Vec::new())) };
-    let (map, claims, mut outcome) = with_children(input, bodies, exprs, map, claims, outcome, bases);
-    // The notes of the search for the pairs that are not in the map.
-    // A note of a limit stays only if the limit applies to the items that are not in the map.
-    if let Some(plain) = plain {
-        outcome.report.identity_candidates |= plain.report.identity_candidates;
-        let (limits, left) = (candidates_without(input.before, input.after, stated).1, limit_notes(input.before, input.after, &map));
-        for note in plain.report.notes {
-            if !outcome.report.notes.contains(&note) && (!limits.contains(&note) || left.contains(&note)) {
-                outcome.report.notes.push(note);
-            }
-        }
-    }
-    Ok((convert(input, &map, &claims, outcome), map))
+    extra
 }
 
 /// The start of the cause of a stated pair with no evidence (design 54.17).
@@ -531,121 +585,6 @@ fn evidence(input: &StepInput, map: &[Candidate], outcome: &StepOutcome, pair: &
         let is_path = edit.kind == EditKind::Replaced && edit.node_before == Some("path") && edit.node_after == Some("path");
         *owner == Some(claim) && (is_use || is_path)
     })
-}
-
-/// The notes for the limits of the search, for the items that are not in a map.
-fn limit_notes(before: &Workspace, after: &Workspace, map: &[Candidate]) -> Vec<String> {
-    let none = BTreeSet::new();
-    let removed: Vec<(&str, ItemKind)> = only_in(before, after, &none).into_iter().filter(|(path, _)| !map.iter().any(|pair| pair.old == *path)).collect();
-    let added: Vec<(&str, ItemKind)> = only_in(after, before, &none).into_iter().filter(|(path, _)| !map.iter().any(|pair| pair.new == *path)).collect();
-    pairs_of(before, after, &removed, &added).1
-}
-
-/// The search for the name map of a step (design 24.6, 36.1, and 50.2). `Err`: no map passes,
-/// and the plain outcome has the notes. A candidate with an item of a stated pair is not in
-/// the search.
-#[allow(clippy::type_complexity)]
-fn search<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, mut plain: StepOutcome, stated: &[Candidate], bases: &crate::joint::OpaqueBases<'a>) -> Result<(Vec<Candidate>, Vec<Claim>, StepOutcome), StepOutcome> {
-    let (pairs, notes) = candidates_without(input.before, input.after, stated);
-    plain.report.notes.extend(notes);
-    if pairs.is_empty() {
-        return Err(plain);
-    }
-    plain.report.identity_candidates = true;
-    let Some(mut maps) = maps(&pairs) else {
-        plain.report.notes.push(format!("{} show(s) as removed and added: Semilla does not derive the rename or the move (the pairs have more than {MAX_MAPS} name maps)", pair_text(&pairs)));
-        return Err(plain);
-    };
-    // Phase 1 of a step has no MIR: the derivation waits for phase 2. A syntax-only check (the
-    // virtual crate of an expansion compare, R83.1-3) derives from the syntax tree (design 50).
-    if plain.bodies.is_empty() && !input.step.syntax_only {
-        plain.report.notes.push(format!("a rename or a move is possible ({}): phase 2 tries the derivation", pair_text(&maps[0])));
-        return Err(plain);
-    }
-    // The score of a map: the sum of the similar scores of its pairs. The map with the highest
-    // score that passes the check gives the facts (design 36.1).
-    let score = |map: &[Candidate]| -> f64 { map.iter().map(|pair| similarity(&input.before.items[&pair.old], &input.after.items[&pair.new])).sum() };
-    let mut scored: Vec<(f64, Vec<Candidate>)> = maps.drain(..).map(|map| (score(&map), map)).collect();
-    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let mut passed: Vec<(f64, Vec<Candidate>, Vec<Claim>, StepOutcome)> = Vec::new();
-    let mut failures = Vec::new();
-    for (score, map) in &scored {
-        // A map with a lower score than a map that passes is not necessary.
-        if passed.first().is_some_and(|(best, ..)| *score < *best - SCORE_TIE) {
-            break;
-        }
-        let mut step = input.step.clone();
-        let claims = claims_of(map);
-        step.claims.extend(claims.iter().cloned());
-        let outcome = crate::verify_core(&StepInput { step: &step, before: input.before, after: input.after }, bodies, exprs, true, true, bases);
-        match passes(&outcome, &claims) {
-            Ok(()) => passed.push((*score, map.clone(), claims, outcome)),
-            Err(reason) => failures.push((map.clone(), reason, outcome)),
-        }
-    }
-    // Maps with the same score: the map that leaves the smallest number of other facts wins
-    // (a wrong map of two fields leaves a change of the member order).
-    let left = |outcome: &StepOutcome| outcome.report.facts.len() + outcome.report.uncovered.len();
-    if let Some(least) = passed.iter().map(|(_, _, _, outcome)| left(outcome)).min() {
-        if passed.iter().filter(|(_, _, _, outcome)| left(outcome) == least).count() == 1 {
-            passed.retain(|(_, _, _, outcome)| left(outcome) == least);
-        }
-    }
-    if passed.len() > 1 {
-        let list = passed.iter().map(|(_, map, _, _)| format!("({})", pair_text(map))).collect::<Vec<_>>().join(" or ");
-        plain.report.notes.push(format!("{} show(s) as removed and added: Semilla does not derive the rename or the move (more than one name map has the same similar score and the same number of other facts: {list})", pair_text(&passed[0].1)));
-        return Err(plain);
-    }
-    let Some((_, map, claims, outcome)) = passed.pop() else {
-        // With no derivation, the pair shows as removed and added. Semilla diffs the two items
-        // under the name map and shows each edit as a fact under the pair, so that a hidden
-        // change (a changed literal) has its own fact (trial 3, A2).
-        if let Some((map, _, failed)) = failures.first() {
-            let known: BTreeSet<String> = plain.report.facts.iter().map(|f| f.description.clone()).collect();
-            let mut extra = Vec::new();
-            for pair in map {
-                let inside = |item: &str| item == pair.new || item.starts_with(&format!("{}::", pair.new)) || item.starts_with(&format!("{}.", pair.new));
-                // Under the name map, each edit that is left inside the new item is a real
-                // difference: the map hides the forced edits of the name.
-                let changed = failed.bodies.iter().any(|b| inside(&b.name) && !matches!(b.status, crate::BodyStatus::Equal { .. }));
-                for (edit_index, edit) in failed.edits.iter().enumerate().filter(|(_, e)| e.anchor().is_some_and(|a| inside(&a.item)) && !matches!(e.kind, EditKind::ItemAdded | EditKind::ItemRemoved)) {
-                    let text = crate::edits::display_text(edit);
-                    if known.iter().any(|k| k.ends_with(&text)) {
-                        continue;
-                    }
-                    // A doc test is code (brief 5h, B1). Semilla does not compile it: the fact
-                    // has no compare, with the cause.
-                    let doc_test = edit.anchor().and_then(|anchor| crate::facts::doc_test_fact(&anchor.item, edit));
-                    let (changed, affected) = pair_diff_result(&failed.report, &failed.fact_of, edit_index, changed, &pair.new);
-                    extra.push(Fact {
-                        at: edit.anchor().cloned(),
-                        file: edit.file.clone(),
-                        part: "pair diff".into(),
-                        description: format!("`{}` differs from the removed `{}`: {text}", name(&pair.new), name(&pair.old)),
-                        status: "derived".into(),
-                        content: doc_test.as_ref().map(|(_, content)| content.clone()),
-                        category: if doc_test.is_some() { Category::Docs } else { edit_category(edit) },
-                        compare: if doc_test.is_some() { Compare::NoCompare } else if changed { Compare::CodeDifferent } else { Compare::CodeEqual },
-                        note: doc_test.as_ref().map(|_| format!("{} Semilla does not compile a doc test", crate::uncompiled::NO_COMPARE)),
-                        affected,
-                        ..Default::default()
-                    });
-                }
-            }
-            let start = plain.report.facts.len();
-            for (index, mut fact) in extra.into_iter().enumerate() {
-                fact.id = format!("f{}", start + index + 1);
-                plain.report.facts.push(fact);
-            }
-        }
-        // The note gives the cause (design 36.1). The pair warning of the change set reads it.
-        for (map, reason, _) in failures.iter().take(1) {
-            let what = if map.iter().all(|c| c.op == "move-item") { "move" } else { "rename" };
-            plain.report.notes.push(format!("{} show(s) as removed and added: Semilla does not derive the {what} ({reason})", pair_text(map)));
-        }
-        return Err(plain);
-    };
-    Ok((map, claims, outcome))
 }
 
 /// True if an item of the kind can be one side of a pair.
@@ -691,51 +630,36 @@ fn children(before: &Workspace, after: &Workspace, map: &[Candidate]) -> Vec<Can
     found
 }
 
-/// Adds the pairs of [`children`] to a map that passes the check (batch 9b2, F2). The larger
-/// map must pass the same check. If it does not pass, or if two maps are equal, the map stays
-/// as it is: the children show as removed and added, as before this rule.
+/// Adds the pairs of [`children`] to a map that passes the check (batch 9b2, F2): the one map of
+/// the matcher over the children (R90.8-1), checked in one run. If it does not pass, the map
+/// stays as it is: the children show as removed and added.
 fn with_children<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, mut map: Vec<Candidate>, mut claims: Vec<Claim>, mut outcome: StepOutcome, bases: &crate::joint::OpaqueBases<'a>) -> (Vec<Candidate>, Vec<Claim>, StepOutcome) {
     loop {
         let pairs = children(input.before, input.after, &map);
         if pairs.is_empty() {
             break;
         }
-        let Some(mut more) = maps(&pairs) else { break };
-        let score = |map: &[Candidate]| -> f64 { map.iter().map(|pair| similarity(&input.before.items[&pair.old], &input.after.items[&pair.new])).sum() };
-        let mut scored: Vec<(f64, Vec<Candidate>)> = more.drain(..).map(|map| (score(&map), map)).collect();
-        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-        let mut passed: Vec<(f64, Vec<Candidate>, Vec<Claim>, StepOutcome)> = Vec::new();
-        for (score, child) in &scored {
-            if passed.first().is_some_and(|(best, ..)| *score < *best - SCORE_TIE) {
-                break;
-            }
-            let next: Vec<Candidate> = map.iter().chain(child).cloned().collect();
-            if let Ok((next_claims, result)) = check_map(input, bodies, exprs, &next, bases) {
-                passed.push((*score, next, next_claims, result));
-            }
-        }
-        let left = |outcome: &StepOutcome| outcome.report.facts.len() + outcome.report.uncovered.len();
-        if let Some(least) = passed.iter().map(|(_, _, _, outcome)| left(outcome)).min() {
-            if passed.iter().filter(|(_, _, _, outcome)| left(outcome) == least).count() == 1 {
-                passed.retain(|(_, _, _, outcome)| left(outcome) == least);
-            }
-        }
-        if passed.len() != 1 {
+        let child = one_map(input.before, input.after, &pairs, &followed_names(&outcome.edits));
+        if child.is_empty() {
             break;
         }
-        let (_, next, next_claims, result) = passed.pop().unwrap();
+        let next: Vec<Candidate> = map.iter().chain(&child).cloned().collect();
+        let (next_claims, result) = run_map(input, bodies, exprs, &next, bases);
+        if !failed_pairs(input, &next, &next_claims, &result, &[]).is_empty() {
+            break;
+        }
         (map, claims, outcome) = (next, next_claims, result);
     }
     (map, claims, outcome)
 }
 
-/// Runs the check of a step with the claims of one map. `Err` has the cause.
-fn check_map<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, map: &[Candidate], bases: &crate::joint::OpaqueBases<'a>) -> Result<(Vec<Claim>, StepOutcome), String> {
+/// Runs the core check of a step one time with the claims of the pairs of a map.
+fn run_map<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, map: &[Candidate], bases: &crate::joint::OpaqueBases<'a>) -> (Vec<Claim>, StepOutcome) {
     let mut step = input.step.clone();
     let claims = claims_of(map);
     step.claims.extend(claims.iter().cloned());
     let outcome = crate::verify_core(&StepInput { step: &step, before: input.before, after: input.after }, bodies, exprs, true, true, bases);
-    passes(&outcome, &claims).map(|()| (claims, outcome))
+    (claims, outcome)
 }
 
 /// The category of the fact for one difference of a pair, from the kind of the edit.

@@ -18,21 +18,21 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `shop::get` (src/lib.rs:1): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
-  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `shop::get` (src/lib.rs:1): the full compare: `#[same(shop::get)] fn get_same() {}`; a difference: `#[change(shop::get)] fn get_change(x: Option<u32>) -> bool { … }` or `#[different(shop::get)] fn get_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: 2 different edits (f1, f2)
       in: shop::get
       lines: src/lib.rs:2, src/lib.rs:-2
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::get=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  other facts, filled in by Semilla:
-  ◆ f1 derived: deleted statement `match x { Some(v) => v, None => 0 }` at `shop::get/S0` [semantics · code different]
+  real edits:
+  item `shop::get`:
+  ◆ f1 delete (Semilla; R90.2-3, 6 removed MIR elements): deleted statement `match x { Some(v) => v, None => 0 }` at `shop::get/S0` [semantics · code different] · not stated
       affected bodies: shop::get (with 1 other edit of this body)
       control flow: − branch `x` (src/lib.rs:-2): std::option::Option::None → return, std::option::Option::Some → return
       control flow: − arrow entry (src/lib.rs:-1) → branch `x` (src/lib.rs:-2)
       equivalence: MIR changes
-  ◆ f2 derived: added statement `x.unwrap_or(0)` at `shop::get/tail` [semantics · code different]
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `x.unwrap_or(0)` at `shop::get/tail` [semantics · code different] · not stated
       affected bodies: shop::get (with 1 other edit of this body)
       control flow: + call `Option::<u32>::unwrap_or` (src/lib.rs:2): return → return
       control flow: + arrow entry (src/lib.rs:1) → call `Option::<u32>::unwrap_or` (src/lib.rs:2)
@@ -43,7 +43,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: deleted statement `match x { Some(v) => v, None => 0 }` at `shop::get/S0` [semantics · code different]
+◆ f1 delete (Semilla; R90.2-3, 6 removed MIR elements): deleted statement `match x { Some(v) => v, None => 0 }` at `shop::get/S0` [semantics · code different] · not stated
     lines: src/lib.rs:-2
-◆ f2 derived: added statement `x.unwrap_or(0)` at `shop::get/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `x.unwrap_or(0)` at `shop::get/tail` [semantics · code different] · not stated
     lines: src/lib.rs:2

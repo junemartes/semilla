@@ -68,10 +68,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✗ a1 change: `idle` "more" (false: the tag `change` does not agree with the edit that Semilla sees)
       Semilla sees no edit in `depot::idle`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::limit` (src/lib.rs:13): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
-  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `1` → `2` (f1)
       in: depot::far
       lines: src/lib.rs:2, src/lib.rs:-2
@@ -81,11 +80,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       lines: src/lib.rs:13, src/lib.rs:-13
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
   to state them, add these options to the command of the step: --change 'depot::far=TEXT'
-  other facts, filled in by Semilla:
-  ◆ f2 derived: changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
+  real edits:
+  item `depot::limit`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
       affected bodies: depot::limit
       equivalence: MIR changes
-  ◆ f1 derived: changed literal `1` → `2` at `depot::far/tail` [semantics · no compare]
+  syntax only:
+  item `depot::far`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed literal `1` → `2` at `depot::far/tail` [semantics · no compare]
       note: no compare: no checked configuration compiles `depot::far`
       ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:1; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::far/tail=…'
   cover: each of the 4 changed line(s) is in a fact
@@ -97,7 +99,7 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change' --reason 'depot::far=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::far=the reason of the test' --change 'depot::far=the text of the test'
-◆ f1 stated: changed literal `1` → `2` at `depot::far/tail` [semantics · no compare]
-    lines: src/lib.rs:2, src/lib.rs:-2
-◆ f2 derived: changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
     lines: src/lib.rs:13, src/lib.rs:-13
+◆ f1 replace, syntax only (a1; R90.2-6, no MIR element; the matcher): changed literal `1` → `2` at `depot::far/tail` [semantics · no compare]
+    lines: src/lib.rs:2, src/lib.rs:-2

@@ -41,26 +41,30 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::two` (src/lib.rs:11): the full compare: `#[same(shop::two)] fn two_same() {}`; a difference: `#[change(shop::two)] fn two_change() -> bool { … }` or `#[different(shop::two)] fn two_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 4 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: replace macro input `here!(2)` → `here!(3)` (f1)
       in: shop::two
       lines: src/lib.rs:12, src/lib.rs:-10
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::two=TEXT'; if it does not change, --same 'rewrite here!(2) => here!(3)'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: replace macro input `here!(2)` → `here!(3)` at `shop::two/tail` [macro · code different]
-      affected bodies: shop::two
-      equivalence: MIR changes
-      expansion: `here!(3)` at `shop::two/tail` (src/lib.rs:12): expansion changed: changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `10u32` → `12u32` at `expansion/elems[1]` [semantics]
-  ◆ f2 derived: the compiled code of `shop::one` changes with no edit at its place: `here!(1)` [indirect · code different]
+  real edits:
+  file `src/lib.rs`:
+  ◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/lib.rs`: added `// The place of each call is in its value.` [docs · no code]
+  item `shop::one`:
+  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::one` changes with no edit at its place: `here!(1)` [indirect · code different]
       affected bodies: shop::one
       expansion: `here!(1)` at `shop::one/tail` (src/lib.rs:8): expansion changed: only the context of the call changes: the line of the call
       note: lines 8
       ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'shop::one=…'
-  ◆ f3 derived: layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
-  ◆ f4 derived: comment in `src/lib.rs`: added `// The place of each call is in its value.` [docs · no code]
+  item `shop::two`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): replace macro input `here!(2)` → `here!(3)` at `shop::two/tail` [macro · code different] · not stated
+      affected bodies: shop::two
+      equivalence: MIR changes
+      expansion: `here!(3)` at `shop::two/tail` (src/lib.rs:12): expansion changed: changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `10u32` → `12u32` at `expansion/elems[1]` [semantics]
+  transformations:
+  file `src/lib.rs`:
+  ◆ f3 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     shop::two (src/lib.rs:11): same graph (the edit keeps the control flow); MIR changes
@@ -71,11 +75,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'shop::one=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::one=the reason of the test'
-◆ f1 derived: replace macro input `here!(2)` → `here!(3)` at `shop::two/tail` [macro · code different]
-    lines: src/lib.rs:12, src/lib.rs:-10
-◆ f2 derived: the compiled code of `shop::one` changes with no edit at its place: `here!(1)` [indirect · code different]
-    no position
-◆ f3 derived: layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
-    lines: src/lib.rs:6
-◆ f4 derived: comment in `src/lib.rs`: added `// The place of each call is in its value.` [docs · no code]
+◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/lib.rs`: added `// The place of each call is in its value.` [docs · no code]
     lines: src/lib.rs:5
+◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::one` changes with no edit at its place: `here!(1)` [indirect · code different]
+    no position
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): replace macro input `here!(2)` → `here!(3)` at `shop::two/tail` [macro · code different] · not stated
+    lines: src/lib.rs:12, src/lib.rs:-10
+◆ f3 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
+    lines: src/lib.rs:6

@@ -69,12 +69,11 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `depot::a` (src/lib.rs:8): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
     MIR changes with no claim: `depot::b` (src/lib.rs:9): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
     MIR changes with no claim: `depot::limit` (src/lib.rs:13): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
-  not stated: 4 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 4 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: changed expression `c.total` → `c.total()` (f1)
       in: depot::a, depot::b
       lines: src/lib.rs:8-9, src/lib.rs:-8-9
@@ -88,8 +87,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       lines: src/lib.rs:13, src/lib.rs:-13
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::far=TEXT'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+  real edits:
+  item `depot::a`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different] · not stated
       in: depot::a, depot::b
       affected bodies: depot::a, depot::b
       control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: c.total() + 1`
@@ -98,10 +98,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 5 more (semilla expand --step 0)
       equivalence: `depot::a`: MIR changes
       equivalence: `depot::b`: MIR changes
-  ◆ f3 derived: changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
+  item `depot::limit`:
+  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
       affected bodies: depot::limit
       equivalence: MIR changes
-  ◆ f2 derived: changed literal `1` → `2` at `depot::far/tail` [semantics · no compare]
+  syntax only:
+  item `depot::far`:
+  ◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed literal `1` → `2` at `depot::far/tail` [semantics · no compare]
       note: no compare: no checked configuration compiles `depot::far`
       spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:1; not on this target), so Semilla did not compare the edit; reason (key `depot::far`): "a function of the windows build only"
   cover: each of the 8 changed line(s) is in a fact
@@ -113,9 +116,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! spotlight: inactive code: depot::far/tail (no checked configuration compiles `depot::far`)
 
 === positions
-◆ f1 derived: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different] · not stated
     lines: src/lib.rs:8-9, src/lib.rs:-8-9
-◆ f3 derived: changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
+◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
     lines: src/lib.rs:13, src/lib.rs:-13
-◆ f2 derived: changed literal `1` → `2` at `depot::far/tail` [semantics · no compare]
+◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed literal `1` → `2` at `depot::far/tail` [semantics · no compare]
     lines: src/lib.rs:2, src/lib.rs:-2

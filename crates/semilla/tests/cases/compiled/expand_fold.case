@@ -28,15 +28,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 5 MIR changes with no claim
     MIR changes with no claim: `shop::a` (src/lib.rs:3): the full compare: `#[same(shop::a)] fn a_same() {}`; a difference: `#[change(shop::a)] fn a_change(v: u32) -> bool { … }` or `#[different(shop::a)] fn a_different() -> bool { … }`
     MIR changes with no claim: `shop::b` (src/lib.rs:4): the full compare: `#[same(shop::b)] fn b_same() {}`; a difference: `#[change(shop::b)] fn b_change(v: u32) -> bool { … }` or `#[different(shop::b)] fn b_different() -> bool { … }`
     MIR changes with no claim: `shop::c` (src/lib.rs:5): the full compare: `#[same(shop::c)] fn c_same() {}`; a difference: `#[change(shop::c)] fn c_change(v: u32) -> bool { … }` or `#[different(shop::c)] fn c_different() -> bool { … }`
     MIR changes with no claim: `shop::d` (src/lib.rs:6): the full compare: `#[same(shop::d)] fn d_same() {}`; a difference: `#[change(shop::d)] fn d_change(v: u32) -> bool { … }` or `#[different(shop::d)] fn d_different() -> bool { … }`
     MIR changes with no claim: `shop::e` (src/lib.rs:7): the full compare: `#[same(shop::e)] fn e_same() {}`; a difference: `#[change(shop::e)] fn e_change(w: u32) -> bool { … }` or `#[different(shop::e)] fn e_different() -> bool { … }`
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro `bump`: `macro_rules! bump { ($v:expr) => { $v + 1 } }` → `macro_rules! bump { ($v:expr) => { $v + 5 } }` [declaration · code different]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `shop::bump!`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `bump`: `macro_rules! bump { ($v:expr) => { $v + 1 } }` → `macro_rules! bump { ($v:expr) => { $v + 5 } }` [declaration · code different]
       affected bodies: shop::a, shop::b, shop::c, shop::d, shop::e
       expansion: 5 calls of `bump`: expansion changed: changed literal `1` → `5` at `expansion/rhs` [semantics]: `shop::a/tail`, `shop::b/tail`, `shop::c/tail`, and 2 more (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
@@ -51,5 +52,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro `bump`: `macro_rules! bump { ($v:expr) => { $v + 1 } }` → `macro_rules! bump { ($v:expr) => { $v + 5 } }` [declaration · code different]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `bump`: `macro_rules! bump { ($v:expr) => { $v + 1 } }` → `macro_rules! bump { ($v:expr) => { $v + 5 } }` [declaration · code different]
     lines: src/lib.rs:1, src/lib.rs:-1

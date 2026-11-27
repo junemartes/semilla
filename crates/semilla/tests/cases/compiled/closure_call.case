@@ -20,24 +20,24 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 3 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
-    MIR changes with no claim: `depot::apply` (src/lib.rs:1): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 3 node(s) of its item not mapped (complete the intent file)]
-    MIR changes with no claim: `depot::apply::{closure#0} |x: u32| x ^ 1` (src/lib.rs:2): the template of `depot::apply` covers its item `depot::apply` [the AST map: 3 node(s) of its item not mapped (complete the intent file)]
-  not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `depot::apply` (src/lib.rs:1): the full compare: `#[same(depot::apply)] fn apply_same() {}`; a difference: `#[change(depot::apply)] fn apply_change(v: u32) -> bool { … }` or `#[different(depot::apply)] fn apply_different() -> bool { … }`
+    MIR changes with no claim: `depot::apply::{closure#0} |x: u32| x ^ 1` (src/lib.rs:2): the template of `depot::apply` covers its item `depot::apply`
+  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
   ? 3 places: 3 different edits (f1, f2, f3)
       in: depot::apply
       lines: src/lib.rs:2-3, src/lib.rs:-2
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::apply=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  other facts, filled in by Semilla:
-  ◆ f1 derived: deleted statement `v ^ 1` at `depot::apply/tail` [semantics · code different]
+  real edits:
+  item `depot::apply`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `v ^ 1` at `depot::apply/tail` [semantics · code different] · not stated
       affected bodies: depot::apply (with 2 other edits of this body)
       equivalence: MIR changes
-  ◆ f2 derived: added `let` `let f = |x: u32| x ^ 1;` at `depot::apply/S0` [semantics · code different]
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added `let` `let f = |x: u32| x ^ 1;` at `depot::apply/S0` [semantics · code different] · not stated
       affected bodies: depot::apply (with 2 other edits of this body)
       control flow: + graph of `depot::apply::{closure#0} |x: u32| x ^ 1`: 2 points, 1 arrow (semilla expand --step 0)
       equivalence: MIR changes
-  ◆ f3 derived: added statement `f(v)` at `depot::apply/tail` [semantics · code different]
+  ◆ f3 add (Semilla; R90.2-3, 3 new MIR elements): added statement `f(v)` at `depot::apply/tail` [semantics · code different] · not stated
       affected bodies: depot::apply (with 2 other edits of this body)
       control flow: + call `f` [closure] (src/lib.rs:3): return → return
       control flow: + arrow entry (src/lib.rs:1) → call `f` [closure] (src/lib.rs:3)
@@ -49,9 +49,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: deleted statement `v ^ 1` at `depot::apply/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `v ^ 1` at `depot::apply/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-2
-◆ f2 derived: added `let` `let f = |x: u32| x ^ 1;` at `depot::apply/S0` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added `let` `let f = |x: u32| x ^ 1;` at `depot::apply/S0` [semantics · code different] · not stated
     lines: src/lib.rs:2
-◆ f3 derived: added statement `f(v)` at `depot::apply/tail` [semantics · code different]
+◆ f3 add (Semilla; R90.2-3, 3 new MIR elements): added statement `f(v)` at `depot::apply/tail` [semantics · code different] · not stated
     lines: src/lib.rs:3

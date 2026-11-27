@@ -49,17 +49,17 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::COUNT` (src/lib.rs:3): the full compare: `#[same(shop::COUNT)] fn count_same() {}`; a difference: `#[change(shop::COUNT)] fn count_change() -> bool { … }` or `#[different(shop::COUNT)] fn count_different() -> bool { … }`
     MIR changes with no claim: `shop::get` (src/lib.rs:6): no result of the equivalence check; the full compare: `#[same(shop::get)] fn get_same() {}`; a difference: `#[change(shop::get)] fn get_change() -> bool { … }` or `#[different(shop::get)] fn get_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: value of, see f1 (f1)
       in: shop::COUNT
       lines: src/lib.rs:3, src/lib.rs:-3
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::COUNT=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  other facts, filled in by Semilla:
-  ◆ f1 derived: value of `shop::COUNT` changed: AtomicU32::new(5) → AtomicU32::new(7) (the public API can change: a different crate can use the item) [semantics · code different]
+  real edits:
+  item `shop::COUNT`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::COUNT` changed: AtomicU32::new(5) → AtomicU32::new(7) (the public API can change: a different crate can use the item) [semantics · code different] · not stated
       affected bodies: shop::COUNT, shop::get
       through: `shop::COUNT` (1 body)
       equivalence: MIR changes
@@ -71,5 +71,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: value of `shop::COUNT` changed: AtomicU32::new(5) → AtomicU32::new(7) (the public API can change: a different crate can use the item) [semantics · code different]
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::COUNT` changed: AtomicU32::new(5) → AtomicU32::new(7) (the public API can change: a different crate can use the item) [semantics · code different] · not stated
     lines: src/lib.rs:3, src/lib.rs:-3

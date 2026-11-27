@@ -33,26 +33,28 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `1` → `2` (f1)
       in: depot::imp#1::value
       lines: src/imp_win.rs:3, src/imp_win.rs:-3
       to state it: --change 'depot::imp#1::value=TEXT'
   to state them, add these options to the command of the step: --change 'depot::imp#1::value=TEXT'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `1` → `2` at `depot::imp#1::value/tail/rhs` [semantics · no compare]
-      note: no compare: no checked configuration compiles `depot::imp#1::value`
-  ◆ f2 derived: src/imp_win.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
+  real edits:
+  file `src/imp_win.rs`:
+  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): src/imp_win.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
       note: no compare: no checked configuration compiles `src/imp_win.rs`
       ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/imp_win.rs`: `#[cfg(windows)]` at `depot::imp#1`; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'src/imp_win.rs=…'
+  syntax only:
+  item `depot::imp#1::value`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed literal `1` → `2` at `depot::imp#1::value/tail/rhs` [semantics · no compare]
+      note: no compare: no checked configuration compiles `depot::imp#1::value`
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: inactive code: src/imp_win.rs (no checked unit reads the file)
 run again: semilla step 'the change' --reason 'src/imp_win.rs=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/imp_win.rs=the reason of the test' --change 'depot::imp#1::value=the text of the test'
-◆ f1 stated: changed literal `1` → `2` at `depot::imp#1::value/tail/rhs` [semantics · no compare]
-    lines: src/imp_win.rs:3, src/imp_win.rs:-3
-◆ f2 derived: src/imp_win.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
+◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): src/imp_win.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
     no position
+◆ f1 replace, syntax only (a1; R90.2-6, no MIR element; the matcher): changed literal `1` → `2` at `depot::imp#1::value/tail/rhs` [semantics · no compare]
+    lines: src/imp_win.rs:3, src/imp_win.rs:-3

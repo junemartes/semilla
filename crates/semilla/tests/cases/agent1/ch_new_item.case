@@ -58,12 +58,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 change: `fresh` "a new function" (holds: no reject)
       note: Semilla shows `depot::fresh` as added: the fact covers no existing code
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::fresh` (src/lib.rs:10): an added body: `#[new(depot::fresh)] fn fresh_new() -> bool { let new = after::depot::fresh(); true }`
-  not stated: 0 item(s)
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: added `depot::fresh` (the public API changes: a different crate can now use the item) [added · code different]
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::fresh`:
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::fresh` (the public API changes: a different crate can now use the item) [added · code different] · not stated
       affected bodies: depot::fresh
       control flow: + graph of `depot::fresh`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
@@ -75,5 +75,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: added `depot::fresh` (the public API changes: a different crate can now use the item) [added · code different]
+◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::fresh` (the public API changes: a different crate can now use the item) [added · code different] · not stated
     lines: src/lib.rs:10

@@ -25,16 +25,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::sum` (src/lib.rs:1): the full compare: `#[same(shop::sum)] fn sum_same() {}`; a difference: `#[change(shop::sum)] fn sum_change(n: u32) -> bool { … }` or `#[different(shop::sum)] fn sum_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed expression `i` → `i * 1` (f1)
       in: shop::sum
       lines: src/lib.rs:4, src/lib.rs:-4
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::sum=TEXT'; if it does not change, --same 'rewrite i => i * 1'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed expression `i` → `i * 1` at `shop::sum/S2/body/S0/rhs/args[0]` [semantics · code different]
+  real edits:
+  item `shop::sum`:
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `i` → `i * 1` at `shop::sum/S2/body/S0/rhs/args[0]` [semantics · code different] · not stated
       affected bodies: shop::sum
       control flow: + check `overflow: i * 1` (src/lib.rs:4): ok → call `num::<impl u32>::wrapping_add`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:4)
@@ -47,5 +47,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed expression `i` → `i * 1` at `shop::sum/S2/body/S0/rhs/args[0]` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `i` → `i * 1` at `shop::sum/S2/body/S0/rhs/args[0]` [semantics · code different] · not stated
     lines: src/lib.rs:4, src/lib.rs:-4

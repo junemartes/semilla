@@ -4,7 +4,7 @@ rule+: R50.4-5
 rule-: R50.4-5
 exit: 0
 must_match: \n      1 site\(s\): add the argument `limit \(\) \* 3` \(in depot::both\)
-must_match: ◆ f[0-9]+ derived: added operand `\+ 1` at `depot::uses_limit/tail`
+must_match: ◆ f[0-9]+ [a-z ,]+ \(Semilla; [^\n]*\): added operand `\+ 1` at `depot::uses_limit/tail`
 must_not_match: site\(s\): add the argument[^\n]*uses_limit
 === both Cargo.toml
 [package]
@@ -57,17 +57,25 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::both` (src/lib.rs:8): the full compare: `#[same(depot::both)] fn both_same() {}`; a difference: `#[change(depot::both)] fn both_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart, d_before: &before::depot::Cart, d_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::both)] fn both_different() -> bool { … }`
     MIR changes with no claim: `depot::uses_limit` (src/lib.rs:12): the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: added operand `+ 1` (f2)
       in: depot::uses_limit
       lines: src/lib.rs:12, src/lib.rs:-12
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::uses_limit=TEXT'; if it does not change, --same 'rewrite $a + $a => $a + $a + 1'
-  declarations, filled in by Semilla:
-  ◆ f1 derived: parameter of `depot::wrap` added: `by: u32` (the public API can change: a different crate can use the item) [declaration · code different]
+  real edits:
+  item `depot::uses_limit`:
+  ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): added operand `+ 1` at `depot::uses_limit/tail` [semantics · code different] · not stated
+      affected bodies: depot::uses_limit
+      control flow: + check `overflow: limit() + limit() + 1` (src/lib.rs:12): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:12)
+      control flow: + arrow check `overflow: limit() + limit()` (src/lib.rs:12) → check `overflow: limit() + limit() + 1` (src/lib.rs:12) (ok)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes
+  item `depot::wrap`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): parameter of `depot::wrap` added: `by: u32` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
       1 site(s): add the argument `limit () * 3` (in depot::both)
       affected bodies: depot::both, depot::wrap
       control flow: + call `limit` (src/lib.rs:8): return → check `overflow: limit() * 3`
@@ -76,14 +84,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 3 more (semilla expand --step 0)
       equivalence: MIR changes
       ! public API: the compare does not cover the code of a different crate
-  other facts, filled in by Semilla:
-  ◆ f2 derived: added operand `+ 1` at `depot::uses_limit/tail` [semantics · code different]
-      affected bodies: depot::uses_limit
-      control flow: + check `overflow: limit() + limit() + 1` (src/lib.rs:12): ok → return, fail → panic `overflow`
-      control flow: + panic `overflow` (src/lib.rs:12)
-      control flow: + arrow check `overflow: limit() + limit()` (src/lib.rs:12) → check `overflow: limit() + limit() + 1` (src/lib.rs:12) (ok)
-      control flow: … 1 more (semilla expand --step 0)
-      equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
     depot::both (src/lib.rs:8): graph changes: +1 call, +1 check, +1 panic, 1 changed check, +4 arrows, −1 arrow; MIR changes
@@ -91,7 +91,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: parameter of `depot::wrap` added: `by: u32` (the public API can change: a different crate can use the item) [declaration · code different]
-    lines: src/lib.rs:8-9, src/lib.rs:-8-9
-◆ f2 derived: added operand `+ 1` at `depot::uses_limit/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): added operand `+ 1` at `depot::uses_limit/tail` [semantics · code different] · not stated
     lines: src/lib.rs:12, src/lib.rs:-12
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): parameter of `depot::wrap` added: `by: u32` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
+    lines: src/lib.rs:8-9, src/lib.rs:-8-9

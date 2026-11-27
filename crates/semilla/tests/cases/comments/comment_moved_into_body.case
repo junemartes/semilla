@@ -25,31 +25,34 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:1): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `10` → `5` (f2)
       in: shop::price
       lines: src/lib.rs:3, src/lib.rs:-3
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 10 => 5'
-  other facts, filled in by Semilla:
-  ◆ f2 derived: changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different]
+  real edits:
+  file `src/lib.rs`:
+  ◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/lib.rs`: removed `// The tax is 10 percent.` [docs · no code]
+  item `shop::price`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different] · not stated
       affected bodies: shop::price
       control flow: ~ check `overflow: x + x / 10` → `overflow: x + x / 5` (src/lib.rs:-3, src/lib.rs:3)
       equivalence: MIR changes
       comment above line 3, moved in this step: see f1, f3
-  ◆ f1 derived: added comment `// The tax is 10 percent.` [docs · no code]
-  ◆ f3 derived: comment in `src/lib.rs`: removed `// The tax is 10 percent.` [docs · no code]
+  syntax only:
+  item `shop::price`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added comment `// The tax is 10 percent.` [docs · no code]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     shop::price (src/lib.rs:1): same structure: 1 changed check; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 derived: changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different]
-    lines: src/lib.rs:3, src/lib.rs:-3
-◆ f1 derived: added comment `// The tax is 10 percent.` [docs · no code]
-    lines: src/lib.rs:2
-◆ f3 derived: comment in `src/lib.rs`: removed `// The tax is 10 percent.` [docs · no code]
+◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/lib.rs`: removed `// The tax is 10 percent.` [docs · no code]
     lines: src/lib.rs:-1
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different] · not stated
+    lines: src/lib.rs:3, src/lib.rs:-3
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added comment `// The tax is 10 percent.` [docs · no code]
+    lines: src/lib.rs:2

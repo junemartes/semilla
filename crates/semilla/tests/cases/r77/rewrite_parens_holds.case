@@ -25,19 +25,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rewrite `$x.min($y)` => `std::cmp::min($x, $y)` (the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
       places: shop::f/tail
-    ◆ f1 stated: changed call: `(a + b).min(7)` → `std::cmp::min(a + b, 7)` at `shop::f/tail` [semantics · code different]
-        affected bodies: shop::f
-        control flow: ~ call `impls::<impl Ord for u32>::min` → `min::<u32>` (src/lib.rs:-2, src/lib.rs:2)
-        equivalence: MIR changes
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+      entries, in the list below: f1
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::f` (src/lib.rs:1): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
-  not stated: 0 item(s)
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::f`:
+  ◆ f1 replace (a1; R90.2-2, 1 changed MIR element): changed call: `(a + b).min(7)` → `std::cmp::min(a + b, 7)` at `shop::f/tail` [semantics · code different]
+      affected bodies: shop::f
+      control flow: ~ call `impls::<impl Ord for u32>::min` → `min::<u32>` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     shop::f (src/lib.rs:1): same structure: 1 changed call target; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: changed call: `(a + b).min(7)` → `std::cmp::min(a + b, 7)` at `shop::f/tail` [semantics · code different]
+◆ f1 replace (a1; R90.2-2, 1 changed MIR element): changed call: `(a + b).min(7)` → `std::cmp::min(a + b, 7)` at `shop::f/tail` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

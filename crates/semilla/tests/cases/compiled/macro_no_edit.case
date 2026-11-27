@@ -40,11 +40,12 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::limit` (src/lib.rs:12): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change(v: u32) -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro `guard`: `macro_rules! guard { ($v:expr) => { if $v > 9 { return 0; } }; }` → [1] [declaration · code different]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::guard!`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `guard`: `macro_rules! guard { ($v:expr) => { if $v > 9 { return 0; } }; }` → [1] [declaration · code different]
         [1] macro_rules! guard { ($v:expr) => { if $v > 9 { return 0; } if $v == 5 { return 5; } }; }
       affected bodies: depot::limit
       expansion: `guard!(v)` at `depot::limit/S0` (src/lib.rs:13): expansion changed: added early exit `if v == 5 { return 5; }` at `expansion/S1` [semantics]
@@ -56,5 +57,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro `guard`: `macro_rules! guard { ($v:expr) => { if $v > 9 { return 0; } }; }` → [1] [declaration · code different]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `guard`: `macro_rules! guard { ($v:expr) => { if $v > 9 { return 0; } }; }` → [1] [declaration · code different]
     lines: src/lib.rs:6-8

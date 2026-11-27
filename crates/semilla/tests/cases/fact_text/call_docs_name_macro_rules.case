@@ -33,9 +33,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro call `table!( A = 1, )` → `table!( A = 2, )` (makes: `pub const A`) [declaration · code equal]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::table!#0`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro call `table!( A = 1, )` → `table!( A = 2, )` (makes: `pub const A`) [declaration · code equal]
       expansion: `table!( A = 2, )` at `depot::table!#0` (src/lib.rs:6): expansion changed: value of `depot::A` changed: 1 → 2 (the public API can change: a different crate can use the item) [semantics]
       docs of `depot::table!#0`, no edit in this step (src/lib.rs:5): `/// Like macro_rules! of the std.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
@@ -46,5 +47,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: changed macro call `table!( A = 1, )` → `table!( A = 2, )` (makes: `pub const A`) [declaration · code equal]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro call `table!( A = 1, )` → `table!( A = 2, )` (makes: `pub const A`) [declaration · code equal]
     lines: src/lib.rs:7, src/lib.rs:-7

@@ -2,8 +2,8 @@ note: design 50.4: only facts with equal full texts fold to one fact "N site(s):
 rule+: R50.4-6
 rule-: R50.4-6
 exit: 0
-must_match: ◆ f[0-9]+ derived: 2 site\(s\): changed expression `x` → `x \+ 1`
-must_match: ◆ f[0-9]+ derived: changed expression `x` → `x \+ 2` at `depot::wrap3/tail`
+must_match: ◆ f[0-9]+ [a-z ,]+ \(Semilla; [^\n]*\): 2 site\(s\): changed expression `x` → `x \+ 1`
+must_match: ◆ f[0-9]+ [a-z ,]+ \(Semilla; [^\n]*\): changed expression `x` → `x \+ 2` at `depot::wrap3/tail`
 must_not_match: 3 site\(s\)
 === both Cargo.toml
 [package]
@@ -58,12 +58,11 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `depot::wrap` (src/lib.rs:9): the full compare: `#[same(depot::wrap)] fn wrap_same() {}`; a difference: `#[change(depot::wrap)] fn wrap_change(x: u32) -> bool { … }` or `#[different(depot::wrap)] fn wrap_different() -> bool { … }`
     MIR changes with no claim: `depot::wrap2` (src/lib.rs:10): the full compare: `#[same(depot::wrap2)] fn wrap2_same() {}`; a difference: `#[change(depot::wrap2)] fn wrap2_change(x: u32) -> bool { … }` or `#[different(depot::wrap2)] fn wrap2_different() -> bool { … }`
     MIR changes with no claim: `depot::wrap3` (src/lib.rs:20): the full compare: `#[same(depot::wrap3)] fn wrap3_same() {}`; a difference: `#[change(depot::wrap3)] fn wrap3_change(x: u32) -> bool { … }` or `#[different(depot::wrap3)] fn wrap3_different() -> bool { … }`
-  not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: changed expression `x` → `x + 1` (f1)
       in: depot::wrap, depot::wrap2
       lines: src/lib.rs:9-10, src/lib.rs:-9-10
@@ -72,8 +71,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: depot::wrap3
       lines: src/lib.rs:20, src/lib.rs:-20
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::wrap3=TEXT'; if it does not change, --same 'rewrite x => x + 2'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: 2 site(s): changed expression `x` → `x + 1` [semantics · code different]
+  real edits:
+  item `depot::wrap3`:
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 2` at `depot::wrap3/tail` [semantics · code different] · not stated
+      affected bodies: depot::wrap3
+      control flow: + check `overflow: x + 2` (src/lib.rs:20): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:20)
+      control flow: + arrow entry (src/lib.rs:20) → check `overflow: x + 2` (src/lib.rs:20)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes
+  item `depot::wrap`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `x` → `x + 1` [semantics · code different] · not stated
       in: depot::wrap, depot::wrap2
       affected bodies: depot::wrap, depot::wrap2
       control flow: + check `overflow: x + 1` (src/lib.rs:9): ok → return, fail → panic `overflow`
@@ -82,13 +90,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 5 more (semilla expand --step 0)
       equivalence: `depot::wrap`: MIR changes
       equivalence: `depot::wrap2`: MIR changes
-  ◆ f2 derived: changed expression `x` → `x + 2` at `depot::wrap3/tail` [semantics · code different]
-      affected bodies: depot::wrap3
-      control flow: + check `overflow: x + 2` (src/lib.rs:20): ok → return, fail → panic `overflow`
-      control flow: + panic `overflow` (src/lib.rs:20)
-      control flow: + arrow entry (src/lib.rs:20) → check `overflow: x + 2` (src/lib.rs:20)
-      control flow: … 1 more (semilla expand --step 0)
-      equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 3 bodies
     depot::wrap (src/lib.rs:9): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow; MIR changes
@@ -97,7 +98,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: 2 site(s): changed expression `x` → `x + 1` [semantics · code different]
-    lines: src/lib.rs:9-10, src/lib.rs:-9-10
-◆ f2 derived: changed expression `x` → `x + 2` at `depot::wrap3/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 2` at `depot::wrap3/tail` [semantics · code different] · not stated
     lines: src/lib.rs:20, src/lib.rs:-20
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `x` → `x + 1` [semantics · code different] · not stated
+    lines: src/lib.rs:9-10, src/lib.rs:-9-10

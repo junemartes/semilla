@@ -58,22 +58,22 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✗ a1 same: rewrite `wrap($a)` => `wrap2($a)` (false: no changed place has the old form `wrap($a)` and the new form `wrap2($a)`)
       no edit of the step has the old form or the new form; the old tree has the form `wrap($a)` at 1 place(s)
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::both` (src/lib.rs:8): the full compare: `#[same(depot::both)] fn both_same() {}`; a difference: `#[change(depot::both)] fn both_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart, d_before: &before::depot::Cart, d_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::both)] fn both_different() -> bool { … }`
-  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: 2 different edits (f1, f2)
       in: depot::both
       lines: src/lib.rs:8, src/lib.rs:-8
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::both=TEXT'; if it does not change, --same 'rewrite wrap => wrap2' --same 'rewrite 1 => 2'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code different]
+  real edits:
+  item `depot::both`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code different] · not stated
       affected bodies: depot::both (with 1 other edit of this body)
       control flow: ~ check `overflow: c.total + 1` → `overflow: c.total + 2` (src/lib.rs:-8, src/lib.rs:8)
       control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-8, src/lib.rs:8)
       control flow: ~ check `overflow: wrap(c.total + 1) + d.total` → `overflow: wrap2(c.total + 2) + d.total` (src/lib.rs:-8, src/lib.rs:8) (the same line for f2)
       equivalence: MIR changes alone; the body: MIR changes
-  ◆ f2 derived: changed literal `1` → `2` at `depot::both/tail/lhs/args[0]/rhs` [semantics · code different]
+  ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed literal `1` → `2` at `depot::both/tail/lhs/args[0]/rhs` [semantics · code different] · not stated
       affected bodies: depot::both (with 1 other edit of this body)
       control flow: ~ check `overflow: c.total + 1` → `overflow: c.total + 2` (src/lib.rs:-8, src/lib.rs:8)
       control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-8, src/lib.rs:8)
@@ -87,7 +87,7 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f1 derived: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code different] · not stated
     lines: src/lib.rs:8, src/lib.rs:-8
-◆ f2 derived: changed literal `1` → `2` at `depot::both/tail/lhs/args[0]/rhs` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed literal `1` → `2` at `depot::both/tail/lhs/args[0]/rhs` [semantics · code different] · not stated
     lines: src/lib.rs:8, src/lib.rs:-8

@@ -182,6 +182,12 @@ pub struct ElementDiff {
     /// `const fn` that it names counts.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub evaluated: bool,
+    /// [R90.1-1] The token ranges of the pairs of elements that differ (old, new): two elements
+    /// that differ in one aligned region, paired by the definitions that they name, then by
+    /// their order (design 90). An element that differs and is in no such pair is new or
+    /// removed code.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed: Vec<(Place, Place)>,
 }
 
 impl ElementDiff {
@@ -202,6 +208,9 @@ impl ElementDiff {
         self.pairs.extend(other.pairs);
         self.pairs.sort();
         self.pairs.dedup();
+        self.changed.extend(other.changed);
+        self.changed.sort();
+        self.changed.dedup();
     }
 }
 
@@ -862,7 +871,13 @@ pub fn diff(old: (&str, &RecordElements), new: (&str, &RecordElements)) -> Optio
         let sources = sources.get(index).cloned().unwrap_or_default();
         Element { tokens, call, targets, exit, glue, jump, symbols, sources }
     };
+    // [R90.1-1] Step 5: the elements that differ, paired inside each aligned region.
+    let changed: Vec<(Place, Place)> = region_pairs([old_order.as_slice(), new_order.as_slice()], &partner, [same.as_slice(), same_new.as_slice()], [symbols[0].as_slice(), symbols[1].as_slice()])
+        .into_iter()
+        .filter_map(|(a, b)| Some((old_ranges[near(&old_blocks, &old_ranges, a)].0.clone()?, new_ranges[near(&new_blocks, &new_ranges, b)].0.clone()?)))
+        .collect();
     let mut out = ElementDiff {
+        changed,
         old: (0..old.elements.len()).filter(|i| !same[*i]).map(|i| element(&old, &old_blocks, &old_ranges, &symbols[0], &sources[0], i)).collect(),
         new: (0..new.elements.len()).filter(|i| !same_new[*i]).map(|i| element(&new, &new_blocks, &new_ranges, &symbols[1], &sources[1], i)).collect(),
         other: old.other != new.other || old.args != new.args,
@@ -875,7 +890,52 @@ pub fn diff(old: (&str, &RecordElements), new: (&str, &RecordElements)) -> Optio
     unique(&mut out.new);
     out.pairs.sort();
     out.pairs.dedup();
+    out.changed.sort();
+    out.changed.dedup();
     Some(out)
+}
+
+/// [R90.1-1] The pairs of the elements that differ, inside each aligned region (design 90).
+///
+/// The equal pairs of the alignment are the anchors. They are in the order of the source on
+/// the two sides (the alignment is a common subsequence), so they cut the two element lists
+/// into regions. In each region, the elements that differ pair first by the definitions that
+/// they name (an equal list of symbols that is not empty), one to one in the order of the
+/// source, and then the rest by their order. An element with no partner is new or removed
+/// code. The cost is at most the product of the sizes of each region: no search.
+fn region_pairs(order: [&[usize]; 2], partner: &[Option<usize>], same: [&[bool]; 2], symbols: [&[Vec<Symbol>]; 2]) -> Vec<(usize, usize)> {
+    let new_place: BTreeMap<usize, usize> = order[1].iter().enumerate().map(|(place, index)| (*index, place)).collect();
+    // The anchors in the order of the source: the place in each order list.
+    let mut anchors: Vec<(usize, usize)> = Vec::new();
+    for (place, index) in order[0].iter().enumerate() {
+        let Some(found) = partner[*index].filter(|_| same[0][*index]).and_then(|b| new_place.get(&b)) else { continue };
+        if anchors.last().is_none_or(|(_, last)| found > last) {
+            anchors.push((place, *found));
+        }
+    }
+    let mut out = Vec::new();
+    let mut start = (0, 0);
+    for end in anchors.iter().copied().chain(std::iter::once((order[0].len(), order[1].len()))) {
+        let olds: Vec<usize> = order[0][start.0..end.0].iter().copied().filter(|index| !same[0][*index]).collect();
+        let news: Vec<usize> = order[1][start.1..end.1].iter().copied().filter(|index| !same[1][*index]).collect();
+        let mut used = vec![false; news.len()];
+        let mut left = Vec::new();
+        for a in olds {
+            let named = symbols[0].get(a).filter(|list| !list.is_empty());
+            let found = named.and_then(|list| (0..news.len()).find(|&k| !used[k] && symbols[1].get(news[k]) == Some(list)));
+            match found {
+                Some(k) => {
+                    used[k] = true;
+                    out.push((a, news[k]));
+                }
+                None => left.push(a),
+            }
+        }
+        let rest: Vec<usize> = news.iter().zip(&used).filter(|(_, used)| !**used).map(|(b, _)| *b).collect();
+        out.extend(left.into_iter().zip(rest));
+        start = (end.0 + 1, end.1 + 1);
+    }
+    out
 }
 
 /// The data of one side of a diff for the dependence rule (design 45).
@@ -1335,6 +1395,50 @@ mod tests {
         }
         out.push_str("    }\n}\n");
         out
+    }
+
+    // rule+ R90.1-1
+    #[test]
+    fn a_changed_element_pairs_with_the_old_element_of_its_region() {
+        let old = text(&["_2 = Add(_1, const u32 = 1)", "_0 = _2", "return"]);
+        let new = text(&["_2 = Add(_1, const u32 = 2)", "_0 = _2", "return"]);
+        let diff = super::diff((&old, &record(3)), (&new, &record(3))).unwrap();
+        assert_eq!((diff.old.len(), diff.new.len()), (1, 1), "{diff:?}");
+        assert_eq!(diff.changed.len(), 1, "{diff:?}");
+        assert_eq!((diff.changed[0].0.start, diff.changed[0].1.start), (0, 0));
+    }
+
+    // rule- R90.1-1
+    #[test]
+    fn a_new_element_with_no_old_element_in_its_region_has_no_partner() {
+        let old = text(&["_2 = Add(_1, const u32 = 1)", "_0 = _2", "return"]);
+        let new = text(&["_2 = Add(_1, const u32 = 1)", "_3 = Mul(_1, const u32 = 3)", "_0 = _2", "return"]);
+        let diff = super::diff((&old, &record(3)), (&new, &record(4))).unwrap();
+        assert!(diff.old.is_empty() && diff.new.len() == 1, "{diff:?}");
+        assert!(diff.changed.is_empty(), "{diff:?}");
+    }
+
+    // rule+ R90.1-2 R90.7-4
+    #[test]
+    fn a_large_body_with_many_equal_elements_aligns_in_polynomial_time_and_the_same_each_time() {
+        // 2 000 equal statements and one changed statement in the middle: the alignment is a
+        // common subsequence (no search), and two runs give the same map.
+        for count in [1_000usize, 2_000] {
+            let mut old: Vec<String> = (0..count).map(|_| "_2 = Add(_1, const u32 = 1)".to_string()).collect();
+            old.push("_0 = _2".into());
+            old.push("return".into());
+            let mut new = old.clone();
+            new[count / 2] = "_2 = Add(_1, const u32 = 2)".into();
+            let (old_text, new_text) = (text(&old.iter().map(String::as_str).collect::<Vec<_>>()), text(&new.iter().map(String::as_str).collect::<Vec<_>>()));
+            let started = std::time::Instant::now();
+            let first = super::diff((&old_text, &record(count + 2)), (&new_text, &record(count + 2))).unwrap();
+            let second = super::diff((&old_text, &record(count + 2)), (&new_text, &record(count + 2))).unwrap();
+            assert!(started.elapsed().as_secs() < 60, "{count}: {:?}", started.elapsed());
+            assert_eq!(first, second);
+            // Each element that differs is in one region with its partner.
+            assert_eq!(first.changed.len(), first.old.len().min(first.new.len()), "{count}");
+            assert!(!first.new.is_empty());
+        }
     }
 
     #[test]

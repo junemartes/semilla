@@ -52,18 +52,18 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 0 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: moved, see f1 (f1)
       in: depot::limit
       lines: src/lib.rs:20, src/lib.rs:-5
       to state it: --change 'depot::limit=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::limit=TEXT'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: moved `depot::limit` past 1 item that can give a macro: `depot::twice!`; a macro has a textual scope: a macro call in `depot::limit` can have a new meaning [macro · no code]
+  real edits:
+  item `depot::limit`:
+  ◆ f1 replace (Semilla; R90.3-2, no changed node (the fact of today)): moved `depot::limit` past 1 item that can give a macro: `depot::twice!`; a macro has a textual scope: a macro call in `depot::limit` can have a new meaning [macro · no code]
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: moved `depot::limit` past 1 item that can give a macro: `depot::twice!`; a macro has a textual scope: a macro call in `depot::limit` can have a new meaning [macro · no code]
+◆ f1 replace (Semilla; R90.3-2, no changed node (the fact of today)): moved `depot::limit` past 1 item that can give a macro: `depot::twice!`; a macro has a textual scope: a macro call in `depot::limit` can have a new meaning [macro · no code]
     lines: src/lib.rs:20, src/lib.rs:-5

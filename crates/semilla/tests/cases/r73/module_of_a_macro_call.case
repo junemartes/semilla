@@ -32,21 +32,24 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::float::at` (src/float.rs:5): the full compare: `#[same(shop::float::at)] fn at_same() {}`; a difference: `#[change(shop::float::at)] fn at_change() -> bool { … }` or `#[different(shop::float::at)] fn at_different() -> bool { … }`
     MIR changes with no claim: `shop::float::first` (src/float.rs:1): no template: error[S0112]: the scope path `before::shop::float::first` names no item of the version
-  other facts, filled in by Semilla:
-  ◆ f1 derived: src/float.rs: changed [file · code different]
+  changed nodes: 0 in 3 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  file `src/float.rs`:
+  ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): src/float.rs: changed [file · code different]
       affected bodies: shop::float::at, shop::float::first
       control flow: + graph of `shop::float::first`: 2 points, 1 arrow (semilla expand --step 0)
       expansion: `load!()` at `shop::load!#0` (src/lib.rs:4): expansion changed: changed literal `2u32` → `6u32` at `shop::float::at/tail/lhs` [semantics]; added `shop::float::first` (the public API changes: a different crate can now use the item) [added]
       ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/float.rs:=…'
-  ◆ f2 derived: the compiler reads this item from another file: `shop::float::at` (src/float.rs) [file · code different]
+  item `shop::float::at`:
+  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiler reads this item from another file: `shop::float::at` (src/float.rs) [file · code different]
       affected bodies: shop::float::at
       control flow: + graph of `shop::float::first`: 2 points, 1 arrow (semilla expand --step 0)
       ✗ spotlight: the compiler reads `shop::float::at` from `src/float.rs`, a file that Semilla does not parse; it needs a reason: --reason 'shop::float::at=…'
-  ◆ f3 derived: the compiler reads this item from another file: `shop::float::first` (src/float.rs) [file · code different]
+  item `shop::float::first`:
+  ◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiler reads this item from another file: `shop::float::first` (src/float.rs) [file · code different]
       affected bodies: shop::float::first
       control flow: + graph of `shop::float::first`: 2 points, 1 arrow (semilla expand --step 0)
       ✗ spotlight: the compiler reads `shop::float::first` from `src/float.rs`, a file that Semilla does not parse; it needs a reason: --reason 'shop::float::first=…'
@@ -61,9 +64,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'src/float.rs:=<why>' --reason 'shop::float::at=<why>' --reason 'shop::float::first=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/float.rs:=the reason of the test' --reason 'shop::float::at=the reason of the test' --reason 'shop::float::first=the reason of the test'
-◆ f1 derived: src/float.rs: changed [file · code different]
+◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): src/float.rs: changed [file · code different]
     lines: src/float.rs:1-4
-◆ f2 derived: the compiler reads this item from another file: `shop::float::at` (src/float.rs) [file · code different]
+◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiler reads this item from another file: `shop::float::at` (src/float.rs) [file · code different]
     lines: src/float.rs:1-4
-◆ f3 derived: the compiler reads this item from another file: `shop::float::first` (src/float.rs) [file · code different]
+◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiler reads this item from another file: `shop::float::first` (src/float.rs) [file · code different]
     lines: src/float.rs:1-4

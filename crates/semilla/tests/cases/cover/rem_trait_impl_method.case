@@ -37,17 +37,17 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `<depot::Sq as depot::Sides>::m` (src/lib.rs:11): a removed body: `#[removed(<depot::Sq as depot::Sides>::m)] fn m_removed() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `<depot::Sq as depot::Sides>::m` (src/lib.rs:11): a removed body: `#[removed(<depot::Sq as depot::Sides>::m)] fn m_removed() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: edit, see f1 (f1)
       in: depot::<Sq as Sides>::m
       lines: src/lib.rs:-8-11
       to state it: --change 'depot::<Sq as Sides>::m=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::<Sq as Sides>::m=TEXT'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: `depot::<Sq as Sides>::m` is removed: the impl now uses the default body of `depot::Sides::m`: `/// The new doc. /// One more line. #[cfg(all())] fn m(&self) -> u32 { 5 }` → `pub trait Sides { fn m(&self) -> u32 { 0 } fn n(&self) -> u32; }` [semantics · code different]
+  real edits:
+  item `depot::<Sq as Sides>::m`:
+  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): `depot::<Sq as Sides>::m` is removed: the impl now uses the default body of `depot::Sides::m`: `/// The new doc. /// One more line. #[cfg(all())] fn m(&self) -> u32 { 5 }` → `pub trait Sides { fn m(&self) -> u32 { 0 } fn n(&self) -> u32; }` [semantics · code different] · not stated
       affected bodies: depot::<Sq as Sides>::m
       control flow: − graph of `<depot::Sq as depot::Sides>::m`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 4 changed line(s) is in a fact
@@ -57,5 +57,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! spotlight: cfg attribute: depot::<Sq as Sides>::m
 
 === positions
-◆ f1 derived: `depot::<Sq as Sides>::m` is removed: the impl now uses the default body of `depot::Sides::m`: `/// The new doc. /// One more line. #[cfg(all())] fn m(&self) -> u32 { 5 }` → `pub trait Sides { fn m(&self) -> u32 { 0 } fn n(&self) -> u32; }` [semantics · code different]
+◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): `depot::<Sq as Sides>::m` is removed: the impl now uses the default body of `depot::Sides::m`: `/// The new doc. /// One more line. #[cfg(all())] fn m(&self) -> u32 { 5 }` → `pub trait Sides { fn m(&self) -> u32 { 0 } fn n(&self) -> u32; }` [semantics · code different] · not stated
     lines: src/lib.rs:-8-11

@@ -66,14 +66,15 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  declarations, filled in by Semilla:
-  ◆ f1 derived: type `u8` → `u16` in 2 places: `shop::a::Block.x`, `shop::a::Block.y` [declaration · code different]
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::a::Block.x`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): type `u8` → `u16` in 2 places: `shop::a::Block.x`, `shop::a::Block.y` [declaration · code different] · not stated
       affected bodies: shop::a::Block::new, shop::a::Block::sum
       through: `shop::a::Block` (2 bodies), `shop::a::Block.x` (2 bodies), `shop::a::Block::new` (1 body)
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: type `u8` → `u16` in 2 places: `shop::a::Block.x`, `shop::a::Block.y` [declaration · code different]
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): type `u8` → `u16` in 2 places: `shop::a::Block.x`, `shop::a::Block.y` [declaration · code different] · not stated
     lines: src/lib.rs:3-4, src/lib.rs:-3-4

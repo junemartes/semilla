@@ -25,10 +25,11 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `shop::quote` (src/lib.rs:1): the full compare: `#[same(shop::quote)] fn quote_same() {}`; a difference: `#[change(shop::quote)] fn quote_change(n: u32, p: u32) -> bool { … }` or `#[different(shop::quote)] fn quote_different() -> bool { … }`
-  not stated: 1 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `shop::quote` (src/lib.rs:1): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+  changed nodes: 4 in 3 entries; 1 real edits (0 stated by the agent); 1 not mapped
+    n1 not mapped [R90.6-1]: changed expression `shop::quote/S0/pat` (src/lib.rs:2): not mapped in f1: `t` → `total`
+        template: #[same(shop::quote)] fn quote(n: u32, p: u32) -> bool { after::shop::quote(n, p) == before::shop::quote(n, p) }
   ? 2 places: 2 different edits (f1, f2)
       in: shop::quote
       lines: src/lib.rs:2-3, src/lib.rs:-2-3
@@ -37,16 +38,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: shop::quote
       lines: src/lib.rs:3, src/lib.rs:-3
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::quote=TEXT'; if it does not change, --same 'rewrite t => total'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed pattern `t` → `total` at `shop::quote/S0/pat` [semantics · code different]
-      affected bodies: shop::quote (with 1 other edit of this body)
-      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
-  ◆ f2 derived: change condition `t > 100` → `total >= 100` at `shop::quote/S1/cond` [semantics · code different]
+  real edits:
+  item `shop::quote`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): change condition `t > 100` → `total >= 100` at `shop::quote/S1/cond` [semantics · code different] · not stated
       affected bodies: shop::quote (with 1 other edit of this body)
       control flow: ~ branch `t > 100` → `total >= 100` (src/lib.rs:-3, src/lib.rs:3)
       control flow: ~ check `overflow: t - 5` → `overflow: total - 5` (src/lib.rs:-3, src/lib.rs:3)
       equivalence: MIR changes alone; the body: MIR changes
-  ◆ f3 derived: 2 site(s): changed path `t` → `total` [semantics · code equal]
+  not mapped:
+  item `shop::quote`:
+  ◆ f1 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed pattern `t` → `total` at `shop::quote/S0/pat` [semantics · code different]
+      affected bodies: shop::quote (with 1 other edit of this body)
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
+  transformations:
+  item `shop::quote`:
+  ◆ f3 same code (Semilla; R90.2-1, equal MIR; 2 nodes): 2 site(s): changed path `t` → `total` [semantics · code equal]
       in: shop::quote (2)
       control flow: ~ branch `t > 100` → `total >= 100` (src/lib.rs:-3, src/lib.rs:3)
       control flow: ~ check `overflow: t - 5` → `overflow: total - 5` (src/lib.rs:-3, src/lib.rs:3)
@@ -57,9 +63,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed pattern `t` → `total` at `shop::quote/S0/pat` [semantics · code different]
-    lines: src/lib.rs:2, src/lib.rs:-2
-◆ f2 derived: change condition `t > 100` → `total >= 100` at `shop::quote/S1/cond` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): change condition `t > 100` → `total >= 100` at `shop::quote/S1/cond` [semantics · code different] · not stated
     lines: src/lib.rs:3, src/lib.rs:-3
-◆ f3 derived: 2 site(s): changed path `t` → `total` [semantics · code equal]
+◆ f1 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed pattern `t` → `total` at `shop::quote/S0/pat` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f3 same code (Semilla; R90.2-1, equal MIR; 2 nodes): 2 site(s): changed path `t` → `total` [semantics · code equal]
     lines: src/lib.rs:3, src/lib.rs:-3

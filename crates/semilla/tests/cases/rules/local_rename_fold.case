@@ -4,7 +4,7 @@ rule+: R50.4-8
 rule-: R50.4-8
 exit: 0
 must_match: `depot::sum`: renamed local `part` → `base`, 3 edit\(s\)
-must_match: ◆ f[0-9]+ derived: changed literal `2` → `3` at `depot::sum/
+must_match: ◆ f[0-9]+ [a-z ,]+ \(Semilla; [^\n]*\): changed literal `2` → `3` at `depot::sum/
 must_not_match: 4 edit\(s\)
 === both Cargo.toml
 [package]
@@ -67,21 +67,21 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::sum` (src/lib.rs:20): the full compare: `#[same(depot::sum)] fn sum_same() {}`; a difference: `#[change(depot::sum)] fn sum_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::sum)] fn sum_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 4 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `2` → `3` (f2)
       in: depot::sum
       lines: src/lib.rs:23, src/lib.rs:-23
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::sum=TEXT'; if it does not change, --same 'rewrite 2 => 3'
-  other facts, filled in by Semilla:
-  ◆ f2 derived: changed literal `2` → `3` at `depot::sum/tail/rhs/rhs` [semantics · code different]
+  real edits:
+  item `depot::sum`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `depot::sum/tail/rhs/rhs` [semantics · code different] · not stated
       affected bodies: depot::sum
       control flow: ~ check `overflow: part * 2` → `overflow: base * 3` (src/lib.rs:-23, src/lib.rs:23)
       control flow: ~ check `overflow: more + part * 2` → `overflow: more + base * 3` (src/lib.rs:-23, src/lib.rs:23)
       equivalence: MIR changes alone; the body: MIR changes
-  ◆ f1 derived: `depot::sum`: renamed local `part` → `base`, 3 edit(s) [rename · code equal]
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 3 nodes): `depot::sum`: renamed local `part` → `base`, 3 edit(s) [rename · code equal] · not stated
       control flow: ~ check `overflow: part * 2` → `overflow: base * 3` (src/lib.rs:-23, src/lib.rs:23)
       control flow: ~ check `overflow: more + part * 2` → `overflow: more + base * 3` (src/lib.rs:-23, src/lib.rs:23)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
@@ -91,7 +91,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 derived: changed literal `2` → `3` at `depot::sum/tail/rhs/rhs` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `depot::sum/tail/rhs/rhs` [semantics · code different] · not stated
     lines: src/lib.rs:23, src/lib.rs:-23
-◆ f1 derived: `depot::sum`: renamed local `part` → `base`, 3 edit(s) [rename · code equal]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 3 nodes): `depot::sum`: renamed local `part` → `base`, 3 edit(s) [rename · code equal] · not stated
     lines: src/lib.rs:21-23, src/lib.rs:-21-23

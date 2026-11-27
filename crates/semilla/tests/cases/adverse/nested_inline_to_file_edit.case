@@ -31,26 +31,28 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::outer::inner::deep` (src/outer/inner.rs:2): the full compare: `#[same(depot::outer::inner::deep)] fn deep_same() {}`; a difference: `#[change(depot::outer::inner::deep)] fn deep_change() -> bool { … }` or `#[different(depot::outer::inner::deep)] fn deep_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `1` → `2` (f1)
       in: depot::outer::inner::deep
       lines: src/outer.rs:-5, src/outer/inner.rs:4
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::outer::inner::deep=TEXT'; if it does not change, --same 'rewrite 1 => 2'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `1` → `2` at `depot::outer::inner::deep/tail/rhs` [semantics · code different]
+  real edits:
+  item `depot::outer::inner::deep`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::outer::inner::deep/tail/rhs` [semantics · code different] · not stated
       affected bodies: depot::outer::inner::deep
       equivalence: MIR changes
-  ◆ f2 derived: source place of `depot::outer::inner`: a block in `src/outer.rs` → file `src/outer/inner.rs`; 0 of 1 item and 6 old lines and 4 new lines keep their tokens [move · no code]
+  transformations:
+  item `depot::outer::inner`:
+  ◆ f2 move (Semilla; R90.2-5, the pair check holds): source place of `depot::outer::inner`: a block in `src/outer.rs` → file `src/outer/inner.rs`; 0 of 1 item and 6 old lines and 4 new lines keep their tokens [move · no code]
   cover: each of the 13 changed line(s) is in a fact
   control flow: 1 body
     depot::outer::inner::deep (src/outer/inner.rs:2): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed literal `1` → `2` at `depot::outer::inner::deep/tail/rhs` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::outer::inner::deep/tail/rhs` [semantics · code different] · not stated
     lines: src/outer.rs:-5, src/outer/inner.rs:4
-◆ f2 derived: source place of `depot::outer::inner`: a block in `src/outer.rs` → file `src/outer/inner.rs`; 0 of 1 item and 6 old lines and 4 new lines keep their tokens [move · no code]
+◆ f2 move (Semilla; R90.2-5, the pair check holds): source place of `depot::outer::inner`: a block in `src/outer.rs` → file `src/outer/inner.rs`; 0 of 1 item and 6 old lines and 4 new lines keep their tokens [move · no code]
     lines: src/outer.rs:1, src/outer.rs:-1-4, src/outer.rs:-6-7, src/outer/inner.rs:1-3, src/outer/inner.rs:5

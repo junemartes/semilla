@@ -48,9 +48,10 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  tests and benches, filled in by Semilla:
-  ◆ f1 derived: attributes of `shop::tests::two`: added `#[ignore]` [attribute · code different]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `shop::tests::two`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `shop::tests::two`: added `#[ignore]` [attribute · code different]
       ! the compiled code changes: shop::tests::two
       expansion: `#[test]` at `shop::tests::two` (src/lib.rs:12): expansion changed: changed code `false,\n ignore_message: ::core::option::Option::None,\n source_file: "src/lib.rs",\n start_line: 13usize,\n start_col: 8usize,\n end_line: 13usize` → `true,\n ignore_message: ::core::option::Option::None,\n source_file: "src/lib.rs",\n start_line: 14usize,\n start_col: 8usize,\n end_line: 14usize`
       ✗ spotlight: a changed attribute that can change the behavior: `ignore`; it needs a reason: --reason 'shop::tests::two=…'
@@ -61,5 +62,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'shop::tests::two=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::tests::two=the reason of the test'
-◆ f1 derived: attributes of `shop::tests::two`: added `#[ignore]` [attribute · code different]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `shop::tests::two`: added `#[ignore]` [attribute · code different]
     lines: src/lib.rs:13

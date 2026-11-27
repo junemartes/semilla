@@ -42,16 +42,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::rules::base` (src/rules.rs:4): the full compare: `#[same(shop::rules::base)] fn base_same() {}`; a difference: `#[change(shop::rules::base)] fn base_change(x: u32) -> bool { … }` or `#[different(shop::rules::base)] fn base_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed expression `x` → `x + 1` (f2)
       in: shop::rules::base
       lines: src/rules.rs:4, src/rules.rs:-4
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::rules::base=TEXT'; if it does not change, --same 'rewrite x => x + 1'
-  other facts, filled in by Semilla:
-  ◆ f2 derived: changed expression `x` → `x + 1` at `shop::rules::base/tail` [semantics · code different]
+  real edits:
+  item `shop::rules::base`:
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 1` at `shop::rules::base/tail` [semantics · code different] · not stated
       affected bodies: shop::rules::base
       control flow: + check `overflow: x + 1` (src/rules.rs:4): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/rules.rs:4)
@@ -60,7 +60,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
       docs of `shop::rules::base`, no edit in this step (src/rules.rs:3): `/// Gives the base price.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  ◆ f1 derived: visibility of `shop::tools`: `private` → `pub` (the public API changes: a different crate can now use the item) [visibility · code equal]
+  syntax only:
+  item `shop::tools`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): visibility of `shop::tools`: `private` → `pub` (the public API changes: a different crate can now use the item) [visibility · code equal]
       ! public API: the compare does not cover the code of a different crate
       docs of `shop::tools`, no edit in this step (src/lib.rs:1): `/// The tools of the shop.`
       docs of `shop::tools`, no edit in this step (src/tools.rs:1-2):
@@ -73,7 +75,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 3 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f2 derived: changed expression `x` → `x + 1` at `shop::rules::base/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 1` at `shop::rules::base/tail` [semantics · code different] · not stated
     lines: src/rules.rs:4, src/rules.rs:-4
-◆ f1 derived: visibility of `shop::tools`: `private` → `pub` (the public API changes: a different crate can now use the item) [visibility · code equal]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): visibility of `shop::tools`: `private` → `pub` (the public API changes: a different crate can now use the item) [visibility · code equal]
     lines: src/lib.rs:2, src/lib.rs:-2

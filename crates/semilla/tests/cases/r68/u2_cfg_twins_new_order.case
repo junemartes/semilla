@@ -35,15 +35,15 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: value of `shop::K#1` changed: 0x9E37_79B9 → 0x9E37_79B1 (f1)
       in: shop::K#1
       lines: src/lib.rs:3-4, src/lib.rs:-1-2
       to state it: --change 'shop::K#1=TEXT'
   to state them, add these options to the command of the step: --change 'shop::K#1=TEXT'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: value of `shop::K#1` changed: 0x9E37_79B9 → 0x9E37_79B1 [semantics · no compare]
+  real edits:
+  item `shop::K#1`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::K#1` changed: 0x9E37_79B9 → 0x9E37_79B1 [semantics · no compare] · not stated
       note: no compare: no checked configuration compiles `shop::K#1`
       ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:1; not on this target); no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:3; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'shop::K#1=…'
   cover: each of the 4 changed line(s) is in a fact
@@ -52,5 +52,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'shop::K#1=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::K#1=the reason of the test' --change 'shop::K#1=the text of the test'
-◆ f1 stated: value of `shop::K#1` changed: 0x9E37_79B9 → 0x9E37_79B1 [semantics · no compare]
+◆ f1 type change (a1; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::K#1` changed: 0x9E37_79B9 → 0x9E37_79B1 [semantics · no compare]
     lines: src/lib.rs:3-4, src/lib.rs:-1-2

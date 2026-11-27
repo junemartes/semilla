@@ -77,32 +77,34 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::extra` (src/list.rs:16): no template: error[S0112]: the scope path `before::depot::list::extra` names no item of the version
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `40` → `41` (f2)
       in: depot::list::extra
       lines: benches/list.rs:-5, benches/list.rs:-7, benches/list.rs:-9, src/list.rs:15, src/list.rs:17, src/list.rs:19
       to state it: --change 'depot::list::extra=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::list::extra=TEXT'
-  tests and benches, filled in by Semilla:
-  ◆ f1 derived: moved `depot (bench "list")::extra` → `depot::list::extra` [move · code equal]
-      control flow: + graph of `depot::list::extra`: 6 points, 5 arrows (semilla expand --step 0)
-  other facts, filled in by Semilla:
-  ◆ f2 derived: changed literal `40` → `41` at `depot::list::extra/S0/init/rhs` [semantics · code different]
+  real edits:
+  item `depot::list::extra`:
+  ◆ f2 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed literal `40` → `41` at `depot::list::extra/S0/init/rhs` [semantics · code different] · not stated
       affected bodies: depot::list::extra
       control flow: + graph of `depot::list::extra`: 6 points, 5 arrows (semilla expand --step 0)
-  ◆ f3 derived: public API: a different crate can now use `depot::list::extra` [move · no code]
+  transformations:
+  item `depot (bench "list")::extra`:
+  ◆ f1 move (Semilla; R90.2-5, the pair check holds): moved `depot (bench "list")::extra` → `depot::list::extra` [move · code equal]
+      control flow: + graph of `depot::list::extra`: 6 points, 5 arrows (semilla expand --step 0)
+  item `depot::list::extra`:
+  ◆ f3 move (Semilla; R90.2-5, the pair check holds): public API: a different crate can now use `depot::list::extra` [move · no code]
   cover: each of the 10 changed line(s) is in a fact
   control flow: 1 body
     depot::list::extra (src/list.rs:16): graph added: 6 points, 5 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: moved `depot (bench "list")::extra` → `depot::list::extra` [move · code equal]
-    lines: benches/list.rs:-6, benches/list.rs:-8, src/list.rs:16, src/list.rs:18
-◆ f2 derived: changed literal `40` → `41` at `depot::list::extra/S0/init/rhs` [semantics · code different]
+◆ f2 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed literal `40` → `41` at `depot::list::extra/S0/init/rhs` [semantics · code different] · not stated
     lines: benches/list.rs:-5, benches/list.rs:-7, benches/list.rs:-9, src/list.rs:15, src/list.rs:17, src/list.rs:19
-◆ f3 derived: public API: a different crate can now use `depot::list::extra` [move · no code]
+◆ f1 move (Semilla; R90.2-5, the pair check holds): moved `depot (bench "list")::extra` → `depot::list::extra` [move · code equal]
+    lines: benches/list.rs:-6, benches/list.rs:-8, src/list.rs:16, src/list.rs:18
+◆ f3 move (Semilla; R90.2-5, the pair check holds): public API: a different crate can now use `depot::list::extra` [move · no code]
     no position

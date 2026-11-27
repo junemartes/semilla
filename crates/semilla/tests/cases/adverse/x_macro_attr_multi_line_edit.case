@@ -29,9 +29,10 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro call `table!( A = 1, #[cfg(any( unix, windows ))] B = 2, )` → `table!( A = 1, #[cfg(any( unix, target_os = "none" ))] B = 2, )` (makes: `pub const A`, `pub const B`) [declaration · no compare]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::table!#0`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro call `table!( A = 1, #[cfg(any( unix, windows ))] B = 2, )` → `table!( A = 1, #[cfg(any( unix, target_os = "none" ))] B = 2, )` (makes: `pub const A`, `pub const B`) [declaration · no compare]
       note: no compare: no checked configuration compiles `depot::table!#0`
       ✗ spotlight: inactive code: Semilla cannot see if a checked configuration compiles the changed code (the input of `table!` at src/lib.rs:2 has a `cfg` condition), so Semilla did not compare the edit; it needs a reason: --reason 'depot::table!#0=…'
   cover: each of the 2 changed line(s) is in a fact
@@ -39,5 +40,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::table!#0=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::table!#0=the reason of the test'
-◆ f1 derived: changed macro call `table!( A = 1, #[cfg(any( unix, windows ))] B = 2, )` → `table!( A = 1, #[cfg(any( unix, target_os = "none" ))] B = 2, )` (makes: `pub const A`, `pub const B`) [declaration · no compare]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro call `table!( A = 1, #[cfg(any( unix, windows ))] B = 2, )` → `table!( A = 1, #[cfg(any( unix, target_os = "none" ))] B = 2, )` (makes: `pub const A`, `pub const B`) [declaration · no compare]
     lines: src/lib.rs:6, src/lib.rs:-6

@@ -124,16 +124,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::tier` (src/lib.rs:1): the full compare: `#[same(shop::tier)] fn tier_same() {}`; a difference: `#[change(shop::tier)] fn tier_change(k: u8) -> bool { … }` or `#[different(shop::tier)] fn tier_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `4` → `5` (f1)
       in: shop::tier
       lines: src/lib.rs:4, src/lib.rs:-4
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::tier=TEXT'; if it does not change, --same 'rewrite 4 => 5'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different]
+  real edits:
+  item `shop::tier`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different] · not stated
       affected bodies: shop::tier
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
@@ -142,5 +142,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different] · not stated
     lines: src/lib.rs:4, src/lib.rs:-4

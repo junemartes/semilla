@@ -28,9 +28,10 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: attributes of `depot::inner`: added `#[cfg(all())]` [attribute · code equal]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::inner`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::inner`: added `#[cfg(all())]` [attribute · code equal]
       ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::inner=…'
       docs of `depot::inner`, no edit in this step (src/lib.rs:5): `/// The old doc.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
@@ -41,5 +42,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::inner=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::inner=the reason of the test'
-◆ f1 derived: attributes of `depot::inner`: added `#[cfg(all())]` [attribute · code equal]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::inner`: added `#[cfg(all())]` [attribute · code equal]
     lines: src/lib.rs:6

@@ -829,7 +829,12 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     let command = shared.step.map(|step| full_text_command(&fact.id, step));
     let budget = command.as_deref().map(|command| semilla_core::text::Budget { command: Some(command), keep: fact.category == semilla_core::Category::Docs });
     let (text, blocks) = semilla_core::text::fact_layout_with(&fact.description, budget);
-    let head = format!("{origin}: {text} [{}]{}", fact.label(), fact.mark());
+    // [R90.5-1] The head of an entry: the kind, the source, and the check (design 90); a record
+    // of an earlier version keeps its origin. [R90.5-2] A real edit that no statement names has
+    // the mark "not stated".
+    let origin = fact.entry_head().unwrap_or_else(|| origin.to_string());
+    let open = if fact.not_stated { " · not stated" } else { "" };
+    let head = format!("{origin}: {text} [{}]{}{open}", fact.label(), fact.mark());
     let mut lines: Vec<String> = blocks.iter().map(|line| format!("        {line}")).collect();
     // The line of each shown line before its cut (R76.1-1): the compare of R71.1-2 reads it, so
     // that two facts with numbers of a different length share an equal line.
@@ -1223,12 +1228,18 @@ fn fact_list(step: &StepReport, names: bool, noted: &mut bool, full: bool) -> (S
     let tag_of = |fact: &semilla_core::report::Fact| step.tag_group(fact);
     let out = &mut first;
     // The place of a fact: below the fact of the agent that states it, or in a group.
-    let place_of = |fact: &semilla_core::report::Fact| match step.agent_facts.iter().position(|agent| agent.facts.contains(&fact.id)) {
-        Some(agent) => Ok(agent),
-        None => Err(fact.filled_group()),
+    // [R90.5-1] An entry of the map has its section in the one list (design 90), grouped by
+    // item. A record of an earlier version keeps the groups of today.
+    // A step with tags has the same order in each tag (property 4 of the case set: a tag changes
+    // no fact line).
+    let sections = |fact: &semilla_core::report::Fact| fact.section();
+    let place_of = |fact: &semilla_core::report::Fact| match (sections(fact), step.agent_facts.iter().position(|agent| agent.facts.contains(&fact.id))) {
+        (Some(section), _) => Err(section),
+        (None, Some(agent)) => Ok(agent),
+        (None, None) => Err(fact.filled_group()),
     };
     let mut order: Vec<&semilla_core::report::Fact> = facts.iter().collect();
-    order.sort_by_key(|fact| (place_of(fact).err().unwrap_or(0), rank(fact)));
+    order.sort_by_key(|fact| (place_of(fact).err().unwrap_or(0), sections(fact).map(|_| entry_item(fact)), rank(fact)));
     // Design 38.4: a spotlight line that is equal for a run of facts shows one time, after the
     // last fact of the run, with the fact numbers. The texts of such a run do not share.
     let runs = spotlight_runs(&order, names, &|fact| place_of(fact));
@@ -1409,10 +1420,21 @@ fn fact_list(step: &StepReport, names: bool, noted: &mut bool, full: bool) -> (S
             put(out, &format!("      lines: {}", semilla_core::Position::list(&semilla_core::Position::normal(line.positions.clone()))));
         }
         if line.rank != 0 {
-            rest.push(Block { place: line.place, tag: line.tag, text: block });
+            let item = facts.iter().find(|fact| fact.id == line.ids[0]).map(entry_item).unwrap_or_default();
+            rest.push(Block { place: line.place, tag: line.tag, text: block, item });
         }
     }
     (first, rest)
+}
+
+/// [R90.5-1] The item of an entry for the groups of the one list: the item of its place, else
+/// its file.
+fn entry_item(fact: &semilla_core::report::Fact) -> String {
+    match (&fact.at, &fact.file) {
+        (Some(at), _) => format!("item `{}`", at.item),
+        (None, Some(file)) => format!("file `{file}`"),
+        (None, None) => "the step".to_string(),
+    }
 }
 
 /// The lines of one fact line of the text report, with the place of the block in the output.
@@ -1422,6 +1444,8 @@ struct Block {
     /// The first tag of the facts (design 55.3).
     tag: TagGroup,
     text: String,
+    /// [R90.5-1] The item of the first fact, for the groups of the one list.
+    item: String,
 }
 
 /// The lines of the tags of one step (design 55.3): each tag with its facts, in the order of
@@ -1478,7 +1502,17 @@ pub fn agent_lines(step: &StepReport, limit: Option<usize>, below: &dyn Fn(usize
     lines.extend(crate::intent::lines(&step.intent_claims));
     // [R77.1-2] The section "semantic changes" (design 77).
     lines.extend(crate::intent::semantic_lines(step, limit.map(|most| most * 2)));
-    lines.extend(step.gap_lines(limit));
+    // [R90.5-3] The coverage line of the map, then (R90.6-1) the request of each node that is
+    // not mapped (a step with no intent file: the section of the claims has none), then the
+    // gap list.
+    let mut gap = step.gap_lines(limit).into_iter();
+    lines.extend(gap.next());
+    if step.intent_claims.is_empty() && limit.is_some() {
+        if let Some(map) = &step.ast {
+            lines.extend(crate::astmap::lines(map, limit, step.step).into_iter().map(|line| line.replacen("    ", "  ", 1)));
+        }
+    }
+    lines.extend(gap);
     if let Some(command) = step.gap_command(limit) {
         lines.push(format!("  {command}"));
     }
@@ -1565,10 +1599,17 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool, fu
         // Design 55.3: in a step with tags, each fact shows in the group of its tag. The fact
         // of the agent names its facts.
         let tagged = !step.tags.is_empty();
+        // [R90.5-1] A fact of the agent is the source of its entries: the entries are in the one
+        // list below, and the fact names them.
+        let sectioned = step.facts.iter().any(|fact| fact.section().is_some());
         let below = |agent: usize| -> Vec<String> {
             if tagged {
                 let ids = &step.agent_facts[agent].facts;
                 return if ids.is_empty() { Vec::new() } else { vec![format!("      facts, in the groups of the tags below: {}", ids.join(", "))] };
+            }
+            if sectioned {
+                let ids = &step.agent_facts[agent].facts;
+                return if ids.is_empty() { Vec::new() } else { vec![format!("      entries, in the list below: {}", ids.join(", "))] };
             }
             facts.iter().filter(|block| block.place == Ok(agent)).flat_map(|block| block.text.lines().map(|line| format!("  {line}"))).collect()
         };
@@ -1576,12 +1617,28 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool, fu
             // Design 54.7: a line with a fact text has no cut.
             text::put_line(&mut out, &line);
         }
-        for (group, name) in semilla_core::report::FILLED_GROUPS.iter().enumerate().filter(|_| !tagged) {
-            let blocks: Vec<&String> = facts.iter().filter(|block| block.place == Err(group)).map(|block| &block.text).collect();
-            if !blocks.is_empty() {
-                put(&mut out, &format!("  {name}, filled in by Semilla:"));
+        // [R90.5-1] The one list of the entries (design 90): the real edits first, grouped by
+        // item. A record of an earlier version keeps the groups of today.
+        let groups = if sectioned { semilla_core::report::ENTRY_SECTIONS } else { semilla_core::report::FILLED_GROUPS };
+        for (group, name) in groups.iter().enumerate().filter(|_| !tagged) {
+            let blocks: Vec<&Block> = facts.iter().filter(|block| block.place == Err(group)).collect();
+            if blocks.is_empty() {
+                continue;
             }
-            blocks.iter().for_each(|block| out.push_str(block));
+            if !sectioned {
+                put(&mut out, &format!("  {name}, filled in by Semilla:"));
+                blocks.iter().for_each(|block| out.push_str(&block.text));
+                continue;
+            }
+            put(&mut out, &format!("  {name}:"));
+            let mut last = "";
+            for block in blocks {
+                if block.item != last {
+                    put(&mut out, &format!("  {}:", block.item));
+                    last = &block.item;
+                }
+                out.push_str(&block.text);
+            }
         }
         // Design 55.3: the facts in the groups of the tags. Each fact line is the line of a
         // step with no tag.

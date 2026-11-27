@@ -113,31 +113,35 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rename limit cap (holds: Semilla derives the rename from the syntax tree)
       places: depot::limit, depot::cap
-    ◆ f1 stated: renamed `depot::limit` → `depot::cap` [rename · code equal]
-    ◆ f3 stated: public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+      entries, in the list below: f1, f3
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::uses_limit` (src/lib.rs:26): the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed expression `limit()` → `wrap(3)` (f2)
       in: depot::uses_limit
       lines: src/lib.rs:26, src/lib.rs:-26
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::uses_limit=TEXT'; if it does not change, --same 'rewrite limit() => wrap(3)'
-  other facts, filled in by Semilla:
-  ◆ f2 derived: changed expression `limit()` → `wrap(3)` at `depot::uses_limit/tail/rhs` [semantics · code different]
+  real edits:
+  item `depot::uses_limit`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `limit()` → `wrap(3)` at `depot::uses_limit/tail/rhs` [semantics · code different] · not stated
       affected bodies: depot::uses_limit
       control flow: ~ call `cap` → `wrap` (src/lib.rs:-26, src/lib.rs:26)
       control flow: ~ check `overflow: limit() + limit()` → `overflow: cap() + wrap(3)` (src/lib.rs:-26, src/lib.rs:26)
       equivalence: MIR changes
+  transformations:
+  item `depot::cap`:
+  ◆ f3 rename (a1; R90.2-5, the pair check holds): public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
+  item `depot::limit`:
+  ◆ f1 rename (a1; R90.2-5, the pair check holds): renamed `depot::limit` → `depot::cap` [rename · code equal]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     depot::uses_limit (src/lib.rs:26): same structure: 1 changed call target, 1 changed check; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: renamed `depot::limit` → `depot::cap` [rename · code equal]
-    lines: src/lib.rs:25, src/lib.rs:-25
-◆ f3 stated: public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
-    no position
-◆ f2 derived: changed expression `limit()` → `wrap(3)` at `depot::uses_limit/tail/rhs` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `limit()` → `wrap(3)` at `depot::uses_limit/tail/rhs` [semantics · code different] · not stated
     lines: src/lib.rs:26, src/lib.rs:-26
+◆ f3 rename (a1; R90.2-5, the pair check holds): public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
+    no position
+◆ f1 rename (a1; R90.2-5, the pair check holds): renamed `depot::limit` → `depot::cap` [rename · code equal]
+    lines: src/lib.rs:25, src/lib.rs:-25

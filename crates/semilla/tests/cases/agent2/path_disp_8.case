@@ -116,15 +116,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 change: `<impl Display for money::Price>::fmt` "the text has a dollar sign" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
       places: depot::money::<Price as fmt::Display>::fmt/tail/args[1]
-    ◆ f1 stated: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different]
-        affected bodies: depot::money::<Price as fmt::Display>::fmt
-        control flow: ~ construct `{}` (src/lib.rs:-6, src/lib.rs:6): callees −`Arguments::<'_>::new::<2, 1>` +`Arguments::<'_>::new::<4, 1>`
-        equivalence: MIR changes
-        expansion: `write!(f, "${}", self.0)` at `depot::money::<Price as fmt::Display>::fmt/tail` (src/lib.rs:6): expansion changed: changed literal `"{0}"` → `"${0}"` at `expansion/args[0]/args[0]` [semantics]
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+      entries, in the list below: f1
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `<depot::money::Price as std::fmt::Display>::fmt` (src/lib.rs:6): the full compare: `#[same(<depot::money::Price as core::fmt::Display>::fmt)] fn fmt_same() {}`; a difference: `#[change(<depot::money::Price as core::fmt::Display>::fmt)] fn fmt_change() -> bool { … }` or `#[different(<depot::money::Price as core::fmt::Display>::fmt)] fn fmt_different() -> bool { … }`
-  not stated: 0 item(s)
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::money::<Price as fmt::Display>::fmt`:
+  ◆ f1 replace (a1; R90.2-2, 4 changed MIR elements): changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different]
+      affected bodies: depot::money::<Price as fmt::Display>::fmt
+      control flow: ~ construct `{}` (src/lib.rs:-6, src/lib.rs:6): callees −`Arguments::<'_>::new::<2, 1>` +`Arguments::<'_>::new::<4, 1>`
+      equivalence: MIR changes
+      expansion: `write!(f, "${}", self.0)` at `depot::money::<Price as fmt::Display>::fmt/tail` (src/lib.rs:6): expansion changed: changed literal `"{0}"` → `"${0}"` at `expansion/args[0]/args[0]` [semantics]
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     <depot::money::Price as std::fmt::Display>::fmt (src/lib.rs:6): same structure: 1 changed `construct` point; MIR changes
@@ -133,5 +135,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different]
+◆ f1 replace (a1; R90.2-2, 4 changed MIR elements): changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different]
     lines: src/lib.rs:6, src/lib.rs:-6

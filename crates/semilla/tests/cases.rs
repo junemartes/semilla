@@ -49,6 +49,9 @@ struct Case {
     /// fact never gets "equivalent".
     different: Vec<String>,
     same_facts: bool,
+    /// [R90.7-3] The line `refactor: yes`: the step is a pure refactor, so its map has zero
+    /// real edits.
+    refactor: bool,
     /// The known failures: the name of the check and the cause.
     known: Vec<(String, String)>,
     old: BTreeMap<String, Vec<u8>>,
@@ -83,7 +86,7 @@ fn base64(text: &str) -> Result<Vec<u8>, String> {
 
 impl Case {
     fn parse(id: &str, file: &Path, text: &str) -> Result<Case, String> {
-        let mut case = Case { id: id.to_string(), file: file.to_path_buf(), options: Vec::new(), exit: None, must_match: Vec::new(), must_not_match: Vec::new(), different: Vec::new(), same_facts: false, known: Vec::new(), old: BTreeMap::new(), new: BTreeMap::new(), head: String::new(), expected: None };
+        let mut case = Case { id: id.to_string(), file: file.to_path_buf(), options: Vec::new(), exit: None, must_match: Vec::new(), must_not_match: Vec::new(), different: Vec::new(), same_facts: false, refactor: false, known: Vec::new(), old: BTreeMap::new(), new: BTreeMap::new(), head: String::new(), expected: None };
         const EXPECTED: &str = "=== expected\n";
         let (head, expected) = match text.find(&format!("\n{EXPECTED}")) {
             Some(at) => (&text[..at + 1], Some(text[at + 1 + EXPECTED.len()..].to_string())),
@@ -139,6 +142,7 @@ impl Case {
                     "must_not_match" => case.must_not_match.push(value.to_string()),
                     "different" => case.different.push(value.to_string()),
                     "same_facts_as_no_option" if value == "yes" => case.same_facts = true,
+                    "refactor" if value == "yes" => case.refactor = true,
                     "known_failure" => {
                         let (check, cause) = value.split_once(": ").ok_or(format!("the known failure `{value}` has no cause"))?;
                         if !CHECKS.contains(&check) || cause.trim().is_empty() {
@@ -614,6 +618,8 @@ fn gaps(text: &str) -> Vec<Block> {
 fn fact_text(head: &str) -> String {
     let rest = head.strip_prefix("◆ ").unwrap_or(head);
     let rest = rest.split_once(' ').map_or(rest, |(_, rest)| rest);
+    // [R90.5-2] The mark "not stated" depends on the statements of the agent.
+    let rest = rest.strip_suffix(" · not stated").unwrap_or(rest);
     rest.split_once(": ").map_or(rest, |(_, text)| text).to_string()
 }
 
@@ -1002,57 +1008,101 @@ fn template_problems(work: &mut Work, folder: &Path, state: &str) -> Result<Vec<
     Ok(Vec::new())
 }
 
-/// The counts of a line `AST changes: N mapped by claims, M mapped by Semilla, K not mapped`.
-fn ast_counts(line: &str) -> Option<[usize; 3]> {
-    let rest = line.trim_start().strip_prefix("AST changes: ")?;
-    let mut out = [0; 3];
-    for (at, (part, word)) in rest.split(", ").zip(["mapped by claims", "mapped by Semilla", "not mapped"]).enumerate() {
-        out[at] = part.strip_suffix(word).or_else(|| part.split_once(&format!(" {word}")).map(|(number, _)| number))?.trim().parse().ok()?;
-    }
-    Some(out)
+/// [R90.5-3] The counts of the coverage line of the map of the diff: "changed nodes: N in M
+/// entries; K real edits (S stated by the agent); J not mapped" (design 90).
+fn map_counts(line: &str) -> Option<[usize; 5]> {
+    let rest = line.trim_start().strip_prefix("changed nodes: ")?;
+    let (nodes, rest) = rest.split_once(" in ")?;
+    let (entries, rest) = rest.split_once(" entries; ")?;
+    let (real, rest) = rest.split_once(" real edits (")?;
+    let (stated, rest) = rest.split_once(" stated by the agent); ")?;
+    let open = rest.strip_suffix(" not mapped")?;
+    let number = |text: &str| text.trim().parse::<usize>().ok();
+    Some([number(nodes)?, number(entries)?, number(real)?, number(stated)?, number(open)?])
 }
 
-/// Property 15 (R79.1-1): the map of the AST pass never hides an edit. The full text of the step
-/// (`semilla expand --step 0`) gives the count T of the changed nodes of the syntax diff (counted
-/// apart from the entries) and one line for each entry with its node number `nI`: each number
-/// from 1 to T is in exactly one line, the three counts add up to T and are the counts of the
-/// states of the lines, and the step output has the same counts (unless the full text is the
-/// syntax tree computed again, with no data of the compiler, R76.1-1).
-fn ast_problems(work: &mut Work, folder: &Path, output: &str, state: &str) -> Result<Vec<String>, String> {
+/// The kinds of the entries of the map (design 90).
+const ENTRY_KINDS: &[&str] = &["same code", "rename", "move", "replace", "add", "delete", "type change", "not mapped"];
+
+/// Property 15 (R90.7-1, R90.7-2, R90.7-3; before: R79.1-1): the map of the diff never hides an
+/// edit. The full text of the step (`semilla expand --step 0`) has the coverage line and one line
+/// for each changed node with its number `nI`, its kind, and its entry:
+/// - complete: each number from 1 to N is in exactly one line, each line names one entry of
+///   the step output, and J is the count of the lines that are not mapped;
+/// - checked: each entry of the step output has a kind, a source, and a check;
+/// - minimal: a case with the line `refactor: yes` has zero real edits;
+/// - the step output has the counts of the full text (unless the full text is the syntax tree
+///   computed again, with no data of the compiler, R76.1-1).
+fn map_problems(work: &mut Work, folder: &Path, output: &str, state: &str, refactor: bool) -> Result<Vec<String>, String> {
     let mut problems = Vec::new();
-    let Some(short) = output.lines().find_map(ast_counts) else {
-        problems.push(format!("{state}: the step output has no line `AST changes: …`"));
+    let Some(short) = output.lines().find_map(map_counts) else {
+        problems.push(format!("{state}: the step output has no coverage line `changed nodes: …`"));
         return Ok(problems);
     };
+    // Checked: each entry has a kind, a source, and a check: `◆ fN KIND (SOURCE; RULE, …): TEXT`.
+    let mut entries: BTreeSet<String> = BTreeSet::new();
+    for line in output.lines().map(str::trim_start).filter(|line| line.starts_with("◆ f")) {
+        let rest = &line["◆ ".len()..];
+        let Some((id, rest)) = rest.split_once(' ') else { continue };
+        entries.insert(id.to_string());
+        let kind = ENTRY_KINDS.iter().find(|kind| rest.starts_with(&format!("{kind} (")) || rest.starts_with(&format!("{kind}, syntax only (")));
+        let checked = rest.split_once("): ").is_some_and(|(head, _)| head.contains("; R90."));
+        if kind.is_none() || !checked {
+            problems.push(format!("{state}: the entry `{}` has no kind, no source, or no check", line.chars().take(120).collect::<String>()));
+        }
+    }
+    // Minimal: a pure refactor has zero real edits.
+    if refactor && short[2] != 0 {
+        problems.push(format!("{state}: a pure refactor has {} real edit(s)", short[2]));
+    }
     let run = work.semilla(folder, &["expand".to_string(), "--step".to_string(), "0".to_string()])?;
-    let Some((full, total)) = run.stdout.lines().find_map(|line| {
-        let counts = ast_counts(line)?;
-        let total = line.split_once("(of ")?.1.split(' ').next()?.parse::<usize>().ok()?;
-        Some((counts, total))
-    }) else {
-        problems.push(format!("{state}: the full text has no line `AST changes: … (of T changed nodes)`"));
+    let Some(full) = run.stdout.lines().find_map(map_counts) else {
+        problems.push(format!("{state}: the full text has no coverage line `changed nodes: …`"));
         return Ok(problems);
     };
     // The full text of a step with no printed record on this machine is the syntax tree computed
     // again with no data of the compiler (R76.1-1): its map can differ, and it says so.
-    if full != short && !run.stdout.contains("this machine has no record of the output of step") {
+    let again = run.stdout.contains("this machine has no record of the output of step");
+    if full != short && !again {
         problems.push(format!("{state}: the counts of the step output {short:?} are not the counts of the full text {full:?}"));
     }
-    if full.iter().sum::<usize>() != total {
-        problems.push(format!("{state}: the counts {full:?} do not add up to the {total} changed nodes"));
-    }
+    let total = full[0];
     let mut seen: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut states = [0usize; 3];
+    let mut open = 0;
     for line in run.stdout.lines() {
         let Some(rest) = line.strip_prefix("      n") else { continue };
         let Some((number, tail)) = rest.split_once(' ') else { continue };
         let Ok(number) = number.parse::<usize>() else { continue };
-        let at = if tail.starts_with("mapped by claim ") { 0 } else if tail.starts_with("mapped by Semilla ") { 1 } else if tail.starts_with("not mapped ") { 2 } else { continue };
-        states[at] += 1;
+        if !(tail.starts_with("mapped by claim ") || tail.starts_with("mapped by Semilla ") || tail.starts_with("not mapped ")) {
+            continue;
+        }
+        open += usize::from(tail.starts_with("not mapped "));
         *seen.entry(number).or_default() += 1;
+        // The kind and the entry follow the place of the node: `(FILE:LINE): KIND[, syntax only] in fN`.
+        let found = tail.match_indices("): ").find_map(|(at, _)| {
+            let rest = &tail[at + 3..];
+            let name = ENTRY_KINDS.iter().find(|name| rest.starts_with(*name))?;
+            let rest = rest[name.len()..].strip_prefix(", syntax only").unwrap_or(&rest[name.len()..]);
+            Some(rest.strip_prefix(" in ").map(|entry| entry.split([':', ' ']).next().unwrap_or("").to_string()))
+        });
+        let Some(entry) = found else {
+            problems.push(format!("{state}: the node line `n{number}` has no kind"));
+            continue;
+        };
+        // Each node is in one entry of the step output (an entry of a claim of `--claim` is its
+        // result line).
+        if let Some(entry) = entry.as_deref() {
+            // A merged fact line names the other facts: `× 2 (also f3)`.
+            let named = output.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == entry);
+            if entry.starts_with('f') && !again && !entries.contains(entry) && !named {
+                problems.push(format!("{state}: the node `n{number}` is in the entry {entry}, and the step output has no such entry"));
+            }
+        } else if !again {
+            problems.push(format!("{state}: the node `n{number}` is in no entry"));
+        }
     }
-    if states != full {
-        problems.push(format!("{state}: the lines of the entries have the states {states:?}, and the count line {full:?}"));
+    if open != full[4] {
+        problems.push(format!("{state}: {open} node line(s) are not mapped, and the coverage line has {}", full[4]));
     }
     let twice: Vec<usize> = seen.iter().filter(|(_, count)| **count > 1).map(|(number, _)| *number).collect();
     let missing: Vec<usize> = (1..=total).filter(|number| !seen.contains_key(number)).collect();
@@ -1511,8 +1561,8 @@ fn check(case: &Case) -> Result<Outcome, String> {
         for problem in full_text_problems(&mut work, &first, &output, state)? {
             work.fail("full_text", problem);
         }
-        // Property 15 (R79.1-1): each changed node is in exactly one entry of the AST map.
-        for problem in ast_problems(&mut work, &first, &output, state)? {
+        // Property 15 (R90.7-1 to R90.7-3): the map of the diff is complete, checked, and minimal.
+        for problem in map_problems(&mut work, &first, &output, state, case.refactor)? {
             work.fail("ast_map", problem);
         }
         // Property 16 (R87.6-1): each printed template passes the check of the intent files.

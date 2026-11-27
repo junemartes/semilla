@@ -53,20 +53,22 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::first` (src/impl_b.rs:8): the full compare: `#[same(depot::list::first)] fn first_same() {}`; a difference: `#[change(depot::list::first)] fn first_change(v: &[u32]) -> bool { … }` or `#[different(depot::list::first)] fn first_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `0` → `1` (f2)
       in: depot::list::first
       to state it: --change 'depot::list::first=TEXT'
   to state them, add these options to the command of the step: --change 'depot::list::first=TEXT'
-  other facts, filled in by Semilla:
-  ◆ f2 derived: changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
+  real edits:
+  item `depot::list::first`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different] · not stated
       affected bodies: depot::list::first
       docs of `depot::list::first`, no edit in this step (src/impl_b.rs:7): `/// The first element.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  ◆ f1 derived: attributes of `depot::list`: changed `#[path = "impl_a.rs"]` → `#[path = "impl_b.rs"]` [attribute · code equal]
+  syntax only:
+  item `depot::list`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::list`: changed `#[path = "impl_a.rs"]` → `#[path = "impl_b.rs"]` [attribute · code equal]
       ✗ spotlight: a changed attribute that can change the behavior: `path`; it needs a reason: --reason 'depot::list=…'
       docs of `depot::list`, no edit in this step (src/impl_b.rs:1-2):
           | //! Tools for lists.
@@ -79,7 +81,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::list=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::list=the reason of the test' --change 'depot::list::first=the text of the test'
-◆ f2 stated: changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
+◆ f2 replace (a1; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
     no position
-◆ f1 derived: attributes of `depot::list`: changed `#[path = "impl_a.rs"]` → `#[path = "impl_b.rs"]` [attribute · code equal]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::list`: changed `#[path = "impl_a.rs"]` → `#[path = "impl_b.rs"]` [attribute · code equal]
     lines: src/lib.rs:3, src/lib.rs:-3

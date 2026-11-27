@@ -27,9 +27,12 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: added `use` line: `/// The new doc. /// One more line. #[cfg(all())] pub use std::fmt::Debug;` in `depot`: added the public name `depot::Debug` (`std::fmt::Debug`) [import · code equal]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 1 not mapped
+    n1 not mapped [R79.5-1]: added `use` line `depot::use#0` (src/lib.rs:5): not mapped, syntax only in f1: `/// The new doc.\n/// One more line.\n#[cfg(all())]\npub use std::fmt::Debug;`
+        a `use` line with a visibility gives its names to other modules; a claim on each item that it names maps it: `core::fmt::Debug`, `core::fmt::macros::Debug`, `core::fmt::Debug`, `core::fmt::macros::Debug`
+  not mapped:
+  item `depot::use#0`:
+  ◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added `use` line: `/// The new doc. /// One more line. #[cfg(all())] pub use std::fmt::Debug;` in `depot`: added the public name `depot::Debug` (`std::fmt::Debug`) [import · code equal]
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::use#0`; it needs a reason: --reason 'depot::use#0=…'
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
@@ -37,5 +40,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::use#0=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::use#0=the reason of the test'
-◆ f1 derived: added `use` line: `/// The new doc. /// One more line. #[cfg(all())] pub use std::fmt::Debug;` in `depot`: added the public name `depot::Debug` (`std::fmt::Debug`) [import · code equal]
+◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added `use` line: `/// The new doc. /// One more line. #[cfg(all())] pub use std::fmt::Debug;` in `depot`: added the public name `depot::Debug` (`std::fmt::Debug`) [import · code equal]
     lines: src/lib.rs:5-8

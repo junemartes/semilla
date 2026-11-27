@@ -1,8 +1,8 @@
 note: design 50.4: a type moves with its `impl` block. A second edit in the moved block has its own fact.
 rule+: R50.4-9
 exit: 0
-must_match: ◆ f[0-9]+ derived: moved `depot::Mode` → `depot::state::Mode`, with 1 impl \[move · code equal\]
-must_match: ◆ f[0-9]+ derived: changed literal `1` → `2` at `depot::state::Mode::rank/tail` \[semantics · code different\]
+must_match: ◆ f[0-9]+ [a-z ,]+ \(Semilla; [^\n]*\): moved `depot::Mode` → `depot::state::Mode`, with 1 impl \[move · code equal\]
+must_match: ◆ f[0-9]+ [a-z ,]+ \(Semilla; [^\n]*\): changed literal `1` → `2` at `depot::state::Mode::rank/tail` \[semantics · code different\]
 === both Cargo.toml
 [package]
 name = "depot"
@@ -64,12 +64,13 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 4 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 2 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::state::Mode::rank` (src/lib.rs:23): no template: the step pairs `depot::Mode::rank` with `depot::state::Mode::rank` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
     equal MIR: `depot::mode_name` (src/lib.rs:15)
     equal MIR: `depot::state::Mode::busy` (src/lib.rs:22)
-  not stated: 2 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 5 in 7 entries; 2 real edits (0 stated by the agent); 1 not mapped
+    n5 not mapped [R79.5-1]: added mod `depot::state` (src/lib.rs:19): not mapped, syntax only in f6: `pub mod state {\npub enum Mode { Idle, Busy }\nimpl Mode {\n    pub fn busy(&self) -> bool { matches!(self, Mode::Busy) }\n    pub fn rank(&self) -> u32 { 2 }\n}\n}`
+        no template: a claim names a function, a constant, or a type, and the node is in a module; a claim on the items that it changes maps it
   ? 2 places: 2 different edits (f4, f5)
       in: depot::mode_name
       lines: src/lib.rs:15, src/lib.rs:-16
@@ -78,35 +79,41 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: depot::state::Mode::rank
       lines: src/lib.rs:23, src/lib.rs:-22
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::state::Mode::rank=TEXT'; if it does not change, --same 'rewrite 1 => 2'
-  new and removed items, filled in by Semilla:
-  ◆ f6 derived: added `depot::state` (the public API changes: a different crate can now use the item) [added · code equal]
-      ! public API: the compare does not cover the code of a different crate
-  declarations, filled in by Semilla:
-  ◆ f2 derived: parameter of `depot::mode_name` `m: &Mode` → `m: &state::Mode` (the public API can change: a different crate can use the item) [declaration · code equal]
+  real edits:
+  item `depot::mode_name`:
+  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `depot::mode_name` `m: &Mode` → `m: &state::Mode` (the public API can change: a different crate can use the item) [declaration · code equal] · not stated
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Idle)
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Busy)
       control flow: − arrow branch `m` (src/lib.rs:-16) → return (src/lib.rs:-16) (depot::Mode::Idle)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: equivalent alone (proved by equal MIR); the body: equivalent (proved by equal MIR)
       ! public API: the compare does not cover the code of a different crate
-  other facts, filled in by Semilla:
-  ◆ f3 derived: changed literal `1` → `2` at `depot::state::Mode::rank/tail` [semantics · code different]
+  item `depot::state::Mode::rank`:
+  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::state::Mode::rank/tail` [semantics · code different] · not stated
       affected bodies: depot::state::Mode::rank
       equivalence: MIR changes
-  ◆ f1 derived: moved `depot::Mode` → `depot::state::Mode`, with 1 impl [move · code equal]
-  ◆ f4 derived: changed pattern `Mode::Idle` → `state::Mode::Idle` at `depot::mode_name/S0/arm[0].pat` [semantics · code equal]
+  not mapped:
+  item `depot::state`:
+  ◆ f6 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added `depot::state` (the public API changes: a different crate can now use the item) [added · code equal]
+      ! public API: the compare does not cover the code of a different crate
+  transformations:
+  item `depot::Mode`:
+  ◆ f1 move (Semilla; R90.2-5, the pair check holds): moved `depot::Mode` → `depot::state::Mode`, with 1 impl [move · code equal]
+  item `depot::mode_name`:
+  ◆ f4 same code (Semilla; R90.2-1, equal MIR): changed pattern `Mode::Idle` → `state::Mode::Idle` at `depot::mode_name/S0/arm[0].pat` [semantics · code equal]
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Idle)
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Busy)
       control flow: − arrow branch `m` (src/lib.rs:-16) → return (src/lib.rs:-16) (depot::Mode::Idle)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: equivalent (proved by equal MIR) (the same line for f5)
-  ◆ f5 derived: changed pattern `Mode::Busy` → `state::Mode::Busy` at `depot::mode_name/S0/arm[1].pat` [semantics · code equal]
+  ◆ f5 same code (Semilla; R90.2-1, equal MIR): changed pattern `Mode::Busy` → `state::Mode::Busy` at `depot::mode_name/S0/arm[1].pat` [semantics · code equal]
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Idle)
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Busy)
       control flow: − arrow branch `m` (src/lib.rs:-16) → return (src/lib.rs:-16) (depot::Mode::Idle)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: the same line as f4
-  ◆ f7 derived: public API: `depot::Mode` is now `depot::state::Mode` (a different crate can no longer use the old path) [move · no code]
+  item `depot::state::Mode`:
+  ◆ f7 move (Semilla; R90.2-5, the pair check holds): public API: `depot::Mode` is now `depot::state::Mode` (a different crate can no longer use the old path) [move · no code]
   cover: each of the 8 changed line(s) is in a fact
   control flow: 3 bodies
     depot::mode_name (src/lib.rs:15): graph changes: +2 arrows, −2 arrows; equivalent (proved by equal MIR)
@@ -117,17 +124,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f6 derived: added `depot::state` (the public API changes: a different crate can now use the item) [added · code equal]
-    lines: src/lib.rs:19-20, src/lib.rs:23-24
-◆ f2 derived: parameter of `depot::mode_name` `m: &Mode` → `m: &state::Mode` (the public API can change: a different crate can use the item) [declaration · code equal]
+◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `depot::mode_name` `m: &Mode` → `m: &state::Mode` (the public API can change: a different crate can use the item) [declaration · code equal] · not stated
     lines: src/lib.rs:15, src/lib.rs:-16
-◆ f3 derived: changed literal `1` → `2` at `depot::state::Mode::rank/tail` [semantics · code different]
+◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::state::Mode::rank/tail` [semantics · code different] · not stated
     lines: src/lib.rs:23, src/lib.rs:-22
-◆ f1 derived: moved `depot::Mode` → `depot::state::Mode`, with 1 impl [move · code equal]
+◆ f6 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added `depot::state` (the public API changes: a different crate can now use the item) [added · code equal]
+    lines: src/lib.rs:19-20, src/lib.rs:23-24
+◆ f1 move (Semilla; R90.2-5, the pair check holds): moved `depot::Mode` → `depot::state::Mode`, with 1 impl [move · code equal]
     lines: src/lib.rs:-15
-◆ f4 derived: changed pattern `Mode::Idle` → `state::Mode::Idle` at `depot::mode_name/S0/arm[0].pat` [semantics · code equal]
+◆ f4 same code (Semilla; R90.2-1, equal MIR): changed pattern `Mode::Idle` → `state::Mode::Idle` at `depot::mode_name/S0/arm[0].pat` [semantics · code equal]
     lines: src/lib.rs:15, src/lib.rs:-16
-◆ f5 derived: changed pattern `Mode::Busy` → `state::Mode::Busy` at `depot::mode_name/S0/arm[1].pat` [semantics · code equal]
+◆ f5 same code (Semilla; R90.2-1, equal MIR): changed pattern `Mode::Busy` → `state::Mode::Busy` at `depot::mode_name/S0/arm[1].pat` [semantics · code equal]
     lines: src/lib.rs:15, src/lib.rs:-16
-◆ f7 derived: public API: `depot::Mode` is now `depot::state::Mode` (a different crate can no longer use the old path) [move · no code]
+◆ f7 move (Semilla; R90.2-5, the pair check holds): public API: `depot::Mode` is now `depot::state::Mode` (a different crate can no longer use the old path) [move · no code]
     no position

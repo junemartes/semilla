@@ -75,11 +75,12 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `probe::hash` (benches/probe.rs:1): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
-  tests and benches, filled in by Semilla:
-  ◆ f1 derived: added early exit `if x == 0 { return 1; }` at `shop (bench "probe")::hash/S0` [semantics · code different]
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop (bench "probe")::hash`:
+  ◆ f1 add (Semilla; R90.2-3, 4 new MIR elements): added early exit `if x == 0 { return 1; }` at `shop (bench "probe")::hash/S0` [semantics · code different] · not stated
       affected bodies: shop (bench "probe")::hash
       control flow: + branch `x == 0` (benches/probe.rs:2): false → call `num::<impl u64>::wrapping_mul`, true → return
       control flow: + arrow entry (benches/probe.rs:1) → branch `x == 0` (benches/probe.rs:2)
@@ -92,5 +93,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: added early exit `if x == 0 { return 1; }` at `shop (bench "probe")::hash/S0` [semantics · code different]
+◆ f1 add (Semilla; R90.2-3, 4 new MIR elements): added early exit `if x == 0 { return 1; }` at `shop (bench "probe")::hash/S0` [semantics · code different] · not stated
     lines: benches/probe.rs:2-4

@@ -105,26 +105,28 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::f3` (src/list.rs:25): the full compare: `#[same(depot::list::f3)] fn f3_same() {}`; a difference: `#[change(depot::list::f3)] fn f3_change() -> bool { … }` or `#[different(depot::list::f3)] fn f3_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `1` → `2` (f1)
       in: depot::list::f3
       lines: src/list.rs:25-26, src/list.rs:-30
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::f3=TEXT'; if it does not change, --same 'rewrite 1 => 2'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `1` → `2` at `depot::list::f3/S0/init` [semantics · code different]
+  real edits:
+  item `depot::list::f3`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::list::f3/S0/init` [semantics · code different] · not stated
       affected bodies: depot::list::f3
       equivalence: MIR changes
-  ◆ f2 derived: layout of `src/list.rs`: 3 changed lines of 1 item with equal tokens at a new place [layout · no code]
+  transformations:
+  file `src/list.rs`:
+  ◆ f2 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/list.rs`: 3 changed lines of 1 item with equal tokens at a new place [layout · no code]
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body
     depot::list::f3 (src/list.rs:25): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed literal `1` → `2` at `depot::list::f3/S0/init` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::list::f3/S0/init` [semantics · code different] · not stated
     lines: src/list.rs:25-26, src/list.rs:-30
-◆ f2 derived: layout of `src/list.rs`: 3 changed lines of 1 item with equal tokens at a new place [layout · no code]
+◆ f2 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/list.rs`: 3 changed lines of 1 item with equal tokens at a new place [layout · no code]
     lines: src/list.rs:30, src/list.rs:-25-26

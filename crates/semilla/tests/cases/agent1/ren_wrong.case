@@ -62,13 +62,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       a fact that holds: `--same 'rename depot::limit depot::cap'`
       Semilla sees: f1 renamed `depot::limit` → `depot::cap` [rename]
       Semilla sees: f2 public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename]
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  not stated: 0 item(s)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: renamed `depot::limit` → `depot::cap` [rename · code equal]
+  changed nodes: 0 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::cap`:
+  ◆ f2 rename (Semilla; R90.2-5, the pair check holds): public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
+  item `depot::limit`:
+  ◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `depot::limit` → `depot::cap` [rename · code equal]
       expansion: `assert_eq!(cap(), 10)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: changed path `limit` → `cap` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/callee` [semantics]
       note: 1 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)
-  ◆ f2 derived: public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
   cover: each of the 6 changed line(s) is in a fact
   expansions: 1 changed, 1 equal
     `assert_eq!(cap(), 10)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: `macro assert_eq` (crate core): changed path `limit` → `cap` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/callee` [semantics]; the input of the call changes
@@ -77,7 +78,7 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f1 derived: renamed `depot::limit` → `depot::cap` [rename · code equal]
-    lines: src/lib.rs:11-12, src/lib.rs:19, src/lib.rs:-11-12, src/lib.rs:-19
-◆ f2 derived: public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
+◆ f2 rename (Semilla; R90.2-5, the pair check holds): public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
     no position
+◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `depot::limit` → `depot::cap` [rename · code equal]
+    lines: src/lib.rs:11-12, src/lib.rs:19, src/lib.rs:-11-12, src/lib.rs:-19

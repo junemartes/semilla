@@ -45,14 +45,15 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: src/list/mod.rs: added [file · no code]
+  changed nodes: 0 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  file `src/list/mod.rs`:
+  ◆ f1 add (Semilla; R90.3-2, a file edit (no tree)): src/list/mod.rs: added [file · no code]
       ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/list/mod.rs:=…'
   cover: each of the 14 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'src/list/mod.rs:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/list/mod.rs:=the reason of the test'
-◆ f1 derived: src/list/mod.rs: added [file · no code]
+◆ f1 add (Semilla; R90.3-2, a file edit (no tree)): src/list/mod.rs: added [file · no code]
     lines: src/list/mod.rs:1-14

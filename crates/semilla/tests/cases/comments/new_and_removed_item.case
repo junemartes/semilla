@@ -29,15 +29,18 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `shop::old_tax` (src/lib.rs:5): a removed body: the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: removed `shop::old_tax` (the public API changes: a different crate can no longer use the item) [removed · code different]
+    MIR changes with no claim: `shop::old_tax` (src/lib.rs:5): a removed body: `#[removed(shop::old_tax)] fn old_tax_removed(x: u32) -> bool { let old = before::shop::old_tax(x); true }`
+  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::old_tax`:
+  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `shop::old_tax` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
       affected bodies: shop::old_tax
       control flow: − graph of `shop::old_tax`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
-  ◆ f2 derived: added `shop::Label` (the public API changes: a different crate can now use the item) [added · no code]
+  syntax only:
+  item `shop::Label`:
+  ◆ f2 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher; 2 nodes): added `shop::Label` (the public API changes: a different crate can now use the item) [added · no code]
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body
@@ -45,7 +48,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: removed `shop::old_tax` (the public API changes: a different crate can no longer use the item) [removed · code different]
+◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `shop::old_tax` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
     lines: src/lib.rs:-3-5
-◆ f2 derived: added `shop::Label` (the public API changes: a different crate can now use the item) [added · no code]
+◆ f2 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher; 2 nodes): added `shop::Label` (the public API changes: a different crate can now use the item) [added · no code]
     lines: src/lib.rs:3-5

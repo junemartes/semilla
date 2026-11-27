@@ -45,24 +45,31 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed docs `/// The larger one.` → `/// The largest one.` [docs · no code]
-  ◆ f2 derived: changed docs `//! Tools for lists. //! A second line.` → `//! Tools for many lists. //! A second line.` [docs · no code]
-  ◆ f3 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 10 lines keep their tokens [move · no code]
-  ◆ f4 derived: comment in `src/list.rs`: removed `// A plain comment.` [docs · no code]
-  ◆ f5 derived: comment in `src/list/mod.rs`: added `// A changed comment.` [docs · no code]
+  changed nodes: 2 in 5 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  file `src/list.rs`:
+  ◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/list.rs`: removed `// A plain comment.` [docs · no code]
+  file `src/list/mod.rs`:
+  ◆ f5 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/list/mod.rs`: added `// A changed comment.` [docs · no code]
+  transformations:
+  item `depot::list`:
+  ◆ f3 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 10 lines keep their tokens [move · no code]
+  syntax only:
+  item `depot::list::larger`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed docs `/// The larger one.` → `/// The largest one.` [docs · no code]
+  item `depot::list`:
+  ◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed docs `//! Tools for lists. //! A second line.` → `//! Tools for many lists. //! A second line.` [docs · no code]
   cover: each of the 28 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed docs `/// The larger one.` → `/// The largest one.` [docs · no code]
-    lines: src/list.rs:-10, src/list/mod.rs:10
-◆ f2 derived: changed docs `//! Tools for lists. //! A second line.` → `//! Tools for many lists. //! A second line.` [docs · no code]
-    lines: src/list.rs:-1-2, src/list/mod.rs:1-2
-◆ f3 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 10 lines keep their tokens [move · no code]
-    lines: src/list.rs:-3, src/list.rs:-5-9, src/list.rs:-11-14, src/list/mod.rs:3, src/list/mod.rs:5-9, src/list/mod.rs:11-14
-◆ f4 derived: comment in `src/list.rs`: removed `// A plain comment.` [docs · no code]
+◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/list.rs`: removed `// A plain comment.` [docs · no code]
     lines: src/list.rs:-4
-◆ f5 derived: comment in `src/list/mod.rs`: added `// A changed comment.` [docs · no code]
+◆ f5 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/list/mod.rs`: added `// A changed comment.` [docs · no code]
     lines: src/list/mod.rs:4
+◆ f3 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 10 lines keep their tokens [move · no code]
+    lines: src/list.rs:-3, src/list.rs:-5-9, src/list.rs:-11-14, src/list/mod.rs:3, src/list/mod.rs:5-9, src/list/mod.rs:11-14
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed docs `/// The larger one.` → `/// The largest one.` [docs · no code]
+    lines: src/list.rs:-10, src/list/mod.rs:10
+◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed docs `//! Tools for lists. //! A second line.` → `//! Tools for many lists. //! A second line.` [docs · no code]
+    lines: src/list.rs:-1-2, src/list/mod.rs:1-2

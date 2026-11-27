@@ -19,11 +19,12 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::f` (src/lib.rs:3): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(v: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro `clamp`: `macro_rules! clamp { ($v:expr) => { if $v > 10 { 10 } else { $v } } }` → `macro_rules! clamp { ($v:expr) => { if $v >= 10 { 10 } else { $v } } }` [declaration · code different]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `shop::clamp!`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `clamp`: `macro_rules! clamp { ($v:expr) => { if $v > 10 { 10 } else { $v } } }` → `macro_rules! clamp { ($v:expr) => { if $v >= 10 { 10 } else { $v } } }` [declaration · code different]
       affected bodies: shop::f
       expansion: `clamp!(v)` at `shop::f/tail` (src/lib.rs:3): expansion changed: changed operator `v > 10` → `v >= 10` at `expansion/S0/cond` [semantics]
   cover: each of the 2 changed line(s) is in a fact
@@ -34,5 +35,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro `clamp`: `macro_rules! clamp { ($v:expr) => { if $v > 10 { 10 } else { $v } } }` → `macro_rules! clamp { ($v:expr) => { if $v >= 10 { 10 } else { $v } } }` [declaration · code different]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `clamp`: `macro_rules! clamp { ($v:expr) => { if $v > 10 { 10 } else { $v } } }` → `macro_rules! clamp { ($v:expr) => { if $v >= 10 { 10 } else { $v } } }` [declaration · code different]
     lines: src/lib.rs:1, src/lib.rs:-1
