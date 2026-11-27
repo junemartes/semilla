@@ -27,25 +27,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::c` (src/lib.rs:3): the full compare: `#[same(shop::c)] fn c_same() {}`; a difference: `#[change(shop::c)] fn c_change(x: u32) -> bool { … }` or `#[different(shop::c)] fn c_different() -> bool { … }`
     MIR changes with no claim: `shop::d` (src/lib.rs:4): the full compare: `#[same(shop::d)] fn d_same() {}`; a difference: `#[change(shop::d)] fn d_change(x: u32) -> bool { … }` or `#[different(shop::d)] fn d_different() -> bool { … }`
   changed nodes: 4 in 5 entries; 4 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: added `if` `if x > 9 { panic!("too big"); }` (f1)
-      in: shop::a
-      lines: src/lib.rs:1, src/lib.rs:-1-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::a=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  ? 1 place: added macro statement `assert_eq!(x, y);` (f2)
-      in: shop::b
-      lines: src/lib.rs:2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::b=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  ? 1 place: added `if` `if x > 9 { unreachable!() }` (f3)
-      in: shop::c
-      lines: src/lib.rs:3
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::c=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  ? 1 place: added `if` `if x > 9 { todo!() }` (f4)
-      in: shop::d
-      lines: src/lib.rs:4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::d=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `shop::a`:
-  ◆ f1 add (Semilla; R90.2-3, 5 new MIR elements): added `if` `if x > 9 { panic!("too big"); }` at `shop::a/S0` [semantics · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, 5 new MIR elements): added `if` `if x > 9 { panic!("too big"); }` at `shop::a/S0` [semantics · code different]
+      not stated (src/lib.rs:1, src/lib.rs:-1-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::a=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::a
       control flow: + branch `x > 9` (src/lib.rs:1): false → return, true → panic `panic!("too big")`
       control flow: + panic `panic!("too big")` (src/lib.rs:1)
@@ -53,29 +38,34 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 4 more (semilla expand --step 0)
       equivalence: MIR changes
   item `shop::b`:
-  ◆ f2 add (Semilla; R90.2-3, 4 new MIR elements): added macro statement `assert_eq!(x, y);` at `shop::b/S0` [semantics · code different] · not stated
+  ◆ f2 add (Semilla; R90.2-3, 4 new MIR elements): added macro statement `assert_eq!(x, y);` at `shop::b/S0` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::b=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::b
       control flow: + branch `assert_eq!(x, y)` (src/lib.rs:2): false → panic `assert_eq!(x, y)`, true → return
       control flow: + panic `assert_eq!(x, y)` (src/lib.rs:2)
       control flow: + arrow entry (src/lib.rs:2) → branch `assert_eq!(x, y)` (src/lib.rs:2)
       equivalence: MIR changes
-  ◆ f5 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::b` changes with no edit at its place: `x ^ y` [indirect · code different]
-      affected bodies: shop::b
-      note: lines 2; the cause: the edit of this body at src/lib.rs:2 (the step changes no other input of the body)
   item `shop::c`:
-  ◆ f3 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if x > 9 { unreachable!() }` at `shop::c/S0` [semantics · code different] · not stated
+  ◆ f3 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if x > 9 { unreachable!() }` at `shop::c/S0` [semantics · code different]
+      not stated (src/lib.rs:3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::c=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::c
       control flow: + branch `x > 9` (src/lib.rs:3): false → return, true → panic `unreachable!()`
       control flow: + panic `unreachable!()` (src/lib.rs:3)
       control flow: + arrow entry (src/lib.rs:3) → branch `x > 9` (src/lib.rs:3)
       equivalence: MIR changes
   item `shop::d`:
-  ◆ f4 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if x > 9 { todo!() }` at `shop::d/S0` [semantics · code different] · not stated
+  ◆ f4 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if x > 9 { todo!() }` at `shop::d/S0` [semantics · code different]
+      not stated (src/lib.rs:4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::d=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::d
       control flow: + branch `x > 9` (src/lib.rs:4): false → return, true → panic `todo!()`
       control flow: + panic `todo!()` (src/lib.rs:4)
       control flow: + arrow entry (src/lib.rs:4) → branch `x > 9` (src/lib.rs:4)
       equivalence: MIR changes
+  compiled code that changes with no edit:
+  item `shop::b`:
+  ◆ f5 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::b` changes with no edit at its place: `x ^ y` [indirect · code different]
+      affected bodies: shop::b
+      note: lines 2; the cause: the edit of this body at src/lib.rs:2 (the step changes no other input of the body)
   cover: each of the 8 changed line(s) is in a fact
   control flow: 4 bodies
     shop::a (src/lib.rs:1): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow; MIR changes
@@ -90,13 +80,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, 5 new MIR elements): added `if` `if x > 9 { panic!("too big"); }` at `shop::a/S0` [semantics · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, 5 new MIR elements): added `if` `if x > 9 { panic!("too big"); }` at `shop::a/S0` [semantics · code different]
     lines: src/lib.rs:1, src/lib.rs:-1-4
-◆ f2 add (Semilla; R90.2-3, 4 new MIR elements): added macro statement `assert_eq!(x, y);` at `shop::b/S0` [semantics · code different] · not stated
+◆ f2 add (Semilla; R90.2-3, 4 new MIR elements): added macro statement `assert_eq!(x, y);` at `shop::b/S0` [semantics · code different]
     lines: src/lib.rs:2
-◆ f5 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::b` changes with no edit at its place: `x ^ y` [indirect · code different]
-    no position
-◆ f3 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if x > 9 { unreachable!() }` at `shop::c/S0` [semantics · code different] · not stated
+◆ f3 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if x > 9 { unreachable!() }` at `shop::c/S0` [semantics · code different]
     lines: src/lib.rs:3
-◆ f4 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if x > 9 { todo!() }` at `shop::d/S0` [semantics · code different] · not stated
+◆ f4 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if x > 9 { todo!() }` at `shop::d/S0` [semantics · code different]
     lines: src/lib.rs:4
+◆ f5 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::b` changes with no edit at its place: `x ^ y` [indirect · code different]
+    no position

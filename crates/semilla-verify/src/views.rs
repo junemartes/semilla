@@ -757,6 +757,9 @@ struct Shared<'a> {
     step: Option<usize>,
     /// The index of the step, for the command of a cut list (R76.1-1).
     index: usize,
+    /// [R92.5-1] The report of the step: the gap list gives the statement of the line "not
+    /// stated" of an entry.
+    report: Option<&'a StepReport>,
 }
 
 impl<'a> Shared<'a> {
@@ -833,9 +836,12 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     // of an earlier version keeps its origin. [R90.5-2] A real edit that no statement names has
     // the mark "not stated".
     let origin = fact.entry_head().unwrap_or_else(|| origin.to_string());
-    let open = if fact.not_stated { " · not stated" } else { "" };
-    let head = format!("{origin}: {text} [{}]{}{open}", fact.label(), fact.mark());
+    let head = format!("{origin}: {text} [{}]{}", fact.label(), fact.mark());
     let mut lines: Vec<String> = blocks.iter().map(|line| format!("        {line}")).collect();
+    // [R92.5-1] The line "not stated" with the statement that states the entry (design 92).
+    if let Some(line) = shared.report.and_then(|report| report.not_stated_line(fact)) {
+        lines.push(format!("      {line}"));
+    }
     // The line of each shown line before its cut (R76.1-1): the compare of R71.1-2 reads it, so
     // that two facts with numbers of a different length share an equal line.
     let mut raws: Vec<String> = lines.clone();
@@ -1246,6 +1252,7 @@ fn fact_list(step: &StepReport, names: bool, noted: &mut bool, full: bool) -> (S
     let alone: Vec<&semilla_core::report::Fact> = order.iter().enumerate().filter(|(index, _)| runs[*index].is_none()).map(|(_, fact)| *fact).collect();
     let mut shared = Shared::new(&alone, names, step.step);
     shared.flow = step.flow.as_ref();
+    shared.report = Some(step);
     shared.after_commit = step.after_commit;
     shared.step = (!full).then_some(step.step);
     // Design 28.3: the build code changes of the step come first, with the diff. The manifest
@@ -1517,6 +1524,13 @@ pub fn agent_lines(step: &StepReport, limit: Option<usize>, below: &dyn Fn(usize
         lines.push(format!("  {command}"));
     }
     lines
+}
+
+/// [R92.5-1] The line "not stated" of each entry of a step, with the number of the entry: for an
+/// output with no list of the entries (`semilla fact`, a tag after the commit), so that no value
+/// of the gap list is lost (design 92).
+pub fn not_stated_lines(step: &StepReport) -> Vec<String> {
+    step.output_order().into_iter().filter_map(|fact| step.not_stated_line(fact).map(|line| format!("  {}: {line}", fact.id))).collect()
 }
 
 /// The text report. With `short_failures`, a claim that is not verified shows only its status

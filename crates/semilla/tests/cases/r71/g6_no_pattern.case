@@ -24,19 +24,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::scale` (src/lib.rs:1): the full compare: `#[same(shop::scale)] fn scale_same() {}`; a difference: `#[change(shop::scale)] fn scale_change(x: f64) -> bool { … }` or `#[different(shop::scale)] fn scale_different() -> bool { … }`
   changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
-  ? 3 places: 3 different edits (f1, f2, f3)
-      in: shop::scale
-      lines: src/lib.rs:2, src/lib.rs:-2-3
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::scale=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `shop::scale`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `let y = x * 3.0;` at `shop::scale/S0` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `let y = x * 3.0;` at `shop::scale/S0` [semantics · code different]
+      not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::scale=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::scale (with 2 other edits of this body)
       equivalence: MIR changes
-  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added statement `x + x + x` at `shop::scale/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added statement `x + x + x` at `shop::scale/tail` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::scale=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::scale (with 2 other edits of this body)
       equivalence: MIR changes
-  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `y` at `shop::scale/tail` [semantics · code different] · not stated
+  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `y` at `shop::scale/tail` [semantics · code different]
+      not stated (src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::scale=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::scale (with 2 other edits of this body)
       equivalence: MIR changes
   cover: each of the 3 changed line(s) is in a fact
@@ -45,9 +44,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `let y = x * 3.0;` at `shop::scale/S0` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `let y = x * 3.0;` at `shop::scale/S0` [semantics · code different]
     lines: src/lib.rs:-2
-◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added statement `x + x + x` at `shop::scale/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added statement `x + x + x` at `shop::scale/tail` [semantics · code different]
     lines: src/lib.rs:2
-◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `y` at `shop::scale/tail` [semantics · code different] · not stated
+◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `y` at `shop::scale/tail` [semantics · code different]
     lines: src/lib.rs:-3

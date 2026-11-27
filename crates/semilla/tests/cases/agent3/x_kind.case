@@ -119,18 +119,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::limit` (src/lib.rs:25): a removed body: `#[removed(depot::limit)] fn limit_removed() -> bool { let old = before::depot::limit(); true }`
     MIR changes with no claim: `depot::uses_limit` (src/lib.rs:26): the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
   changed nodes: 4 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: changed expression `limit()` → `7` (f2)
-      in: depot::uses_limit
-      lines: src/lib.rs:26, src/lib.rs:-26
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::uses_limit=TEXT'; if it does not change, --same 'rewrite limit() => 7'
   real edits:
   item `depot::limit`:
-  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::limit` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
+  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::limit` (the public API changes: a different crate can no longer use the item) [removed · code different]
+      not stated (src/lib.rs:-25); to state it: --change 'depot::limit=TEXT'
       affected bodies: depot::limit
       control flow: − graph of `depot::limit`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   item `depot::uses_limit`:
-  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `limit()` → `7` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `limit()` → `7` [semantics · code different]
+      not stated (src/lib.rs:26, src/lib.rs:-26); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::uses_limit=TEXT'; if it does not change, --same 'rewrite limit() => 7' (one statement for 2 places: f2)
       in: depot::uses_limit (2)
       affected bodies: depot::uses_limit (with 1 other edit of this body)
       control flow: − call `limit` (src/lib.rs:-26): return → call `limit`
@@ -151,9 +149,9 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::limit` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
+◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::limit` (the public API changes: a different crate can no longer use the item) [removed · code different]
     lines: src/lib.rs:-25
-◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `limit()` → `7` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `limit()` → `7` [semantics · code different]
     lines: src/lib.rs:26, src/lib.rs:-26
 ◆ f3 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `depot::Cap` (the public API changes: a different crate can now use the item) [added · no code]
     lines: src/lib.rs:25

@@ -122,13 +122,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::cap` (src/lib.rs:26): an added body: `#[new(depot::cap)] fn cap_new() -> bool { let new = after::depot::cap(); true }`
     MIR changes with no claim: `depot::uses_limit` (src/lib.rs:27): the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
   changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: changed path `limit` → `cap` (f1)
-      in: depot::uses_limit
-      lines: src/lib.rs:27, src/lib.rs:-26
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::uses_limit=TEXT'; if it does not change, --same 'rewrite limit => cap'
   real edits:
   item `depot::cap`:
-  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::cap` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::cap` (the public API changes: a different crate can now use the item) [added · code different]
+      not stated (src/lib.rs:26); to state it: --change 'depot::cap=TEXT'
       affected bodies: depot::cap
       control flow: + graph of `depot::cap`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
@@ -148,7 +145,7 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::cap` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::cap` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:26
 ◆ f1 same code (Semilla; R90.2-1, equal MIR; 2 nodes): 2 site(s): changed path `limit` → `cap` [semantics · code equal]
     lines: src/lib.rs:27, src/lib.rs:-26

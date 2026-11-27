@@ -4,7 +4,7 @@ option: rename limit cap
 exit: 0
 must_match: ✓ a1 same
 must_match: `10` → `20`
-must_match: · not stated
+must_match: \n      not stated \(
 same_facts_as_no_option: yes
 === both Cargo.toml
 [package]
@@ -66,22 +66,20 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::tests::t_limit` (src/lib.rs:19): the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`; no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `depot::tests::t_limit::{closure#0} #[test]` (src/lib.rs:19): the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`; the template of `depot::tests::t_limit` covers its item `depot::tests::t_limit`
   changed nodes: 2 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `10` → `20` (f2)
-      in: depot::cap
-      lines: src/lib.rs:11, src/lib.rs:19, src/lib.rs:-11, src/lib.rs:-19
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::cap=TEXT'; if it does not change, --same 'rewrite 10 => 20'
   real edits:
   item `depot::cap`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes): 2 site(s): changed literal `10` → `20` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes): 2 site(s): changed literal `10` → `20` [semantics · code different]
+      not stated (src/lib.rs:11, src/lib.rs:19, src/lib.rs:-11, src/lib.rs:-19); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::cap=TEXT'; if it does not change, --same 'rewrite 10 => 20'
       in: depot::cap, depot::tests::t_limit
       affected bodies: depot::cap, depot::tests::t_limit
       equivalence: `depot::cap`: MIR changes
       equivalence: `depot::tests::t_limit`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`
       equivalence: `depot::tests::t_limit::{closure#0} #[test]`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`
       expansion: `assert_eq!(cap(), 20)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: changed path `limit` → `cap` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/callee` [semantics]; changed literal `10` → `20` at `expansion/S0/body/S0/scrutinee/elems[1]/operand` [semantics]
-  transformations:
+  compiled code that changes with no edit:
   item `depot::cap`:
-  ◆ f3 rename (a1; R90.2-5, the pair check holds): public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
+  ◆ f3 rename (a1; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
+  transformations:
   item `depot::limit`:
   ◆ f1 rename (a1; R90.2-5, the pair check holds): renamed `depot::limit` → `depot::cap` [rename · code equal]
       note: 1 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)
@@ -95,9 +93,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes): 2 site(s): changed literal `10` → `20` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes): 2 site(s): changed literal `10` → `20` [semantics · code different]
     lines: src/lib.rs:11, src/lib.rs:19, src/lib.rs:-11, src/lib.rs:-19
-◆ f3 rename (a1; R90.2-5, the pair check holds): public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
+◆ f3 rename (a1; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
     no position
 ◆ f1 rename (a1; R90.2-5, the pair check holds): renamed `depot::limit` → `depot::cap` [rename · code equal]
     lines: src/lib.rs:12, src/lib.rs:-12

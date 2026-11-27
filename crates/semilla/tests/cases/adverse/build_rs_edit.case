@@ -55,11 +55,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   ! build code changed in this step; read this change first
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): build.rs: changed [build code · no code]
+      not stated (build.rs:3); to state it: --change 'build.rs=TEXT'
       ✗ spotlight: build script: this file is code of the build script of `depot`. Cargo runs it before each build of the package, and it can change the code and the result of the build; it needs a reason: --reason 'build.rs:=…'
       diff:
         @@ line 3 @@
         +     println!("cargo:rustc-cfg=fast");
-  changed nodes: 0 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   cover: each of the 1 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: build script: build.rs

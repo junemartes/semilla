@@ -69,12 +69,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop::a::Block.x`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): type `u8` → `u16` in 2 places: `shop::a::Block.x`, `shop::a::Block.y` [declaration · code different] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): type `u8` → `u16` in 2 places: `shop::a::Block.x`, `shop::a::Block.y` [declaration · code different]
+      not stated (src/lib.rs:3-4, src/lib.rs:-3-4); to state it: --change 'shop::a::Block.x=TEXT'
       affected bodies: shop::a::Block::new, shop::a::Block::sum
       through: `shop::a::Block` (2 bodies), `shop::a::Block.x` (2 bodies), `shop::a::Block::new` (1 body)
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): type `u8` → `u16` in 2 places: `shop::a::Block.x`, `shop::a::Block.y` [declaration · code different] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): type `u8` → `u16` in 2 places: `shop::a::Block.x`, `shop::a::Block.y` [declaration · code different]
     lines: src/lib.rs:3-4, src/lib.rs:-3-4

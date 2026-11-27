@@ -1,0 +1,64 @@
+note: one fact of the syntax diff has a removed and an added `use` line (two kinds of nodes): the old node becomes the new node, so the entry has one kind, replace
+rule+: R92.7-1
+must_match: ◆ f[0-9]+ replace, syntax only \(Semilla; .*an old node and a new node of one fact
+must_not_match: ◆ f[0-9]+ delete, syntax only
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+use std::fmt::Debug;
+use std::collections::HashMap;
+
+pub fn show<T: Debug>(value: T) -> String {
+    format!("{value:?}")
+}
+
+pub fn count(map: &HashMap<u32, u32>) -> usize {
+    map.len()
+}
+=== new src/lib.rs
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::Debug;
+
+pub fn show<T: Debug>(value: T) -> String {
+    format!("{value:?}")
+}
+
+pub fn count(map: &HashMap<u32, u32>) -> usize {
+    map.len()
+}
+
+pub fn size(map: &BTreeMap<u32, u32>) -> usize {
+    map.len()
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::size` (src/lib.rs:12): an added body: no template: error[E0433]: cannot find module or crate `alloc` in this scope
+  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::size`:
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::size` (the public API changes: a different crate can now use the item) [added · code different]
+      not stated (src/lib.rs:11-14); to state it: --change 'depot::size=TEXT'
+      affected bodies: depot::size
+      control flow: + graph of `depot::size`: 3 points, 2 arrows (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  syntax only:
+  item `depot::use#0`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher; an old node and a new node of one fact: the old node becomes the new node (R92.6-1); 2 nodes): changed `use` line: `use std::collections::HashMap;` → `use std::collections::{BTreeMap, HashMap};` in `depot` [import · code equal]
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 1 body
+    depot::size (src/lib.rs:12): graph added: 3 points, 2 arrows
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::size` (the public API changes: a different crate can now use the item) [added · code different]
+    lines: src/lib.rs:11-14
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher; an old node and a new node of one fact: the old node becomes the new node (R92.6-1); 2 nodes): changed `use` line: `use std::collections::HashMap;` → `use std::collections::{BTreeMap, HashMap};` in `depot` [import · code equal]
+    lines: src/lib.rs:1, src/lib.rs:-2

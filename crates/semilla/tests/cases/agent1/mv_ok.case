@@ -59,24 +59,23 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✓ a1 same: move idle conf::idle (holds: Semilla derives the move from the syntax tree)
       places: depot::idle, depot::conf::idle
       entries, in the list below: f1, f3
-  changed nodes: 1 in 3 entries; 0 real edits (0 stated by the agent); 1 not mapped
-    n1 not mapped [R79.5-1]: added `use` line `depot::use#0` (src/lib.rs:13): not mapped, syntax only in f2: `pub use conf::idle;`
-        a `use` line with a visibility gives its names to other modules; a claim on each item that it names maps it: `depot::conf::idle`
-  not mapped:
-  item `depot::use#0`:
-  ◆ f2 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added `use` line: `pub use conf::idle;` in `depot`: added the public name `depot::idle` (`depot::conf::idle`) [import · code equal]
-  transformations:
+  changed nodes: 1 in 3 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  compiled code that changes with no edit:
   item `depot::conf::idle`:
-  ◆ f3 move (a1; R90.2-5, the pair check holds): public API: `depot::idle` is now `depot::conf::idle` (a `pub use` line can keep the old path) [move · no code]
+  ◆ f3 move (a1; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::idle` is now `depot::conf::idle` (a `pub use` line can keep the old path) [move · no code]
+  transformations:
   item `depot::idle`:
   ◆ f1 move (a1; R90.2-5, the pair check holds): moved `depot::idle` → `depot::conf::idle` [move · code equal]
+  syntax only:
+  item `depot::use#0`:
+  ◆ f2 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; its names reach other modules: `depot::conf::idle` (the name record)): added `use` line: `pub use conf::idle;` in `depot`: added the public name `depot::idle` (`depot::conf::idle`) [import · code equal]
   cover: each of the 6 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added `use` line: `pub use conf::idle;` in `depot`: added the public name `depot::idle` (`depot::conf::idle`) [import · code equal]
-    lines: src/lib.rs:13
-◆ f3 move (a1; R90.2-5, the pair check holds): public API: `depot::idle` is now `depot::conf::idle` (a `pub use` line can keep the old path) [move · no code]
+◆ f3 move (a1; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::idle` is now `depot::conf::idle` (a `pub use` line can keep the old path) [move · no code]
     no position
 ◆ f1 move (a1; R90.2-5, the pair check holds): moved `depot::idle` → `depot::conf::idle` [move · code equal]
     lines: src/lib.rs:16-17, src/lib.rs:-13-14, src/lib.rs:-17
+◆ f2 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; its names reach other modules: `depot::conf::idle` (the name record)): added `use` line: `pub use conf::idle;` in `depot`: added the public name `depot::idle` (`depot::conf::idle`) [import · code equal]
+    lines: src/lib.rs:13

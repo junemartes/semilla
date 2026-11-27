@@ -1,0 +1,73 @@
+note: an added macro call that makes items and an added `pub use` line have no partner: each one is an addition with who reaches it, not a node that is not mapped
+rule+: R92.3-1
+must_match: ◆ f[0-9]+ add, syntax only \(Semilla; R92.3-1, no MIR element and no partner; 
+must_match: 0 not mapped
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! getter {
+    ($name:ident, $value:expr) => {
+        pub fn $name() -> u32 {
+            $value
+        }
+    };
+}
+
+pub mod inner {
+    pub fn base() -> u32 {
+        1
+    }
+}
+
+getter!(first, 1);
+=== new src/lib.rs
+macro_rules! getter {
+    ($name:ident, $value:expr) => {
+        pub fn $name() -> u32 {
+            $value
+        }
+    };
+}
+
+pub mod inner {
+    pub fn base() -> u32 {
+        1
+    }
+}
+
+pub use inner::base;
+
+getter!(first, 1);
+getter!(second, 2);
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::second` (src/lib.rs:3): no template: `depot::second` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
+  changed nodes: 2 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::getter!#1`:
+  ◆ f2 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; no item of the other tree names it (the name record)): added macro call `getter!(second, 2)` (makes: `pub fn second`) [added · code different]
+      affected bodies: depot::second
+      control flow: + graph of `depot::second`: 2 points, 1 arrow (semilla expand --step 0)
+      expansion: `getter!(second, 2)` at `depot::getter!#1` (src/lib.rs:18): expansion added: makes `depot::second`
+  item `depot::use#0`:
+  ◆ f1 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; its names reach other modules: `depot::inner::base` (the name record)): added `use` line: `pub use inner::base;` in `depot`: added the public name `depot::base` (`depot::inner::base`) [import · code equal]
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 1 body
+    depot::second (src/lib.rs:3): graph added: 2 points, 1 arrow; no edit in the body
+  expansions: 1 added, 1 equal
+    `getter!(second, 2)` at `depot::getter!#1` (src/lib.rs:18): expansion added: `macro_rules! getter` (src/lib.rs:1): makes `depot::second`; the step adds the call or its input
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; no item of the other tree names it (the name record)): added macro call `getter!(second, 2)` (makes: `pub fn second`) [added · code different]
+    lines: src/lib.rs:18
+◆ f1 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; its names reach other modules: `depot::inner::base` (the name record)): added `use` line: `pub use inner::base;` in `depot`: added the public name `depot::base` (`depot::inner::base`) [import · code equal]
+    lines: src/lib.rs:15-16

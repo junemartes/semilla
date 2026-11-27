@@ -39,18 +39,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::cost` (src/lib.rs:5): the full compare: `#[same(shop::cost)] fn cost_same() {}`; a difference: `#[change(shop::cost)] fn cost_change(s_before: before::shop::Shape, s_after: after::shop::Shape) -> bool { … }` or `#[different(shop::cost)] fn cost_different() -> bool { … }`
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: 2 different edits (f1, f2)
-      in: shop::cost
-      lines: src/lib.rs:7, src/lib.rs:9, src/lib.rs:-8
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::cost=TEXT'; if it does not change, --same 'rewrite 2 => 3', and a `--same` fact (rename, move, or rewrite) that explains each other edit
   real edits:
   item `shop::cost`:
-  ◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added match arm `Shape::Box => cost_of(9)` at `shop::cost/S0/arm[0].pat` [semantics · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added match arm `Shape::Box => cost_of(9)` at `shop::cost/S0/arm[0].pat` [semantics · code different]
+      not stated (src/lib.rs:7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::cost=TEXT'; if it does not change, --same 'rewrite 2 => 3', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: shop::cost (with 1 other edit of this body)
       control flow: + call `cost_of` (src/lib.rs:7): return → return
       control flow: + arrow branch `s` (src/lib.rs:6) → call `cost_of` (src/lib.rs:7) (shop::Shape::Box)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
-  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed literal `2` → `3` at `shop::cost/S0/arm[1].body/args[0]` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed literal `2` → `3` at `shop::cost/S0/arm[1].body/args[0]` [semantics · code different]
+      not stated (src/lib.rs:9, src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::cost=TEXT'; if it does not change, --same 'rewrite 2 => 3', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: shop::cost (with 1 other edit of this body)
       equivalence: MIR changes alone; the body: MIR changes
   cover: each of the 3 changed line(s) is in a fact
@@ -59,7 +57,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added match arm `Shape::Box => cost_of(9)` at `shop::cost/S0/arm[0].pat` [semantics · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added match arm `Shape::Box => cost_of(9)` at `shop::cost/S0/arm[0].pat` [semantics · code different]
     lines: src/lib.rs:7
-◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed literal `2` → `3` at `shop::cost/S0/arm[1].body/args[0]` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed literal `2` → `3` at `shop::cost/S0/arm[1].body/args[0]` [semantics · code different]
     lines: src/lib.rs:9, src/lib.rs:-8

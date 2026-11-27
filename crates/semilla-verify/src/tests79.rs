@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use semilla_core::{AstState, IntentFile, IntentResult, Step};
+use semilla_core::{AstEntry, AstState, IntentFile, IntentResult, Step};
 use semilla_syntax::Workspace;
 
 use super::astmap::{ClaimCalls, CompiledClaims};
@@ -178,6 +178,13 @@ fn run79(before: &[(&str, &str)], after: &[(&str, &str)], intent: Option<&str>, 
     Run { outcome, _dirs: (d1, d2) }
 }
 
+/// [R92.3-1] True for a node that the AST pass maps by no rule (design 79): it stays "not
+/// mapped" with its request, or (design 92) a syntax-only node with no partner is an addition or
+/// a removal with who reaches it.
+fn open(entry: &AstEntry) -> bool {
+    entry.state == AstState::NotMapped || entry.rule == "R92.3-1"
+}
+
 fn lib(text: &str) -> Vec<(&'static str, String)> {
     vec![("src/lib.rs", text.to_string())]
 }
@@ -250,7 +257,7 @@ fn an_anchor_of_a_type_maps_the_nodes_inside_it() {
 fn an_anchor_does_not_map_a_node_of_another_item() {
     let run = run79(&files(&lib(OLD)), &files(&lib(NEW)), Some(CLAIM_F), Some(Ok(f_links())), false);
     let other = run.entry("added", "demo::g/S0");
-    assert_eq!(other.state, AstState::NotMapped);
+    assert!(open(other), "{other:?}");
     assert!(other.template.starts_with("#[same(demo::g)] fn g(x: u32) -> bool"), "{}", other.template);
 }
 
@@ -280,12 +287,12 @@ fn a_call_of_a_generic_claim_anchors_the_definition_with_its_parameters() {
 fn the_anchor_comes_from_the_definition_that_rustc_resolved_never_from_the_text() {
     // No compiled claims: no anchor, and the map says why.
     let run = run79(&files(&lib(OLD)), &files(&lib(NEW)), Some(CLAIM_F), None, false);
-    assert_eq!(run.entry("added", "demo::f/S1").state, AstState::NotMapped);
+    assert!(open(run.entry("added", "demo::f/S1")));
     assert!(run.map().gap.as_deref().is_some_and(|gap| gap.contains("the claims that rustc compiles")), "{:?}", run.map().gap);
     // The scope text `demo::f` resolves (by rustc) to `demo::g`: the anchor is `g`.
     let data = compiled(&[("before::demo::f", Some("before::demo::g")), ("after::demo::f", Some("after::demo::g"))], &[("f_same", &["demo::g"], &["demo::g"])], &[]);
     let run = run79(&files(&lib(OLD)), &files(&lib(NEW)), Some(CLAIM_F), Some(Ok(data)), false);
-    assert_eq!(run.entry("added", "demo::f/S1").state, AstState::NotMapped);
+    assert!(open(run.entry("added", "demo::f/S1")));
     assert_eq!(run.entry("added", "demo::g/S0").state, AstState::Claim);
     // A property that does not call the new version gives no anchor of it.
     let data = compiled(&[("before::demo::f", Some("before::demo::f")), ("after::demo::f", Some("after::demo::f"))], &[("f_same", &["demo::f"], &[])], &[]);
@@ -380,7 +387,7 @@ fn the_matcher_maps_a_node_with_a_partner() {
 fn a_node_with_no_partner_is_not_mapped_by_the_matcher() {
     let run = run79(&files(&lib(OLD)), &files(&lib(NEW)), None, None, false);
     let added = run.entry("added", "demo::f/S1");
-    assert_eq!((added.state, added.rule.as_str()), (AstState::NotMapped, "R79.5-1"));
+    assert_eq!((added.state, added.rule.as_str()), (AstState::Semilla, "R92.3-1"));
 }
 
 const NEW_DOC: &str = "/// The next value.\npub fn f(x: u32) -> u32 {\n    // one more\n    let a = x + 1;\n    a\n}\n\npub fn g(x: u32) -> u32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n        assert_eq!(super::f(1), 2);\n    }\n}\n";
@@ -400,7 +407,7 @@ fn a_doc_a_comment_and_test_code_are_mapped_by_semilla() {
 fn a_statement_of_code_that_is_not_a_test_is_not_mapped_by_the_rule_of_no_code() {
     let new = NEW_DOC.replace("    a\n}\n\npub fn g", "    let c = 1;\n    a\n}\n\npub fn g");
     let run = run79(&files(&lib(OLD)), &files(&lib(&new)), None, None, false);
-    assert!(run.map().entries.iter().any(|entry| entry.at.starts_with("demo::f/") && entry.state == AstState::NotMapped), "{:#?}", run.map().entries);
+    assert!(run.map().entries.iter().any(|entry| entry.at.starts_with("demo::f/") && open(entry)), "{:#?}", run.map().entries);
 }
 
 const OLD_R: &str = "pub fn f(x: u32) -> u32 {\n    helper(x)\n}\n\nfn helper(x: u32) -> u32 {\n    x + 1\n}\n\nfn dead_a(x: u32) -> u32 {\n    dead_b(x)\n}\n\nfn dead_b(x: u32) -> u32 {\n    dead_a(x)\n}\n\npub fn api(x: u32) -> u32 {\n    x\n}\n";
@@ -427,7 +434,7 @@ fn a_removed_item_with_a_reader_or_a_public_item_is_not_mapped() {
         // `helper` has a reader in the old tree (`f`); `api` is public.
         for at in ["demo::helper", "demo::api"] {
             let entry = run.entry("removed", at);
-            assert_eq!(entry.state, AstState::NotMapped, "names: {names}: {entry:?}");
+            assert!(open(entry), "names: {names}: {entry:?}");
             assert!(entry.template.starts_with("#[removed("), "{}", entry.template);
         }
     }
@@ -453,7 +460,7 @@ fn an_added_item_that_a_changed_body_reaches_is_not_mapped_also_through_another_
         let run = run79(&files(&lib(OLD_A)), &files(&lib(NEW_A)), None, None, names);
         for at in ["demo::outer", "demo::inner"] {
             let entry = run.entry("added", at);
-            assert_eq!(entry.state, AstState::NotMapped, "names: {names}: {entry:?}");
+            assert!(open(entry), "names: {names}: {entry:?}");
             assert!(entry.template.starts_with(&format!("#[new({at})] fn ")), "{}", entry.template);
         }
     }
@@ -495,12 +502,12 @@ fn a_use_line_with_an_unchanged_reader_or_with_no_name_record_is_not_mapped() {
     let new = "mod inner {\n    pub struct Set;\n    impl Set {\n        pub fn size(&self) -> u32 { 1 }\n    }\n}\nuse inner::*;\nuse inner::Set;\n\npub fn g() -> u32 {\n    Set.size()\n}\n";
     let run = run79(&[("src/lib.rs", old)], &[("src/lib.rs", new)], None, None, true);
     let line = run.map().entries.iter().find(|entry| entry.node == "`use` line").expect("the added line");
-    assert_eq!(line.state, AstState::NotMapped, "{line:?}");
+    assert!(open(line), "{line:?}");
     assert!(line.template.contains("`demo::g`"), "{}", line.template);
     // No name record: Semilla cannot find the readers.
     let run = run79(&files(&lib(OLD_U)), &files(&lib(NEW_U)), None, None, false);
     for entry in run.map().entries.iter().filter(|entry| entry.node == "`use` line") {
-        assert_eq!(entry.state, AstState::NotMapped, "{entry:?}");
+        assert!(open(entry), "{entry:?}");
         assert!(entry.template.contains("no name record"), "{}", entry.template);
     }
 }
@@ -533,7 +540,7 @@ fn the_pass_does_not_search_for_a_pair_that_the_matcher_does_not_give() {
     let run = run79(&[("src/lib.rs", old)], &[("src/lib.rs", new)], None, None, false);
     let tail: Vec<_> = run.map().entries.iter().filter(|entry| entry.at == "demo::f/tail").collect();
     assert_eq!(tail.len(), 2, "{:#?}", run.map().entries);
-    assert!(tail.iter().all(|entry| entry.state == AstState::NotMapped), "{tail:?}");
+    assert!(tail.iter().all(|entry| open(entry)), "{tail:?}");
 }
 
 // rule+ R79.5-1
@@ -544,9 +551,9 @@ fn a_node_that_is_not_mapped_gives_its_texts_and_a_template() {
     assert_eq!(entry.after, "let b = a + 0;");
     assert!(entry.before.is_empty());
     assert_eq!(entry.template, "#[same(demo::f)] fn f(x: u32) -> bool { after::demo::f(x) == before::demo::f(x) }");
-    let lines = astmap::lines(run.map(), Some(10), 0).join("\n");
-    assert!(lines.contains("not mapped [R79.5-1]: added `let` `demo::f/S1` (src/lib.rs:4): not mapped, syntax only in f3: `let b = a + 0;`"), "{lines}");
-    assert!(lines.contains("template: #[same(demo::f)] fn f(x: u32)"), "{lines}");
+    // [R92.3-1] The node has no MIR element and no partner: an addition, with its template.
+    let lines = astmap::lines(run.map(), None, 0).join("\n");
+    assert!(lines.contains("[R92.3-1]: added `let` `demo::f/S1` (src/lib.rs:4): add, syntax only in f3"), "{lines}");
 }
 
 // rule- R79.5-1
@@ -555,7 +562,7 @@ fn a_node_with_no_claim_form_gives_the_cause_and_no_template() {
     let old = "pub struct W;\nimpl std::fmt::Display for W {\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        write!(f, \"w\")\n    }\n}\n";
     let new = "pub struct W;\nimpl std::fmt::Display for W {\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        let text = \"w\";\n        write!(f, \"{text}\")\n    }\n}\n";
     let run = run79(&[("src/lib.rs", old)], &[("src/lib.rs", new)], None, None, false);
-    let entry = run.map().entries.iter().find(|entry| entry.state == AstState::NotMapped).expect("a node that is not mapped");
+    let entry = run.map().entries.iter().find(|entry| open(entry)).expect("a node that is not mapped");
     assert!(entry.template.starts_with("no template: "), "{}", entry.template);
 }
 
@@ -568,7 +575,7 @@ fn the_coverage_line_of_the_map_replaces_the_ast_line_and_the_node_lines_follow_
     let gap = run.outcome.report.gap_lines(Some(10));
     assert!(gap[0].trim_start().starts_with("changed nodes: "), "{gap:#?}");
     // A node that is not mapped is no reject: the step passes with J > 0.
-    assert!(run.map().count(AstState::NotMapped) > 0);
+    assert!(run.map().entries.iter().any(open));
     run.outcome.report.intent_claims.retain(|claim| claim.result != IntentResult::Claimed);
     assert!(run.outcome.report.accepted(), "{:?}", run.outcome.report.errors);
 }
@@ -641,7 +648,7 @@ fn an_added_impl_block_with_a_member_that_is_not_mapped_is_not_mapped() {
     let run = run79(&[("src/lib.rs", OLD_I)], &[("src/lib.rs", NEW_I)], None, None, true);
     for node in ["fn", "impl", "type"] {
         let entry = run.map().entries.iter().find(|entry| entry.node == node).unwrap_or_else(|| panic!("no {node}: {:#?}", run.map().entries));
-        assert_eq!(entry.state, AstState::NotMapped, "{entry:?}");
+        assert!(open(entry), "{entry:?}");
     }
     // The method of the trait impl gives its qualified path, not a template.
     let method = run.map().entries.iter().find(|entry| entry.node == "fn").unwrap();

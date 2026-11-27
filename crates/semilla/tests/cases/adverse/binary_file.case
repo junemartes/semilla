@@ -53,17 +53,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::first` (src/list.rs:8): the full compare: `#[same(depot::list::first)] fn first_same() {}`; a difference: `#[change(depot::list::first)] fn first_change(v: &[u32]) -> bool { … }` or `#[different(depot::list::first)] fn first_different() -> bool { … }`
-  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `0` → `1` (f2)
-      in: depot::list::first
-      lines: src/list.rs:8, src/list.rs:-8
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::first=TEXT'; if it does not change, --same 'rewrite 0 => 1'
+  changed nodes: 1 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `assets/logo.bin`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): assets/logo.bin: changed (binary file changed) [file · no code]
+      not stated; to state it: --change 'assets/logo.bin=TEXT'
       ✗ spotlight: a file that is not on the allow list of files that no tool reads to build or to test (docs, license texts, images); it needs a reason: --reason 'assets/logo.bin:=…'
   item `depot::list::first`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
+      not stated (src/list.rs:8, src/list.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::first=TEXT'; if it does not change, --same 'rewrite 0 => 1'
       affected bodies: depot::list::first
       control flow: ~ check `bounds: v[0]` → `bounds: v[1]` (src/list.rs:-8, src/list.rs:8)
       equivalence: MIR changes
@@ -79,5 +77,5 @@ run again: semilla step 'the change' --reason 'assets/logo.bin:=<why>'
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'assets/logo.bin:=the reason of the test'
 ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): assets/logo.bin: changed (binary file changed) [file · no code]
     no position
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
     lines: src/list.rs:8, src/list.rs:-8

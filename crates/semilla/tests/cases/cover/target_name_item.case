@@ -44,7 +44,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot (test "list")::first`:
-  ◆ f1 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2); 2 nodes): 2 site(s): changed literal `1` → `2` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2); 2 nodes): 2 site(s): changed literal `1` → `2` [semantics · code different]
+      not stated (tests/list.rs:3, tests/list.rs:-3); to state it: --change 'depot (test "list")::first=TEXT'
       in: depot (test "list")::first (2)
       affected bodies: depot (test "list")::first (with 1 other edit of this body)
       equivalence: `list::first`: MIR changes: the same MIR text; a changed callee: `list::first::{closure#0}`
@@ -59,5 +60,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2); 2 nodes): 2 site(s): changed literal `1` → `2` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2); 2 nodes): 2 site(s): changed literal `1` → `2` [semantics · code different]
     lines: tests/list.rs:3, tests/list.rs:-3

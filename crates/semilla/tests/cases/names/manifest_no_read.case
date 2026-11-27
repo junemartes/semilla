@@ -23,10 +23,11 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 0 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `Cargo.toml`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): Cargo.toml: package.description "a shop" → "a small shop" [manifest · no code]
+      not stated (Cargo.toml:5, Cargo.toml:-5); to state it: --change 'Cargo.toml=TEXT'
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

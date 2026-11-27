@@ -100,21 +100,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::Tool::size` (src/lib.rs:30): the full compare: `#[same(depot::Tool::size)] fn size_same() {}`; a difference: `#[change(depot::Tool::size)] fn size_change(this_before: &before::depot::Tool, this_after: &after::depot::Tool) -> bool { … }` or `#[different(depot::Tool::size)] fn size_different() -> bool { … }`
     MIR changes with no claim: `depot::beta` (src/lib.rs:9): the full compare: `#[same(depot::beta)] fn beta_same() {}`; a difference: `#[change(depot::beta)] fn beta_change(v: &[u32]) -> bool { … }` or `#[different(depot::beta)] fn beta_different() -> bool { … }`
   changed nodes: 3 in 4 entries; 3 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed expression `by` → `by + 1` (f1)
-      in: depot::Tool::grow
-      lines: src/lib.rs:34-42, src/lib.rs:-10-19
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::Tool::grow=TEXT'; if it does not change, --same 'rewrite by => by + 1'
-  ? 1 place: changed expression `self.n` → `self.n + 0` (f2)
-      in: depot::Tool::size
-      lines: src/lib.rs:24, src/lib.rs:26-33, src/lib.rs:-2-9
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::Tool::size=TEXT'; if it does not change, --same 'rewrite $a.n => $a.n + 0'
-  ? 1 place: changed operator `*x > best` → `*x >= best` (f3)
-      in: depot::beta
-      lines: src/lib.rs:12, src/lib.rs:-31
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::beta=TEXT'; if it does not change, --same 'rewrite $a > $b => $a >= $b'
   real edits:
   item `depot::Tool::grow`:
-  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics · code different]
+      not stated (src/lib.rs:34-42, src/lib.rs:-10-19); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::Tool::grow=TEXT'; if it does not change, --same 'rewrite by => by + 1'
       affected bodies: depot::Tool::grow
       control flow: + check `overflow: by + 1` (src/lib.rs:38): ok → check `overflow: self.n += by + 1`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:38)
@@ -122,7 +111,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 2 more (semilla expand --step 0)
       equivalence: MIR changes
   item `depot::Tool::size`:
-  ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.n` → `self.n + 0` at `depot::Tool::size/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.n` → `self.n + 0` at `depot::Tool::size/tail` [semantics · code different]
+      not stated (src/lib.rs:24, src/lib.rs:26-33, src/lib.rs:-2-9); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::Tool::size=TEXT'; if it does not change, --same 'rewrite $a.n => $a.n + 0'
       affected bodies: depot::Tool::size
       control flow: + check `overflow: self.n + 0` (src/lib.rs:31): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:31)
@@ -132,7 +122,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       docs of `depot::Tool::size`, no edit in this step (src/lib.rs:28): `/// The size.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   item `depot::beta`:
-  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics · code different] · not stated
+  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics · code different]
+      not stated (src/lib.rs:12, src/lib.rs:-31); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::beta=TEXT'; if it does not change, --same 'rewrite $a > $b => $a >= $b'
       affected bodies: depot::beta
       control flow: ~ branch `*x > best` → `*x >= best` (src/lib.rs:-31, src/lib.rs:12)
       equivalence: MIR changes
@@ -148,11 +139,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics · code different]
     lines: src/lib.rs:34-42, src/lib.rs:-10-19
-◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.n` → `self.n + 0` at `depot::Tool::size/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.n` → `self.n + 0` at `depot::Tool::size/tail` [semantics · code different]
     lines: src/lib.rs:24, src/lib.rs:26-33, src/lib.rs:-2-9
-◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics · code different] · not stated
+◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics · code different]
     lines: src/lib.rs:12, src/lib.rs:-31
 ◆ f4 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 2 changed lines of 1 item with equal tokens at a new place [layout · no code]
     lines: src/lib.rs:25, src/lib.rs:-1

@@ -50,17 +50,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::modulo::value` (src/módulo.rs:1): the full compare: `#[same(depot::modulo::value)] fn value_same() {}`; a difference: `#[change(depot::modulo::value)] fn value_change() -> bool { … }` or `#[different(depot::modulo::value)] fn value_different() -> bool { … }`
-  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `1` → `2` (f2)
-      in: depot::modulo::value
-      lines: src/módulo.rs:3, src/módulo.rs:-3
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::modulo::value=TEXT'; if it does not change, --same 'rewrite 1 => 2'
+  changed nodes: 1 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `docs/ñandú.md`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): docs/ñandú (`\u{f1}and\u{fa}`).md: changed [file · no code]
+      not stated (docs/ñandú.md:2, docs/ñandú.md:-2); to state it: --change 'docs/ñandú.md=TEXT'
       ✗ spotlight: an identifier with characters outside ASCII: `ñandú` (`\u{f1}and\u{fa}`); it needs a reason: --reason 'docs/ñandú.md:=…'
   item `depot::modulo::value`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::modulo::value/tail/rhs` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::modulo::value/tail/rhs` [semantics · code different]
+      not stated (src/módulo.rs:3, src/módulo.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::modulo::value=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: depot::modulo::value
       equivalence: MIR changes
   cover: each of the 4 changed line(s) is in a fact
@@ -72,5 +70,5 @@ run again: semilla step 'the change' --reason 'docs/ñandú.md:=<why>'
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'docs/ñandú.md:=the reason of the test'
 ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): docs/ñandú (`\u{f1}and\u{fa}`).md: changed [file · no code]
     lines: docs/ñandú.md:2, docs/ñandú.md:-2
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::modulo::value/tail/rhs` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::modulo::value/tail/rhs` [semantics · code different]
     lines: src/módulo.rs:3, src/módulo.rs:-3

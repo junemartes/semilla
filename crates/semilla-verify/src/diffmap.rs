@@ -10,11 +10,14 @@
 //! - The one fact (R90.3-1): each entry of the map is a fact of the step with its kind, its
 //!   nodes, its source, and its check. A fact of the agent is the source of its entries.
 //!
+//! - Design 92: a syntax-only node with no partner is an addition or a removal (R92.3-1), the
+//!   nodes of one change make one entry (R92.6-1), and an entry has one kind (R92.7-1).
+//!
 //! Each rule reads data that the step already has: no search, no solver.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use semilla_core::{AstEntry, AstMap, AstState, EntryKind, Fact, NodeMir};
+use semilla_core::{Anchor, AstEntry, AstMap, AstState, Compare, EntryKind, Fact, NodeMir, Position};
 use semilla_syntax::{Edit, EditKind, ItemKind, Workspace};
 
 use crate::StepOutcome;
@@ -26,6 +29,8 @@ pub const RULE_TYPE: &str = "R90.2-4";
 pub const RULE_PAIR: &str = "R90.2-5";
 pub const RULE_SYNTAX: &str = "R90.2-6";
 pub const RULE_OPEN: &str = "R90.6-1";
+pub const RULE_NO_PARTNER: &str = "R92.3-1";
+pub const RULE_NO_EDIT: &str = "R92.4-1";
 
 /// The kind of one changed node, with the mark "syntax only" and the check.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,9 +66,16 @@ fn owner_type(path: &str, kind: ItemKind) -> &str {
 /// of the addition).
 fn is_type_change(edit: &Edit, trees: [&Workspace; 2]) -> bool {
     let kinds = [item_kind(&edit.before, trees[0]), item_kind(&edit.after, trees[1])];
+    // [R92.6-1] An added or a removed part of a signature (a parameter, a bound, a return
+    // type): a part of the signature that changes.
+    let in_signature = [&edit.before, &edit.after].iter().flat_map(|anchor| anchor.as_ref()).any(|anchor| anchor.path.first().is_some_and(|segment| segment.to_string() == "sig"));
+    if in_signature && matches!(edit.kind, EditKind::Inserted | EditKind::Deleted) && !kinds.iter().flatten().any(|kind| *kind == ItemKind::Macro) {
+        return true;
+    }
     match edit.kind {
         EditKind::Signature => !kinds.iter().flatten().any(|kind| *kind == ItemKind::Macro),
-        EditKind::Members => kinds.iter().flatten().any(|kind| matches!(kind, ItemKind::Struct | ItemKind::Enum)),
+        // [R92.6-1] The member list of a variant is a part of the definition of its enum.
+        EditKind::Members => kinds.iter().flatten().any(|kind| matches!(kind, ItemKind::Struct | ItemKind::Enum | ItemKind::Variant)),
         EditKind::ItemAdded | EditKind::ItemRemoved | EditKind::Modified | EditKind::Replaced => [&edit.before, &edit.after].iter().zip(kinds).any(|(anchor, kind)| match (anchor, kind) {
             (Some(anchor), Some(kind @ (ItemKind::Field | ItemKind::Variant))) => {
                 let owner = owner_type(&anchor.item, kind);
@@ -158,7 +170,7 @@ pub(crate) fn nodes(outcome: &StepOutcome, trees: [&Workspace; 2], map: &mut Ast
     for (place, (entry, index)) in map.entries.iter_mut().zip(indices).enumerate() {
         let edit = &outcome.edits[*index];
         let fact = outcome.fact_of.get(*index).copied().flatten().and_then(|fact| outcome.report.facts.get(fact));
-        let found = claimed(node_kind(edit, outcome.report.node_mir.get(index), fact, trees), entry, edit, trees);
+        let found = no_partner(claimed(node_kind(edit, outcome.report.node_mir.get(index), fact, trees), entry, edit, trees), entry, edit);
         entry.entry = match (fact, outcome.owners.get(*index).copied().flatten()) {
             (Some(fact), _) => fact.id.clone(),
             (None, Some(claim)) => outcome.report.claims.get(claim).map(|claim| claim.claim.clone()).unwrap_or_default(),
@@ -194,6 +206,29 @@ fn claimed(found: NodeKind, entry: &AstEntry, edit: &Edit, trees: [&Workspace; 2
     found
 }
 
+/// [R92.3-1] A syntax-only node that the matcher of today leaves with no partner (the AST pass
+/// gives it no rule) is an addition or a removal (decision 13.6 of the draft of the intent
+/// language): an added node "add", a removed node "delete". The check gives who reaches it in
+/// the other tree (the name record). A syntax-only node of another edit keeps its answer.
+fn no_partner(found: NodeKind, entry: &AstEntry, edit: &Edit) -> NodeKind {
+    if !found.syntax_only || entry.state != AstState::NotMapped {
+        return found;
+    }
+    let kind = match edit.kind {
+        EditKind::ItemAdded | EditKind::Inserted => EntryKind::Add,
+        EditKind::ItemRemoved | EditKind::Deleted => EntryKind::Delete,
+        _ => return found,
+    };
+    // A statement has the item of its body as who reaches it.
+    let item = edit.anchor().filter(|anchor| !anchor.path.is_empty()).map(|anchor| anchor.item.clone());
+    let reach = match (entry.by.is_empty(), item) {
+        (false, _) => entry.by.clone(),
+        (true, Some(item)) => format!("a statement of `{item}`"),
+        (true, None) => "who reaches it: no data".to_string(),
+    };
+    NodeKind::new(kind, true, RULE_NO_PARTNER, format!("no MIR element and no partner; {reach}"))
+}
+
 /// The state of one entry of the map from its kind.
 fn set_state(entry: &mut AstEntry, found: &NodeKind, open: &mut Vec<usize>, place: usize) {
     if found.kind == EntryKind::NotMapped {
@@ -206,15 +241,20 @@ fn set_state(entry: &mut AstEntry, found: &NodeKind, open: &mut Vec<usize>, plac
         return;
     }
     // [R90.2-6] A node with no MIR element keeps the answer of the matcher of today (the AST
-    // pass of design 79), also "not mapped" with its request. A claim keeps its anchor: it is
-    // the source of the entry.
-    if entry.state == AstState::NotMapped && !found.syntax_only {
+    // pass of design 79). A claim keeps its anchor: it is the source of the entry.
+    // [R92.3-1] A syntax-only node with no partner is an addition or a removal: it has who
+    // reaches it, not a request.
+    if entry.state == AstState::NotMapped && (!found.syntax_only || found.rule == RULE_NO_PARTNER) {
         entry.state = AstState::Semilla;
-        entry.by = format!("the map of the diff: {}", found.kind.name());
+        entry.by = if found.rule == RULE_NO_PARTNER { found.check.clone() } else { format!("the map of the diff: {}", found.kind.name()) };
         entry.rule = found.rule.into();
-        entry.template = String::new();
-        entry.before = String::new();
-        entry.after = String::new();
+        // [R92.5-1] A node with no partner keeps its texts and its template: the line "not
+        // stated" of its entry gives the template as the statement that states the entry.
+        if found.rule != RULE_NO_PARTNER {
+            entry.template = String::new();
+            entry.before = String::new();
+            entry.after = String::new();
+        }
     }
 }
 
@@ -232,6 +272,278 @@ fn priority(kind: EntryKind) -> u8 {
     }
 }
 
+/// The kind of each node of the map (in the order of the entries of the map), after the AST pass
+/// and the projection (`nodes`).
+fn node_kinds(outcome: &StepOutcome, trees: [&Workspace; 2], map: &AstMap, indices: &[usize]) -> Vec<NodeKind> {
+    map.entries
+        .iter()
+        .zip(indices)
+        .map(|(entry, index)| {
+            let edit = &outcome.edits[*index];
+            let fact = outcome.fact_of.get(*index).copied().flatten().and_then(|fact| outcome.report.facts.get(fact));
+            let found = claimed(node_kind(edit, outcome.report.node_mir.get(index), fact, trees), entry, edit, trees);
+            // [R92.3-1] A syntax-only node with no partner: the projection gave its kind and who
+            // reaches it.
+            if entry.rule == RULE_NO_PARTNER {
+                return NodeKind::new(found.kind, true, RULE_NO_PARTNER, entry.by.clone());
+            }
+            match (entry.state, found.syntax_only) {
+                // [R90.2-6] The matcher of today leaves a node with no MIR element with no partner.
+                (AstState::NotMapped, true) => NodeKind::new(EntryKind::NotMapped, true, RULE_SYNTAX, format!("no MIR element; the matcher of today maps no partner ({})", entry.rule)),
+                (AstState::NotMapped, false) => NodeKind::new(EntryKind::NotMapped, false, RULE_OPEN, "the alignment gives no unique answer".into()),
+                _ => found,
+            }
+        })
+        .collect()
+}
+
+/// The mark in the check of a fact that [`shape`] made from two facts or more (R92.6-1), or from
+/// a part of a fact (R92.7-1). [`entries`] writes the full check.
+const MERGED: &str = "one change (R92.6-1)";
+const SPLIT: &str = "split by kind (R92.7-1)";
+
+/// [R92.6-1] [R92.7-1] The entries of the map are the facts of the step (design 92). Two facts
+/// whose nodes come from one change make one fact: the nodes own one changed MIR element by its
+/// place (rules 1 and 1b of design 40.3), and the nodes have one kind. Then a fact with nodes
+/// of more than one kind splits into one fact for each kind: the fact keeps the nodes of its
+/// strongest kind, and each other kind gets a new fact with the texts of its nodes. It runs in
+/// the AST pass, after the projection and before the facts of the agent, the gap list, and
+/// the tags: they read the facts of the result.
+pub(crate) fn shape(outcome: &mut StepOutcome, trees: [&Workspace; 2], map: &mut AstMap, indices: &[usize]) {
+    let kinds = node_kinds(outcome, trees, map, indices);
+    let count = outcome.report.facts.len();
+    let place_of: BTreeMap<usize, usize> = indices.iter().enumerate().map(|(place, index)| (*index, place)).collect();
+    let fact_at = |fact_of: &[Option<usize>], index: usize| fact_of.get(index).copied().flatten().filter(|fact| *fact < count);
+    // [R92.6-1] The groups of the facts of one change (the lowest fact of a group is its root).
+    let mut parent: Vec<usize> = (0..count).collect();
+    fn root(parent: &mut [usize], mut at: usize) -> usize {
+        while parent[at] != at {
+            parent[at] = parent[parent[at]];
+            at = parent[at];
+        }
+        at
+    }
+    for (place, index) in indices.iter().enumerate() {
+        let (Some(mir), Some(own)) = (outcome.report.node_mir.get(index), fact_at(&outcome.fact_of, *index)) else { continue };
+        for other in &mir.shared {
+            let (Some(theirs), Some(other_place)) = (fact_at(&outcome.fact_of, *other), place_of.get(other)) else { continue };
+            if theirs == own || kinds[place].kind != kinds[*other_place].kind {
+                continue;
+            }
+            let (a, b) = (root(&mut parent, own), root(&mut parent, theirs));
+            if a != b {
+                parent[a.max(b)] = a.min(b);
+            }
+        }
+    }
+    let roots: Vec<usize> = (0..count).map(|fact| root(&mut parent, fact)).collect();
+    if roots.iter().enumerate().any(|(fact, root)| *root != fact) {
+        for fact in 0..count {
+            if roots[fact] != fact {
+                let from = outcome.report.facts[fact].clone();
+                let into_id = outcome.report.facts[roots[fact]].id.clone();
+                absorb(&mut outcome.report.facts[roots[fact]], from.clone());
+                if let Some(flow) = outcome.report.flow.as_mut() {
+                    move_lines(flow, &from.id, &into_id);
+                }
+            }
+        }
+        let mut new_index: Vec<Option<usize>> = vec![None; count];
+        let mut next = 0;
+        for fact in 0..count {
+            if roots[fact] == fact {
+                new_index[fact] = Some(next);
+                next += 1;
+            }
+        }
+        for slot in outcome.fact_of.iter_mut() {
+            if let Some(fact) = slot.filter(|fact| *fact < count) {
+                *slot = new_index[roots[fact]];
+            }
+        }
+        let mut at = 0;
+        outcome.report.facts.retain(|_| {
+            at += 1;
+            roots[at - 1] == at - 1
+        });
+    }
+    // [R92.7-1] One kind for each fact.
+    let count = outcome.report.facts.len();
+    let mut held: Vec<Vec<(usize, NodeKind)>> = vec![Vec::new(); count];
+    for (place, index) in indices.iter().enumerate() {
+        if let Some(fact) = outcome.fact_of.get(*index).copied().flatten().filter(|fact| *fact < count) {
+            held[fact].push((place, kinds[place].clone()));
+        }
+    }
+    let mut groups: Vec<BTreeMap<EntryKind, Vec<usize>>> = vec![BTreeMap::new(); count];
+    for (fact, nodes) in held.iter_mut().enumerate() {
+        one_change(nodes.iter_mut().map(|(_, found)| found));
+        for (place, found) in nodes.iter() {
+            groups[fact].entry(found.kind).or_default().push(*place);
+            // [R92.6-1] A node that the change of its fact explains is mapped.
+            let entry = &mut map.entries[*place];
+            if found.kind != kinds[*place].kind && entry.state == AstState::NotMapped {
+                entry.state = AstState::Semilla;
+                entry.by = "a part of one change (the fact of the syntax diff)".into();
+                entry.rule = RULE_ONE_CHANGE.into();
+                entry.template = String::new();
+                entry.before = String::new();
+                entry.after = String::new();
+            }
+            if entry.kind.is_some() {
+                entry.kind = Some(found.kind);
+            }
+        }
+    }
+    let mut next_id = outcome.report.facts.iter().filter_map(|fact| fact.id.strip_prefix('f').and_then(|number| number.parse::<usize>().ok())).max().unwrap_or(0) + 1;
+    for (fact, by_kind) in groups.into_iter().enumerate() {
+        let Some(main) = by_kind.keys().copied().min_by_key(|kind| priority(*kind)) else { continue };
+        for (kind, places) in by_kind.into_iter().filter(|(kind, _)| *kind != main) {
+            let _ = kind;
+            let part = split_fact(&outcome.report.facts[fact], &places.iter().map(|place| (&map.entries[*place], &outcome.edits[indices[*place]])).collect::<Vec<_>>(), next_id, trees);
+            next_id += 1;
+            let at = outcome.report.facts.len();
+            outcome.report.facts.push(part);
+            for place in places {
+                outcome.fact_of[indices[place]] = Some(at);
+            }
+        }
+    }
+    // The entry of each node after the changes.
+    for (entry, index) in map.entries.iter_mut().zip(indices) {
+        if let Some(fact) = outcome.fact_of.get(*index).copied().flatten().and_then(|fact| outcome.report.facts.get(fact)) {
+            entry.entry = fact.id.clone();
+        }
+    }
+}
+
+/// [R92.6-1] The kinds of the nodes of one fact that come from one change (design 92):
+/// - a forced edit at a use of a changed declaration (a site of design 22.6, an edit whose MIR
+///   changes with the declaration) is a part of the type change (R90.2-4: the entry lists each
+///   use whose MIR changes): each other node of a fact with a type change is a type change;
+/// - an old node and a new node that one fact pairs (a removed and an added node of one fact of
+///   the syntax diff) are one replace: the old node becomes the new node.
+fn one_change<'a>(nodes: impl Iterator<Item = &'a mut NodeKind>) {
+    let mut nodes: Vec<&mut NodeKind> = nodes.collect();
+    let has = |nodes: &[&mut NodeKind], kind: EntryKind| nodes.iter().any(|found| found.kind == kind);
+    let to = if has(&nodes, EntryKind::TypeChange) {
+        // Each other node of the fact is a forced edit at a use of the declaration.
+        for found in nodes.iter_mut().filter(|found| found.kind != EntryKind::TypeChange) {
+            found.kind = EntryKind::TypeChange;
+            found.check = format!("{}; a use of a changed declaration (R90.2-4, {RULE_ONE_CHANGE})", found.check);
+        }
+        return;
+    } else if has(&nodes, EntryKind::Add) && has(&nodes, EntryKind::Delete) {
+        Some((EntryKind::Replace, "an old node and a new node of one fact: the old node becomes the new node"))
+    } else {
+        None
+    };
+    let Some((kind, why)) = to else { return };
+    for found in nodes.iter_mut().filter(|found| found.kind != kind && matches!(found.kind, EntryKind::Replace | EntryKind::Add | EntryKind::Delete)) {
+        found.kind = kind;
+        found.check = format!("{}; {why} ({RULE_ONE_CHANGE})", found.check);
+    }
+}
+
+const RULE_ONE_CHANGE: &str = "R92.6-1";
+
+/// [R92.6-1] Adds the fact `from` of one change to the fact `into`: the texts, the lines, the
+/// bodies, and the marks of the two facts.
+fn absorb(into: &mut Fact, from: Fact) {
+    into.description = format!("{}; {}", into.description, from.description);
+    into.positions = Position::normal(into.positions.iter().cloned().chain(from.positions).collect());
+    for body in from.affected {
+        if !into.affected.contains(&body) {
+            into.affected.push(body);
+        }
+    }
+    for body in from.equal_sites {
+        if !into.equal_sites.contains(&body) && !into.affected.contains(&body) {
+            into.equal_sites.push(body);
+        }
+    }
+    into.equal_sites.retain(|body| !into.affected.contains(body));
+    into.sites.extend(from.sites);
+    for (symbol, bodies) in from.through {
+        let known = into.through.entry(symbol).or_default();
+        for body in bodies {
+            if !known.contains(&body) {
+                known.push(body);
+            }
+        }
+    }
+    if from.compare == Compare::CodeDifferent || into.compare == Compare::Off {
+        into.compare = from.compare;
+    }
+    let join = |a: Option<String>, b: Option<String>| match (a, b) {
+        (Some(a), Some(b)) if a != b => Some(format!("{a}; {b}")),
+        (a, b) => a.or(b),
+    };
+    into.spotlight |= from.spotlight;
+    into.spotlight_why = join(into.spotlight_why.take(), from.spotlight_why);
+    into.note = join(into.note.take(), from.note);
+    into.reason = into.reason.take().or(from.reason);
+    into.branches = into.branches.take().or(from.branches);
+    into.causes.extend(from.causes);
+    into.unsafe_code |= from.unsafe_code;
+    into.test &= from.test;
+    into.other_edits = into.other_edits.max(from.other_edits).saturating_sub(1);
+    into.check = MERGED.into();
+}
+
+/// [R92.6-1] The lines of the graph section of a fact go to the fact that holds it now.
+fn move_lines(flow: &mut semilla_core::report::FlowReport, from: &str, into: &str) {
+    for lines in [&mut flow.facts, &mut flow.equivalence, &mut flow.expansion_lines] {
+        if let Some(moved) = lines.remove(from) {
+            let known = lines.entry(into.to_string()).or_default();
+            for line in moved {
+                if !known.contains(&line) {
+                    known.push(line);
+                }
+            }
+        }
+    }
+    if let Some(moved) = flow.reaches.remove(from) {
+        flow.reaches.entry(into.to_string()).or_insert(moved);
+    }
+}
+
+/// [R92.7-1] The fact of the nodes of one kind of a fact: the texts of the nodes, their lines,
+/// and the category and the compare result of the fact. The lines below the fact (the bodies,
+/// the spotlight) stay with the fact.
+fn split_fact(fact: &Fact, nodes: &[(&AstEntry, &Edit)], id: usize, trees: [&Workspace; 2]) -> Fact {
+    let file_of = |edit: &Edit| edit.file.clone().or_else(|| [(&edit.after, 1), (&edit.before, 0)].iter().find_map(|(anchor, side)| anchor.as_ref().and_then(|anchor| trees[*side].items.get(&anchor.item)).map(|item| item.file.clone())));
+    let positions = Position::normal(nodes.iter().filter_map(|(_, edit)| Some(Position { file: file_of(edit)?, old: edit.after.is_none(), start: edit.line, end: edit.line })).collect());
+    let texts: Vec<String> = nodes
+        .iter()
+        .map(|(entry, edit)| {
+            let side = |text: &Option<String>| text.as_deref().map(semilla_core::text::flat_text);
+            let sides = match (side(&edit.text_before), side(&edit.text_after)) {
+                (Some(old), Some(new)) => format!(": `{old}` → `{new}`"),
+                (Some(old), None) => format!(": `{old}`"),
+                (None, Some(new)) => format!(": `{new}`"),
+                (None, None) => String::new(),
+            };
+            format!("{} {} `{}`{sides}", entry.change, entry.node, entry.at)
+        })
+        .collect();
+    let first = nodes[0].1;
+    Fact {
+        id: format!("f{id}"),
+        at: first.anchor().cloned().or_else(|| fact.at.clone()).map(|anchor| Anchor::item(&anchor.item)).or_else(|| fact.at.clone()),
+        file: file_of(first).or_else(|| fact.file.clone()),
+        positions,
+        part: fact.part.clone(),
+        description: texts.join("; "),
+        status: fact.status.clone(),
+        category: fact.category,
+        compare: fact.compare,
+        test: fact.test,
+        check: SPLIT.into(),
+        ..Default::default()
+    }
+}
+
 /// [R90.3-1] Gives each fact of the step the fields of the one fact (design 90): its nodes, its
 /// kind, its check, its source, and the mark "not stated" (R90.5-2). It runs after the facts of
 /// the agent and the claims of the intent files have their results.
@@ -240,18 +552,14 @@ pub(crate) fn entries(outcome: &mut StepOutcome, trees: [&Workspace; 2]) {
     let indices: Vec<usize> = outcome.edits.iter().enumerate().filter(|(_, edit)| crate::astmap::is_node(edit)).map(|(index, _)| index).collect();
     // The nodes of each fact, with their kinds and their claims.
     let count = outcome.report.facts.len();
+    let kinds = node_kinds(outcome, trees, &map, &indices);
     let mut held: Vec<Vec<(usize, NodeKind, &AstEntry)>> = vec![Vec::new(); count];
-    for (place, (entry, index)) in map.entries.iter().zip(&indices).enumerate() {
+    for (place, ((entry, index), found)) in map.entries.iter().zip(&indices).zip(kinds).enumerate() {
         let Some(fact) = outcome.fact_of.get(*index).copied().flatten().filter(|fact| *fact < count) else { continue };
-        let edit = &outcome.edits[*index];
-        let found = claimed(node_kind(edit, outcome.report.node_mir.get(index), outcome.report.facts.get(fact), trees), entry, edit, trees);
-        let found = match (entry.state, found.syntax_only) {
-            // [R90.2-6] The matcher of today leaves a node with no MIR element with no partner.
-            (AstState::NotMapped, true) => NodeKind::new(EntryKind::NotMapped, true, RULE_SYNTAX, format!("no MIR element; the matcher of today maps no partner ({})", entry.rule)),
-            (AstState::NotMapped, false) => NodeKind::new(EntryKind::NotMapped, false, RULE_OPEN, "the alignment gives no unique answer".into()),
-            _ => found,
-        };
         held[fact].push((place + 1, found, entry));
+    }
+    for nodes in held.iter_mut() {
+        one_change(nodes.iter_mut().map(|(_, found, _)| found));
     }
     // The file edits of each fact (a file is not a node of a tree).
     let mut files: Vec<Option<EditKind>> = vec![None; count];
@@ -265,10 +573,12 @@ pub(crate) fn entries(outcome: &mut StepOutcome, trees: [&Workspace; 2]) {
     for (fact_index, fact) in outcome.report.facts.iter_mut().enumerate() {
         let nodes = &held[fact_index];
         fact.nodes = nodes.iter().map(|(number, ..)| *number).collect();
-        let (kind, syntax_only, check) = match nodes.iter().min_by_key(|(_, found, _)| priority(found.kind)) {
+        // [R92.6-1] [R92.7-1] The mark of a fact that the shape of the entries made.
+        let shaped = if fact.check == MERGED || fact.check == SPLIT { format!("; {}", fact.check) } else { String::new() };
+        let (kind, syntax_only, check) = match nodes.iter().min_by_key(|(_, found, _)| (priority(found.kind), found.syntax_only)) {
             Some((_, found, _)) => {
                 let more = if nodes.len() > 1 { format!("; {} nodes", nodes.len()) } else { String::new() };
-                (found.kind, nodes.iter().all(|(_, found, _)| found.syntax_only), format!("{}, {}{more}", found.rule, found.check))
+                (found.kind, nodes.iter().all(|(_, found, _)| found.syntax_only), format!("{}, {}{more}{shaped}", found.rule, found.check))
             }
             None => no_node_kind(fact, files[fact_index]),
         };
@@ -316,11 +626,16 @@ fn no_node_kind(fact: &Fact, file: Option<EditKind>) -> (EntryKind, bool, String
         (None, Category::Layout) => EntryKind::SameCode,
         (None, _) => EntryKind::Replace,
     };
+    // [R92.4-1] An entry with no node and no changed line of its own is not a real edit: the
+    // compiled code of a body with no edit at its place, or a line of the public API of a pair.
+    let no_edit = fact.positions.is_empty() && fact.at.is_some() && fact.part != "identity";
     let check = match (file, kind) {
         (Some(_), _) => "R90.3-2, a file edit (no tree)".to_string(),
         // [R90.2-5] A pair of items: the fact exists only when the pair passes its check.
+        (None, EntryKind::Rename | EntryKind::Move) if no_edit => format!("{RULE_NO_EDIT}, a line of the public API of a pair; the pair check holds ({RULE_PAIR})"),
         (None, EntryKind::Rename | EntryKind::Move) => format!("{RULE_PAIR}, the pair check holds"),
         (None, EntryKind::SameCode) => "R90.3-2, equal tokens (a new layout)".to_string(),
+        (None, _) if no_edit => format!("{RULE_NO_EDIT}, no node and no changed line of its own"),
         (None, _) => "R90.3-2, no changed node (the fact of today)".to_string(),
     };
     (kind, false, check)

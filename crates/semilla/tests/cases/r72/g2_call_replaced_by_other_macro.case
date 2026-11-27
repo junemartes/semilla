@@ -28,24 +28,23 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::make` (src/lib.rs:1): the full compare: `#[same(shop::make)] fn make_same() {}`; a difference: `#[change(shop::make)] fn make_change(n: u32) -> bool { … }` or `#[different(shop::make)] fn make_different() -> bool { … }`
   changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
-  ? 3 places: 3 different edits (f1, f2, f3)
-      in: shop::make
-      lines: src/lib.rs:2, src/lib.rs:4, src/lib.rs:-2, src/lib.rs:-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::make=TEXT'; if it does not change, --same 'rewrite format!("n = {}", n) => String::new()', and a `--same` fact (rename, move, or rewrite) that explains each other edit
   real edits:
   item `shop::make`:
-  ◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `format!("n = {}", n)` → `String::new()` at `shop::make/S0/init` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `format!("n = {}", n)` → `String::new()` at `shop::make/S0/init` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::make=TEXT'; if it does not change, --same 'rewrite format!("n = {}", n) => String::new()', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::make (with 2 other edits of this body)
       control flow: − construct `{}` (src/lib.rs:-2): return → call `format`
       control flow: − call `must_use::<String>` (src/lib.rs:-2): return → call `Vec::<u32>::new`
       control flow: ~ call `format` → `String::new` (src/lib.rs:-2, src/lib.rs:2)
       control flow: … 3 more (semilla expand --step 0)
       equivalence: MIR changes alone; the body: MIR changes
-  ◆ f2 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `Vec::new()` at `shop::make/tail` [semantics · code different] · not stated
+  ◆ f2 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `Vec::new()` at `shop::make/tail` [semantics · code different]
+      not stated (src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::make=TEXT'; if it does not change, --same 'rewrite format!("n = {}", n) => String::new()', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::make (with 2 other edits of this body)
       control flow: ~ call `Vec::<u32>::new` → `Box::<[u32; 3]>::new_uninit` (src/lib.rs:-4, src/lib.rs:4)
       equivalence: no result alone (the body has 2 edits; the edit adds or removes a node); the body: MIR changes
-  ◆ f3 add (Semilla; R90.2-3, 7 new MIR elements): added macro statement `vec![n, n + 1, n + 2]` at `shop::make/tail` [semantics · code different] · not stated
+  ◆ f3 add (Semilla; R90.2-3, 7 new MIR elements): added macro statement `vec![n, n + 1, n + 2]` at `shop::make/tail` [semantics · code different]
+      not stated (src/lib.rs:4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::make=TEXT'; if it does not change, --same 'rewrite format!("n = {}", n) => String::new()', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::make (with 2 other edits of this body)
       control flow: + check `overflow: n + 1` (src/lib.rs:4): ok → check `overflow: n + 2`, fail → panic `overflow`
       control flow: + check `overflow: n + 2` (src/lib.rs:4): ok → check `alignment: [$($x),+]`, fail → panic `overflow`
@@ -61,9 +60,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `format!("n = {}", n)` → `String::new()` at `shop::make/S0/init` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `format!("n = {}", n)` → `String::new()` at `shop::make/S0/init` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2
-◆ f2 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `Vec::new()` at `shop::make/tail` [semantics · code different] · not stated
+◆ f2 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `Vec::new()` at `shop::make/tail` [semantics · code different]
     lines: src/lib.rs:-4
-◆ f3 add (Semilla; R90.2-3, 7 new MIR elements): added macro statement `vec![n, n + 1, n + 2]` at `shop::make/tail` [semantics · code different] · not stated
+◆ f3 add (Semilla; R90.2-3, 7 new MIR elements): added macro statement `vec![n, n + 1, n + 2]` at `shop::make/tail` [semantics · code different]
     lines: src/lib.rs:4

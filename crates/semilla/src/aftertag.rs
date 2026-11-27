@@ -461,6 +461,8 @@ impl App {
         let result = result?;
         let report = result.report.steps.first().cloned().unwrap_or_default();
         let mut lines = semilla_verify::views::agent_lines(&report, Some(semilla_core::report::GAP_LIMIT), &|_| Vec::new());
+        // [R92.5-1] The line "not stated" of each entry (design 92).
+        lines.extend(semilla_verify::views::not_stated_lines(&report));
         lines.extend(semilla_verify::views::tag_lines(&report, &|_| Vec::new()));
         if let Some(error) = report.tags.iter().filter(|tag| tag.form).find_map(|tag| tag.error.clone()) {
             bail!("{error}");

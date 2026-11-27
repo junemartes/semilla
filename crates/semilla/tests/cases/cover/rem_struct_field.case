@@ -38,12 +38,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::Size.mid`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): field `depot::Size.mid` removed: `u16` (the public API can change: a different crate can use the item) [removed · no code] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): field `depot::Size.mid` removed: `u16` (the public API can change: a different crate can use the item) [removed · no code]
+      not stated (src/lib.rs:-7-10); to state it: --change 'depot::Size.mid=TEXT'
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::Size.mid
 
 === positions
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): field `depot::Size.mid` removed: `u16` (the public API can change: a different crate can use the item) [removed · no code] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): field `depot::Size.mid` removed: `u16` (the public API can change: a different crate can use the item) [removed · no code]
     lines: src/lib.rs:-7-10

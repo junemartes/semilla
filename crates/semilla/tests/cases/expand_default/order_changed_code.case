@@ -71,13 +71,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop::Item`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `shop::Item`: `a, b` → `b, a` [declaration · code different] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `shop::Item`: `a, b` → `b, a` [declaration · code different]
+      not stated (shop/src/lib.rs:4, shop/src/lib.rs:-3); to state it: --change 'shop::Item=TEXT'
       affected bodies: <shop::Item as std::fmt::Debug>::fmt
       through: `shop::Item` (1 body)
       expansion: derived `Debug` of `shop::Item`: expansion changed: changed literal `"a"` → `"b"` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[2]` [semantics]; changed expression `self.a` → `self.b` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[3]/operand` [semantics]; changed lite… (113 characters more; `semilla expand f1 --step 0` shows the full line) ….b` → `self.a` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[5]/operand/operand` [semantics]
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Marker`, `Debug`): the code that it makes reads the members in order; it needs a reason: --reason 'shop::Item=…'
   item `shop::Packed`:
-  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `shop::Packed`: `a, b` → `b, a` [declaration · no compare] · not stated
+  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `shop::Packed`: `a, b` → `b, a` [declaration · no compare]
+      not stated (shop/src/lib.rs:11, shop/src/lib.rs:-10); to state it: --change 'shop::Packed=TEXT'
       note: no compare: the MIR bodies do not show each effect of a member order
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Marker`): the code that it makes reads the members in order; it needs a reason: --reason 'shop::Packed=…'
   cover: each of the 4 changed line(s) is in a fact
@@ -89,7 +91,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'shop::Item=<why>' --reason 'shop::Packed=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::Item=the reason of the test' --reason 'shop::Packed=the reason of the test'
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `shop::Item`: `a, b` → `b, a` [declaration · code different] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `shop::Item`: `a, b` → `b, a` [declaration · code different]
     lines: shop/src/lib.rs:4, shop/src/lib.rs:-3
-◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `shop::Packed`: `a, b` → `b, a` [declaration · no compare] · not stated
+◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `shop::Packed`: `a, b` → `b, a` [declaration · no compare]
     lines: shop/src/lib.rs:11, shop/src/lib.rs:-10

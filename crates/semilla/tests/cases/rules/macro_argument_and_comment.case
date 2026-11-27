@@ -78,29 +78,19 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::show` (src/lib.rs:20): the full compare: `#[same(depot::show)] fn show_same() {}`; a difference: `#[change(depot::show)] fn show_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::show)] fn show_different() -> bool { … }`
-  changed nodes: 3 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: 2 different edits (f2, f3)
-      in: depot::show
-      lines: src/lib.rs:22, src/lib.rs:-22
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::show=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total + 1' --same 'rewrite $a.len() => $a.len() * 2'
+  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::show`:
-  ◆ f2 replace (Semilla; R90.2-2, 7 changed MIR elements): changed expression `c.total` → `c.total + 1` at `depot::show/tail/args[1]` [semantics · code different] · not stated
-      affected bodies: depot::show (with 1 other edit of this body)
-      control flow: + check `overflow: c.total + 1` (src/lib.rs:22): ok → call `Vec::<u32>::len`, fail → panic `overflow` (the same line for f3)
+  ◆ f2 replace (Semilla; R90.2-2, 7 changed MIR elements; 2 nodes; one change (R92.6-1)): changed expression `c.total` → `c.total + 1` at `depot::show/tail/args[1]`; changed expression `c.items.len()` → `c.items.len() * 2` at `depot::show/tail/args[2]` [semantics · code different]
+      not stated (src/lib.rs:22, src/lib.rs:-22); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::show=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total + 1' --same 'rewrite $a.len() => $a.len() * 2' (one statement for 2 places: f2)
+      affected bodies: depot::show
+      control flow: + check `overflow: c.total + 1` (src/lib.rs:22): ok → call `Vec::<u32>::len`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:22)
       control flow: + check `overflow: c.items.len() * 2` (src/lib.rs:22): ok → construct `{}`, fail → panic `overflow`
       control flow: … 4 more (semilla expand --step 0)
       equivalence: MIR changes alone; the body: MIR changes
       expansion: `format!("{} {}", c.total + 1, c.items.len() * 2)` at `depot::show/tail` (src/lib.rs:22): expansion changed: changed expression `c.total` → `c.total + 1` at `expansion/args[0]/body/tail/args[0]/args[1]` [semantics]; changed expression `c.items.len()` → `c.items.len() * 2` at `expansion/args[0]/body/tail/args[0]/args[2]` [semantics] (also the change of f3)
       comment above line 22, changed in this step: see f1
-  ◆ f3 replace (Semilla; R90.2-2, 7 changed MIR elements): changed expression `c.items.len()` → `c.items.len() * 2` at `depot::show/tail/args[2]` [semantics · code different] · not stated
-      affected bodies: depot::show (with 1 other edit of this body)
-      control flow: the same line as f2
-      control flow: + panic `overflow` (src/lib.rs:22)
-      control flow: + check `overflow: c.items.len() * 2` (src/lib.rs:22): ok → construct `{}`, fail → panic `overflow`
-      control flow: … 4 more (semilla expand --step 0)
-      equivalence: MIR changes alone; the body: MIR changes
   syntax only:
   item `depot::show`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed comment `// the text of the cart` → `// the full text of the cart` [docs · no code]
@@ -112,9 +102,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 replace (Semilla; R90.2-2, 7 changed MIR elements): changed expression `c.total` → `c.total + 1` at `depot::show/tail/args[1]` [semantics · code different] · not stated
-    lines: src/lib.rs:22, src/lib.rs:-22
-◆ f3 replace (Semilla; R90.2-2, 7 changed MIR elements): changed expression `c.items.len()` → `c.items.len() * 2` at `depot::show/tail/args[2]` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 7 changed MIR elements; 2 nodes; one change (R92.6-1)): changed expression `c.total` → `c.total + 1` at `depot::show/tail/args[1]`; changed expression `c.items.len()` → `c.items.len() * 2` at `depot::show/tail/args[2]` [semantics · code different]
     lines: src/lib.rs:22, src/lib.rs:-22
 ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed comment `// the text of the cart` → `// the full text of the cart` [docs · no code]
     lines: src/lib.rs:21, src/lib.rs:-21

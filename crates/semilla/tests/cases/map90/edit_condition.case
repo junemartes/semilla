@@ -34,13 +34,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::pick` (src/lib.rs:1): the full compare: `#[same(depot::pick)] fn pick_same() {}`; a difference: `#[change(depot::pick)] fn pick_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::pick)] fn pick_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed operator `a > b` → `a >= b` (f1)
-      in: depot::pick
-      lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pick=TEXT'; if it does not change, --same 'rewrite $a > $b => $a >= $b'
   real edits:
   item `depot::pick`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `a > b` → `a >= b` at `depot::pick/S0/cond` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `a > b` → `a >= b` at `depot::pick/S0/cond` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pick=TEXT'; if it does not change, --same 'rewrite $a > $b => $a >= $b'
       affected bodies: depot::pick
       control flow: ~ branch `a > b` → `a >= b` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: MIR changes
@@ -50,5 +47,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `a > b` → `a >= b` at `depot::pick/S0/cond` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `a > b` → `a >= b` at `depot::pick/S0/cond` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

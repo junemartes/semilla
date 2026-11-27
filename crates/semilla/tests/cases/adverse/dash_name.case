@@ -38,12 +38,14 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 0 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 0 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `-x.txt`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): -x.txt: changed [file · no code]
+      not stated (-x.txt:1, -x.txt:-1); to state it: --change '-x.txt=TEXT'
   file `src/--help.rs`:
   ◆ f2 replace (Semilla; R90.3-2, a file edit (no tree)): src/--help.rs: changed [file · no code]
+      not stated (src/--help.rs:1, src/--help.rs:-1); to state it: --change 'src/--help.rs=TEXT'
       ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/--help.rs:=…'
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

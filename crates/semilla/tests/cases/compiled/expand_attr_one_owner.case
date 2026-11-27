@@ -85,43 +85,34 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
         no template: the name record has no definition at the place of the item (code that a macro makes)
     n3 not mapped [R90.6-1]: changed literal `shop::Cart::total/tail/rhs` (shop/src/lib.rs:8): not mapped in f3: `1` → `2`
         no template: the name record has no definition at the place of the item (code that a macro makes)
-  ? 1 place: changed literal `2` → `4` (f1)
-      in: shop::Cart::double
-      lines: shop/src/lib.rs:16, shop/src/lib.rs:-16
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::double=TEXT'; if it does not change, --same 'rewrite 2 => 4'
-  ? 1 place: changed literal `2` → `3` (f2)
-      in: shop::Cart::half
-      lines: shop/src/lib.rs:12, shop/src/lib.rs:-12
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::half=TEXT'; if it does not change, --same 'rewrite 2 => 3'
-  ? 1 place: changed literal `1` → `2` (f3)
-      in: shop::Cart::total
-      lines: shop/src/lib.rs:8, shop/src/lib.rs:-8
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::total=TEXT'; if it does not change, --same 'rewrite 1 => 2'
-  real edits:
+  compiled code that changes with no edit:
   item `shop::Cart::double`:
-  ◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::Cart::double` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
+  ◆ f4 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::Cart::double` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
       affected bodies: shop::Cart::double
       note: lines 5
   item `shop::Cart::half`:
-  ◆ f5 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::Cart::half` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
+  ◆ f5 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::Cart::half` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
       affected bodies: shop::Cart::half
       note: lines 5
   item `shop::Cart::total`:
-  ◆ f6 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::Cart::total` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
+  ◆ f6 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::Cart::total` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
       affected bodies: shop::Cart::total
       note: lines 5
   not mapped:
   item `shop::Cart::double`:
   ◆ f1 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics · code different]
+      not stated (shop/src/lib.rs:16, shop/src/lib.rs:-16); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::double=TEXT'; if it does not change, --same 'rewrite 2 => 4'
       affected bodies: shop::Cart::double
       equivalence: MIR changes
       expansion: `#[depot_macros::helper]` at `shop::impl Cart` (shop/src/lib.rs:5): expansion changed: changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics]; changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics]; changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics] (also the change of f2, f3)
   item `shop::Cart::half`:
   ◆ f2 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics · code different]
+      not stated (shop/src/lib.rs:12, shop/src/lib.rs:-12); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::half=TEXT'; if it does not change, --same 'rewrite 2 => 3'
       affected bodies: shop::Cart::half
       equivalence: MIR changes
   item `shop::Cart::total`:
   ◆ f3 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics · code different]
+      not stated (shop/src/lib.rs:8, shop/src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::total=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: shop::Cart::total
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
@@ -134,11 +125,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::Cart::double` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
+◆ f4 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::Cart::double` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
     no position
-◆ f5 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::Cart::half` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
+◆ f5 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::Cart::half` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
     no position
-◆ f6 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::Cart::total` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
+◆ f6 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::Cart::total` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
     no position
 ◆ f1 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics · code different]
     lines: shop/src/lib.rs:16, shop/src/lib.rs:-16

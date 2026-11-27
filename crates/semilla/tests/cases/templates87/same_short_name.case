@@ -20,22 +20,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::inner::size` (src/lib.rs:2): the full compare: `#[same(depot::inner::size)] fn size_same() {}`; a difference: `#[change(depot::inner::size)] fn size_change(x: u32) -> bool { … }` or `#[different(depot::inner::size)] fn size_different() -> bool { … }`
     MIR changes with no claim: `depot::size` (src/lib.rs:1): the full compare: `#[same(depot::size)] fn size_same_2() {}`; a difference: `#[change(depot::size)] fn size_change_2(x: u32) -> bool { … }` or `#[different(depot::size)] fn size_different_2() -> bool { … }`
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `1` → `2` (f1)
-      in: depot::inner::size
-      lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::inner::size=TEXT'; if it does not change, --same 'rewrite 1 => 2'
-  ? 1 place: changed expression `x` → `x * 2` (f2)
-      in: depot::size
-      lines: src/lib.rs:1, src/lib.rs:-1
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::size=TEXT'; if it does not change, --same 'rewrite x => x * 2'
   real edits:
   item `depot::inner::size`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::inner::size/tail/rhs` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::inner::size/tail/rhs` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::inner::size=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: depot::inner::size
       control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: MIR changes
   item `depot::size`:
-  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x * 2` at `depot::size/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x * 2` at `depot::size/tail` [semantics · code different]
+      not stated (src/lib.rs:1, src/lib.rs:-1); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::size=TEXT'; if it does not change, --same 'rewrite x => x * 2'
       affected bodies: depot::size
       control flow: + check `overflow: x * 2` (src/lib.rs:1): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:1)
@@ -49,7 +43,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::inner::size/tail/rhs` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::inner::size/tail/rhs` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2
-◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x * 2` at `depot::size/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x * 2` at `depot::size/tail` [semantics · code different]
     lines: src/lib.rs:1, src/lib.rs:-1

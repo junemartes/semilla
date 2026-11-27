@@ -37,10 +37,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::run` (src/lib.rs:5)
   changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: change type annotation `let _b = 2;` → `#[cfg(all())] let _b = 2;` (f1)
-      in: depot::run
-      lines: src/lib.rs:7
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   transformations:
   item `depot::run`:
   ◆ f1 same code (Semilla; R90.2-1, equal MIR): change type annotation `let _b = 2;` → `#[cfg(all())] let _b = 2;` at `depot::run/S1` [semantics · code equal]

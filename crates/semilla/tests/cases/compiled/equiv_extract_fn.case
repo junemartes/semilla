@@ -29,13 +29,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::cost` (src/lib.rs:5): the full compare: `#[same(shop::cost)] fn cost_same() {}`; a difference: `#[change(shop::cost)] fn cost_change(w: u32) -> bool { … }` or `#[different(shop::cost)] fn cost_different() -> bool { … }`
     MIR changes with no claim: `shop::ship` (src/lib.rs:1): an added body: `#[new(shop::ship)] fn ship_new(w: u32) -> bool { let new = after::shop::ship(w); true }`
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` (f1)
-      in: shop::cost
-      lines: src/lib.rs:6, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::cost=TEXT'; if it does not change, --same 'rewrite if $a > 10 { 15 } else { 5 } => ship($a)'
   real edits:
   item `shop::cost`:
-  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `shop::cost/S0/init` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `shop::cost/S0/init` [semantics · code different]
+      not stated (src/lib.rs:6, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::cost=TEXT'; if it does not change, --same 'rewrite if $a > 10 { 15 } else { 5 } => ship($a)'
       affected bodies: shop::cost
       control flow: + call `ship` (src/lib.rs:6): return → check `overflow: base + 1`
       control flow: − branch `w > 10` (src/lib.rs:-2): false → check `overflow: base + 1`, true → check `overflow: base + 1`
@@ -43,7 +40,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
   item `shop::ship`:
-  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::ship` [added · code different] · not stated
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::ship` [added · code different]
+      not stated (src/lib.rs:1-4); to state it: --change 'shop::ship=TEXT'
       affected bodies: shop::ship
       control flow: + graph of `shop::ship`: 3 points, 3 arrows (semilla expand --step 0)
   cover: each of the 6 changed line(s) is in a fact
@@ -53,7 +51,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `shop::cost/S0/init` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `shop::cost/S0/init` [semantics · code different]
     lines: src/lib.rs:6, src/lib.rs:-2
-◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::ship` [added · code different] · not stated
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::ship` [added · code different]
     lines: src/lib.rs:1-4

@@ -7,7 +7,7 @@ option: rewrite $a.total => $a.total()
 exit: 0
 must_match: ✓ a1 same: rewrite `\$a\.total` => `\$a\.total\(\)` \(the form holds: 2 site\(s\) have exactly this edit\. Semilla does not check that the behavior is the same\)
 must_match: (?s)✓ a1 same.*\n      places: depot::a/tail/lhs, depot::b/tail/lhs\n      entries, in the list below: f1\n.*◆ f1 replace \(a1; .*2 site\(s\)
-must_match: (?s)facts of the agent.*◆ f2 replace \(Semilla; [^\n]*\): changed literal `10` → `11`[^\n]* · not stated
+must_match: (?s)facts of the agent.*◆ f2 replace \(Semilla; [^\n]*\): changed literal `10` → `11`[^\n]*\n      not stated \(
 must_not_match: stated: changed literal
 same_facts_as_no_option: yes
 === both Cargo.toml
@@ -70,10 +70,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::b` (src/lib.rs:7): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
     MIR changes with no claim: `depot::limit` (src/lib.rs:11): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
   changed nodes: 3 in 2 entries; 2 real edits (1 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `10` → `11` (f2)
-      in: depot::limit
-      lines: src/lib.rs:11, src/lib.rs:-11
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
   real edits:
   item `depot::a`:
   ◆ f1 replace (a1; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
@@ -86,7 +82,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: `depot::a`: MIR changes
       equivalence: `depot::b`: MIR changes
   item `depot::limit`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
+      not stated (src/lib.rs:11, src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
       affected bodies: depot::limit
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
@@ -99,5 +96,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 === positions
 ◆ f1 replace (a1; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
     lines: src/lib.rs:6-7, src/lib.rs:-6-7
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
     lines: src/lib.rs:11, src/lib.rs:-11

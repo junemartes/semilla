@@ -58,12 +58,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot (test "a")::common::extra`:
-  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "a")::common::extra` [removed · code different] · not stated
+  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "a")::common::extra` [removed · code different]
+      not stated (tests/common/mod.rs:-5-6); to state it: --change 'depot (test "a")::common::extra=TEXT'
       affected bodies: depot (test "a")::common::extra
       control flow: − graph of `a::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: − graph of `b::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
   item `depot (test "b")::common::extra`:
-  ◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "b")::common::extra` [removed · code different] · not stated
+  ◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "b")::common::extra` [removed · code different]
+      not stated (tests/common/mod.rs:-6); to state it: --change 'depot (test "b")::common::extra=TEXT'
       affected bodies: depot (test "a")::common::extra
       control flow: − graph of `a::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: − graph of `b::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
@@ -75,7 +77,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! spotlight: inactive code: depot (test "b")::common::extra (no checked configuration compiles `depot (test "b")::common::extra`)
 
 === positions
-◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "a")::common::extra` [removed · code different] · not stated
+◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "a")::common::extra` [removed · code different]
     lines: tests/common/mod.rs:-5-6
-◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "b")::common::extra` [removed · code different] · not stated
+◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "b")::common::extra` [removed · code different]
     lines: tests/common/mod.rs:-6

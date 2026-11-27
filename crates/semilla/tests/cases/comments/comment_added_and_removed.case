@@ -32,13 +32,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:1): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
   changed nodes: 3 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `10` → `5` (f3)
-      in: shop::price
-      lines: src/lib.rs:3, src/lib.rs:-3
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 10 => 5'
   real edits:
   item `shop::price`:
-  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/S0/init/rhs` [semantics · code different] · not stated
+  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/S0/init/rhs` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 10 => 5'
       affected bodies: shop::price
       equivalence: MIR changes
       comment above line 3, added in this step: see f2
@@ -53,7 +50,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/S0/init/rhs` [semantics · code different] · not stated
+◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/S0/init/rhs` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:-3
 ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): removed docs `/// Gives the price with a tax of 10 percent.` [docs · no code]
     lines: src/lib.rs:-1

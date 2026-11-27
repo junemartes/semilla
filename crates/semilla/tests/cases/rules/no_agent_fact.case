@@ -64,17 +64,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::b` (src/lib.rs:7): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
     MIR changes with no claim: `depot::limit` (src/lib.rs:11): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
   changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: changed expression `c.total` → `c.total()` (f1)
-      in: depot::a, depot::b
-      lines: src/lib.rs:6-7, src/lib.rs:-6-7
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::a,depot::b=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()'
-  ? 1 place: changed literal `10` → `11` (f2)
-      in: depot::limit
-      lines: src/lib.rs:11, src/lib.rs:-11
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
   real edits:
   item `depot::a`:
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+      not stated (src/lib.rs:6-7, src/lib.rs:-6-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::a,depot::b=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()' (one statement for 2 places: f1)
       in: depot::a, depot::b
       affected bodies: depot::a, depot::b
       control flow: + call `Cart::total` (src/lib.rs:6): return → check `overflow: c.total() + 1`
@@ -84,7 +77,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: `depot::a`: MIR changes
       equivalence: `depot::b`: MIR changes
   item `depot::limit`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
+      not stated (src/lib.rs:11, src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
       affected bodies: depot::limit
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
@@ -95,7 +89,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
     lines: src/lib.rs:6-7, src/lib.rs:-6-7
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
     lines: src/lib.rs:11, src/lib.rs:-11

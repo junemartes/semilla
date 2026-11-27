@@ -108,13 +108,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::f3` (src/list.rs:25): the full compare: `#[same(depot::list::f3)] fn f3_same() {}`; a difference: `#[change(depot::list::f3)] fn f3_change() -> bool { … }` or `#[different(depot::list::f3)] fn f3_different() -> bool { … }`
   changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `1` → `2` (f1)
-      in: depot::list::f3
-      lines: src/list.rs:25-26, src/list.rs:-30
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::f3=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   real edits:
   item `depot::list::f3`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::list::f3/S0/init` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::list::f3/S0/init` [semantics · code different]
+      not stated (src/list.rs:25-26, src/list.rs:-30); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::f3=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: depot::list::f3
       equivalence: MIR changes
   transformations:
@@ -126,7 +123,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::list::f3/S0/init` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::list::f3/S0/init` [semantics · code different]
     lines: src/list.rs:25-26, src/list.rs:-30
 ◆ f2 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/list.rs`: 3 changed lines of 1 item with equal tokens at a new place [layout · no code]
     lines: src/list.rs:30, src/list.rs:-25-26

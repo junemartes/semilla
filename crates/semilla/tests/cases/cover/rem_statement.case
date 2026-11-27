@@ -36,13 +36,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::run` (src/lib.rs:5): the full compare: `#[same(depot::run)] fn run_same() {}`; a difference: `#[change(depot::run)] fn run_change() -> bool { … }` or `#[different(depot::run)] fn run_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: deleted statement `#[cfg(all())] let _b = 2;` (f1)
-      in: depot::run
-      lines: src/lib.rs:-7-8
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `depot::run`:
-  ◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `#[cfg(all())] let _b = 2;` at `depot::run/S1` [semantics · code different] · not stated
+  ◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `#[cfg(all())] let _b = 2;` at `depot::run/S1` [semantics · code different]
+      not stated (src/lib.rs:-7-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::run
       equivalence: MIR changes
       note: this body uses `#[cfg(all())]`, which Semilla did not check (`depot::run`)
@@ -52,5 +49,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `#[cfg(all())] let _b = 2;` at `depot::run/S1` [semantics · code different] · not stated
+◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `#[cfg(all())] let _b = 2;` at `depot::run/S1` [semantics · code different]
     lines: src/lib.rs:-7-8

@@ -31,13 +31,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::new_tax` (src/lib.rs:5): no template: the step pairs `shop::old_tax` with `shop::new_tax` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
   changed nodes: 4 in 6 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed expression `x / 10` → `x / 5 + y` (f5)
-      in: shop::new_tax
-      lines: src/lib.rs:5, src/lib.rs:-5
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::new_tax=TEXT'; if it does not change, --same 'rewrite $a / 10 => $a / 5 + y'
   real edits:
   item `shop::new_tax`:
-  ◆ f5 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `x / 10` → `x / 5 + y` at `shop::new_tax/tail` [semantics · code different] · not stated
+  ◆ f5 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `x / 10` → `x / 5 + y` at `shop::new_tax/tail` [semantics · code different]
+      not stated (src/lib.rs:5, src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::new_tax=TEXT'; if it does not change, --same 'rewrite $a / 10 => $a / 5 + y'
       affected bodies: shop::new_tax (with 1 other edit of this body)
       control flow: + check `overflow: x / 5 + y` (src/lib.rs:5): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:5)
@@ -46,16 +43,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
       docs of `shop::new_tax`, changed in this step: see f3
       comment in the attributes of `shop::new_tax`, changed in this step: see f4
-  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `shop::new_tax` added: `y: u32` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
+  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `shop::new_tax` added: `y: u32` (the public API can change: a different crate can use the item) [declaration · code different]
+      not stated (src/lib.rs:5); to state it: --change 'shop::new_tax=TEXT'
       affected bodies: shop::new_tax (with 1 other edit of this body)
       control flow: + check `overflow: x / 5 + y` (src/lib.rs:5): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:5)
       control flow: + arrow entry (src/lib.rs:5) → check `overflow: x / 5 + y` (src/lib.rs:5)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
       ! public API: the compare does not cover the code of a different crate
-  transformations:
+  compiled code that changes with no edit:
   item `shop::new_tax`:
-  ◆ f6 rename (Semilla; R90.2-5, the pair check holds): public API: `shop::old_tax` is now `shop::new_tax` (a different crate can no longer use the old path) [rename · no code]
+  ◆ f6 rename (Semilla; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `shop::old_tax` is now `shop::new_tax` (a different crate can no longer use the old path) [rename · no code]
+  transformations:
   item `shop::old_tax`:
   ◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `shop::old_tax` → `shop::new_tax` [rename · code equal]
   syntax only:
@@ -69,11 +68,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f5 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `x / 10` → `x / 5 + y` at `shop::new_tax/tail` [semantics · code different] · not stated
+◆ f5 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `x / 10` → `x / 5 + y` at `shop::new_tax/tail` [semantics · code different]
     lines: src/lib.rs:5, src/lib.rs:-5
-◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `shop::new_tax` added: `y: u32` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
+◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `shop::new_tax` added: `y: u32` (the public API can change: a different crate can use the item) [declaration · code different]
     lines: src/lib.rs:5
-◆ f6 rename (Semilla; R90.2-5, the pair check holds): public API: `shop::old_tax` is now `shop::new_tax` (a different crate can no longer use the old path) [rename · no code]
+◆ f6 rename (Semilla; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `shop::old_tax` is now `shop::new_tax` (a different crate can no longer use the old path) [rename · no code]
     no position
 ◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `shop::old_tax` → `shop::new_tax` [rename · code equal]
     no position

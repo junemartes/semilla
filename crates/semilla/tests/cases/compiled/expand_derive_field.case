@@ -30,7 +30,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop::Point.z`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): field `shop::Point.z` added: `i32` (the public API can change: a different crate can use the item) [added · code different] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): field `shop::Point.z` added: `i32` (the public API can change: a different crate can use the item) [added · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: --change 'shop::Point.z=TEXT'
       affected bodies: <shop::Point as std::cmp::PartialEq>::eq, <shop::Point as std::fmt::Debug>::fmt
       through: `shop::Point` (2 bodies)
       expansion: derived `PartialEq` of `shop::Point`: expansion changed: added operand `&& self.z == other.z` at `shop::<Point as ::core::cmp::PartialEq>::eq/tail` [semantics]
@@ -46,5 +47,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): field `shop::Point.z` added: `i32` (the public API can change: a different crate can use the item) [added · code different] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): field `shop::Point.z` added: `i32` (the public API can change: a different crate can use the item) [added · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

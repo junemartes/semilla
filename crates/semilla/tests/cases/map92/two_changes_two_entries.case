@@ -1,0 +1,52 @@
+note: two changed nodes in two statements own different MIR elements: two changes, two entries
+rule-: R92.6-1
+must_match: changed nodes: 2 in 2 entries
+must_not_match: one change \(R92.6-1\)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let x = a * 2;
+    let y = b + 1;
+    x + y
+}
+=== new src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let x = a * 3;
+    let y = b + 4;
+    x + y
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `depot::total/S0/init/rhs` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite 2 => 3' --same 'rewrite 1 => 4' (one statement for 2 places: f1, f2)
+      affected bodies: depot::total (with 1 other edit of this body)
+      control flow: ~ check `overflow: a * 2` → `overflow: a * 3` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: MIR changes alone; the body: MIR changes
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `4` at `depot::total/S1/init/rhs` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite 2 => 3' --same 'rewrite 1 => 4' (one statement for 2 places: f1, f2)
+      affected bodies: depot::total (with 1 other edit of this body)
+      control flow: ~ check `overflow: b + 1` → `overflow: b + 4` (src/lib.rs:-3, src/lib.rs:3)
+      equivalence: MIR changes alone; the body: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:1): same structure: 2 changed checks; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `depot::total/S0/init/rhs` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `4` at `depot::total/S1/init/rhs` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-3

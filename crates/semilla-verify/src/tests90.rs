@@ -106,7 +106,8 @@ fn the_one_list_has_the_real_edits_first_grouped_by_item_and_the_coverage_line()
     let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("no `{needle}` in:\n{text}"));
     assert!(at("changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped") < at("  real edits:"), "{text}");
     assert!(at("  real edits:") < at("  item `demo::g`:") && at("  item `demo::g`:") < at("◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): the fact f1") && at("◆ f1 replace") < at("  transformations:") && at("  transformations:") < at("◆ f2 same code (Semilla; R90.2-1, equal MIR)"), "{text}");
-    assert!(text.contains("[semantics · no code] · not stated") || text.contains("· not stated"), "{text}");
+    // [R92.5-1] The line below the entry has the mark and the statement that states it.
+    assert!(text.contains("\n      not stated; to state it: --change 'demo::g=TEXT'\n"), "{text}");
     // A record of an earlier version (no kind) keeps the groups and the line of today.
     let mut old_map = map(1, &["f1"]);
     old_map.entries[0].kind = None;
@@ -168,14 +169,15 @@ fn an_option_and_its_intent_statement_give_the_same_entry_and_the_same_result() 
 // rule- R90.8-1
 #[test]
 fn the_pairs_come_from_the_hints_then_from_the_one_map_of_the_matcher() {
-    // Two equal twins: the matcher gives one map (ties by the source order), checked one time.
-    let twins = "pub fn one(a: u32) -> u32 {\n    a + 1\n}\npub fn two(a: u32) -> u32 {\n    a + 1\n}\n";
-    let report = run(twins, &twins.replace("fn one", "fn first").replace("fn two", "fn second"), AgentFacts::default());
+    // Two twins and the use of one of them that follows a pair: the anchor decides the map,
+    // checked one time (two equal twins with no anchor are a tie: R92.1-1).
+    let twins = "pub fn one(a: u32) -> u32 {\n    a + 1\n}\npub fn two(a: u32) -> u32 {\n    a + 1\n}\npub fn run() -> u32 {\n    one(1)\n}\n";
+    let report = run(twins, &twins.replace("fn one", "fn first").replace("fn two", "fn second").replace("one(1)", "first(1)"), AgentFacts::default());
     let texts: Vec<&str> = report.facts.iter().map(|fact| fact.description.as_str()).collect();
     assert!(texts.contains(&"renamed `demo::one` → `demo::first`") && texts.contains(&"renamed `demo::two` → `demo::second`"), "{texts:#?}");
     // A hint wins over the matcher: the agent pairs the twins the other way.
     let hinted = AgentFacts { same: vec!["rename one second".into(), "rename two first".into()], ..Default::default() };
-    let report = run(twins, &twins.replace("fn one", "fn first").replace("fn two", "fn second"), hinted);
+    let report = run(twins, &twins.replace("fn one", "fn first").replace("fn two", "fn second").replace("one(1)", "second(1)"), hinted);
     let texts: Vec<&str> = report.facts.iter().map(|fact| fact.description.as_str()).collect();
     assert!(texts.contains(&"renamed `demo::one` → `demo::second`") && texts.contains(&"renamed `demo::two` → `demo::first`"), "{texts:#?}");
     // Two texts that are not similar are no pair: a delete and an add.

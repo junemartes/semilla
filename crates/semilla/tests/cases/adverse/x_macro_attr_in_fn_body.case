@@ -32,10 +32,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::f` (src/lib.rs:2)
   changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: replace macro input, see f1 (f1)
-      in: depot::f
-      lines: src/lib.rs:5, src/lib.rs:-5
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::f=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   transformations:
   item `depot::f`:
   ◆ f1 same code (Semilla; R90.2-1, equal MIR): replace macro input `table!( A = 1, #[cfg(unix)] B = 2, );` → `table!( A = 1, #[cfg(windows)] B = 2, );` at `depot::f/S0` [macro · no compare]

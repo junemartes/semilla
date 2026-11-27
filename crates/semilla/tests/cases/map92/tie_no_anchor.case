@@ -1,0 +1,70 @@
+note: two equal twins and no use that follows a pair: a tie of the one map gives no pair, and a note has the template of each candidate
+rule+: R92.1-1
+must_not_match: ◆ f[0-9]+ rename \(
+must_match: a tie of the one map
+must_match: the hint of the pair `depot::one` → `depot::uno`: template: `#\[rename\(before::depot::one, after::depot::uno\)\]
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn one(x: u32) -> u32 {
+    x + 1
+}
+=== new src/lib.rs
+pub fn uno(x: u32) -> u32 {
+    x + 1
+}
+
+pub fn eins(x: u32) -> u32 {
+    x + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+    MIR changes with no claim: `depot::eins` (src/lib.rs:5): an added body: `#[new(depot::eins)] fn eins_new(x: u32) -> bool { let new = after::depot::eins(x); true }`
+    MIR changes with no claim: `depot::one` (src/lib.rs:1): a removed body: `#[removed(depot::one)] fn one_removed(x: u32) -> bool { let old = before::depot::one(x); true }`
+    MIR changes with no claim: `depot::uno` (src/lib.rs:1): an added body: `#[new(depot::uno)] fn uno_new(x: u32) -> bool { let new = after::depot::uno(x); true }`
+  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::eins`:
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::eins` (the public API changes: a different crate can now use the item) [added · code different]
+      not stated (src/lib.rs:4-5); to state it: --change 'depot::eins=TEXT'
+      affected bodies: depot::eins
+      control flow: + graph of `depot::eins`: 4 points, 3 arrows (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  item `depot::one`:
+  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::one` (the public API changes: a different crate can no longer use the item) [removed · code different]
+      not stated (src/lib.rs:-1); to state it: --change 'depot::one=TEXT'
+      affected bodies: depot::one
+      control flow: − graph of `depot::one`: 4 points, 3 arrows (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  item `depot::uno`:
+  ◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::uno` (the public API changes: a different crate can now use the item) [added · code different]
+      not stated (src/lib.rs:1-3); to state it: --change 'depot::uno=TEXT'
+      affected bodies: depot::uno
+      control flow: + graph of `depot::uno`: 4 points, 3 arrows (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 3 bodies
+    depot::eins (src/lib.rs:5): graph added: 4 points, 3 arrows
+    depot::one (src/lib.rs:1): graph removed: 4 points, 3 arrows
+    depot::uno (src/lib.rs:1): graph added: 4 points, 3 arrows
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  note: `depot::one` → `depot::eins`, `depot::one` → `depot::uno` show(s) as removed and added: a tie of the one map (candidates with an equal score), and no anchor (a hint, a use that follows a pair) decides it; Semilla does not use the source order
+  note: the hint of the pair `depot::one` → `depot::eins`: template: `#[rename(before::depot::one, after::depot::eins)] fn one_to_eins() {}`
+  note: the hint of the pair `depot::one` → `depot::uno`: template: `#[rename(before::depot::one, after::depot::uno)] fn one_to_uno() {}`
+
+  ! pair: `depot::one` (removed) and `depot::eins` (added) are 100% similar: they can be one item with a new name and a second change. Semilla does not derive one item: no name map of the step has this pair
+=== positions
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::eins` (the public API changes: a different crate can now use the item) [added · code different]
+    lines: src/lib.rs:4-5
+◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::one` (the public API changes: a different crate can no longer use the item) [removed · code different]
+    lines: src/lib.rs:-1
+◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::uno` (the public API changes: a different crate can now use the item) [added · code different]
+    lines: src/lib.rs:1-3

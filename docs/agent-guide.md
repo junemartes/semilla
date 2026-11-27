@@ -139,24 +139,26 @@ Each step gives one list of entries (design 90). Each changed node of the syntax
 | `add`, `delete` | each MIR element of the node is new, or removed (a real edit) |
 | `type change` | a signature, a field, or a variant changes; the entry lists the bodies whose MIR changes (a real edit) |
 | `not mapped` | the alignment has no unique answer for the node; the request has a template |
-| `…, syntax only` | the node has no MIR element (docs, a comment, an attribute, a visibility, an item with no body): the matcher gives its pair |
+| `…, syntax only` | the node has no MIR element (docs, a comment, an attribute, a visibility, an item with no body): the matcher gives its pair. A syntax-only node with no partner (an added macro call that makes items, an added `pub use` line, the head of an added container) is `add` or `delete`, and the check says who reaches it ("reached from `shop::total` (the name record)") (design 92) |
 
 ```text
   changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop::price`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: --change 'shop::price=TEXT'
   transformations:
   item `shop::total`:
   ◆ f2 same code (Semilla; R90.2-1, equal MIR; 2 nodes): `shop::total`: renamed local `sum` → `both`, 2 edit(s) [rename · code equal]
 ```
 
-- The coverage line: `changed nodes: N in M entries; K real edits (S stated by the agent); J not mapped`. A syntax-only entry and an entry with no node of its own (the public API line of a rename) are not real edits.
-- The list has the sections `real edits`, `not mapped`, `transformations`, and `syntax only`, in this order. A line `item `PATH`:` starts the entries of one item.
+- The coverage line: `changed nodes: N in M entries; K real edits (S stated by the agent); J not mapped`. A syntax-only entry and an entry with no node of its own are not real edits.
+- The list has the sections `real edits`, `compiled code that changes with no edit`, `not mapped`, `transformations`, and `syntax only`, in this order. A line `item `PATH`:` starts the entries of one item. The section `compiled code that changes with no edit` has each entry with no node and no changed line of its own: the compiled code of a body with no edit at its place, and the line of the public API of a rename or a move (design 92). `semilla review --md` shows the same sections.
+- One change gives one entry (design 92): two nodes that own one changed MIR element are one entry ("one change (R92.6-1)"), a changed tuple variant and its constructor are one entry, and a forced edit at a use of a changed declaration is a part of its type change. An entry has one kind: a fact with nodes of two kinds splits ("split by kind (R92.7-1)"), and a removed node and an added node of one fact are one `replace`.
 - Each entry line: the number, the kind, the source (`Semilla`, or your fact `aN`), the check (the rule and what holds), the text, the category, and the compare result.
-- A real edit that no fact of yours states has the mark `· not stated`. The step passes.
+- A real edit that no fact of yours states has a line below it: `not stated (LINES); to state it: STATEMENT`. The statement is the option of design 54.4 (a `rewrite` for a group of equal edits, with the other entries of the group), the claim template of an added or a removed node, or `--change 'ITEM=TEXT'`. The step passes.
 - Your options are short forms of statements of the intent file, and they give the same entries: `--same 'rename A B'` is `#[rename(before::A, after::B)]`, `--same 'move A B'` is `#[moved(before::A, after::B)]`, `--same 'rewrite FROM => TO'` is `#[rewrite("FROM", "TO")]`, and `--change 'A,B=TEXT'` is `#[change(A, B, reason = "TEXT")]`.
-- Semilla pairs a renamed or a moved item from your hints first (`--same 'rename …'`, `#[rename]`, `#[moved]`), then from one map of its matcher. It checks each pair one time. A pair that does not pass shows as a `delete` and an `add`, with a template `#[rename(before::OLD, after::NEW)] fn …() {}`.
+- Semilla pairs a renamed or a moved item from your hints first (`--same 'rename …'`, `#[rename]`, `#[moved]`), then from one map of its matcher. A use that follows a pair (`two(x)` → `dos(x)`, `p.a` → `p.x`) decides the map. A tie (two candidates with an equal score and no such use) gives no pair: the items show as `delete` and `add`, and a note gives the template of each candidate; the source order never decides a pair. The pairs come before the check of the step, and the step runs its check one time with them. A pair that does not pass (for example a move that changes the `cfg` conditions on its path) shows as a `delete` and an `add`, with a template `#[rename(before::OLD, after::NEW)] fn …() {}`; it does not stop the other pairs.
 - `semilla expand --step N` lists each node: `nI STATE [RULE]: CHANGE NODE `AT` (PLACE): KIND in fN`.
 
 ## The facts that you state
@@ -210,23 +212,24 @@ semilla step "use the method for the total" \
 - Two forms of one change need two `rewrite` facts: `rewrite $c.total => $c.total()` and `rewrite $c.total => Cart::total($c)`.
 - A false fact rejects the step. Nothing is stored. The last line is the command with no false fact.
 
-**The gap list.** After your facts, Semilla prints each edit of existing code that can change the behavior and that no fact states. Tests, benches, new items, and removed items are not in the list. The list never rejects a step.
+**The gap list.** Semilla finds each edit of existing code that can change the behavior and that no fact states. Tests, benches, new items, and removed items are not in the list. The list never rejects a step. Since design 92, each line of the list is below its entries (the line `not stated … to state it: …`), and the one command follows the coverage line:
 
 ```text
   changed nodes: 3 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: changed expression `c.total` → `c.total()` (f1)
-      in: shop::a, shop::b
-      to state it: --same 'rewrite $a.total => $a.total()'
-  ? 1 place: changed literal `10` → `20` (f2)
-      in: shop::limit
-      to state it: --change 'shop::limit=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --same 'rewrite $a.total => $a.total()' --change 'shop::limit=TEXT'
+  real edits:
+  item `shop::a`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+      not stated (src/lib.rs:4, src/lib.rs:9, src/lib.rs:-4, src/lib.rs:-9); to state it: --same 'rewrite $a.total => $a.total()' (one statement for 2 places: f1)
+  item `shop::limit`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `20` at `shop::limit/tail` [semantics · code different]
+      not stated (src/lib.rs:12, src/lib.rs:-12); to state it: --change 'shop::limit=TEXT'
 ```
 
-- Each line is a group of equal edits, largest first. Start at the top: one fact for the first line explains the most places.
+- A group of equal edits gives one statement for each of its entries: one fact explains each place of the group.
 - "to state it" is an option that passes the check. Read it before you use it. Use a `rewrite` option only if the rewrite is what you did on purpose. Write your sentence in place of `TEXT`.
 - A line whose check did not decide (no result "different") gives the two forms (design 71.3): "to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::scale=TEXT'; if it does not change, --same 'rewrite $a * 3.0 => $a + $a + $a'". The `--same` form is the concrete pattern of the edit when Semilla has one (also for one place); a line with an edit that has no pattern adds "a `--same` fact (rename, move, or rewrite) that explains each other edit", and a line with no pattern has only these general words. Choose the form that is true for your intent: the pattern is a check of the form, not of the behavior. The one command "to state them" does not have such a line.
-- The step output shows the first 5 lines. `semilla expand --step S` shows each line.
+- Each entry has its line. The one command has the options of the first 5 lines of the list.
 - A gap is not an error. If an edit is not a part of your intent (a side effect that you did not plan), look at it. Then state it, or correct the code in the next step.
 
 **How to add a fact.** `semilla fact [--step N] --same '…' --change '…'` adds facts to a stored step (default: the last step). `--reason 'KEY=TEXT'` adds a reason for a spotlight of the stored step, as `semilla step --reason` does (design 68.11); a new text replaces the old text of the key, and a reason that belongs to no fact stores nothing. No build check runs again, because the code of the step is the same. The output shows each fact with its result and the new count of the gaps. A false fact stores nothing.
@@ -568,7 +571,7 @@ Read the positions from the hunk headers of the command. The header `@@ -120,12 
 
 - A fact with lines in the tag and lines out of it shows with the tag and the mark "in part", with the lines that are not in the tag: "in part: f6 has lines that are not in the tag: src/net.rs:3-4". The head line of the tag counts these facts apart ("0 fact(s); 1 fact(s) in part; 2 changed line(s)"). Add the hunk of these lines to the tag if the fact belongs to it.
 - A fact with no position (an `indirect` fact, a fact of the public API with no edit of its own) is in no tag and not in the group "not in a tag". These facts show in their own line: "facts with no position (a tag selects changed lines; these facts have none): …".
-- `semilla status --verbose` prints the position of each fact (the line `lines:`). The gap list of the step output prints the positions of each gap.
+- `semilla status --verbose` prints the position of each fact (the line `lines:`). The line "not stated" of an entry prints its positions (design 92).
 
 **The errors.**
 

@@ -164,6 +164,9 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
         let item = if added { &edit.after } else { &edit.before }.as_ref().map(|anchor| anchor.item.clone()).unwrap_or_default();
         map.entries[place].template = templates.entry((added, item)).or_insert_with(|| template(input, outcome, edit, &mut pending)).clone();
     }
+    // [R92.6-1] [R92.7-1] The facts of one change make one fact, and each fact has one kind.
+    crate::diffmap::shape(outcome, trees, &mut map, &indices);
+    let nodes: Vec<&Edit> = outcome.edits.iter().filter(|edit| is_node(edit)).collect();
     let mut not_mapped = BTreeSet::new();
     for (edit, entry) in nodes.iter().zip(&map.entries) {
         if entry.state == AstState::NotMapped {
@@ -224,7 +227,8 @@ fn containers(input: &StepInput, nodes: &[&Edit], entries: &mut [AstEntry]) {
         }
         let states: Vec<AstState> = members.iter().map(|at| entries[*at].state).collect();
         let decision = if states.contains(&AstState::NotMapped) {
-            (AstState::NotMapped, String::new())
+            // [R92.3-1] Who reaches the head of the container: its members.
+            (AstState::NotMapped, "the head of a container: its members reach it".to_string())
         } else if states.iter().all(|state| *state == AstState::Claim) {
             let mut ids: Vec<String> = members.iter().flat_map(|at| entries[*at].by.split(", ").map(str::to_string).collect::<Vec<_>>()).collect();
             ids.sort();
@@ -774,6 +778,9 @@ struct Pure {
     unreached: BTreeSet<String>,
     /// [R79.3-5] The state of each added (side 1) and removed (side 0) `use` line.
     uses: [BTreeMap<String, UseState>; 2],
+    /// [R92.3-1] Who reaches each added (side 1) and removed (side 0) item that old code reaches
+    /// (that new code reads): the items of the other tree that name it, from the name record.
+    reach: [BTreeMap<String, String>; 2],
 }
 
 impl Pure {
@@ -781,7 +788,7 @@ impl Pure {
         let pure_items = |kind: EditKind| -> BTreeSet<String> { outcome.edits.iter().filter(|edit| edit.kind == kind).filter_map(|edit| edit.anchor()).filter(|anchor| anchor.path.is_empty()).map(|anchor| anchor.item.clone()).collect() };
         let (removed, added) = (pure_items(EditKind::ItemRemoved), pure_items(EditKind::ItemAdded));
         if removed.is_empty() && added.is_empty() {
-            return Pure { dead: BTreeSet::new(), unreached: BTreeSet::new(), uses: Default::default() };
+            return Pure { dead: BTreeSet::new(), unreached: BTreeSet::new(), uses: Default::default(), reach: Default::default() };
         }
         let trees = [Tree::new(input.before), Tree::new(input.after)];
         let is_use = |side: usize, path: &String| trees[side].tree.items.get(path).is_some_and(|item| item.kind == ItemKind::Use);
@@ -842,7 +849,7 @@ impl Pure {
         }
         let more: Vec<String> = candidates.iter().filter(|path| !reached.contains(*path) && trees[1].is_container(path) && reached.iter().any(|member| trees[1].within(path, member))).cloned().collect();
         reached.extend(more);
-        let unreached = candidates.iter().filter(|path| !reached.contains(*path)).cloned().collect();
+        let unreached: BTreeSet<String> = candidates.iter().filter(|path| !reached.contains(*path)).cloned().collect();
         // [R79.3-5] The `use` lines.
         let mut edited: [BTreeSet<String>; 2] = Default::default();
         for edit in &outcome.edits {
@@ -859,9 +866,42 @@ impl Pure {
                 uses[side].insert(path.clone(), use_state(&trees[side], &trees[1 - side], side, path, anchors, &edited[side]));
             }
         }
-        Pure { dead, unreached, uses }
+        // [R92.3-1] Who reaches each item that the rules above leave with a reader.
+        let mut reach: [BTreeMap<String, String>; 2] = Default::default();
+        for path in removed.iter().filter(|path| !dead.contains(*path) && !is_use(0, path)) {
+            reach[0].insert(path.clone(), reach_text(&trees[0], trees[1].tree, path));
+        }
+        for path in added.iter().filter(|path| !unreached.contains(*path) && !is_use(1, path)) {
+            reach[1].insert(path.clone(), reach_text(&trees[1], trees[0].tree, path));
+        }
+        Pure { dead, unreached, uses, reach }
     }
 }
+
+/// [R92.3-1] Who reaches an added or a removed item (design 92): the items of the other tree that
+/// name it (the name record; with no record, the words of the text), at most four with a count
+/// of the others. A public item and an item of a trait impl have the cause of their reader.
+fn reach_text(tree: &Tree, other: &Workspace, path: &str) -> String {
+    if tree.of_trait(path) {
+        return "a use of its trait reaches it".into();
+    }
+    let spots = match tree.refs(path) {
+        Refs::Always => return "a derive of its type reads it".into(),
+        Refs::At(spots) => spots,
+    };
+    let inner = |holder: &String| holder == path || holder.starts_with(&format!("{path}::")) || holder.starts_with(&format!("{path}."));
+    let readers: BTreeSet<String> = spots.iter().take(REACH_SPOTS).filter_map(|spot| tree.holder(spot)).filter(|holder| !inner(holder) && other.items.contains_key(holder)).collect();
+    let source = if tree.names.is_some() { "the name record" } else { "the words of the text" };
+    if readers.is_empty() {
+        return if tree.public(path) { "a different crate can use it (a public item)".into() } else { format!("no item of the other tree names it ({source})") };
+    }
+    let shown: Vec<String> = readers.iter().take(4).map(|reader| format!("`{reader}`")).collect();
+    let more = if readers.len() > 4 { format!(", and {} more", readers.len() - 4) } else { String::new() };
+    format!("reached from {}{more} ({source})", shown.join(", "))
+}
+
+/// [R92.3-1] The most references of an item that the text of who reaches it reads.
+const REACH_SPOTS: usize = 64;
 
 /// [R79.3-5] The state of an added or a removed `use` line: unused by the name record (Semilla),
 /// or a part of the changes of its readers when each item that reads a name of the line has an
@@ -885,7 +925,9 @@ fn leaves_of(tree: &Tree, path: &str) -> Option<Vec<String>> {
 }
 
 fn use_state(tree: &Tree, other: &Tree, side: usize, path: &str, anchors: &[ClaimAnchor], edited: &BTreeSet<String>) -> UseState {
-    let not_mapped = |cause: &str| (AstState::NotMapped, String::new(), cause.to_string());
+    // [R92.3-1] A line that is not mapped has who reaches it in the second part.
+    let reached = |cause: &str, reach: String| (AstState::NotMapped, reach, cause.to_string());
+    let not_mapped = |cause: &str| reached(cause, "its names: no data of the name record".to_string());
     let Some(item) = tree.tree.items.get(path) else { return not_mapped("no claim names a `use` line") };
     if item.signature.contains('*') {
         return not_mapped("a glob `use` line: Semilla does not know the names that it gives; a claim on each item that reads them maps it");
@@ -922,7 +964,7 @@ fn use_state(tree: &Tree, other: &Tree, side: usize, path: &str, anchors: &[Clai
             return (AstState::Claim, ids.join(", "), String::new());
         }
         let shown = if named.is_empty() { leaves.iter().map(|leaf| format!("`{leaf}`")).collect::<Vec<_>>().join(", ") } else { list(&named) };
-        return not_mapped(&format!("a `use` line with a visibility gives its names to other modules; a claim on each item that it names maps it: {shown}"));
+        return reached(&format!("a `use` line with a visibility gives its names to other modules; a claim on each item that it names maps it: {shown}"), format!("its names reach other modules: {shown} (the name record)"));
     }
     // The names of the module of the line and of each module below it.
     let module = path.rsplit_once("::").map(|(module, _)| module).unwrap_or("");
@@ -959,7 +1001,7 @@ fn use_state(tree: &Tree, other: &Tree, side: usize, path: &str, anchors: &[Clai
     if open.is_empty() {
         return (AstState::Semilla, format!("a part of the changes of its readers: {}", list(&readers)), String::new());
     }
-    not_mapped(&format!("no claim names a `use` line; it reads into items that the step does not change: {}; a claim on each one maps the line", list(&open)))
+    reached(&format!("no claim names a `use` line; it reads into items that the step does not change: {}; a claim on each one maps the line", list(&open)), format!("reached from {} (the name record)", list(&open)))
 }
 
 /// The words of the change of an edit.
@@ -1087,7 +1129,9 @@ fn entry(input: &StepInput, edit: &Edit, anchors: &[ClaimAnchor], pure: &Pure) -
             } else if edit.kind == EditKind::ItemAdded && pure.unreached.contains(&item) {
                 set(&mut entry, AstState::Semilla, "an added item that no old code reaches", RULE_NOT_REACHED);
             } else {
-                set(&mut entry, AstState::NotMapped, "", RULE_REQUEST);
+                // [R92.3-1] Who reaches the item: the map of the diff gives it to the entry.
+                let reach = pure.reach[side].get(&item).cloned().unwrap_or_default();
+                set(&mut entry, AstState::NotMapped, &reach, RULE_REQUEST);
             }
         }
     }

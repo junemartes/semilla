@@ -1050,7 +1050,8 @@ fn map_problems(work: &mut Work, folder: &Path, output: &str, state: &str, refac
         let Some((id, rest)) = rest.split_once(' ') else { continue };
         entries.insert(id.to_string());
         let kind = ENTRY_KINDS.iter().find(|kind| rest.starts_with(&format!("{kind} (")) || rest.starts_with(&format!("{kind}, syntax only (")));
-        let checked = rest.split_once("): ").is_some_and(|(head, _)| head.contains("; R90."));
+        // [R92.4-1] [R92.3-1] The rules of design 92 check an entry too.
+        let checked = rest.split_once("): ").is_some_and(|(head, _)| head.contains("; R90.") || head.contains("; R92."));
         if kind.is_none() || !checked {
             problems.push(format!("{state}: the entry `{}` has no kind, no source, or no check", line.chars().take(120).collect::<String>()));
         }
@@ -1752,7 +1753,8 @@ fn check(case: &Case) -> Result<Outcome, String> {
     // A comment of a changed item is below the first fact of the item in the order of the
     // output (design 58.6), and a fact of the agent changes that order. Thus the comments are
     // not sub lines of the compare of the facts: they have their own compare.
-    let fact_set = |run: &Run| -> BTreeSet<(String, Vec<String>)> { facts(&run.all()).iter().map(|fact| (fact_text(&fact.head), comment_subs(&fact.subs).0)).collect() };
+    // [R92.5-1] The line "not stated" of an entry depends on the statements of the agent.
+    let fact_set = |run: &Run| -> BTreeSet<(String, Vec<String>)> { facts(&run.all()).iter().map(|fact| (fact_text(&fact.head), comment_subs(&fact.subs).0.into_iter().filter(|sub| !sub.starts_with("not stated")).collect())).collect() };
     if case.same_facts && let Some(plain) = &plain {
         let (with, without) = (fact_set(&step), fact_set(plain));
         if step.code == 2 {

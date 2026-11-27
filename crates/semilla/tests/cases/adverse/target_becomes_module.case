@@ -51,22 +51,20 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::extra::value` (src/extra.rs:1): no template: error[S0112]: the scope path `before::depot::extra::value` names no item of the version
     MIR changes with no claim: `extra::{test-harness-main}` (no place): no result of the equivalence check; no template: error[S0112]: the scope path `before::depot::extra` names no item of the version
   changed nodes: 2 in 4 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `1` → `2` (f2)
-      in: depot::extra::value
-      lines: src/extra.rs:3-4, tests/extra.rs:-3-4
-      to state it: --change 'depot::extra::value=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::extra::value=TEXT'
   real edits:
   item `depot::extra::value`:
-  ◆ f2 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed literal `1` → `2` at `depot::extra::value/tail/rhs` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed literal `1` → `2` at `depot::extra::value/tail/rhs` [semantics · code different]
+      not stated (src/extra.rs:3-4, tests/extra.rs:-3-4); to state it: --change 'depot::extra::value=TEXT'
       affected bodies: depot::extra::value
       control flow: + graph of `depot::extra::value`: 2 points, 1 arrow (semilla expand --step 0)
+  compiled code that changes with no edit:
+  item `depot::extra::value`:
+  ◆ f4 move (Semilla; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: a different crate can now use `depot::extra::value` [move · no code]
   transformations:
   item `depot (test "extra")::value`:
   ◆ f1 move (Semilla; R90.2-5, the pair check holds): moved `depot (test "extra")::value` → `depot::extra::value` [move · code equal]
       control flow: + graph of `depot::extra::value`: 2 points, 1 arrow (semilla expand --step 0)
-  item `depot::extra::value`:
-  ◆ f4 move (Semilla; R90.2-5, the pair check holds): public API: a different crate can now use `depot::extra::value` [move · no code]
   syntax only:
   item `depot::extra`:
   ◆ f3 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `depot::extra` (the public API changes: a different crate can now use the item) [added · no code]
@@ -78,11 +76,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed literal `1` → `2` at `depot::extra::value/tail/rhs` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed literal `1` → `2` at `depot::extra::value/tail/rhs` [semantics · code different]
     lines: src/extra.rs:3-4, tests/extra.rs:-3-4
+◆ f4 move (Semilla; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: a different crate can now use `depot::extra::value` [move · no code]
+    no position
 ◆ f1 move (Semilla; R90.2-5, the pair check holds): moved `depot (test "extra")::value` → `depot::extra::value` [move · code equal]
     lines: src/extra.rs:1-2, tests/extra.rs:-1-2
-◆ f4 move (Semilla; R90.2-5, the pair check holds): public API: a different crate can now use `depot::extra::value` [move · no code]
-    no position
 ◆ f3 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `depot::extra` (the public API changes: a different crate can now use the item) [added · no code]
     lines: src/lib.rs:6

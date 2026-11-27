@@ -38,7 +38,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop::inc2`:
-  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::inc2` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::inc2` (the public API changes: a different crate can now use the item) [added · code different]
+      not stated (src/lib.rs:4-15); to state it: --change 'shop::inc2=TEXT'
       affected bodies: shop::inc2
       control flow: + graph of `shop::inc2`: 4 points, 3 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
@@ -48,5 +49,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::inc2` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::inc2` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:4-15

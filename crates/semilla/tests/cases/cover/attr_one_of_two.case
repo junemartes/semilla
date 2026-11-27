@@ -30,7 +30,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::limit`:
-  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): attributes of `depot::limit`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): attributes of `depot::limit`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute · code different]
+      not stated (src/lib.rs:4, src/lib.rs:-4); to state it: --change 'depot::limit=TEXT'
       ! the compiled code changes: depot::limit
       ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::limit=…'
   cover: each of the 2 changed line(s) is in a fact
@@ -41,5 +42,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::limit=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::limit=the reason of the test'
-◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): attributes of `depot::limit`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): attributes of `depot::limit`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute · code different]
     lines: src/lib.rs:4, src/lib.rs:-4

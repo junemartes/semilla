@@ -36,20 +36,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::run` (src/lib.rs:5): the full compare: `#[same(shop::run)] fn run_same() {}`; a difference: `#[change(shop::run)] fn run_change(v: u32) -> bool { … }` or `#[different(shop::run)] fn run_different() -> bool { … }`
     MIR changes with no claim: `shop::run::{closure#0} |x: u32| helper(x.wrapping_add(1))` (src/lib.rs:6): the template of `shop::run` covers its item `shop::run`
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: 2 different edits (f1, f2)
-      in: shop::run
-      lines: src/lib.rs:6-7, src/lib.rs:-6-7
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::run=TEXT'; if it does not change, --same 'rewrite $a.wrapping_add(1) => helper($a.wrapping_add(1))' --same 'rewrite helper($a) => h(v)'
   real edits:
   item `shop::run`:
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x.wrapping_add(1)` → `helper(x.wrapping_add(1))` at `shop::run/S0/init/body` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x.wrapping_add(1)` → `helper(x.wrapping_add(1))` at `shop::run/S0/init/body` [semantics · code different]
+      not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::run=TEXT'; if it does not change, --same 'rewrite $a.wrapping_add(1) => helper($a.wrapping_add(1))' --same 'rewrite helper($a) => h(v)' (one statement for 2 places: f1, f2)
       affected bodies: shop::run (with 1 other edit of this body)
       control flow: moved call `helper` (src/lib.rs:6) from `shop::run`: return → return
       control flow: + arrow call `num::<impl u32>::wrapping_add` (src/lib.rs:6) → call `helper` (src/lib.rs:6) (return)
       control flow: − arrow call `num::<impl u32>::wrapping_add` (src/lib.rs:-6) → return (src/lib.rs:-6) (return)
       equivalence: `shop::run`: MIR changes alone: the same MIR text; a changed callee: `shop::run::{closure#0}`; the body: MIR changes
       equivalence: `shop::run::{closure#0} |x: u32| helper(x.wrapping_add(1))`: MIR changes alone; the body: MIR changes
-  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed call: `helper(h(v))` → `h(v)` at `shop::run/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed call: `helper(h(v))` → `h(v)` at `shop::run/tail` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::run=TEXT'; if it does not change, --same 'rewrite $a.wrapping_add(1) => helper($a.wrapping_add(1))' --same 'rewrite helper($a) => h(v)' (one statement for 2 places: f1, f2)
       affected bodies: shop::run (with 1 other edit of this body)
       control flow: moved call `helper` (src/lib.rs:-7) to `shop::run::{closure#0}`: return → return
       control flow: − arrow call `h` [closure] (src/lib.rs:-7) → call `helper` (src/lib.rs:-7) (return)
@@ -62,7 +60,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x.wrapping_add(1)` → `helper(x.wrapping_add(1))` at `shop::run/S0/init/body` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x.wrapping_add(1)` → `helper(x.wrapping_add(1))` at `shop::run/S0/init/body` [semantics · code different]
     lines: src/lib.rs:6, src/lib.rs:-6
-◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed call: `helper(h(v))` → `h(v)` at `shop::run/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed call: `helper(h(v))` → `h(v)` at `shop::run/tail` [semantics · code different]
     lines: src/lib.rs:7, src/lib.rs:-7

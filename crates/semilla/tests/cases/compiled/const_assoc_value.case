@@ -42,23 +42,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::S::B` (src/lib.rs:7): the full compare: `#[same(shop::S::B)] fn b_same() {}`; a difference: `#[change(shop::S::B)] fn b_change() -> bool { … }` or `#[different(shop::S::B)] fn b_different() -> bool { … }`
     MIR changes with no claim: `shop::get` (src/lib.rs:10): the full compare: `#[same(shop::get)] fn get_same() {}`; a difference: `#[change(shop::get)] fn get_change() -> bool { … }` or `#[different(shop::get)] fn get_different() -> bool { … }`
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: value of, see f1 (f1)
-      in: shop::S::A
-      lines: src/lib.rs:6, src/lib.rs:-6
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::S::A=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  ? 1 place: value of, see f2 (f2)
-      in: shop::S::B
-      lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::S::B=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `shop::S::A`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::S::A` changed: N as u32 → (M + 1) as u32 (the public API can change: a different crate can use the item) [semantics · code different] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::S::A` changed: N as u32 → (M + 1) as u32 (the public API can change: a different crate can use the item) [semantics · code different]
+      not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::S::A=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::S::A, shop::get
       through: `shop::S::A` (1 body)
       equivalence: MIR changes
       ! public API: the compare does not cover the code of a different crate
   item `shop::S::B`:
-  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::S::B` changed: N as u32 → M as u32 (the public API can change: a different crate can use the item) [semantics · code different] · not stated
+  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::S::B` changed: N as u32 → M as u32 (the public API can change: a different crate can use the item) [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::S::B=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::S::B, shop::get
       through: `shop::S::B` (1 body)
       equivalence: MIR changes
@@ -71,7 +65,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::S::A` changed: N as u32 → (M + 1) as u32 (the public API can change: a different crate can use the item) [semantics · code different] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::S::A` changed: N as u32 → (M + 1) as u32 (the public API can change: a different crate can use the item) [semantics · code different]
     lines: src/lib.rs:6, src/lib.rs:-6
-◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::S::B` changed: N as u32 → M as u32 (the public API can change: a different crate can use the item) [semantics · code different] · not stated
+◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::S::B` changed: N as u32 → M as u32 (the public API can change: a different crate can use the item) [semantics · code different]
     lines: src/lib.rs:7, src/lib.rs:-7

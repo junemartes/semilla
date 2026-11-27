@@ -275,6 +275,9 @@ pub struct NodeMir {
     pub doubt: bool,
     /// True: the body of the node is on one side only (an added or a removed function).
     pub one_side: bool,
+    /// [R92.6-1] The other nodes (by the index of their edit) that own an element of this node
+    /// by its place: the nodes come from one change (design 92).
+    pub shared: std::collections::BTreeSet<usize>,
 }
 
 /// The control flow graph diff of a step (design 60, part C).
@@ -1386,28 +1389,47 @@ impl EntryKind {
 }
 
 /// [R90.5-1] The section of an entry in the one list (design 90): the real edits first.
-pub const ENTRY_SECTIONS: &[&str] = &["real edits", "not mapped", "transformations", "syntax only"];
+/// [R92.4-1] The entries with no edit of their own (design 92) have a section after the real
+/// edits.
+pub const ENTRY_SECTIONS: &[&str] = &["real edits", NO_EDIT_SECTION, "not mapped", "transformations", "syntax only"];
+
+/// [R92.4-1] The section of the entries with no node and no changed line of their own: the
+/// compiled code of a body with no edit, and a line of the public API of a rename or a move.
+pub const NO_EDIT_SECTION: &str = "compiled code that changes with no edit";
 
 impl Fact {
     /// [R90.5-1] The section of the entry in the one list: an index of [`ENTRY_SECTIONS`].
     /// `None`: a record of an earlier version (the groups of today).
     pub fn section(&self) -> Option<usize> {
         let kind = self.kind?;
-        Some(if kind == EntryKind::NotMapped {
+        Some(if self.no_edit() {
             1
+        } else if kind == EntryKind::NotMapped {
+            2
         } else if self.syntax_only {
-            3
+            4
         } else if kind.is_real() {
             0
         } else {
-            2
+            3
         })
     }
 
-    /// [R90.3-1] True for an entry that counts as a real edit in the coverage line: a real kind,
-    /// not syntax only, with a changed node or a file edit of its own.
+    /// [R92.4-1] True for an entry with no edit of its own (design 92): no changed node, no
+    /// changed line, and no file edit. Such an entry is the compiled code of a body with no edit
+    /// at its place, or a line of the public API of a pair. It is not a real edit. A new layout
+    /// (equal tokens) is a transformation, and the fact of a pair (the part `identity`) is the
+    /// entry of the pair (R90.2-5): the syntax diff under the name map has no node of the name.
+    pub fn no_edit(&self) -> bool {
+        let file_edit = self.at.is_none() && self.file.is_some();
+        self.kind.is_some_and(|kind| kind != EntryKind::SameCode) && self.nodes.is_empty() && self.positions.is_empty() && !file_edit && self.part != "identity"
+    }
+
+    /// [R90.3-1] True for an entry that counts as a real edit in the coverage line: an entry of
+    /// the section "real edits" (a real kind, not syntax only, with a changed node, a changed
+    /// line, or a file edit of its own; R92.4-1).
     pub fn counts_as_real(&self) -> bool {
-        self.kind.is_some_and(EntryKind::is_real) && !self.syntax_only && (!self.nodes.is_empty() || self.part == "file")
+        self.section() == Some(0)
     }
 
     /// [R90.5-1] The head of the entry before its text: the kind, the source, and the check.
@@ -1417,6 +1439,40 @@ impl Fact {
         let source = if self.source.is_empty() { "Semilla".to_string() } else { self.source.join(", ") };
         let syntax = if self.syntax_only && kind != EntryKind::NotMapped { ", syntax only" } else { "" };
         Some(format!("{}{syntax} ({source}; {})", kind.name(), self.check))
+    }
+}
+
+impl StepReport {
+    /// [R92.5-1] The line below an entry that no statement names (design 92): the mark "not
+    /// stated", the lines of the edit, and the statement that states it. The statement is the
+    /// option of the line of the gap list of the entry (design 54.4), with the other entries of
+    /// that line; else the claim template of a node of the entry; else a `change` statement of
+    /// the item (or of the file) of the entry. An entry of a line of the gap list that is
+    /// syntax only or not mapped has the line too: no value of the gap list is lost. `None`:
+    /// the entry is stated, or it is a transformation (same code, rename, move), or it has no
+    /// edit of its own (R92.4-1), or it is a record of an earlier version.
+    pub fn not_stated_line(&self, fact: &Fact) -> Option<String> {
+        let kind = fact.kind?;
+        let in_gap = self.gaps.iter().any(|gap| gap.facts.contains(&fact.id));
+        let open = matches!(kind, EntryKind::Replace | EntryKind::Add | EntryKind::Delete | EntryKind::TypeChange | EntryKind::NotMapped) && !fact.no_edit();
+        if !(fact.not_stated || (in_gap && open)) {
+            return None;
+        }
+        let lines = if fact.positions.is_empty() { String::new() } else { format!(" ({})", Position::list(&fact.positions)) };
+        // The claim template of a node of the entry that the gate accepts (R79.5-1, R87.1-1).
+        let template = self.ast.as_ref().and_then(|map| fact.nodes.iter().filter_map(|node| map.entries.get(node.wrapping_sub(1))).map(|entry| entry.template.as_str()).find(|template| template.starts_with("#[")));
+        let statement = match (self.gaps.iter().find(|gap| gap.facts.contains(&fact.id)), template) {
+            (Some(gap), _) => {
+                let others = if gap.places.len() > 1 { format!(" (one statement for {}: {})", gap.line().split(':').next().unwrap_or(""), gap.facts.join(", ")) } else { String::new() };
+                format!("{}{others}", gap.suggestion())
+            }
+            (None, Some(template)) => format!("`{template}`"),
+            (None, None) => {
+                let target = fact.at.as_ref().map(|at| at.item.clone()).or_else(|| fact.file.clone()).unwrap_or_default();
+                format!("--change '{}=TEXT'", target.replace('\'', "'\\''"))
+            }
+        };
+        Some(format!("not stated{lines}; to state it: {statement}"))
     }
 }
 
@@ -2225,6 +2281,12 @@ impl StepReport {
         };
         let Some(head) = head else { return Vec::new() };
         let mut lines = vec![format!("  {head}")];
+        // [R92.5-1] Each entry that no statement names has its own line with the statement
+        // (`not_stated_line`): the separate gap list goes. A record of an earlier version keeps
+        // its list.
+        if self.facts.iter().any(|fact| fact.kind.is_some()) {
+            return lines;
+        }
         let shown = limit.unwrap_or(self.gaps.len()).min(self.gaps.len());
         for gap in &self.gaps[..shown] {
             lines.push(format!("  ? {}", gap.line()));

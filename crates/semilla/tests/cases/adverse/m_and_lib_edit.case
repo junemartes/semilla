@@ -54,13 +54,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::top` (src/lib.rs:5): the full compare: `#[same(depot::top)] fn top_same() {}`; a difference: `#[change(depot::top)] fn top_change() -> bool { … }` or `#[different(depot::top)] fn top_different() -> bool { … }`
   changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `1` → `2` (f1)
-      in: depot::top
-      lines: src/lib.rs:5, src/lib.rs:-5
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::top=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   real edits:
   item `depot::top`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::top/tail` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::top/tail` [semantics · code different]
+      not stated (src/lib.rs:5, src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::top=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: depot::top
       equivalence: MIR changes
   transformations:
@@ -72,7 +69,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::top/tail` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::top/tail` [semantics · code different]
     lines: src/lib.rs:5, src/lib.rs:-5
 ◆ f2 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 2 items and 14 lines keep their tokens [move · no code]
     lines: src/list.rs:-1-14, src/list/mod.rs:1-14

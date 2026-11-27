@@ -27,10 +27,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `shop::secs` (src/lib.rs:3)
   changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed expression `3600` → `HOUR` (f1)
-      in: shop::secs
-      lines: src/lib.rs:4, src/lib.rs:-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::secs=TEXT'; if it does not change, --same 'rewrite 3600 => HOUR'
   transformations:
   item `shop::secs`:
   ◆ f1 same code (Semilla; R90.2-1, equal MIR): changed expression `3600` → `HOUR` at `shop::secs/tail/rhs` [semantics · code equal]

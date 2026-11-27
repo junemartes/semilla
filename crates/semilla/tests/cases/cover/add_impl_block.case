@@ -34,12 +34,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::Tool::size`:
-  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::Tool::size` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::Tool::size` (the public API changes: a different crate can now use the item) [added · code different]
+      not stated (src/lib.rs:9); to state it: --change 'depot::Tool::size=TEXT'
       affected bodies: depot::Tool::size
       control flow: + graph of `depot::Tool::size`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   item `depot::impl Tool`:
-  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::impl Tool` with: `fn size` [added · code different] · not stated
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::impl Tool` with: `fn size` [added · code different]
+      not stated (src/lib.rs:6-9); to state it: --change 'depot::impl Tool=TEXT'
       affected bodies: depot::Tool::size
       control flow: + graph of `depot::Tool::size`: 2 points, 1 arrow (semilla expand --step 0)
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::impl Tool`; it needs a reason: --reason 'depot::impl Tool=…'
@@ -51,7 +53,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::impl Tool=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::impl Tool=the reason of the test'
-◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::Tool::size` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::Tool::size` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:9
-◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::impl Tool` with: `fn size` [added · code different] · not stated
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::impl Tool` with: `fn size` [added · code different]
     lines: src/lib.rs:6-9

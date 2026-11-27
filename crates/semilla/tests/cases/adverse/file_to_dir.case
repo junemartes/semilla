@@ -34,12 +34,14 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 0 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 0 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `notes/one.txt`:
   ◆ f2 add (Semilla; R90.3-2, a file edit (no tree)): notes/one.txt: added [file · no code]
+      not stated (notes/one.txt:1); to state it: --change 'notes/one.txt=TEXT'
   file `notes`:
   ◆ f1 delete (Semilla; R90.3-2, a file edit (no tree)): notes: removed [file · no code]
+      not stated (notes:-1); to state it: --change 'notes=TEXT'
       ✗ spotlight: a file that is not on the allow list of files that no tool reads to build or to test (docs, license texts, images); it needs a reason: --reason 'notes:=…'
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

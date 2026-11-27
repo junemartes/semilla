@@ -34,13 +34,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::W::<u8>::get` (src/lib.rs:6): the full compare: `#[same(shop::W::get)] fn get_same() {}`; a difference: `#[change(shop::W::get)] fn get_change() -> bool { … }` or `#[different(shop::W::get)] fn get_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed expression `self.0` → `self.0 + 1` (f1)
-      in: shop::W::get#1
-      lines: src/lib.rs:5-7, src/lib.rs:-2-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::W::get#1=TEXT'; if it does not change, --same 'rewrite $a.0 => $a.0 + 1'
   real edits:
   item `shop::W::get#1`:
-  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 1` at `shop::W::get#1/tail` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 1` at `shop::W::get#1/tail` [semantics · code different]
+      not stated (src/lib.rs:5-7, src/lib.rs:-2-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::W::get#1=TEXT'; if it does not change, --same 'rewrite $a.0 => $a.0 + 1'
       affected bodies: shop::W::get#1
       control flow: + check `overflow: self.0 + 1` (src/lib.rs:6): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:6)
@@ -54,5 +51,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   note: twins: `shop::W::get#0` of the old tree and `shop::W::get#1` of the new tree are one pair (a pair by its identity); the facts name the pair `shop::W::get#1`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 1` at `shop::W::get#1/tail` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 1` at `shop::W::get#1/tail` [semantics · code different]
     lines: src/lib.rs:5-7, src/lib.rs:-2-4

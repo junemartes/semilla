@@ -213,6 +213,23 @@ pub fn assign(input: &Input, report: &mut StepReport) {
                     }
                 }
             }
+            // [R92.6-1] The nodes that own one element by its place (rules 1 and 1b of design
+            // 40.3) come from one change: they project the same changed MIR element. A node of a
+            // refactoring (a move, a variable, a rename of a local, design 41.7) changes no
+            // element: it is not a part of the change of the element.
+            let mut by_element: BTreeMap<(usize, &crate::MirPlace), BTreeSet<usize>> = BTreeMap::new();
+            for (edit, elements) in own.owns.iter().filter(|(edit, _)| own.positional.contains(*edit) && !refactoring.contains(*edit)) {
+                for side in 0..2 {
+                    for place in elements[side].iter().filter_map(|element| element.tokens.as_ref()) {
+                        by_element.entry((side, place)).or_default().insert(*edit);
+                    }
+                }
+            }
+            for edits in by_element.values().filter(|edits| edits.len() > 1) {
+                for edit in edits {
+                    report.node_mir.entry(*edit).or_default().shared.extend(edits.iter().filter(|other| *other != edit));
+                }
+            }
             note_through(input, &own, &name, &mut through_of);
             map.counts.linked += own.linked;
             for (cause, count) in &own.causes {
@@ -1043,7 +1060,10 @@ fn text_edits(input: &Input, body: &BodyComparison, name: &str) -> Vec<usize> {
         let Some(item) = edit.item() else { continue };
         // An edit with a place only before the step: its item can have a new path (design 36.1).
         let item = if edit.after.is_none() { input.identity_pairs.iter().find(|(_, old, _)| old == item).map_or(item, |(_, _, new)| new.as_str()) } else { item };
-        let own = item == name;
+        // [R92.6-1] A part of the definition of the body (a field of a tuple struct or of a
+        // tuple variant, whose constructor is the body) is an edit of the body: one change of
+        // one definition.
+        let own = item == name || item.strip_prefix(name).is_some_and(|rest| rest.starts_with('.'));
         let can_change = match edit.kind {
             EditKind::Docs | EditKind::Comment | EditKind::Visibility | EditKind::FileAdded | EditKind::FileRemoved | EditKind::FileChanged => false,
             EditKind::Attrs => !crate::facts::harmless_attribute_edit(edit) && items.contains(item),

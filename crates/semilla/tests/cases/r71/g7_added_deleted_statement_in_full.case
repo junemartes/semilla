@@ -88,17 +88,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::other` (src/lib.rs:5): the full compare: `#[same(shop::other)] fn other_same() {}`; a difference: `#[change(shop::other)] fn other_change(x: u32) -> bool { … }` or `#[different(shop::other)] fn other_different() -> bool { … }`
     MIR changes with no claim: `shop::table` (src/lib.rs:1): the full compare: `#[same(shop::table)] fn table_same() {}`; a difference: `#[change(shop::table)] fn table_change(x: u32) -> bool { … }` or `#[different(shop::table)] fn table_different() -> bool { … }`
   changed nodes: 6 in 6 entries; 6 real edits (0 stated by the agent); 0 not mapped
-  ? 3 places: 3 different edits (f1, f2, f3)
-      in: shop::other
-      lines: src/lib.rs:4-6, src/lib.rs:32, src/lib.rs:-30-32
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::other=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  ? 3 places: 3 different edits (f4, f5, f6)
-      in: shop::table
-      lines: src/lib.rs:2-3, src/lib.rs:-2, src/lib.rs:-28-29
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::table=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `shop::other`:
-  ◆ f1 add (Semilla; R90.2-3, 48 new MIR elements): added `let` [1] at `shop::other/S0` [semantics · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, 48 new MIR elements): added `let` [1] at `shop::other/S0` [semantics · code different]
         [1] let cells = [
                 0 * x,
                 1 * x,
@@ -125,18 +117,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
                 22 * x,
                 23 * x,
             ];
+      not stated (src/lib.rs:4-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::other=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::other (with 2 other edits of this body)
       equivalence: MIR changes
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `x` at `shop::other/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `x` at `shop::other/tail` [semantics · code different]
+      not stated (src/lib.rs:-30-32); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::other=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::other (with 2 other edits of this body)
       equivalence: MIR changes
-  ◆ f3 add (Semilla; R90.2-3, 3 new MIR elements): added statement `cells[5]` at `shop::other/tail` [semantics · code different] · not stated
+  ◆ f3 add (Semilla; R90.2-3, 3 new MIR elements): added statement `cells[5]` at `shop::other/tail` [semantics · code different]
+      not stated (src/lib.rs:32); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::other=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::other (with 2 other edits of this body)
       control flow: + check `bounds: cells[5]` (src/lib.rs:32): ok → return, fail → panic `bounds`
       control flow: + panic `bounds` (src/lib.rs:32)
       equivalence: MIR changes
   item `shop::table`:
-  ◆ f4 delete (Semilla; R90.2-3, 48 removed MIR elements): deleted statement [1] at `shop::table/S0` [semantics · code different] · not stated
+  ◆ f4 delete (Semilla; R90.2-3, 48 removed MIR elements): deleted statement [1] at `shop::table/S0` [semantics · code different]
         [1] let rows = [
                 0 * x,
                 1 * x,
@@ -163,13 +158,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
                 22 * x,
                 23 * x,
             ];
+      not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::table=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f4, f5, f6)
       affected bodies: shop::table (with 2 other edits of this body)
       equivalence: MIR changes
-  ◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `x` at `shop::table/tail` [semantics · code different] · not stated
+  ◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `x` at `shop::table/tail` [semantics · code different]
+      not stated (src/lib.rs:2-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::table=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f4, f5, f6)
       affected bodies: shop::table (with 2 other edits of this body)
       control flow: + arrow entry (src/lib.rs:1) → return (src/lib.rs:3)
       equivalence: MIR changes
-  ◆ f6 delete (Semilla; R90.2-3, 3 removed MIR elements): deleted statement `rows[3]` at `shop::table/tail` [semantics · code different] · not stated
+  ◆ f6 delete (Semilla; R90.2-3, 3 removed MIR elements): deleted statement `rows[3]` at `shop::table/tail` [semantics · code different]
+      not stated (src/lib.rs:-28-29); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::table=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f4, f5, f6)
       affected bodies: shop::table (with 2 other edits of this body)
       control flow: − check `bounds: rows[3]` (src/lib.rs:-28): ok → return, fail → panic `bounds`
       control flow: − panic `bounds` (src/lib.rs:-28)
@@ -181,15 +179,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, 48 new MIR elements): added `let` [1] at `shop::other/S0` [semantics · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, 48 new MIR elements): added `let` [1] at `shop::other/S0` [semantics · code different]
     lines: src/lib.rs:4-6
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `x` at `shop::other/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `x` at `shop::other/tail` [semantics · code different]
     lines: src/lib.rs:-30-32
-◆ f3 add (Semilla; R90.2-3, 3 new MIR elements): added statement `cells[5]` at `shop::other/tail` [semantics · code different] · not stated
+◆ f3 add (Semilla; R90.2-3, 3 new MIR elements): added statement `cells[5]` at `shop::other/tail` [semantics · code different]
     lines: src/lib.rs:32
-◆ f4 delete (Semilla; R90.2-3, 48 removed MIR elements): deleted statement [1] at `shop::table/S0` [semantics · code different] · not stated
+◆ f4 delete (Semilla; R90.2-3, 48 removed MIR elements): deleted statement [1] at `shop::table/S0` [semantics · code different]
     lines: src/lib.rs:-2
-◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `x` at `shop::table/tail` [semantics · code different] · not stated
+◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `x` at `shop::table/tail` [semantics · code different]
     lines: src/lib.rs:2-3
-◆ f6 delete (Semilla; R90.2-3, 3 removed MIR elements): deleted statement `rows[3]` at `shop::table/tail` [semantics · code different] · not stated
+◆ f6 delete (Semilla; R90.2-3, 3 removed MIR elements): deleted statement `rows[3]` at `shop::table/tail` [semantics · code different]
     lines: src/lib.rs:-28-29

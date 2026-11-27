@@ -37,14 +37,16 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 0 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 0 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `Cargo.toml`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): Cargo.toml: package.description "a shop" → "a small shop" [manifest · code different]
+      not stated (Cargo.toml:5-6, Cargo.toml:-5); to state it: --change 'Cargo.toml=TEXT'
       affected bodies: shop::about, shop::home
       note: this body uses `env!("CARGO_PKG_DESCRIPTION")`, which Semilla did not check (`shop::about`); this body uses `option_env!("CARGO_PKG_HOMEPAGE")`, which Semilla did not check (`shop::home`) (the same line for f2)
       ✗ spotlight: a build input: the MIR of 2 bodies changed with no edit of their text, and this change can reach their crates. The bodies have one of these causes: `Cargo.toml: package.description "a shop" → "a small shop"`, `Cargo.toml: package.homepage added ("https://shop.example")` (the same text for f1, f2); it needs a reason: --reason 'Cargo.toml:package.description=…'
   ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): Cargo.toml: package.homepage added ("https://shop.example") [manifest · code different]
+      not stated (Cargo.toml:5-6, Cargo.toml:-5); to state it: --change 'Cargo.toml=TEXT'
       affected bodies: shop::about, shop::home
       note: the same line as f1
       ✗ spotlight: a build input: the same text as f1; it needs a reason: --reason 'Cargo.toml:package.homepage=…'

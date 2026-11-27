@@ -30,13 +30,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::name` (src/lib.rs:1): the full compare: `#[same(depot::name)] fn name_same() {}`; a difference: `#[change(depot::name)] fn name_change(x: u32) -> bool { … }` or `#[different(depot::name)] fn name_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: added match arm `1 => "one"` (f1)
-      in: depot::name
-      lines: src/lib.rs:4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::name=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `depot::name`:
-  ◆ f1 add (Semilla; R90.2-3, 2 new MIR elements): added match arm `1 => "one"` at `depot::name/S0/arm[1].pat` [semantics · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, 2 new MIR elements): added match arm `1 => "one"` at `depot::name/S0/arm[1].pat` [semantics · code different]
+      not stated (src/lib.rs:4); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::name=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::name
       equivalence: MIR changes
   cover: each of the 1 changed line(s) is in a fact
@@ -45,5 +42,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, 2 new MIR elements): added match arm `1 => "one"` at `depot::name/S0/arm[1].pat` [semantics · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, 2 new MIR elements): added match arm `1 => "one"` at `depot::name/S0/arm[1].pat` [semantics · code different]
     lines: src/lib.rs:4

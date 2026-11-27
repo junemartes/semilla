@@ -1688,8 +1688,12 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
         }
     }
 
-    // 10. The positions of the facts of the edits.
+    // 10. The positions of the facts of the edits. [R92.4-1] A fact with no edit in the map keeps
+    // the lines that its maker gave (the facts of a pair that does not pass, design 92).
     for (index, files) in lines_of.iter().enumerate() {
+        if files.is_empty() && !report.facts[index].positions.is_empty() {
+            continue;
+        }
         report.facts[index].positions = files.iter().flat_map(|(file, lines)| position_list(&diffs, file, lines)).collect();
     }
     let compare = if input.step.syntax_only { Compare::Off } else { Compare::NoCode };

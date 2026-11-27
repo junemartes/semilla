@@ -1,7 +1,7 @@
 rule+: R48.2-1 R49.3-4 R54.4-1
 rule-: R48.2-2 R54.5-1
 exit: 0
-must_match: · not stated
+must_match: \n      not stated \(
 same_facts_as_no_option: yes
 === both Cargo.toml
 [package]
@@ -115,13 +115,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::limit` (src/lib.rs:25): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `10` → `20` (f1)
-      in: depot::limit
-      lines: src/lib.rs:25, src/lib.rs:-25
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 20'
   real edits:
   item `depot::limit`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `20` at `depot::limit/tail` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `20` at `depot::limit/tail` [semantics · code different]
+      not stated (src/lib.rs:25, src/lib.rs:-25); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 20'
       affected bodies: depot::limit
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
@@ -130,5 +127,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `20` at `depot::limit/tail` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `20` at `depot::limit/tail` [semantics · code different]
     lines: src/lib.rs:25, src/lib.rs:-25

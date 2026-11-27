@@ -33,17 +33,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:1): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(n: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
-  changed nodes: 2 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `2` → `1` (f3)
-      in: shop::price
-      lines: src/lib.rs:2, src/lib.rs:-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 2 => 1'
+  changed nodes: 2 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `Cargo.toml`:
   ◆ f2 replace (Semilla; R90.3-2, a file edit (no tree)): Cargo.toml: features.nightly removed ([]) [manifest · no code]
+      not stated (Cargo.toml:-5-7); to state it: --change 'Cargo.toml=TEXT'
       ✗ spotlight: a build setting (profile, patch, features, lints, or a target table); it needs a reason: --reason 'Cargo.toml:features.nightly=…'
   item `shop::price`:
-  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `1` at `shop::price/tail/rhs` [semantics · code different] · not stated
+  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `1` at `shop::price/tail/rhs` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 2 => 1'
       affected bodies: shop::price
       control flow: ~ check `overflow: n + 2` → `overflow: n + 1` (src/lib.rs:-4, src/lib.rs:2)
       equivalence: MIR changes
@@ -62,7 +60,7 @@ run again: semilla step 'the change' --reason 'shop=<why>' --reason 'Cargo.toml:
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop=the reason of the test' --reason 'Cargo.toml:features.nightly=the reason of the test' --configuration full
 ◆ f2 replace (Semilla; R90.3-2, a file edit (no tree)): Cargo.toml: features.nightly removed ([]) [manifest · no code]
     lines: Cargo.toml:-5-7
-◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `1` at `shop::price/tail/rhs` [semantics · code different] · not stated
+◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `1` at `shop::price/tail/rhs` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-4
 ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `shop`: removed `#![cfg_attr(feature = "nightly", feature(no_such_feature_of_semilla))]` [attribute · code equal]
     lines: src/lib.rs:-1-2

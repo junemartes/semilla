@@ -43,25 +43,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::two` (src/lib.rs:11): the full compare: `#[same(shop::two)] fn two_same() {}`; a difference: `#[change(shop::two)] fn two_change() -> bool { … }` or `#[different(shop::two)] fn two_different() -> bool { … }`
-  changed nodes: 1 in 4 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: replace macro input `here!(2)` → `here!(3)` (f1)
-      in: shop::two
-      lines: src/lib.rs:12, src/lib.rs:-10
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::two=TEXT'; if it does not change, --same 'rewrite here!(2) => here!(3)'
+  changed nodes: 1 in 4 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `src/lib.rs`:
   ◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/lib.rs`: added `// The place of each call is in its value.` [docs · no code]
+      not stated (src/lib.rs:5); to state it: --change 'src/lib.rs=TEXT'
+  item `shop::two`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): replace macro input `here!(2)` → `here!(3)` at `shop::two/tail` [macro · code different]
+      not stated (src/lib.rs:12, src/lib.rs:-10); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::two=TEXT'; if it does not change, --same 'rewrite here!(2) => here!(3)'
+      affected bodies: shop::two
+      equivalence: MIR changes
+      expansion: `here!(3)` at `shop::two/tail` (src/lib.rs:12): expansion changed: changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `10u32` → `12u32` at `expansion/elems[1]` [semantics]
+  compiled code that changes with no edit:
   item `shop::one`:
-  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::one` changes with no edit at its place: `here!(1)` [indirect · code different]
+  ◆ f2 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::one` changes with no edit at its place: `here!(1)` [indirect · code different]
       affected bodies: shop::one
       expansion: `here!(1)` at `shop::one/tail` (src/lib.rs:8): expansion changed: only the context of the call changes: the line of the call
       note: lines 8
       ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'shop::one=…'
-  item `shop::two`:
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): replace macro input `here!(2)` → `here!(3)` at `shop::two/tail` [macro · code different] · not stated
-      affected bodies: shop::two
-      equivalence: MIR changes
-      expansion: `here!(3)` at `shop::two/tail` (src/lib.rs:12): expansion changed: changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `10u32` → `12u32` at `expansion/elems[1]` [semantics]
   transformations:
   file `src/lib.rs`:
   ◆ f3 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
@@ -77,9 +76,9 @@ run again: semilla step 'the change' --reason 'shop::one=<why>'
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::one=the reason of the test'
 ◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/lib.rs`: added `// The place of each call is in its value.` [docs · no code]
     lines: src/lib.rs:5
-◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::one` changes with no edit at its place: `here!(1)` [indirect · code different]
-    no position
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): replace macro input `here!(2)` → `here!(3)` at `shop::two/tail` [macro · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): replace macro input `here!(2)` → `here!(3)` at `shop::two/tail` [macro · code different]
     lines: src/lib.rs:12, src/lib.rs:-10
+◆ f2 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::one` changes with no edit at its place: `here!(1)` [indirect · code different]
+    no position
 ◆ f3 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
     lines: src/lib.rs:6

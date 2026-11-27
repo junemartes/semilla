@@ -1,0 +1,67 @@
+note: a move that keeps the cfg conditions on its path passes, also with a rename in the same step
+rule-: R92.2-2
+must_match: ◆ f[0-9]+ move \(Semilla; R90.2-5, the pair check holds\): moved `depot::a::far` → `depot::b::far`
+must_match: renamed `depot::keep` → `depot::hold`
+must_not_match: show\(s\) as removed and added
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub mod a {
+    pub fn far(x: u32) -> u32 {
+        x + 7
+    }
+}
+
+pub fn keep(x: u32) -> u32 {
+    x * 3
+}
+=== new src/lib.rs
+pub mod a {}
+
+pub mod b {
+    pub fn far(x: u32) -> u32 {
+        x + 7
+    }
+}
+
+pub fn hold(x: u32) -> u32 {
+    x * 3
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed nodes: 1 in 5 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  compiled code that changes with no edit:
+  item `depot::b::far`:
+  ◆ f5 move (Semilla; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::a::far` is now `depot::b::far` (a different crate can no longer use the old path) [move · no code]
+  item `depot::hold`:
+  ◆ f4 rename (Semilla; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::keep` is now `depot::hold` (a different crate can no longer use the old path) [rename · no code]
+  transformations:
+  item `depot::a::far`:
+  ◆ f2 move (Semilla; R90.2-5, the pair check holds): moved `depot::a::far` → `depot::b::far` [move · code equal]
+  item `depot::keep`:
+  ◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `depot::keep` → `depot::hold` [rename · code equal]
+  syntax only:
+  item `depot::b`:
+  ◆ f3 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `depot::b` (the public API changes: a different crate can now use the item) [added · code equal]
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 6 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f5 move (Semilla; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::a::far` is now `depot::b::far` (a different crate can no longer use the old path) [move · no code]
+    no position
+◆ f4 rename (Semilla; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::keep` is now `depot::hold` (a different crate can no longer use the old path) [rename · no code]
+    no position
+◆ f2 move (Semilla; R90.2-5, the pair check holds): moved `depot::a::far` → `depot::b::far` [move · code equal]
+    no position
+◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `depot::keep` → `depot::hold` [rename · code equal]
+    lines: src/lib.rs:9, src/lib.rs:-7
+◆ f3 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `depot::b` (the public API changes: a different crate can now use the item) [added · code equal]
+    lines: src/lib.rs:1-3, src/lib.rs:-1

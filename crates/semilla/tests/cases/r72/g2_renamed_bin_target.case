@@ -41,10 +41,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `tool::{test-harness-main}` (no place): no result of the equivalence check; no template: the item is in the crate `tool`, which is not a library of the workspace (a test, a bench, an example, or a binary target)
     MIR changes with no claim: `toolbox::main` (src/main.rs:1): no template: the item is in a binary target, and the intent crate links the libraries only (design 78)
     MIR changes with no claim: `toolbox::{test-harness-main}` (no place): no result of the equivalence check; no template: `toolbox` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
-  changed nodes: 0 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 0 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `Cargo.toml`:
   ◆ f2 replace (Semilla; R90.3-2, a file edit (no tree)): Cargo.toml: bin [{ name = "tool", path = "src/main.rs" }] → [{ name = "toolbox", path = "src/main.rs" }] [manifest · no code]
+      not stated (Cargo.toml:7, Cargo.toml:-7); to state it: --change 'Cargo.toml=TEXT'
       ✗ spotlight: a build setting (profile, patch, features, lints, or a target table); it needs a reason: --reason 'Cargo.toml:bin=…'
   transformations:
   item `shop (bin "tool")::main`:

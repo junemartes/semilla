@@ -74,36 +74,30 @@ fn run(repo: &Path, args: &[&str], expect: i32) -> String {
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert_eq!(output.status.code(), Some(expect), "semilla {args:?}\n--- stdout\n{stdout}\n--- stderr\n{stderr}");
-    legacy(&stdout)
+    stdout
 }
 
-/// The heads of design 90 (`◆ fN KIND (SOURCE; CHECK): TEXT … · not stated`) in the form of
-/// before (`◆ fN derived: TEXT …` or `◆ fN stated: TEXT …`): these tests read the text, the
-/// category, and the compare result of a fact, not its entry head (the case set and the tests of
-/// design 90 read the head).
-fn legacy(text: &str) -> String {
-    let mut out = String::new();
-    for line in text.lines() {
-        let converted = line.find("◆ f").and_then(|at| {
-            let (pre, rest) = line.split_at(at);
-            let (id, after) = rest["◆ ".len()..].split_once(' ')?;
-            let open = after.find(" (")?;
-            let (source, _) = after[open + 2..].split_once("; ")?;
-            let close = after.find("): ")?;
-            if !after[..open].chars().all(|c| c.is_ascii_lowercase() || c == ' ' || c == ',') {
-                return None;
-            }
-            let status = if source.starts_with('a') || source.starts_with('i') { "stated" } else { "derived" };
-            let body = &after[close + 3..];
-            Some(format!("{pre}◆ {id} {status}: {}", body.strip_suffix(" · not stated").unwrap_or(body)))
-        });
-        out.push_str(&converted.unwrap_or_else(|| line.to_string()));
-        out.push('\n');
-    }
-    if !text.ends_with('\n') {
-        out.pop();
-    }
-    out
+/// [R92.5-1] An output with no line "not stated" below an entry (design 92): for a test of the
+/// other lines below an entry.
+fn without_not_stated(text: &str) -> String {
+    text.lines().filter(|line| !line.trim_start().starts_with("not stated (") && !line.trim_start().starts_with("not stated;")).map(|line| format!("{line}\n")).collect()
+}
+
+/// The head of an entry (design 90): `◆ fN KIND (SOURCE; CHECK): TEXT`. True if a line of the
+/// output is an entry of the kind (also syntax only) with the source and a text that starts with
+/// `body`. An empty source is each source.
+fn has_entry(text: &str, kind: &str, source: &str, body: &str) -> bool {
+    text.lines().map(str::trim_start).filter(|line| line.starts_with("◆ f")).any(|line| {
+        let Some((_, rest)) = line.strip_prefix("◆ ").and_then(|tail| tail.split_once(' ')) else { return false };
+        let kinded = rest.starts_with(&format!("{kind} (")) || rest.starts_with(&format!("{kind}, syntax only ("));
+        let sourced = source.is_empty() || rest.split_once(" (").is_some_and(|(_, tail)| tail.starts_with(&format!("{source};")));
+        kinded && sourced && rest.match_indices("): ").any(|(at, _)| rest[at + 3..].starts_with(body))
+    })
+}
+
+/// The count of the entry lines of an output.
+fn entry_count(text: &str) -> usize {
+    text.lines().filter(|line| line.trim_start().starts_with("◆ f")).count()
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
@@ -1251,11 +1245,11 @@ fn one_command_for_each_step() {
     assert_eq!(step_lines.len(), 2, "{status}");
     assert!(step_lines[0].starts_with("step 0  \"no overflow checks\" · 1 fact: "), "{status}");
     assert!(step_lines[1].starts_with("step 1  \"raise the max\" · "), "{status}");
-    assert!(status.contains("\nresult: accepted · 2 steps") && !status.contains("f1 derived"), "{status}");
+    assert!(status.contains("\nresult: accepted · 2 steps") && !status.contains("◆ f1 "), "{status}");
     // Batch 5y, C4.5: the hint for a commit names the commit.
     assert!(status.contains("run `semilla status HEAD --verbose`"), "{status}");
     let verbose = run(repo, &["status", "HEAD", "--verbose"], 0);
-    assert!(verbose.contains("f1 derived") && verbose.contains("\nresult: accepted · 2 steps"), "{verbose}");
+    assert!(verbose.contains("◆ f1 ") && verbose.contains("\nresult: accepted · 2 steps"), "{verbose}");
     // The default report is short. `--full` adds the change tree and the sources.
     let out = common::TestDir::new();
     let (short, full) = (out.path().join("short.md"), out.path().join("full.md"));
@@ -1465,9 +1459,9 @@ fn the_guide_examples_of_calls_only_and_rewrite_pattern() {
     assert_eq!(out.status.code(), Some(2), "{text}");
     assert!(text.contains("the claim `rewrite-pattern` is gone: state the pattern as a fact of the step, `--same 'rewrite FROM => TO'`"), "{text}");
     let out = run(repo, &["step", "cap each total", "--same", "rewrite $c.total($m) => $c.total($m).min(9)"], 0);
-    assert!(out.contains("  ✓ a1 same: rewrite `$c.total($m)` => `$c.total($m).min(9)` (the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same)\n      places: shop_core::cart::show/tail/lhs, shop_core::cart::show/tail/rhs\n      entries, in the list below: f1, f2\n") && out.contains("◆ f1 stated: changed expression `cart.total(10)` → `cart.total(10).min(9)` at "), "{out}");
+    assert!(out.contains("  ✓ a1 same: rewrite `$c.total($m)` => `$c.total($m).min(9)` (the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same)\n      places: shop_core::cart::show/tail/lhs, shop_core::cart::show/tail/rhs\n      entries, in the list below: f1, f2\n") && out.contains("◆ f1 replace (a1; R90.2-2, 2 changed MIR elements): changed expression `cart.total(10)` → `cart.total(10).min(9)` at "), "{out}");
     // [R90.5-3] The coverage line replaces the line "not stated: 0 item(s)".
-    assert!(out.contains(" stated: ") && out.contains("  changed nodes: ") && !out.contains("  ? "), "{out}");
+    assert!(out.contains("◆ f1 replace (a1; ") && out.contains("  changed nodes: ") && !out.contains("not stated ("), "{out}");
     // The claim does not say that each place of the old form changed: it holds for one site.
     run(repo, &["undo"], 0);
     let missed = show.replace("cart.total(10) + cart.total(20)", "cart.total(10).min(9) + cart.total(20)");
@@ -3056,7 +3050,7 @@ fn each_command_runs_changed_build_code_and_marks_each_proof() {
     let step_3 = later.split_once("step 3  ").expect("the text of step 3").1;
     assert!(step_3.contains(&format!("✓ c2 verified (mir) {MARK_1}\n")) && step_3.contains(&format!("code equal] {MARK_1}\n")), "{out}");
     // The build code change is the first section of step 1, with its spotlight and its diff.
-    assert!(later.starts_with(&format!("\"add a build script\"\n  {SECTION}\n  ◆ f1 derived: crates/shop-core/build.rs: added [build code · no code]\n      spotlight: build script")), "{out}");
+    assert!(later.starts_with(&format!("\"add a build script\"\n  {SECTION}\n  ◆ f1 add (Semilla; R90.3-2, a file edit (no tree)): crates/shop-core/build.rs: added [build code · no code]\n      not stated (crates/shop-core/build.rs:1-5); to state it: --change 'crates/shop-core/build.rs=TEXT'\n      spotlight: build script")), "{out}");
     assert!(later.contains("reason: \"the build needs a script\"") && later.contains("the build script ran"), "{out}");
     let out = run(repo, &["verify"], 0);
     assert!(out.contains(RAN_1) && out.contains(&format!("code equal] {MARK_1}")), "{out}");
@@ -3290,7 +3284,7 @@ fn a_step_can_mix_build_code_and_other_code() {
     run(repo, &["review", "--md", md.to_str().unwrap()], 0);
     let text = std::fs::read_to_string(&md).unwrap();
     let section = text.find("#### Build code changes (1): read these changes first").expect("the section");
-    assert!(section < text.find("#### Derived facts").expect("the other facts") && text.contains("code equal\\] (with the build code of step 0)"), "{text}");
+    assert!(section < text.find("#### Entries of the map of the diff").expect("the other facts") && text.contains("code equal\\] (with the build code of step 0)"), "{text}");
     no_proof_without_mark("the Markdown report", &text, 0);
 }
 
@@ -5122,7 +5116,7 @@ fn an_added_configuration_is_a_check_and_not_a_proof() {
     let out = run(repo, &["step", "probe"], 0);
     assert!(out.contains("Semilla added the configurations `dev, features fast`, `release, features fast`"), "{out}");
     // R61.4-5: the equivalence of each configuration, the worst first.
-    assert!(out.contains("at `shop_core::cut#0/tail/operand` [semantics · code different]\n      affected bodies: shop_core::cut#0\n      equivalence: MIR changes in dev, features fast, release, features fast; equivalent in dev, all features, release, all features (proved by equal MIR)\n"), "{out}");
+    assert!(without_not_stated(&out).contains("at `shop_core::cut#0/tail/operand` [semantics · code different]\n      affected bodies: shop_core::cut#0\n      equivalence: MIR changes in dev, features fast, release, features fast; equivalent in dev, all features, release, all features (proved by equal MIR)\n"), "{out}");
     assert!(out.contains("; equivalent in dev, all features, release, all features (proved by equal MIR)\n      note: the compiled code is equal in `dev, all features`, `release, all features`; different in `dev, features fast`, `release, features fast`"), "{out}");
     assert!(!out.contains("code equal]") && !out.contains("indirect change") && !out.contains("spotlight:"), "{out}");
     run(repo, &["undo"], 0);
@@ -5747,8 +5741,9 @@ fn an_edit_in_code_that_no_configuration_compiles_needs_a_reason() {
     assert!(out.starts_with("accepted: "), "{out}");
     // Design 38.4: a run of facts with an equal spotlight line shows the line one time.
     // Design 54.6: the groups of the facts made five runs (before the groups: four). Design 90:
-    // the sections and the items of the one list make eight runs.
-    assert_eq!(out.matches("; reason (key `kind:inactive-code`; one reason covers 11 spotlights of the kind inactive-code): \"the 16 bit target is not in the checks\"\n").count(), 8, "{out}");
+    // the sections and the items of the one list make eight runs. Design 92: seven runs (the
+    // one change of R92.6-1 and the sections).
+    assert_eq!(out.matches("; reason (key `kind:inactive-code`; one reason covers 11 spotlights of the kind inactive-code): \"the 16 bit target is not in the checks\"\n").count(), 7, "{out}");
     assert!(out.contains("; reason: \"the limit of the small target is 8\"\n"), "{out}");
     let md = repo.join(".semilla/review.md");
     run(repo, &["review", "--md", md.to_str().unwrap()], 0);
@@ -6101,7 +6096,7 @@ fn an_anchor_of_a_trait_impl_accepts_the_forms_of_the_source() {
     let out = run(repo, &["status", "--verbose"], 0);
     assert!(out.contains("trait impl `<Weight as From<Grams>>#0` added") && out.contains("trait impl `<Weight as From<Kilos>>#1` added"), "{out}");
     // Design 60: the fact has a line `control flow:` before its note.
-    let grams = out.lines().skip_while(|line| !line.contains("trait impl `<Weight as From<Grams>>#0` added")).take(5).collect::<Vec<_>>().join("\n");
+    let grams = out.lines().skip_while(|line| !line.contains("trait impl `<Weight as From<Grams>>#0` added")).take(6).collect::<Vec<_>>().join("\n");
     assert!(grams.contains("the scale gives grams"), "{out}");
     assert_eq!(out.matches("the scale gives grams").count(), 1, "{out}");
 }
@@ -6390,12 +6385,12 @@ fn a_macro_call_fact_lists_the_items_that_the_call_makes() {
     let same = "\nmacro_rules! same {\n    ($t:ty) => {\n        impl PartialEq for $t {\n            fn eq(&self, other: &Self) -> bool {\n                self.items == other.items\n            }\n        }\n    };\n}\n";
     write(repo, file, &format!("{CART_V0}{same}"));
     let out = run(repo, &["step", "add a macro"], 0);
-    assert!(out.contains("derived: added macro `same` [added · no code]"), "{out}");
+    assert!(has_entry(&out, "add", "Semilla", "added macro `same` [added · no code]"), "{out}");
     // A call that makes a trait impl of a public type.
     let with_call = format!("{CART_V0}{same}same!(Cart);\n");
     write(repo, file, &with_call);
     let out = run(repo, &["step", "call the macro"], 0);
-    assert!(out.contains("derived: added macro call `same!(Cart)` (makes: `impl PartialEq for Cart`) [added · code different]"), "{out}");
+    assert!(has_entry(&out, "add", "Semilla", "added macro call `same!(Cart)` (makes: `impl PartialEq for Cart`) [added · code different]"), "{out}");
     let bodies = out.lines().find(|line| line.contains("affected bodies:")).unwrap_or_default();
     assert!(bodies.contains("PartialEq>::eq") && !bodies.contains("total"), "only the bodies that the step changes\n{out}");
     assert!(!out.contains("needs a reason") && !out.contains("indirect change") && !out.contains("does not see"), "{out}");
@@ -6407,7 +6402,7 @@ fn a_macro_call_fact_lists_the_items_that_the_call_makes() {
     assert!(out.contains("added macro call `getter!(made_one, 1)` (makes: `pub fn made_one`) [added · code different]"), "{out}");
     write(repo, file, &with_tests);
     let out = run(repo, &["step", "a test from a macro"], 0);
-    assert!(out.contains("derived: added macro call `t!(test26)` (makes: `test26`) [added · code different]"), "{out}");
+    assert!(has_entry(&out, "add", "Semilla", "added macro call `t!(test26)` (makes: `test26`) [added · code different]"), "{out}");
     assert!(!out.contains("needs a reason") && !out.contains("indirect change") && !out.contains("does not see"), "{out}");
     // A call that makes an impl of `Drop`: the rule of the direct impl. The fact needs a reason.
     let on_drop = "\nmacro_rules! on_drop {\n    ($t:ty) => {\n        impl Drop for $t {\n            fn drop(&mut self) {}\n        }\n    };\n}\non_drop!(Cart);\n";
@@ -6441,13 +6436,13 @@ fn a_new_test_above_other_tests_in_a_test_file_gives_one_fact() {
     let new_test = "\n#[test]\nfn test_new() {\n    check(3);\n}\n";
     write(repo, file, &format!("{helper}{new_test}{old_tests}"));
     let out = run(repo, &["step", "a new test above"], 0);
-    assert!(out.contains("derived: added `shop_core (test \"req\")::test_new` [added · code different]"), "{out}");
-    assert_eq!(out.matches("derived:").count(), 1, "one fact\n{out}");
+    assert!(out.contains("  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `shop_core (test \"req\")::test_new` [added · code different]"), "{out}");
+    assert_eq!(entry_count(&out), 1, "one fact\n{out}");
     assert!(!out.contains("indirect change") && !out.contains("needs a reason"), "{out}");
     // A real change of a test below the new lines stays a fact of that test.
     write(repo, file, &format!("{helper}{new_test}{}", old_tests.replace("check(2)", "check(4)")));
     let out = run(repo, &["step", "a changed test"], 0);
-    assert!(out.contains("shop_core (test \"req\")::test_two") && out.matches("derived:").count() == 1, "{out}");
+    assert!(out.contains("shop_core (test \"req\")::test_two") && entry_count(&out) == 1, "{out}");
     // A changed attribute of a test is a part of the descriptor: the fact stays.
     write(repo, file, &format!("{helper}{new_test}{}", old_tests.replace("check(2)", "check(4)").replace("#[test]\nfn test_one", "#[test]\n#[should_panic]\nfn test_one")));
     let out = run(repo, &["step", "a test that must panic"], 1);
@@ -6492,8 +6487,8 @@ fn the_run_again_line_passes_with_a_key_that_has_an_equal_sign() {
     assert_eq!(code, 0, "{line}\n{out}");
     assert!(out.starts_with("accepted: step 0 \"it's a step for the \\\"android\\\" target\""), "{out}");
     assert!(!out.contains("belongs to no fact") && !out.contains("needs a reason"), "{out}");
-    assert!(out.contains("package.metadata.it's.level added (\"a=b\") [manifest · no code]\n      spotlight: a manifest key that is not in the allow list; reason: \"the value is a = b, it's \\\"right\\\"\""), "{out}");
-    assert!(out.contains("dependencies.shop-util.path added (\"../shop-util\") [manifest · no code]\n      spotlight: a new dependency; reason: \"the target needs it\""), "{out}");
+    assert!(without_not_stated(&out).contains("package.metadata.it's.level added (\"a=b\") [manifest · no code]\n      spotlight: a manifest key that is not in the allow list; reason: \"the value is a = b, it's \\\"right\\\"\""), "{out}");
+    assert!(without_not_stated(&out).contains("dependencies.shop-util.path added (\"../shop-util\") [manifest · no code]\n      spotlight: a new dependency; reason: \"the target needs it\""), "{out}");
     run(repo, &["undo"], 0);
 
     // The key and the reason have a `=`: the longest open key is the key.
@@ -6571,11 +6566,11 @@ fn a_fold_never_hides_an_inner_line() {
     };
     let (honest, honest_md) = outputs("sum += value;");
     // Design 54.7: the text of the loop is full. Before: a cut mark was after `if index > 0 {`.
-    assert!(honest.contains("◆ f1 derived: 2 site(s): added loop `for (index, value) in v.iter().enumerate() { if index > 0 { sum += value; } }` [semantics"), "{honest}");
+    assert!(has_entry(&honest, "add", "Semilla", "2 site(s): added loop `for (index, value) in v.iter().enumerate() { if index > 0 { sum += value; } }` [semantics"), "{honest}");
     let (needle, needle_md) = outputs("sum -= value;");
     assert!(!needle.contains("site(s): added loop"), "{needle}");
-    assert_eq!(needle.matches(" derived: added loop `for (index, value) in v.iter().enumerate() { if index > 0 { sum ").count(), 2, "{needle}");
-    assert!(needle.contains(" derived: added loop `for (index, value) in v.iter().enumerate() { if index > 0 { sum -= value; } }` at `shop_core::loops::second/S1` [semantics"), "{needle}");
+    assert_eq!(needle.lines().filter(|line| line.trim_start().starts_with("◆ f") && line.contains("): added loop `for (index, value) in v.iter().enumerate() { if index > 0 { sum ")).count(), 2, "{needle}");
+    assert!(has_entry(&needle, "add", "Semilla", "added loop `for (index, value) in v.iter().enumerate() { if index > 0 { sum -= value; } }` at `shop_core::loops::second/S1` [semantics"), "{needle}");
     // The Markdown report shows the source of each site.
     assert!(needle_md.contains("sum -= value;") && needle_md.contains("sum += value;"), "{needle_md}");
     assert!(!honest_md.contains("sum -= value;"), "{honest_md}");
@@ -6767,7 +6762,7 @@ fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_chan
     // R60.4-1: the line of the fact, with the changed point and its arrows. It replaces the
     // line `branches:` of design 40.4. R60.4-7: a callee has its short form in a fact line
     // (`price`), and its full form in `status --verbose` (`shop_core::price`, below).
-    assert!(out.contains("added early exit `if qty == 0 { return Err(Error::Empty); }` at `shop_core::order/S0` [semantics · code different]\n      affected bodies: shop_core::order\n      control flow: + branch `qty == 0` (crates/shop-core/src/lib.rs:23): false → call `price`, true → return\n"), "{out}");
+    assert!(without_not_stated(&out).contains("added early exit `if qty == 0 { return Err(Error::Empty); }` at `shop_core::order/S0` [semantics · code different]\n      affected bodies: shop_core::order\n      control flow: + branch `qty == 0` (crates/shop-core/src/lib.rs:23): false → call `price`, true → return\n"), "{out}");
     assert!(!out.contains("branches: "), "{out}");
     // R60.4-1, the negative case: a fact with no changed point and no changed arrow at its
     // lines has no line.
@@ -7088,14 +7083,14 @@ fn the_statement_mapper_gives_one_fact_for_each_refactoring_and_keeps_each_chang
     };
     let out = step(base.replace("    s += a * 2;\n    if b > 3 {\n", "    if b > 3 {\n        s += a * 2;\n"));
     assert!(out.contains("moved statement `s += a * 2` from `shop_core::mix/S1` to `shop_core::mix/S1/then/S0` [semantics · code different]") && !out.contains("! the compiled code changes"), "{out}");
-    assert!(!out.contains("[indirect") && out.matches(" derived: ").count() == 1, "{out}");
+    assert!(!out.contains("[indirect") && entry_count(&out) == 1, "{out}");
     let out = step(base.replace("    if a * b + 1 > 10 {\n        return a * b + 1;\n", "    let area = a * b + 1;\n    if area > 10 {\n        return area;\n"));
     assert!(out.contains("extracted variable `area` = `a * b + 1` (2 uses) at `shop_core::area/S0` [move · code"), "{out}");
-    assert!(!out.contains("[indirect") && out.matches(" derived: ").count() == 1, "{out}");
+    assert!(!out.contains("[indirect") && entry_count(&out) == 1, "{out}");
     let swapped = base.replace("    let x = a + 1;\n    let y = b * 2;\n", "    let y = b * 2;\n    let x = a + 1;\n");
     let out = step(swapped.clone());
     assert!(out.contains("moved statement `let x = a + 1;` from `shop_core::pick/S0` to `shop_core::pick/S1` [semantics · code") && !out.contains("! the compiled code changes"), "{out}");
-    assert!(!out.contains("[indirect") && out.matches(" derived: ").count() == 1, "{out}");
+    assert!(!out.contains("[indirect") && entry_count(&out) == 1, "{out}");
     // The needle: the move does not absorb the changed operator.
     let out = step(swapped.replace("if x > y", "if x >= y"));
     assert!(out.contains("moved statement `let x = a + 1;` from `shop_core::pick/S0` to `shop_core::pick/S1` [semantics · code"), "{out}");
@@ -7328,10 +7323,10 @@ fn the_dependence_gives_each_changed_element_to_the_edit_of_its_local() {
     assert!(clean(&out) && fact_line(&out, "changed literal `5u32` → `5u16`").ends_with("[semantics · code different]"), "{out}");
     let receiver = base.replace("    let x: Wrapping<u32> = Wrapping(a.into());\n    let s = x.to_string();", "    let x: Wrapping<u64> = Wrapping(a.into());\n    let s = x.to_string();");
     let out = step(receiver, "receiver");
-    assert!(clean(&out) && out.matches(" derived: ").count() == 1, "{out}");
+    assert!(clean(&out) && entry_count(&out) == 1, "{out}");
     let operands = base.replace("    let x: Wrapping<u32> = Wrapping(a.into());\n    let y: Wrapping<u32> = Wrapping(b.into());\n    x == y", "    let x: Wrapping<u64> = Wrapping(a.into());\n    let y: Wrapping<u64> = Wrapping(b.into());\n    x == y");
     let out = step(operands, "operands");
-    assert!(clean(&out) && out.matches(" derived: ").count() == 2, "{out}");
+    assert!(clean(&out) && entry_count(&out) == 2, "{out}");
     // The needle: a change of behavior in the same body keeps its own fact.
     let out = step(typed.replace("    p + q\n", "    p - q\n"), "needle");
     assert!(clean(&out) && fact_line(&out, "changed operator `p + q` → `p - q`").ends_with("[semantics · code different]") && fact_line(&out, "changed pattern `x: u32`").ends_with("code different]"), "{out}");
@@ -7428,7 +7423,7 @@ fn semilla_checked(repo: &Path, args: &[&str], env: &[(&str, &str)]) -> (Option<
     let mut all = vec![("SEMILLA_NO_WORKER", "1")];
     all.extend(env.iter().copied());
     let output = semilla_env(repo, args, &all);
-    (output.status.code(), legacy(&format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))))
+    (output.status.code(), format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)))
 }
 
 /// The stored steps of the session file.
@@ -7967,12 +7962,13 @@ fn facts_setup() -> common::TestDir {
 /// Runs Semilla in the default mode (the syntax tree model). Gives the exit code and the output.
 fn tree_mode(repo: &Path, args: &[&str]) -> (Option<i32>, String) {
     let output = semilla_env(repo, args, &[]);
-    (output.status.code(), legacy(&format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))))
+    (output.status.code(), format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)))
 }
 
 /// True if a fact line of `text` has the origin `stated`.
 fn has_stated(text: &str) -> bool {
-    text.lines().any(|line| line.trim_start().starts_with('◆') && line.contains(" stated: "))
+    // An entry with a statement of the agent (`aN`) or of an intent file (`iN`) as its source.
+    text.lines().map(str::trim_start).filter(|line| line.starts_with("◆ f")).any(|line| line.split_once(" (").is_some_and(|(_, tail)| (tail.starts_with('a') || tail.starts_with('i')) && tail[1..].starts_with(|c: char| c.is_ascii_digit())))
 }
 
 const GAP_HEAD: &str = "that can change the behavior of existing code and that no fact of the agent states";
@@ -7985,33 +7981,35 @@ fn a_step_with_no_agent_fact_is_valid_and_prints_the_gap_list_with_one_command()
     let (code, out) = tree_mode(repo, &["step", "use the method"]);
     assert_eq!(code, Some(0), "{out}");
     // The gap list: the largest group first, with the option that covers the group. The test
-    // function is not in the list.
-    let list = format!(
-        "  ? 3 places: `$a.total` => `$a.total()` (f1, f2)\n      in: shop_core::facts::a, shop_core::facts::b, shop_core::facts::d\n      lines: crates/shop-core/src/facts.rs:11, crates/shop-core/src/facts.rs:14, crates/shop-core/src/facts.rs:17, crates/shop-core/src/facts.rs:-11, crates/shop-core/src/facts.rs:-14, crates/shop-core/src/facts.rs:-17\n      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::a,shop_core::facts::b,shop_core::facts::d=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()'\n  ? 2 places: 2 different edits (f3, f4)\n      in: shop_core::facts::idle\n      lines: crates/shop-core/src/facts.rs:20-25\n      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::idle=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit\n  ? 1 place: changed literal `1` → `5` (f5)\n"
-    );
+    // function is not in the list. [R92.5-1] Each line of the list is below its entries, with
+    // the other entries of the group (design 92).
+    let one = "the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::a,shop_core::facts::b,shop_core::facts::d=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()' (one statement for 3 places: f1, f2)";
+    let list = format!("  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]\n      not stated (crates/shop-core/src/facts.rs:11, crates/shop-core/src/facts.rs:14, crates/shop-core/src/facts.rs:-11, crates/shop-core/src/facts.rs:-14); to state it: {one}\n");
     assert!(out.contains(&list), "{out}");
-    assert!(!out.lines().any(|line| line.starts_with("      in: ") && line.contains("tests::t")), "{out}");
+    assert!(out.contains(&format!("      not stated (crates/shop-core/src/facts.rs:17, crates/shop-core/src/facts.rs:-17); to state it: {one}\n")), "{out}");
+    assert!(out.contains("      not stated (crates/shop-core/src/facts.rs:20); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::idle=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f3, f4)\n"), "{out}");
+    assert!(!out.lines().any(|line| line.starts_with("      not stated (") && line.contains("(one statement for") && line.contains("tests::t")), "{out}");
     // A line whose check did not decide has the two forms, and the command does not have it
     // (R71.3-1). [R84.4-1] "MIR changes" reads as "not decided": each line of this step has the
     // two forms, so the step has no command.
-    assert!(out.contains("  ? 1 place: changed literal `1` → `5` (f5)\n      in: shop_core::facts::inner::a\n      lines: crates/shop-core/src/facts.rs:33, crates/shop-core/src/facts.rs:-27\n      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::inner::a=TEXT'; if it does not change, --same 'rewrite 1 => 5'\n"), "{out}");
+    assert!(out.contains("  ◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `5` at `shop_core::facts::inner::a/tail/rhs` [semantics · code different]\n      not stated (crates/shop-core/src/facts.rs:33, crates/shop-core/src/facts.rs:-27); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::inner::a=TEXT'; if it does not change, --same 'rewrite 1 => 5'\n"), "{out}");
     assert!(!out.contains("  to state them, add facts to the stored step"), "{out}");
-    // Each fact has the origin of Semilla, in the groups of design 48.3.
-    assert!(out.contains("◆ f7 derived: changed literal `2` → `6` at `shop_core::facts::tests::t/S0/args[1]` [semantics · code different]\n"), "{out}");
-    assert!(out.contains("◆ f1 derived: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]\n"), "{out}");
+    // Each fact has the source Semilla, in the sections of design 90.
+    assert!(out.contains("◆ f7 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed literal `2` → `6` at `shop_core::facts::tests::t/S0/args[1]` [semantics · code different]\n"), "{out}");
+    assert!(out.contains("◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]\n"), "{out}");
     assert!(!has_stated(&out) && !out.contains("facts of the agent"), "{out}");
 
     // Part D (design 54.7). A long statement: the full text is in a block below the fact line.
-    assert!(out.contains(&format!("  ◆ f3 derived: added `let` [1] at `shop_core::facts::idle/S0` [semantics · code different]\n        [1] {LONG_LET}\n")), "{out}");
+    assert!(out.contains(&format!("  ◆ f3 add (Semilla; R90.2-3, 5 new MIR elements): added `let` [1] at `shop_core::facts::idle/S0` [semantics · code different]\n        [1] {LONG_LET}\n")), "{out}");
     // A text with more than one line keeps its lines.
     assert!(
-        out.contains("  ◆ f4 derived: added loop [1] at `shop_core::facts::idle/S1` [semantics · code different]\n        [1] for step in 0..scaled_total_with_a_long_name.min(4) {\n                if step > 2 {\n                    return step + x.wrapping_mul(scaled_total_with_a_long_name);\n                }\n            }\n"),
+        out.contains("  ◆ f4 add (Semilla; R90.2-3, 13 new MIR elements): added loop [1] at `shop_core::facts::idle/S1` [semantics · code different]\n        [1] for step in 0..scaled_total_with_a_long_name.min(4) {\n                if step > 2 {\n                    return step + x.wrapping_mul(scaled_total_with_a_long_name);\n                }\n            }\n"),
         "{out}"
     );
     // A tail expression that gets a `;`: the text shows the `;`.
-    assert!(out.contains("  ◆ f6 derived: moved call: `drop(x)` → `drop(x);` from `tail` to `S0` in `shop_core::facts::tail` [semantics · code different]\n"), "{out}");
+    assert!(out.contains("  ◆ f6 replace (Semilla; R90.2-2, 2 changed MIR elements): moved call: `drop(x)` → `drop(x);` from `tail` to `S0` in `shop_core::facts::tail` [semantics · code different]\n"), "{out}");
     // Negative: a short text stays in the fact line, and no fact text has a cut mark.
-    assert!(out.contains("  ◆ f5 derived: changed literal `1` → `5` at `shop_core::facts::inner::a/tail/rhs` [semantics · code different]\n"), "{out}");
+    assert!(out.contains("  ◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `5` at `shop_core::facts::inner::a/tail/rhs` [semantics · code different]\n"), "{out}");
     assert!(!out.lines().any(|line| line.trim_start().starts_with('◆') && line.contains('…')), "{out}");
 
     // The status and the review have one line with the count.
@@ -8022,7 +8020,9 @@ fn a_step_with_no_agent_fact_is_valid_and_prints_the_gap_list_with_one_command()
     let report = std::fs::read_to_string(&md).unwrap();
     assert!(report.contains(&format!("not stated: 6 item(s) with 7 place(s) {GAP_HEAD}")), "{report}");
     assert!(report.contains(&format!("  [1] {LONG_LET}\n")) && report.contains("          if step > 2 {\n              return step + x.wrapping_mul(scaled_total_with_a_long_name);\n") && report.contains("`drop(x)` → `drop(x);`"), "{report}");
-    assert!(report.contains("#### Not stated (6)") && report.contains("Filled in by Semilla, tests and benches (1):") && !report.contains("Facts of the agent"), "{report}");
+    // [R92.8-1] [R92.5-1] The review has the sections of the one list, and the line "not
+    // stated" of each entry (design 92).
+    assert!(report.contains("#### Entries of the map of the diff (") && report.contains("Real edits (") && report.contains("; not stated (") && !report.contains("#### Not stated") && !report.contains("Facts of the agent"), "{report}");
     // `tag` has the count line too.
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "use the method"]);
     let (code, tag) = tree_mode(repo, &["tag"]);
@@ -8040,12 +8040,12 @@ fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     // The step runs the build check one time.
     let checked = [];
     let output = semilla_env(repo, &["step", "use the method", "--same", "rewrite $a.total => $a.total()"], &checked);
-    let out = legacy(&String::from_utf8_lossy(&output.stdout));
+    let out = String::from_utf8_lossy(&output.stdout).into_owned();
     assert!(output.status.success() && out.contains("build check: passes ("), "{out}{}", String::from_utf8_lossy(&output.stderr));
-    assert!(out.contains("  ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)\n      places: shop_core::facts::a/tail/lhs, shop_core::facts::b/tail/lhs, shop_core::facts::d/tail/rhs\n      entries, in the list below: f1, f2\n") && out.contains("◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]\n"), "{out}");
+    assert!(out.contains("  ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)\n      places: shop_core::facts::a/tail/lhs, shop_core::facts::b/tail/lhs, shop_core::facts::d/tail/rhs\n      entries, in the list below: f1, f2\n") && out.contains("◆ f1 replace (a1; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]\n"), "{out}");
     // A partial fact set: the other items are in the gap list.
     // [R90.5-3] The coverage line replaces the count line; the gap list follows it.
-    assert!(out.contains("  changed nodes: ") && out.matches("\n  ? ").count() >= 1, "{out}");
+    assert!(out.contains("  changed nodes: ") && out.matches("\n      not stated (").count() >= 1, "{out}");
     let build = session_steps(repo)[0]["build_check"].clone();
     // The command `fact` adds facts. The build check does not run again: with a broken tool
     // chain variable the command still passes, and the stored result of the check stays.
@@ -8054,9 +8054,9 @@ fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     assert!(output.status.success(), "{out}{}", String::from_utf8_lossy(&output.stderr));
     assert!(out.starts_with("stored: 2 new fact(s) of the agent in step 0 \"use the method\"; no build check runs again (the trees of the step are the same)\n") && !out.contains("build check:"), "{out}");
     assert!(out.contains("  ✓ a2 change: `shop_core::facts::idle` \"idle scales the value\" (holds: the behavior of existing code can change in each item; covers 2 fact(s) in 1 item(s) with 6 changed line(s))\n      places: shop_core::facts::idle/S0, shop_core::facts::idle/S1\n"), "{out}");
-    assert!(out.contains("  ✓ a3 change: `inner` \"the fee is 5\" (holds: ") && out.contains("  changed nodes: ") && out.matches("\n  ? ").count() == 1, "{out}");
+    assert!(out.contains("  ✓ a3 change: `inner` \"the fee is 5\" (holds: ") && out.contains("  changed nodes: ") && out.contains("\n  f6: not stated ("), "{out}");
     // R71.3-1: the one gap line has the two forms, so the output has no one command.
-    assert!(out.contains("      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::tail=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit\n") && !out.contains("to state them"), "{out}");
+    assert!(out.contains("; to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::tail=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit\n") && !out.contains("to state them"), "{out}");
     let step = session_steps(repo)[0].clone();
     assert_eq!(step["build_check"], build);
     assert_eq!(step["agent"], serde_json::json!({"same": ["rewrite $a.total => $a.total()"], "change": ["shop_core::facts::idle=idle scales the value", "inner=the fee is 5"]}));
@@ -8074,7 +8074,7 @@ fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     assert_eq!(session_steps(repo)[0], step);
     // The last gap: the list is empty.
     let (code, out) = tree_mode(repo, &["fact", "--change", "shop_core::facts::tail=the tail is a statement"]);
-    assert!(code == Some(0) && out.contains("  changed nodes: ") && !out.contains("\n  ? "), "{out}");
+    assert!(code == Some(0) && out.contains("  changed nodes: ") && !out.contains("\n  f6: not stated ("), "{out}");
 
     // The record. `status` has the agent facts with their check results and the count line
     // of the gaps, with the count 0 (design 54.14).
@@ -8084,16 +8084,17 @@ fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     // them (origin `stated`), then the facts that Semilla filled in (origin `derived`).
     let (_, verbose) = tree_mode(repo, &["status", "--verbose"]);
     let at = |text: &str| verbose.find(text).unwrap_or_else(|| panic!("no `{text}` in:\n{verbose}"));
-    assert!(at("  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):") < at("  ✓ a1 same: ") && at("  ✓ a1 same: ") < at("      entries, in the list below: f1") && at("      entries, in the list below: f1") < at("  ✓ a2 change: ") && at("  ✓ a2 change: ") < at("  ◆ f1 stated: "), "{verbose}");
+    assert!(at("  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):") < at("  ✓ a1 same: ") && at("  ✓ a1 same: ") < at("      entries, in the list below: f1") && at("      entries, in the list below: f1") < at("  ✓ a2 change: ") && at("  ✓ a2 change: ") < at("  ◆ f1 replace (a1; "), "{verbose}");
     // Design 90: one list of the entries, the real edits first, grouped by item.
-    assert!(at("  real edits:\n") < at("  ◆ f6 stated: moved call: `drop(x)` → `drop(x);`") && at("  ◆ f6 stated: moved call: `drop(x)` → `drop(x);`") < at("  ◆ f7 derived: "), "{verbose}");
-    assert!(verbose.contains(&format!("  ◆ f3 stated: added `let` [1] at `shop_core::facts::idle/S0` [semantics · code different]\n        [1] {LONG_LET}\n")), "{verbose}");
+    let moved = "  ◆ f6 replace (a4; R90.2-2, 2 changed MIR elements): moved call: `drop(x)` → `drop(x);`";
+    assert!(at("  real edits:\n") < at(moved) && at(moved) < at("  ◆ f7 replace (Semilla; "), "{verbose}");
+    assert!(verbose.contains(&format!("  ◆ f3 add (a2; R90.2-3, 5 new MIR elements): added `let` [1] at `shop_core::facts::idle/S0` [semantics · code different]\n        [1] {LONG_LET}\n")), "{verbose}");
     // The review has the same order, with the origin of each fact.
     let md = repo.join(".semilla/review.md");
     tree_mode(repo, &["review", "--md", md.to_str().unwrap()]);
     let report = std::fs::read_to_string(&md).unwrap();
     let at = |text: &str| report.find(text).unwrap_or_else(|| panic!("no `{text}` in:\n{report}"));
-    assert!(report.contains("facts of the agent: 4, each one checked against the edit") && report.contains("\nnot stated: 0 item(s)\n") && !report.contains("to state it"), "{report}");
+    assert!(report.contains("facts of the agent: 4, each one checked against the edit") && report.contains("\nnot stated: 0 item(s)\n") && report.lines().filter(|line| line.contains("to state it")).all(|line| line.contains("shop_core::facts::tests::t")), "{report}");
     assert!(at("#### Facts of the agent (4)") < at("✓ a1 same: rewrite `$a.total` =&gt; `$a.total()` (the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)") && at("f1 replace (a1; ") < at("f7 replace (Semilla; "), "{report}");
     // Design 54.12: the HTML export has the same words for the `rewrite` fact, and a `change`
     // fact keeps the word "holds".
@@ -8145,8 +8146,9 @@ fn a_false_fact_of_the_agent_rejects_the_step_and_hides_no_edit() {
     write(repo, "crates/shop-core/src/facts.rs", &fresh);
     let (code, out) = tree_mode(repo, &["step", "use the method", "--same", "rewrite $a.total => $a.total()", "--change", "fresh=a new function"]);
     assert_eq!(code, Some(0), "{out}");
-    assert!(out.contains("  ✓ a2 change: `fresh` \"a new function\" (holds: no reject)\n      note: Semilla shows `shop_core::facts::fresh` as added: the fact covers no existing code\n"), "{out}");
-    assert!(legacy(&out).contains("◆ f8 derived: added `shop_core::facts::fresh`"), "{out}");
+    // [R92.5-1] The new item is a place of the fact: the fact names its entry.
+    assert!(out.contains("  ✓ a2 change: `fresh` \"a new function\" (holds: no reject)\n      places: shop_core::facts::fresh\n      note: Semilla shows `shop_core::facts::fresh` as added: the fact covers no existing code\n"), "{out}");
+    assert!(has_entry(&out, "add", "a2", "added `shop_core::facts::fresh`"), "{out}");
 }
 
 // rule- R54.3-4
@@ -8245,7 +8247,7 @@ fn the_mcp_tools_and_a_plan_step_take_the_facts_of_the_agent() {
 #[test]
 fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     let file = "crates/shop-core/src/facts.rs";
-    let fact_lines = |text: &str| -> Vec<String> { text.lines().filter(|line| line.starts_with("  ◆ ") || line.starts_with("  ? ") || line.starts_with("  not stated: ")).map(str::to_string).collect() };
+    let fact_lines = |text: &str| -> Vec<String> { text.lines().filter(|line| line.starts_with("  ◆ ") || line.starts_with("      not stated (") || line.starts_with("  not stated: ")).map(str::to_string).collect() };
     // The same step with no tag.
     let plain_dir = facts_setup();
     let (code, plain) = tree_mode(&plain_dir.path().join("repo"), &["step", "use the method"]);
@@ -8281,17 +8283,19 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     // moved call (the hunk header `@@ -23 +29 @@`).
     let (code, out) = tree_mode(repo, &["step", "use the method", "--tag", &format!("{file}:11-17=method calls"), "--tag", &format!("{file}:20-25,{file}:-23=idle and tail")]);
     assert_eq!(code, Some(0), "{out}");
-    assert!(legacy(&out).contains(&format!("  tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s)\n  ◆ f1 derived: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]\n")), "{out}");
-    assert!(out.contains(&format!("  tag `idle and tail` ({file}:20-25, {file}:-23): 3 fact(s): 3 semantics; 8 changed line(s)\n  ◆ f3 derived: added `let` [1]")), "{out}");
+    assert!(out.contains(&format!("  tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s)\n  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]\n")), "{out}");
+    assert!(out.contains(&format!("  tag `idle and tail` ({file}:20-25, {file}:-23): 3 fact(s): 3 semantics; 8 changed line(s)\n  ◆ f3 add (Semilla; R90.2-3, 5 new MIR elements): added `let` [1]")), "{out}");
     // Design 90: the entries in no tag have the order of the one list (by item).
-    assert!(out.contains("  not in a tag: 2 fact(s): 2 semantics; 4 changed line(s)\n  ◆ f5 derived: ") && out.contains("  ◆ f7 derived: "), "{out}");
+    assert!(out.contains("  not in a tag: 2 fact(s): 2 semantics; 4 changed line(s)\n  ◆ f5 replace (Semilla; ") && out.contains("  ◆ f7 replace (Semilla; "), "{out}");
     // Negative test: no fact is in the two tags, thus no tag names a fact of a tag above.
     assert!(!out.contains("also in this tag"), "{out}");
     // Design 55.2: the default output has positions only in the gap list. No fact line has a
     // line `lines:` below it.
-    assert!(out.contains("\n      lines: "), "{out}");
+    assert!(out.contains("\n      not stated (crates/shop-core/src/facts.rs:"), "{out}");
     assert!(!out.lines().zip(out.lines().skip(1)).any(|(fact, next)| fact.starts_with("  ◆ ") && next.trim_start().starts_with("lines: ")), "{out}");
-    assert!(out.contains("      tag: `method calls`\n      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::a,shop_core::facts::b,shop_core::facts::d=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()'\n") && out.contains("      not in a tag\n      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::inner::a=TEXT'; if it does not change, --same 'rewrite 1 => 5'\n"), "{out}");
+    // [R92.5-1] The line "not stated" of an entry is in the group of its tag (design 92).
+    let tagged_at = out.find("  tag `method calls` (").unwrap_or_else(|| panic!("{out}"));
+    assert!(out[tagged_at..].split("\n  tag `").next().is_some_and(|group| group.contains("; to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::a,shop_core::facts::b,shop_core::facts::d=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()' (one statement for 3 places: f1, f2)\n")), "{out}");
     assert!(out.contains("\n  cover: each of the 18 changed line(s) is in a fact\n"), "{out}");
     // A tag does not replace a fact: each fact line and each gap line of the step with no
     // tag is in the output one time, and the stored facts are equal.
@@ -8311,7 +8315,7 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     assert!(out.starts_with("stored: 1 new fact(s) of the agent and 1 new tag(s) in step 0 \"use the method\"; no build check runs again"), "{out}");
     assert!(out.contains("(holds: the behavior of existing code can change in each item; covers 2 fact(s) in 1 item(s) with 6 changed line(s))\n"), "{out}");
     assert!(out.contains(&format!("  tag `tail` ({file}:29): 1 fact(s): 1 semantics; 2 changed line(s)\n      also in this tag, shown in a tag above: f6\n")), "{out}");
-    assert!(out.contains("      tags: `idle and tail`, `tail`\n"), "{out}");
+    assert!(out.contains("  tag `idle and tail` ("), "{out}");
     // A tag with no edit adds nothing (exit code 1); a line after the last line: exit code 2.
     let stored = session_steps(repo)[0].clone();
     let (code, out) = tree_mode(repo, &["fact", "--tag", &format!("{file}:1=none")]);
@@ -8325,7 +8329,7 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     let (_, verbose) = tree_mode(repo, &["status", "--verbose"]);
     assert!(verbose.contains("      facts, in the groups of the tags below: f3, f4\n"), "{verbose}");
     // The lines of the compiled check come between the fact line and its line `lines:`.
-    let f2 = verbose.find("  ◆ f2 derived: changed expression `e.total` → `e.total()` at `shop_core::facts::d/tail/rhs` [semantics · code different]\n").expect("the line of f2");
+    let f2 = verbose.find("  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `e.total` → `e.total()` at `shop_core::facts::d/tail/rhs` [semantics · code different]\n").expect("the line of f2");
     let next = verbose[f2 + 1..].find("  ◆ ").map_or(verbose.len(), |at| f2 + 1 + at);
     assert!(verbose[f2..next].contains(&format!("\n      lines: {file}:17, {file}:-17\n")), "{verbose}");
     assert!(verbose.contains(&format!("  tag `tail` ({file}:29): 1 fact(s): 1 semantics; 2 changed line(s)\n")), "{verbose}");
@@ -8338,7 +8342,8 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     assert!(report.contains("#### Tags of the agent (3)\n") && report.contains(&format!("Step 0, tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s):\n\n- step 0: f1 replace (Semilla; ")), "{report}");
     assert!(report.contains("- also in this tag, shown in a tag above: f6\n") && report.contains("Step 0, not in a tag: 2 fact(s): 2 semantics; 4 changed line(s):\n"), "{report}");
     // The gap line has the lines of its edits (a short list), then the tag.
-    assert!(report.contains(&format!("in: `shop_core::facts::inner::a`; lines: {file}:33, {file}:-27; not in a tag\n")) && report.contains(&format!("{file}:-17; tag: `method calls`\n")), "{report}");
+    // [R92.5-1] Each entry has its line "not stated" in the group of its tag (design 92).
+    assert!(report.contains(&format!("; not stated ({file}:33, {file}:-27); to state it: ")) && report.contains(&format!("; not stated ({file}:17, {file}:-17); to state it: ")), "{report}");
     assert!(!report.contains("#### Derived facts") && report.contains("  - facts, in the groups of the tags below: f3, f4\n"), "{report}");
     for id in ["f1", "f2", "f3", "f4", "f5", "f6", "f7"] {
         assert_eq!(report.matches(&format!("- step 0: {id} ")).count(), 1, "{id}\n{report}");
@@ -8348,7 +8353,7 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     let md = plain_repo.join(".semilla/review.md");
     tree_mode(&plain_repo, &["review", "--md", md.to_str().unwrap()]);
     let report = std::fs::read_to_string(&md).unwrap();
-    assert!(!report.contains("Tags of the agent") && !report.contains("not in a tag") && report.contains("#### Derived facts (7)"), "{report}");
+    assert!(!report.contains("Tags of the agent") && !report.contains("not in a tag") && report.contains("#### Entries of the map of the diff (7)"), "{report}");
 }
 
 /// Design 55.3: the MCP tools `step` and `fact`, and a step of a replay plan, take tags.

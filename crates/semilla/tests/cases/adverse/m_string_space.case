@@ -48,14 +48,11 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: value of, see f1 (f1)
-      in: depot::list::S
-      lines: src/list.rs:-15, src/list/mod.rs:15
-      to state it: --change 'depot::list::S=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::list::S=TEXT'
   real edits:
   item `depot::list::S`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `depot::list::S` changed: "a b" → "a  b" (the public API can change: a different crate can use the item) [semantics · code equal] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `depot::list::S` changed: "a b" → "a  b" (the public API can change: a different crate can use the item) [semantics · code equal]
+      not stated (src/list.rs:-15, src/list/mod.rs:15); to state it: --change 'depot::list::S=TEXT'
       ! public API: the compare does not cover the code of a different crate
   transformations:
   item `depot::list`:
@@ -64,7 +61,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `depot::list::S` changed: "a b" → "a  b" (the public API can change: a different crate can use the item) [semantics · code equal] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `depot::list::S` changed: "a b" → "a  b" (the public API can change: a different crate can use the item) [semantics · code equal]
     lines: src/list.rs:-15, src/list/mod.rs:15
 ◆ f2 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 14 lines keep their tokens [move · no code]
     lines: src/list.rs:-1-14, src/list/mod.rs:1-14

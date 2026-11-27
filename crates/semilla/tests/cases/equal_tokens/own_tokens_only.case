@@ -27,13 +27,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::run` (src/lib.rs:1): the same MIR text; a changed callee: `depot::run::{closure#0}`; the full compare: `#[same(depot::run)] fn run_same() {}`; a difference: `#[change(depot::run)] fn run_change() -> bool { … }` or `#[different(depot::run)] fn run_different() -> bool { … }`
     MIR changes with no claim: `depot::run::{closure#0} async { 2 }` (src/lib.rs:2): the template of `depot::run` covers its item `depot::run`
   changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: 2 different edits (f1, f2)
-      in: depot::run
-      lines: src/lib.rs:2-3, src/lib.rs:-2-3
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, --same 'rewrite async move { 1 } => async { 2 }' --same 'rewrite 1 => 2'
   real edits:
   item `depot::run`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::run/tail/body/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::run/tail/body/tail` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, --same 'rewrite async move { 1 } => async { 2 }' --same 'rewrite 1 => 2' (one statement for 2 places: f1, f2)
       affected bodies: depot::run
       equivalence: `depot::run`: no result alone (the body has 2 edits); the body: MIR changes: the same MIR text; a changed callee: `depot::run::{closure#0}` (the same line for f1)
       equivalence: `depot::run::{closure#0} async { 2 }`: MIR changes alone; the body: MIR changes
@@ -50,7 +47,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   note: `▫` is in place of a child of the node (a condition, a block, an argument). It is not a cut: each edit in the child has its own fact.
 
 === positions
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::run/tail/body/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::run/tail/body/tail` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:-3
 ◆ f1 same code (Semilla; R90.2-1, equal MIR): changed async: `async move {▫}` → `async {▫}` at `depot::run/tail` [semantics · code equal]
     lines: src/lib.rs:2, src/lib.rs:-2

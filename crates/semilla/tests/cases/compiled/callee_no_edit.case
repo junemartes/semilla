@@ -35,16 +35,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::make` (src/lib.rs:7): the signature changes (`fn make () -> Food` → `fn make () -> Fuel`): `#[same(shop::make)] fn make() -> bool { let old = before::shop::make(); let new = after::shop::make(); true }`; a difference: `#[change(shop::make)] fn make_change() -> bool { … }` or `#[different(shop::make)] fn make_different() -> bool { … }`
     MIR changes with no claim: `shop::total` (src/lib.rs:9): the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change() -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed path `Food` → `Fuel` (f2)
-      in: shop::make
-      lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::make=TEXT'; if it does not change, --same 'rewrite Food => Fuel'
   real edits:
   item `shop::make`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Food` → `Fuel` at `shop::make/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Food` → `Fuel` at `shop::make/tail` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::make=TEXT'; if it does not change, --same 'rewrite Food => Fuel'
       affected bodies: shop::make (with 1 other edit of this body)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): return type of `shop::make` `-> Food` → `-> Fuel` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): return type of `shop::make` `-> Food` → `-> Fuel` (the public API can change: a different crate can use the item) [declaration · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: --change 'shop::make=TEXT'
       affected bodies: shop::make, shop::total (with 1 other edit of this body)
       through: `shop::make` (1 body)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
@@ -56,7 +54,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Food` → `Fuel` at `shop::make/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Food` → `Fuel` at `shop::make/tail` [semantics · code different]
     lines: src/lib.rs:7, src/lib.rs:-7
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): return type of `shop::make` `-> Food` → `-> Fuel` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): return type of `shop::make` `-> Food` → `-> Fuel` (the public API can change: a different crate can use the item) [declaration · code different]
     lines: src/lib.rs:7, src/lib.rs:-7

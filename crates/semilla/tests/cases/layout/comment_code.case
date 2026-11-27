@@ -55,13 +55,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:6): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: bool, b: &bool, v: &[u32]) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
   changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: deleted statement `for x in v { n += x; }` (f2)
-      in: depot::total
-      lines: src/lib.rs:-11
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `depot::total`:
-  ◆ f2 delete (Semilla; R90.2-3, 9 removed MIR elements): deleted statement `for x in v { n += x; }` at `depot::total/S4` [semantics · code different] · not stated
+  ◆ f2 delete (Semilla; R90.2-3, 9 removed MIR elements): deleted statement `for x in v { n += x; }` at `depot::total/S4` [semantics · code different]
+      not stated (src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::total
       control flow: − for `v` (src/lib.rs:-11): done → return, next → call `<u32 as AddAssign<&u32>>::add_assign`
       control flow: − call `<u32 as AddAssign<&u32>>::add_assign` (src/lib.rs:-11): return → for `v`
@@ -76,7 +73,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 delete (Semilla; R90.2-3, 9 removed MIR elements): deleted statement `for x in v { n += x; }` at `depot::total/S4` [semantics · code different] · not stated
+◆ f2 delete (Semilla; R90.2-3, 9 removed MIR elements): deleted statement `for x in v { n += x; }` at `depot::total/S4` [semantics · code different]
     lines: src/lib.rs:-11
 ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added comment `// for x in v { n += x; }` [docs · no code]
     lines: src/lib.rs:11

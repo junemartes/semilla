@@ -47,19 +47,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::width` (src/lib.rs:12): the full compare: `#[same(shop::width)] fn width_same() {}`; a difference: `#[change(shop::width)] fn width_change(b_before: before::shop::Block, b_after: after::shop::Block) -> bool { … }` or `#[different(shop::width)] fn width_different() -> bool { … }`
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: 2 different edits (f1, f2)
-      in: shop::width
-      lines: src/lib.rs:13-14, src/lib.rs:-13
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::width=TEXT'; if it does not change, --same 'rewrite b => wide', and a `--same` fact (rename, move, or rewrite) that explains each other edit
   real edits:
   item `shop::width`:
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): added `let` `let wide: Block = b * 2;` at `shop::width/S0` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): added `let` `let wide: Block = b * 2;` at `shop::width/S0` [semantics · code different]
+      not stated (src/lib.rs:13); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::width=TEXT'; if it does not change, --same 'rewrite b => wide', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: shop::width (with 1 other edit of this body)
       control flow: + check `overflow: b * 2` (src/lib.rs:13): ok → check `overflow: wide + 1`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:13)
       control flow: + arrow entry (src/lib.rs:12) → check `overflow: b * 2` (src/lib.rs:13)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
-  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed path `b` → `wide` at `shop::width/tail/lhs` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed path `b` → `wide` at `shop::width/tail/lhs` [semantics · code different]
+      not stated (src/lib.rs:14, src/lib.rs:-13); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::width=TEXT'; if it does not change, --same 'rewrite b => wide', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: shop::width (with 1 other edit of this body)
       control flow: ~ check `overflow: b + 1` → `overflow: wide + 1` (src/lib.rs:-13, src/lib.rs:14)
       control flow: − arrow entry (src/lib.rs:-12) → check `overflow: b + 1` (src/lib.rs:-13)
@@ -70,7 +68,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): added `let` `let wide: Block = b * 2;` at `shop::width/S0` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): added `let` `let wide: Block = b * 2;` at `shop::width/S0` [semantics · code different]
     lines: src/lib.rs:13
-◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed path `b` → `wide` at `shop::width/tail/lhs` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed path `b` → `wide` at `shop::width/tail/lhs` [semantics · code different]
     lines: src/lib.rs:14, src/lib.rs:-13

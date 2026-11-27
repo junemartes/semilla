@@ -1005,6 +1005,11 @@ impl<'a> Check<'a> {
                 // No reject: the code is new, or it is gone. It is not existing code.
                 held += 1;
                 result.notes.push(format!("note: Semilla shows `{}` as {side}: the fact covers no existing code", target.name));
+                // [R92.5-1] The item is a place of the fact: the fact names the entry of the
+                // addition or the removal (design 90, R90.5-2).
+                if !result.places.contains(&target.name) {
+                    result.places.push(target.name.clone());
+                }
             } else {
                 let mut facts: Vec<usize> = units.iter().map(|&unit| self.units[unit].fact).collect();
                 facts.dedup();

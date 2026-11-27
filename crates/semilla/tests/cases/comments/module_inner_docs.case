@@ -45,13 +45,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::rules::base` (src/rules.rs:4): the full compare: `#[same(shop::rules::base)] fn base_same() {}`; a difference: `#[change(shop::rules::base)] fn base_change(x: u32) -> bool { … }` or `#[different(shop::rules::base)] fn base_different() -> bool { … }`
   changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed expression `x` → `x + 1` (f2)
-      in: shop::rules::base
-      lines: src/rules.rs:4, src/rules.rs:-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::rules::base=TEXT'; if it does not change, --same 'rewrite x => x + 1'
   real edits:
   item `shop::rules::base`:
-  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 1` at `shop::rules::base/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 1` at `shop::rules::base/tail` [semantics · code different]
+      not stated (src/rules.rs:4, src/rules.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::rules::base=TEXT'; if it does not change, --same 'rewrite x => x + 1'
       affected bodies: shop::rules::base
       control flow: + check `overflow: x + 1` (src/rules.rs:4): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/rules.rs:4)
@@ -75,7 +72,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 3 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 1` at `shop::rules::base/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 1` at `shop::rules::base/tail` [semantics · code different]
     lines: src/rules.rs:4, src/rules.rs:-4
 ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): visibility of `shop::tools`: `private` → `pub` (the public API changes: a different crate can now use the item) [visibility · code equal]
     lines: src/lib.rs:2, src/lib.rs:-2

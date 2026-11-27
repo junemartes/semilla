@@ -5073,7 +5073,7 @@ Decided by Claude:
 
 Thus the option that explains the largest set of edits comes first, and an option that Semilla prints is never a false fact of form. The agent decides if the option is true for the intent, and it writes the sentence (`TEXT`).
 
-**The output.** [R54.4-4] The step output has the count line, at most 5 lines of the list (`GAP_LIMIT`), "and N more line(s)", and one complete command:
+**The output.** [R54.4-4] The step output has the count line, at most 5 lines of the list (`GAP_LIMIT`), "and N more line(s)", and one complete command (design 92, R92.5-1: each line of the list is below its entries, each entry has its line, and the one command has the options of the first 5 lines):
 
 ```text
   not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -10535,8 +10535,8 @@ Rule index: the identities are below.
 
 Rule index: the identities are below.
 
-1. [R90.5-1] **One list of entries, the real edits first, grouped by item.** The sections: "real edits", "not mapped", "transformations" (same code, rename, move), "syntax only". In each section, a line `item `PATH`:` (or `file `PATH`:`) starts the entries of one item. Each entry line: `◆ fN KIND (SOURCE; CHECK): TEXT [CATEGORY · COMPARE]`, with the marks of today, and ` · not stated` for a real edit that no statement names. The lines below an entry stay. A fact of the agent shows its check and the line `entries, in the list below: f1, f3`. A step with tags keeps the groups of the tags (design 55.3). `semilla review --md`, `status --verbose`, `verify --json` (the new fields of the fact), and the MCP tools give the same entries. A record of an earlier version (no kind) keeps the groups of today. Tests: `the_one_list_has_the_real_edits_first_grouped_by_item_and_the_coverage_line` (positive and negative).
-2. [R90.5-2] **A real edit that no statement names has the mark "not stated". The step passes.** A statement names an entry when a fact of the agent holds and has it below (or its item is an item of a `change` fact), when a claim anchor maps a node of it, or when a proved claim explains its item. The gap list of today (54.4) stays below the coverage line. Tests: the case `map90/edit_literal_negative` (positive), `an_option_and_its_intent_statement_give_the_same_entry_and_the_same_result` (negative: a stated entry has no mark).
+1. [R90.5-1] **One list of entries, the real edits first, grouped by item.** The sections: "real edits", "not mapped", "transformations" (same code, rename, move), "syntax only". In each section, a line `item `PATH`:` (or `file `PATH`:`) starts the entries of one item. Each entry line: `◆ fN KIND (SOURCE; CHECK): TEXT [CATEGORY · COMPARE]`, with the marks of today, and ` · not stated` for a real edit that no statement names (design 92, R92.5-1: a line below the entry). Design 92 adds the section "compiled code that changes with no edit" after the real edits (R92.4-1). The lines below an entry stay. A fact of the agent shows its check and the line `entries, in the list below: f1, f3`. A step with tags keeps the groups of the tags (design 55.3). `semilla review --md`, `status --verbose`, `verify --json` (the new fields of the fact), and the MCP tools give the same entries. A record of an earlier version (no kind) keeps the groups of today. Tests: `the_one_list_has_the_real_edits_first_grouped_by_item_and_the_coverage_line` (positive and negative).
+2. [R90.5-2] **A real edit that no statement names has the mark "not stated". The step passes.** A statement names an entry when a fact of the agent holds and has it below (or its item is an item of a `change` fact), when a claim anchor maps a node of it, or when a proved claim explains its item. The gap list of today (54.4) stays below the coverage line (design 92, R92.5-1: the mark is a line below the entry with the statement, and the gap list goes into the entries). Tests: the case `map90/edit_literal_negative` (positive), `an_option_and_its_intent_statement_give_the_same_entry_and_the_same_result` (negative: a stated entry has no mark).
 3. [R90.5-3] **One coverage line: "changed nodes: N in M entries; K real edits (S stated by the agent); J not mapped".** N counts the changed nodes of the syntax diff, M the entries of the step, K the entries that count as real edits (R90.3-2), S the real edits with a source, J the nodes that are not mapped. The line replaces the line "AST changes" (R79.6-1, R79.6-2) and the line "not stated" of the gap list. Then the request of each node that is not mapped (the first lines and a count), then the gap list. The line "changed bodies" of design 84, the cover line of the changed lines, and the line of the hunks stay. The full text (`semilla expand --step N`) lists each node: `nI STATE [RULE]: CHANGE NODE `AT` (PLACE): KIND in fN`. Tests: `the_one_list_has_the_real_edits_first_grouped_by_item_and_the_coverage_line` (positive; negative: a record of an earlier version keeps its line), property 15 of the case runner.
 
 ### 90.6 "not mapped"
@@ -10558,8 +10558,8 @@ Rule index: the identities are below.
 
 Rule index: the identities are below.
 
-1. [R90.8-1] **The pairs come from the hints of the agent first, then from the one map of the matcher.** The hints are `#[rename]`, `#[moved]`, and their short forms (R90.4-1). The compiler identity pairs each item whose definition keeps its path (design 70). For the other removed and added items of one kind, the candidates of design 24.2 (a rename keeps the owner, a move keeps the name, similar texts, at most 4 of one kind in one owner) go to the matcher of G2 (design 72): one minimum-cost assignment by the similar score, with a bonus of 1 for a pair whose uses follow it (a changed path from the old name to the new name, the evidence of design 54.17), ties by the source order. Semilla does not try a second map (the search of up to 24 maps of design 24.6 and 36.1 is gone). Tests: `the_pairs_come_from_the_hints_then_from_the_one_map_of_the_matcher` (positive: two twins, and a hint that wins; negative: two texts that are not similar).
-2. [R90.8-2] **Each pair is checked one time.** One run of the core check of the step with the claims of all pairs gives the result of each pair. A pair that does not pass does not remove the other pairs: one more run with the pairs that pass gives the entries "delete" and "add" of the failed pairs, and checks no pair a second time. The children of a pair (the fields and the variants of a renamed type, batch 9b2) get one map of the matcher and one run. So a step runs the core check at most four times for the pairs (BASE: one run for each map that it tried, up to 24, for each stated pair one more). Tests: `a_hint_that_does_not_pass_stays_a_delete_and_an_add_and_the_other_pairs_keep_their_check` (positive), the same test with no hint (negative).
+1. [R90.8-1] **The pairs come from the hints of the agent first, then from the one map of the matcher.** The hints are `#[rename]`, `#[moved]`, and their short forms (R90.4-1). The compiler identity pairs each item whose definition keeps its path (design 70). For the other removed and added items of one kind, the candidates of design 24.2 (a rename keeps the owner, a move keeps the name, similar texts, at most 4 of one kind in one owner) go to the matcher of G2 (design 72): one minimum-cost assignment by the similar score, with a bonus of 1 for a pair whose uses follow it (a changed path from the old name to the new name, the evidence of design 54.17), ties by the source order (design 92, R92.1-1: a tie gives no pair). Semilla does not try a second map (the search of up to 24 maps of design 24.6 and 36.1 is gone). Tests: `the_pairs_come_from_the_hints_then_from_the_one_map_of_the_matcher` (positive: two twins, and a hint that wins; negative: two texts that are not similar).
+2. [R90.8-2] **Each pair is checked one time.** One run of the core check of the step with the claims of all pairs gives the result of each pair. A pair that does not pass does not remove the other pairs: one more run with the pairs that pass gives the entries "delete" and "add" of the failed pairs, and checks no pair a second time. The children of a pair (the fields and the variants of a renamed type, batch 9b2) get one map of the matcher and one run. So a step runs the core check at most four times for the pairs (BASE: one run for each map that it tried, up to 24, for each stated pair one more). (Design 92, R92.2-1 and R92.2-2: the pairs and the children come before the check of the step, the check of the step is the run with the pairs, and a pair that does not pass changes no other pair.) Tests: `a_hint_that_does_not_pass_stays_a_delete_and_an_add_and_the_other_pairs_keep_their_check` (positive), the same test with no hint (negative).
 3. [R90.8-3] **A pair that does not pass stays "delete" plus "add".** A hint gets the cause on its fact of the agent (`✗ aN`). A pair of the matcher gets the note "… show(s) as removed and added: Semilla does not derive the rename (CAUSE)", a note with the template `#[rename(before::OLD, after::NEW)] fn old_to_new() {}` (or `#[moved]`) if the check of the intent files accepts it (the gate of R87.1-1; else `no template: CAUSE`), and each edit under the name map as its own fact ("pair diff", trial 3). A rename with other edits that passes keeps the rename entry and one entry for each other edit (design 36.1). Test: `a_hint_that_does_not_pass_stays_a_delete_and_an_add_and_the_other_pairs_keep_their_check` (positive).
 
 ### 90.9 Decided by Claude
@@ -10569,22 +10569,22 @@ Rule index: no rule: the subsection lists the choices of this batch.
 - The one fact is the fact of today with new fields (`kind`, `source`, `check`, `nodes`, `syntax_only`, `not_stated`), not a new type: each value of today stays on it, and each output, the JSON, and the Markdown review show it with no new reader. A fact of the agent stays a record of its own (the statement: its text, its check, its notes); it is the source of entries, not an entry.
 - An entry has the kind of its strongest node (type change, replace, add, delete, not mapped, rename, move, same code). The check names the rule of that node and the count of the nodes.
 - The coverage line counts M as each entry of the step, K as each entry with a node (or a file edit) whose kind is a real edit and that is not syntax only. An entry with no node of its own (a line of the public API, the compiled code of a body with no edit) is in the list with its kind, and it is not in K: it repeats a node entry, or it has no node to review.
-- A syntax-only node keeps the state of the matcher of today (design 79), also "not mapped" with its request: the brief rule M2 ("the matcher of today, with the mark syntax only") is read before decision 13.6 of the draft for a node with no MIR element.
+- A syntax-only node keeps the state of the matcher of today (design 79), also "not mapped" with its request: the brief rule M2 ("the matcher of today, with the mark syntax only") is read before decision 13.6 of the draft for a node with no MIR element. (Changed by design 92, R92.3-1: a syntax-only node with no partner is "add" or "delete".)
 - A node that an anchor of a claim maps and that has no unique alignment is a "replace" of the claim, not a request.
 - The `--claim` forms of today are property claims: no statement of the intent language (90.4).
 - The statement of a `--change` option has the body `true` (a `change` claim needs a `bool` body); it is never a claim for the proof.
 - The order of the sections: real edits, not mapped, transformations, syntax only (decision 13.1 of the draft puts the real edits first; a node that is not mapped needs the agent, so it is second).
-- The gap list of design 54.4 stays below the coverage line: its lines give the option that states a place (`to state it`), a value of today. The header line "not stated: N item(s) with M place(s)" goes: the coverage line replaces it, and each gap line has its count of places.
-- Rule M8: a use that follows a pair (a changed path `two` → `dos`) is an anchor of the one map; the matcher of G2 breaks a tie that is left by the source order (rung 4 of design 72); before, a tie gave no rename (R50.2-2, removed). A pair that the order chose is checked as each other pair. Found on a unit test of five twins: with no anchor of the uses, the order paired `two` with `tres`, the check passed, and the uses stayed as changed paths.
-- The tests of `e2e.rs` and of `tests.rs` that read the text, the category, or the compare result of a fact (not its head) read the heads in the form of before (a helper `legacy`); the tests of design 90 and the case set read the new heads.
-- Rule M8: one run of the core check for all pairs, not a check of the bodies of each pair. The core check of a step has no form for a subset of the bodies; the cost is one run (plus one run when a pair fails, plus one run for the children).
+- The gap list of design 54.4 stays below the coverage line: its lines give the option that states a place (`to state it`), a value of today. The header line "not stated: N item(s) with M place(s)" goes: the coverage line replaces it, and each gap line has its count of places. (Changed by design 92, R92.5-1: each line of the gap list is below its entries.)
+- Rule M8: a use that follows a pair (a changed path `two` → `dos`) is an anchor of the one map; the matcher of G2 breaks a tie that is left by the source order (rung 4 of design 72); before, a tie gave no rename (R50.2-2, removed). A pair that the order chose is checked as each other pair. (Changed by design 92, R92.1-1: a tie gives no pair.) Found on a unit test of five twins: with no anchor of the uses, the order paired `two` with `tres`, the check passed, and the uses stayed as changed paths.
+- The tests of `e2e.rs` and of `tests.rs` that read the text, the category, or the compare result of a fact (not its head) read the heads in the form of before (a helper `legacy`); the tests of design 90 and the case set read the new heads. (Changed by design 92: the helper is gone.)
+- Rule M8: one run of the core check for all pairs, not a check of the bodies of each pair. The core check of a step has no form for a subset of the bodies; the cost is one run (plus one run when a pair fails, plus one run for the children). (Changed by design 92, R92.2-1 and R92.2-2: the run with the pairs is the check of the step, and each pair has its own result.)
 
 ### 90.10 Limits
 
 Rule index: no rule: the subsection lists the limits.
 
-- The check of a pair (R90.8-2) is a run of the core check of the full step, not of the bodies that the pair touches only.
-- No test makes a pair of the matcher fail its check: the template of R90.8-3 for such a pair has no test of its own (the hint that fails has one).
+- The check of a pair (R90.8-2) is a run of the core check of the full step, not of the bodies that the pair touches only. (Changed by design 92, R92.2-1, R92.2-2.)
+- No test makes a pair of the matcher fail its check: the template of R90.8-3 for such a pair has no test of its own (the hint that fails has one). (Changed by design 92: the case `map92/pair_fails_check`.)
 - The kinds "extract", "inline", and "reorder", the statements of section 7 of the draft, and the control-flow map of section 8 are batches 15b and 15c. A moved statement keeps the kind "move" of its fact of today; an extracted or an inlined variable keeps its fact of today.
 - A node of a body with no element data (a body from a macro, a record of an earlier driver) is "not mapped".
 - A node of test code that no checked configuration compiles has no MIR: it is syntax only.
@@ -10595,11 +10595,11 @@ Rule index: no rule: the subsection lists the limits.
 
 Rule index: no rule: the subsection has the open questions.
 
-- Should an entry with no node of its own (a line of the public API of a rename, the compiled code of a body with no edit) count as a real edit, or go into its node entry as a line?
-- Should a syntax-only node that the matcher of today leaves "not mapped" (an added type that changed code reaches, a `use` line with an unchanged reader) be "add" or "delete" (decision 13.6 of the draft) instead?
-- Should a tie of the matcher (two equal candidates) give no pair and a request, in place of the pair by the source order?
-- Should the gap list (the lines `? …` with `to state it`) go into the entries (a line below each entry with the mark "not stated")?
-- Should the check of a pair run only on the bodies that the pair touches (a part of the core check for a subset of the bodies)?
+- Should an entry with no node of its own (a line of the public API of a rename, the compiled code of a body with no edit) count as a real edit, or go into its node entry as a line? (Decided by Claude in design 92, R92.4-1: a section of its own, not in K.)
+- Should a syntax-only node that the matcher of today leaves "not mapped" (an added type that changed code reaches, a `use` line with an unchanged reader) be "add" or "delete" (decision 13.6 of the draft) instead? (Decided by Claude in design 92, R92.3-1: yes, with who reaches it.)
+- Should a tie of the matcher (two equal candidates) give no pair and a request, in place of the pair by the source order? (Decided by Claude in design 92, R92.1-1: yes.)
+- Should the gap list (the lines `? …` with `to state it`) go into the entries (a line below each entry with the mark "not stated")? (Decided by Claude in design 92, R92.5-1: yes.)
+- Should the check of a pair run only on the bodies that the pair touches (a part of the core check for a subset of the bodies)? (Decided by Claude in design 92, R92.2-1, R92.2-2: the pairs come before the check of the step, and each pair has its own result.)
 
 ### 90.12 The results
 
@@ -10806,3 +10806,167 @@ Rule index: no rule: the subsection has the decisions, the limits, and the open 
 - Should a later batch give the outcome of the check of one step a stored form, so that a step after a step does not check the step before again?
 - Should a later batch give the construction of the opaque inputs a record of the parts that each item reads (the condition for a key of each item of the core check)?
 - Should the driver write the records of only the units and the bodies that change (the largest part of the build in a step after a step)?
+
+## 92. Batch 15a2: the map of the diff: the defects and the open questions of batch 15a
+
+Date: 2026-11-27. The open questions of 90.11 have answers of Claude (the user did not answer yet): each answer below has the mark "Decided by Claude". The decision of the user that applies (2026-11-27, rule M8): "We shouldn't need to search for it because we derive the entities from the hints for most of the diff".
+
+**The general rule.** One change gives one entry, and each entry shows its true kind. A pair of items is checked on its own data, and a pair that does not pass changes no other pair. The source order never decides a pair. The reviewer reads the real edits first; an entry with no edit of its own is in a section of its own; the statement that states an entry is below the entry.
+
+This section changes parts of section 90: 90.9 (the decisions on a syntax-only node, the gap list, the tie, the helper `legacy`, and the one run of the pairs), 90.10 (the limits of the check of a pair and of its test), and 90.11 (each open question), each one marked there, and the rule R54.4-4 (the lines of the gap list). The rules R90.5-2 (the place of the gap list) and R90.8-1 (the tie by the source order), R90.8-2 (one more run of the core check for the pairs) have new forms below.
+
+### 92.1 A tie gives no pair (N1)
+
+Rule index: the identities are below.
+
+1. [R92.1-1] **A tie of the one map of the matcher gives no pair.** The one map of R90.8-1 is a minimum-cost assignment by the similar score, with the bonus of 1 for a use that follows a pair. A pair of the assignment is a tie when an assignment with an equal sum of the scores does not have it (the pair with its score set to 0 gives the same sum). A tie gives no pair: the items stay "delete" and "add", and the step has the note "`A` → `B`, `A` → `C` show(s) as removed and added: a tie of the one map (candidates with an equal score), and no anchor (a hint, a use that follows a pair) decides it; Semilla does not use the source order", and one note with the template `#[rename(before::A, after::B)] fn …() {}` (or `#[moved]`) for each candidate of the tie. The gate of R87.1-1 checks each template with the other templates of the step (`template::Pending::notes`). A use that follows a pair: an edit whose two texts have the same tokens except names at the same places (`two(x)` → `dos(x)`, `p.a - p.b` → `p.x - p.y`). Tests: `a_tie_of_the_one_map_gives_no_pair_and_a_use_that_follows_a_pair_decides_it` (positive and negative), `a_tie_of_two_candidates_gives_no_pair_in_the_syntax_only_check`, the cases `map92/tie_no_anchor` (positive) and `map92/tie_with_anchor` (negative).
+
+**Decided by Claude.** This reverses decision 9 of 90.9 (a tie by the source order) for rule M8; R50.2-2 gave no rename for a tie before design 90. A pair whose assignment is not unique is a tie also when its own candidates have different scores (two other pairs give the same sum): the order would decide it.
+
+### 92.2 The check of a pair runs on its own data (N2)
+
+Rule index: the identities are below.
+
+1. [R92.2-1] **The pairs come before the check of the step.** The plan of the pairs (`identity::plan`) reads only the two trees: the hints of the agent, the candidates and the one map of the matcher (R90.8-1, R92.1-1), the children of each pair (batch 9b2, F2), and each check of a pair that needs no compiled code (R92.2-2). Then the check of the step runs one time with the claims of all the pairs of the plan (`identity::first_run`): it is the check of the step, not one more run. `identity::settle` reads the result of each pair from it. Only a pair that does not pass gives one more run (with the pairs that pass). So the phase "the search for a derived identity" has no core check when each pair passes. Tests: `the_pairs_come_before_the_check_of_the_step_and_a_step_whose_pairs_pass_runs_one_core_check` (positive: one run; negative: a hint that does not pass gives a second run).
+2. [R92.2-2] **A pair that does not pass its check changes no other pair.** The check of a pair reads the bodies that the pair touches: the items of the pair and the bodies that name an item of the pair (the references that follow it). A move keeps the `cfg` conditions on the path of the item (batch 5x, part B): the plan checks it for each pair on the two trees; the check of the step (`identity_step`) no longer gives the result of one move to each identity claim of a derived map. An edit with no fact fails only a pair that it touches (an edit in an item of the pair, or in an item whose reference follows the pair; an edit with no item touches each pair). An error of the step fails each pair. A child of a pair that does not pass does not pass. Tests: `a_pair_that_does_not_pass_its_check_changes_no_other_pair` (positive and negative), the cases `map92/pair_fails_check` (positive: the template of R90.8-3 of a pair of the matcher, which had no test) and `map92/pair_passes_check` (negative).
+
+### 92.3 A syntax-only node with no partner (N3)
+
+Rule index: the identities are below.
+
+1. [R92.3-1] **A syntax-only node with no partner is "add" or "delete".** A node with no MIR element that the matcher of today leaves with no partner (the AST pass of design 79 gives it no rule: an added macro call that makes items, an added `pub use` line, the head of an added container, an added field of a new type, a statement that no checked configuration compiles) is an addition ("add") or a removal ("delete"), mapped by Semilla with the rule R92.3-1. The check of its entry gives who reaches it in the other tree, with the data of Semilla: the items of the other tree that name it (the name record; with no record, the words of the text), the names that a `use` line gives, "a use of its trait reaches it", "a different crate can use it (a public item)", "the head of a container: its members reach it", or "a statement of `ITEM`". The node keeps its texts and its claim template (R79.5-1): the line of R92.5-1 gives the template. "not mapped" stays only for a node with no unique alignment (R90.6-1). Tests: `a_syntax_only_node_with_no_partner_is_an_addition_with_who_reaches_it` (positive and negative), `a_node_with_no_partner_is_not_mapped_by_the_matcher`, the case `map92/added_macro_call_and_pub_use` (positive).
+
+**Decided by Claude.** Decision 13.6 of the draft of the intent language applies to a node with no MIR element too. A node of a tie of N1 is an addition or a removal (the tie has its request in the note).
+
+### 92.4 An entry with no edit of its own (N4)
+
+Rule index: the identities are below.
+
+1. [R92.4-1] **An entry with no node and no changed line of its own is not a real edit.** Such an entry (`Fact::no_edit`: no node of the map, no position, no file edit, and not the fact of a pair, the part `identity`) is the compiled code of a body with no edit at its place ("code that Semilla does not see", "indirect change, cause not known") or a line of the public API of a rename or a move. It goes into the section "compiled code that changes with no edit", after the real edits. It is not in K. Its check is "R92.4-1, no node and no changed line of its own" (or "R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)"). No cause search: an `indirect` change is a fact of the step (the decision of the user of 2026-11-21). A file edit is a real edit with no node (R90.3-2): its entry now counts in K (before, the test of a file edit read the part `file`, and no fact has this part). Tests: `an_entry_with_no_node_and_no_changed_line_is_in_its_own_section_and_no_real_edit` (positive and negative), the cases `map92/compiled_code_no_edit` and `map92/api_line_of_a_rename` (positive).
+
+### 92.5 The gap list goes into the entries (N5)
+
+Rule index: the identities are below.
+
+1. [R92.5-1] **Each entry that no statement names has a line below it**: `not stated (LINES); to state it: STATEMENT` (`StepReport::not_stated_line`). The statement is, in this order: the option of the line of the gap list of the entry (design 54.4, with R71.3-1 for a line that the check did not decide), with "(one statement for N places: fA, fB)" for a group; the claim template of a node of the entry that the gate accepts (R79.5-1, R87.1-1); else `--change 'ITEM=TEXT'` (or the file). The line also shows for an entry of a line of the gap list that is syntax only or not mapped (the syntax-only check), so no value of the gap list is lost: the text and the count of the places (the group), the items (the line `item` of the group), the lines (the positions), the tags (the group of the tag), and the option. The separate gap list and the mark ` · not stated` of the head go; the one command "to state them, …" stays after the coverage line, with the options of the first lines. A record of an earlier version (no kind) keeps the gap list. A holding `change` fact on a new or a removed item has the item as a place (it names the entry of the addition or the removal, R90.5-2). Tests: `an_entry_that_no_statement_names_has_a_line_with_the_statement_that_states_it` (positive and negative), `the_one_list_has_the_real_edits_first_grouped_by_item_and_the_coverage_line`, `the_gap_list_groups_equal_edits_and_gives_the_option_that_covers_them`, `a_long_gap_list_shows_its_first_lines_and_a_count`.
+
+### 92.6 One change gives one entry (N6)
+
+Rule index: the identities are below.
+
+1. [R92.6-1] **The nodes of one change make one entry.** The general rule: two nodes come from one change when the compiled code links them, with no name. (a) They own one changed MIR element by its place (rules 1 and 1b of design 40.3: an element whose range holds two changed nodes): `owners::assign` notes the nodes of each element (`NodeMir::shared`), and `diffmap::shape` makes their facts one fact (the texts, the lines, the bodies, and the marks of the two facts; the check ends with "one change (R92.6-1)"), when the nodes have one kind and neither node is a refactoring of design 41.7 (a move, a variable, a rename of a local: such a node changes no element; the case `rules/local_rename_fold` is a negative case). (b) They are parts of one definition that changes: the constructor body of a tuple struct or of a tuple variant is an edit of its fields (`owners::text_edits`: an edit of `NAME.N` is an edit of the body `NAME`), the member list of a variant is a type change (as of a struct or an enum), an added or a removed part of a signature (a parameter, a bound) is a type change, and each other node of a fact with a type change is a forced edit at a use of the declaration (a site of design 22.6): a part of the type change (R90.2-4). (c) A removed node and an added node of one fact of the syntax diff are one replace: the old node becomes the new node. Tests: `two_nodes_that_own_one_changed_element_are_one_entry` (positive and negative), `a_change_inside_a_moved_statement_owns_its_elements` (positive), the cases `map92/changed_tuple_variant`, `map92/one_change_two_nodes` (positive), and `map92/two_changes_two_entries` (negative).
+
+**Decided by Claude.** A merged fact keeps the lowest number; the number of the other fact goes, and the numbers are not given again (each reference of the step reads a number). The `indirect` fact of the constructor of a changed tuple variant goes: its spotlight ("an indirect change that Semilla cannot explain") asked for a reason; now the cause is known (the variant), so the step needs no reason for it.
+
+### 92.7 An entry has one kind (N7)
+
+Rule index: the identities are below.
+
+1. [R92.7-1] **An entry with nodes of more than one kind splits into one entry for each kind** (after the rules of one change, R92.6-1). The fact keeps the nodes of its strongest kind (type change, replace, add, delete, not mapped, rename, move, same code), its text, and its lines below (the bodies, the spotlight); each other kind gets a new fact with the texts of its nodes (`CHANGE NODE `AT`: `OLD` → `NEW``), their lines, the category and the compare result of the fact, and the check "split by kind (R92.7-1)". So each node is in exactly one entry, and each entry shows its true kind. Tests: `an_entry_with_nodes_of_two_kinds_splits_into_one_entry_for_each_kind` (positive and negative), the case `map92/use_line_two_kinds` (positive: a removed and an added `use` line of one fact give one entry of one kind).
+
+### 92.8 The review shows the sections (N8)
+
+Rule index: the identities are below.
+
+1. [R92.8-1] **The Markdown review and the HTML export show the sections of the one list**, as the step output does: the heading "Entries of the map of the diff (N)", the coverage line of each step, and one list for each section (real edits, compiled code that changes with no edit, not mapped, transformations, syntax only). A fact of the agent names its entries ("entries, in the list below: f1, f3"). The line "not stated" of an entry follows its text; the separate list "Not stated" is only for a record of an earlier version. Tests: `the_review_shows_the_sections_of_the_one_list` (positive and negative).
+
+### 92.9 The tests of the old heads (N9)
+
+Rule index: no rule: the subsection lists a change of the tests.
+
+The tests of `e2e.rs` and of `tests.rs` read the new heads: the helper `legacy` is gone from the two files.
+
+### 92.10 Decided by Claude
+
+Rule index: no rule: the subsection lists the choices of this batch.
+
+- The answers to the five open questions of 90.11 (92.1 to 92.5) are the defaults of the brief.
+- A pair is a tie when the optimal assignment is not unique (one more assignment of the matcher for each pair, with the score of the pair set to 0: at most the count of the pairs of one map, each over at most 4 removed and 4 added items of one kind in one owner).
+- A use that follows a pair is an edit whose two texts differ only in names at the same token places (no name list: the tokens of the two texts). Design 90 read only the edits of a path node; a path inside a larger edit (five changed calls in one expression) gave no anchor, and the order decided.
+- The check of the trees of a pair is the `cfg` rule of a move (batch 5x, part B), the one rule of `identity_step` that refutes a derived pair. The plan applies it to each pair; `identity_step` keeps it for an identity claim of the agent (`--claim`).
+- The template of a note of a pair goes to the one gate of the step (no gate run for each pair, as before): the identity phase has no build of the intent crate.
+- The kinds of the nodes of one fact are made one kind before the split (R92.6-1, (b) and (c)), so a declaration with its forced sites stays one entry.
+- An entry of a line of the gap list that is syntax only or not mapped has the line "not stated" too (the syntax-only check has no real edit): else the values of the gap list are lost in that check.
+- The one command after the coverage line keeps the options of the first 5 lines of the gap list (`GAP_LIMIT`), as before.
+- A new fact of a split has the next free number (the largest number plus 1); a merged fact keeps the lowest number. No number is given again.
+- A file edit counts in K (R90.3-2 said so; the code read a part `file` that no fact has).
+
+### 92.11 Limits
+
+Rule index: no rule: the subsection lists the limits.
+
+- The text of a fact that keeps the nodes of its strongest kind after a split is the text of today: it can name the nodes of the new fact too.
+- A merged fact (R92.6-1) joins the texts of its facts with `; `; its compare result is "code different" if one fact has it.
+- Rule (a) of R92.6-1 reads only the elements that a node owns by its place in a body with an edit; an element that a symbol link owns (design 44) joins no facts.
+- The check of a pair still needs the check of the step for the claim result (the forced edits, the sites) and for the evidence of a hint: a pair that does not pass after the check of the step gives one more run.
+- The time of the phase "the search for a derived identity" no longer has the core check of the pairs: the check of the step with the pairs is in the phase "the core check of a step".
+- In a step with a hint and no compiled code (phase 1), the plan is not used: the step runs one more check with no pair (the note "phase 2 tries the derivation").
+- No small case of the case set has a fact with nodes of two kinds that do not become one kind by R92.6-1 (the facts of today keep two compare results apart): the split of R92.7-1 has a unit test, and the training set has such entries (indexmap #424).
+
+### 92.12 The results
+
+Rule index: no rule: the subsection has the results of the measures.
+
+**The case set** (`SEMILLA_CASES_WRITE=1` on the change rebased on `5f9ec714`, then a compare with the texts of `5f9ec714`): 703 cases (692 of `5f9ec714` and 11 new in `map92/`). 464 expected texts change. The classes (one case can have more than one): the line "not stated" below an entry in place of the mark of the head (399), the lines of the gap list go into the entries (304), the counts of the coverage line (100), the check of the line of the public API of a pair (66), the section "compiled code that changes with no edit" (53), the request lines of a syntax-only node with no partner go (37), a syntax-only node with no partner is "add" or "delete" (34), one change gives one entry (18), a split by kind (1), the exit code (2: `adverse/o_tuple_field_order`, `compiled/expand_one_owner_line`, from 1 to 0, R92.6-1). The other changed lines (56 cases) are each of these classes: the texts of the merged facts and their counts "with N other edits of this body", the template lines of a request that goes, and the place of a `change` fact on a new item. Each property of 90.7 (complete, checked, minimal, stable) holds in each case; the 6 cases with `refactor: yes` have 0 real edits. The patterns of 13 cases that read the gap list or the mark of the head read the new lines.
+
+**The training set** (no intent file; a fresh copy, `step "the change"`, an empty cache; the release binaries of BASE `2e7cbf96` and of this batch rebased on `5f9ec714`):
+
+| PR | BASE: nodes, entries, real edits, not mapped, syntax only, no node | This batch: nodes, entries, real edits, not mapped, syntax only, section N4 |
+|---|---|---|
+| bitflags #465 | 12, 23, 5, 3, 1, 15 | 12, 23, 7, 0, 1, 15 |
+| hashbrown #693 | 29, 27, 12, 0, 10, 1 | 29, 25, 10, 0, 10, 1 |
+| indexmap #424 | 217, 170, 141, 3, 17, 1 | 217, 153, 128, 0, 18, 0 |
+| itertools #1086 | 37, 16, 10, 12, 4, 1 | 37, 16, 11, 0, 5, 0 |
+| num-traits #334 | 117, 116, 51, 48, 16, 1 | 117, 116, 51, 0, 64, 1 |
+| uuid #932 | 124, 93, 33, 24, 30, 3 | 124, 93, 38, 0, 54, 0 |
+| winnow #891 | 289, 263, 102, 39, 70, 66 | 289, 252, 161, 11, 77, 2 |
+
+The column "no node" of BASE counts the entries with the check "no changed node (the fact of today)" (a file edit, a body with no edit, a line of the public API): BASE showed them in the real edits. The real edits of this batch count each file edit (winnow: 51 changed files of the build code). The 11 nodes of winnow that stay not mapped have no unique alignment (R90.6-1). The kinds by entry, this batch: bitflags replace 17, add 6; hashbrown same code 4, replace 17, delete 4; indexmap same code 5, rename 2, replace 66, add 34, delete 29, type change 17; itertools replace 2, add 14; num-traits replace 13, add 103; uuid same code 1, replace 32, add 21, delete 11, type change 28; winnow same code 1, replace 125, add 50, delete 55, type change 10, not mapped 11. One change (R92.6-1): 7 entries in indexmap, 2 in hashbrown. A split by kind (R92.7-1): 1 in indexmap, 1 in winnow. Winnow: each of the 7 moves of the one map has its own `cfg` condition on the new path, so each one still does not pass (the cause names the pair, not `Caseless` for each pair, as before).
+
+**The time of the identity phase** (the phase "the search for a derived identity (with its core checks)"; three pairs in alternation, BASE then this batch, CPUs 6 to 11, a fresh copy and an empty cache for each run; the load of each pair 3.5 to 7.4 on 12 CPUs): indexmap 1.00, 0.70, 0.71 s → 0.09, 0.06, 0.06 s (median 0.71 → 0.06 s); winnow 3.04, 4.90, 3.63 s → 0.15, 0.16, 0.15 s (median 3.63 → 0.15 s). The target (under 0.3 s) holds. The phase "the core check of a step" (with the run of the pairs in this batch): indexmap 2.16, 1.50, 1.50 → 1.69, 1.52, 1.53 s; winnow 5.17, 5.70, 6.27 → 4.95, 5.52, 6.24 s. The binaries of this batch include batch 14h (`5f9ec714`); BASE does not.
+
+**The tests.** `cargo build`, then `cargo test --workspace --no-fail-fast` (no `SEMILLA_MIR_DRIVER`, CPUs 6 to 11, a load of 6 to 12) on the change rebased on `5f9ec714` (batch 14h): 1392 tests, 1392 passed, 0 failed (new: 8 in `semilla-verify/src/tests92.rs`, 1 in `semilla-ui/src/export.rs`, 11 cases in `map92/`). The tests of the old output forms changed to the new ones: the heads of `e2e.rs` and `tests.rs` (the helper `legacy` is gone), the gap list (`tests.rs`, `e2e.rs`, `no_solver.rs`, 5 cases of `rules/`), the nodes with no partner (`tests79.rs`), and the ties (`tests.rs`, `tests90.rs`).
+
+**The mutation check** (one change at a time, each undone; the tests of the group of the rule; on the final tree): the 17 mutations of 90.12 again, and 10 for the new rules. Each one fails a test:
+
+| Change | Failed test |
+|---|---|
+| M1 R90.1-1: no pair in a region | `a_changed_element_pairs_with_the_old_element_of_its_region` |
+| M2 R90.1-1: the compare skips the rename map of the step | the cases `map90/refactor_fn_rename`, `map90/refactor_move_item` |
+| M3 R90.2-7: a deep node is "same code" | `a_change_inside_a_moved_statement_owns_its_elements` |
+| M4 R90.4-1: `--same 'move A B'` gives `#[rename]` | `each_option_is_a_short_form_of_an_intent_statement_and_reads_on_its_path` |
+| M5 R90.3-1: a lost value (the lines of the line "not stated") | `an_entry_that_no_statement_names_has_a_line_with_the_statement_that_states_it` |
+| M6 R90.2-1: "same code" becomes "replace" | `a_node_with_no_unique_alignment_is_not_mapped_and_each_other_node_has_its_kind` |
+| M7 R90.2-3: an added statement with new elements is "replace" | `an_added_statement_with_new_elements_is_an_add_also_with_an_element_of_its_enclosing_node` |
+| M8 R90.2-4: no type change for a signature | the case `map90/edit_signature` |
+| M9 R90.2-5: a node of a rename fact is "replace" | `a_node_of_a_rename_fact_is_a_rename_and_a_renamed_local_is_not` |
+| M10 R90.2-6: a syntax-only node loses the state of the matcher | `a_doc_a_comment_and_test_code_are_mapped_by_semilla` |
+| M11 R90.5-1: the real edits last | `the_one_list_has_the_real_edits_first_grouped_by_item_and_the_coverage_line` |
+| M12 R90.5-2: no entry is "not stated" | the cases `map90/edit_add_statement`, `map90/edit_condition`, `map90/edit_literal` (the unit tests did not find it) |
+| M13 R90.6-1: a node with no unique alignment is "same code" | `a_node_with_no_unique_alignment_is_not_mapped_and_each_other_node_has_its_kind` |
+| M14 R90.7-1: a node names a wrong entry | property 15 in the cases of `map90` |
+| M15 R90.7-3: a layout is a real edit | the case `map90/refactor_layout` |
+| M16 R90.8-1: the hints come after the matcher | `the_pairs_come_from_the_hints_then_from_the_one_map_of_the_matcher` |
+| M17 R90.8-2: a pair that fails removes each pair | `a_hint_that_does_not_pass_stays_a_delete_and_an_add_and_the_other_pairs_keep_their_check` |
+| M18 R92.1-1: no tie (the order decides) | `a_tie_of_the_one_map_gives_no_pair_and_a_use_that_follows_a_pair_decides_it` |
+| M19 R92.2-1: one more core check before the pairs | `the_pairs_come_before_the_check_of_the_step_and_a_step_whose_pairs_pass_runs_one_core_check` |
+| M20 R92.2-2: the cause of one pair stops each pair | `a_pair_that_does_not_pass_its_check_changes_no_other_pair` |
+| M21 R92.3-1: a syntax-only node with no partner stays not mapped | `a_syntax_only_node_with_no_partner_is_an_addition_with_who_reaches_it` |
+| M22 R92.4-1: no entry has no edit | `an_entry_with_no_node_and_no_changed_line_is_in_its_own_section_and_no_real_edit` |
+| M23 R92.5-1: the statement never comes from the gap list | `an_entry_that_no_statement_names_has_a_line_with_the_statement_that_states_it` |
+| M24 R92.6-1: no fact of one element joins | `two_nodes_that_own_one_changed_element_are_one_entry` |
+| M24b R92.6-1: a field is no part of its constructor body | the case `map92/changed_tuple_variant` |
+| M25 R92.7-1: no split | `an_entry_with_nodes_of_two_kinds_splits_into_one_entry_for_each_kind` |
+| M26 R92.8-1: the review ignores the sections | the e2e tests `a_step_with_no_agent_fact_is_valid_and_prints_the_gap_list_with_one_command`, `the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check` (the unit test did not find it) |
+
+**The three numbers.** Rules with an identity: +9 (661 → 670 identities in the design: R92.1-1, R92.2-1, R92.2-2, R92.3-1, R92.4-1, R92.5-1, R92.6-1, R92.7-1, R92.8-1; none removed). Rows of `docs/name-lists.md`: 0 (117 lines before and after; `tests/names.rs` passes). Code paths that decide by a name of a crate or a symbol of the user: 0 (the rules read the kinds of the edits and of the items, the elements of the MIR alignment, the anchor path of Semilla (`sig`), and the part of a fact of Semilla (`identity`)).
+
+### 92.13 Open questions for the user
+
+Rule index: no rule: the subsection has the open questions.
+
+- Should an entry of test, bench, or example code have the line "not stated" (design 54.5 says that the agent writes no fact for such a place; design 90 gave it the mark)?
+- Should an entry with changed lines and no node of its own (a module with a new source place, an item moved past an item that can give a macro) count as a real edit? (Decided by Claude: yes, it has an edit of its own.)
+- Should rule (a) of R92.6-1 also join the facts of a symbol link (a changed signature and the changed calls in other bodies)?
+- Should the fact that keeps the strongest kind after a split (R92.7-1) get a text of its own nodes only?
+- The constructor of a changed tuple struct or variant is now a body of the entry of its field (R92.6-1): its spotlight "an indirect change that Semilla cannot explain" goes, and two cases of the case set (`adverse/o_tuple_field_order`, `compiled/expand_one_owner_line`) change from rejected to accepted. Is that the wanted meaning?

@@ -55,13 +55,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::acc_a` (src/lib.rs:1): the full compare: `#[same(shop::acc_a)] fn acc_a_same() {}`; a difference: `#[change(shop::acc_a)] fn acc_a_change(n: u32, c: bool) -> bool { … }` or `#[different(shop::acc_a)] fn acc_a_different() -> bool { … }`
     MIR changes with no claim: `shop::acc_b` (src/lib.rs:11): the full compare: `#[same(shop::acc_b)] fn acc_b_same() {}`; a difference: `#[change(shop::acc_b)] fn acc_b_change(n: u32, c: bool) -> bool { … }` or `#[different(shop::acc_b)] fn acc_b_different() -> bool { … }`
   changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: changed literal `5` → `6` (f1)
-      in: shop::acc_a, shop::acc_b
-      lines: src/lib.rs:3, src/lib.rs:13, src/lib.rs:-3, src/lib.rs:-13
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::acc_a,shop::acc_b=TEXT'; if it does not change, --same 'rewrite 5 => 6'
   real edits:
   item `shop::acc_a`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes): 2 site(s): changed literal `5` → `6` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes): 2 site(s): changed literal `5` → `6` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:13, src/lib.rs:-3, src/lib.rs:-13); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::acc_a,shop::acc_b=TEXT'; if it does not change, --same 'rewrite 5 => 6' (one statement for 2 places: f1)
       in: shop::acc_a, shop::acc_b
       affected bodies: shop::acc_a, shop::acc_b
       equivalence: `shop::acc_a`: MIR changes
@@ -73,5 +70,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes): 2 site(s): changed literal `5` → `6` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes): 2 site(s): changed literal `5` → `6` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:13, src/lib.rs:-3, src/lib.rs:-13

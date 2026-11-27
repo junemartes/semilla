@@ -173,13 +173,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::talk` (src/lib.rs:42): the full compare: `#[same(shop::talk)] fn talk_same() {}`; a difference: `#[change(shop::talk)] fn talk_change() -> bool { … }` or `#[different(shop::talk)] fn talk_different() -> bool { … }`
     MIR changes with no claim: `shop::wrap` (src/lib.rs:59): the full compare: `#[same(shop::wrap)] fn wrap_same() {}`; a difference: `#[change(shop::wrap)] fn wrap_change() -> bool { … }` or `#[different(shop::wrap)] fn wrap_different() -> bool { … }`
   changed nodes: 7 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 7 places: changed literal `1` → `2` (f1)
-      in: shop::bits, shop::copy_one, shop::first, shop::later, shop::run_later, shop::talk, shop::wrap
-      lines: src/lib.rs:43, src/lib.rs:47, src/lib.rs:52, src/lib.rs:56, src/lib.rs:61, src/lib.rs:70, src/lib.rs:74, src/lib.rs:-43, src/lib.rs:-47, src/lib.rs:-52, src/lib.rs:-56, src/lib.rs:-61, src/lib.rs:-70, src/lib.rs:-74
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::bits,shop::copy_one,shop::first,shop::later,shop::run_later,shop::talk,shop::wrap=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   real edits:
   item `shop::bits`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 7 nodes): 7 site(s): changed literal `1` → `2` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 7 nodes): 7 site(s): changed literal `1` → `2` [semantics · code different]
+      not stated (src/lib.rs:43, src/lib.rs:47, src/lib.rs:52, src/lib.rs:56, src/lib.rs:61, src/lib.rs:70, src/lib.rs:74, src/lib.rs:-43, src/lib.rs:-47, src/lib.rs:-52, src/lib.rs:-56, src/lib.rs:-61, src/lib.rs:-70, src/lib.rs:-74); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::bits,shop::copy_one,shop::first,shop::later,shop::run_later,shop::talk,shop::wrap=TEXT'; if it does not change, --same 'rewrite 1 => 2' (one statement for 7 places: f1)
       in: shop::bits, shop::copy_one, shop::first, shop::later, shop::run_later, shop::talk, and 1 more
       affected bodies: shop::bits, shop::copy_one, shop::first, shop::later, shop::run_later, shop::talk, shop::wrap
       control flow: ~ check `overflow: x.count_ones() + 1` → `overflow: x.count_ones() + 2` (src/lib.rs:-47, src/lib.rs:47)
@@ -207,5 +204,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 7 nodes): 7 site(s): changed literal `1` → `2` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 7 nodes): 7 site(s): changed literal `1` → `2` [semantics · code different]
     lines: src/lib.rs:43, src/lib.rs:47, src/lib.rs:52, src/lib.rs:56, src/lib.rs:61, src/lib.rs:70, src/lib.rs:74, src/lib.rs:-43, src/lib.rs:-47, src/lib.rs:-52, src/lib.rs:-56, src/lib.rs:-61, src/lib.rs:-70, src/lib.rs:-74

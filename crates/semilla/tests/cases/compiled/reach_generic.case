@@ -75,13 +75,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
       MIR changes with no claim: `<shop::Food as shop::Tax>::rate` (src/lib.rs:8): the full compare: `#[same(<shop::Food as shop::Tax>::rate)] fn rate_same() {}`; a difference: `#[change(<shop::Food as shop::Tax>::rate)] fn rate_change() -> bool { … }` or `#[different(<shop::Food as shop::Tax>::rate)] fn rate_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `5` → `6` (f1)
-      in: shop::<Food as Tax>::rate
-      lines: src/lib.rs:9, src/lib.rs:-9
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::<Food as Tax>::rate=TEXT'; if it does not change, --same 'rewrite 5 => 6'
   real edits:
   item `shop::<Food as Tax>::rate`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different]
+      not stated (src/lib.rs:9, src/lib.rs:-9); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::<Food as Tax>::rate=TEXT'; if it does not change, --same 'rewrite 5 => 6'
       affected bodies: shop::<Food as Tax>::rate
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact

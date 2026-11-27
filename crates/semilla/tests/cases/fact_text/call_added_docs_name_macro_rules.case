@@ -29,12 +29,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 1 not mapped
-    n1 not mapped [R79.5-1]: added macro `depot::table!#0` (src/lib.rs:5): not mapped, syntax only in f1: `/// Like macro_rules! of the std.\ntable!(\n    A = 2,\n);`
-        no template: `depot::table!#0` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library); a claim on the items that it changes maps it
-  not mapped:
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
   item `depot::table!#0`:
-  ◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added macro call `table!( A = 2, )` (makes: `pub const A`) [added · no code]
+  ◆ f1 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; no item of the other tree names it (the name record)): added macro call `table!( A = 2, )` (makes: `pub const A`) [added · no code]
       expansion: `table!( A = 2, )` at `depot::table!#0` (src/lib.rs:6): expansion added: makes `depot::A`
   cover: each of the 4 changed line(s) is in a fact
   expansions: 1 added
@@ -42,5 +40,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added macro call `table!( A = 2, )` (makes: `pub const A`) [added · no code]
+◆ f1 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; no item of the other tree names it (the name record)): added macro call `table!( A = 2, )` (makes: `pub const A`) [added · no code]
     lines: src/lib.rs:5-8

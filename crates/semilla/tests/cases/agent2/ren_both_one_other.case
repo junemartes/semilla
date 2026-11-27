@@ -125,15 +125,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::start` (src/lib.rs:24): the signature changes (`fn start () -> Mode` → `fn start () -> State`): `#[same(depot::start)] fn start() -> bool { let old = before::depot::start(); let new = after::depot::start(); true }`; a difference: `#[change(depot::start)] fn start_change() -> bool { … }` or `#[different(depot::start)] fn start_different() -> bool { … }`
     equal MIR: `depot::mode_name` (src/lib.rs:23)
   changed nodes: 1 in 5 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed path `Mode::Idle` → `State::Busy` (f3)
-      in: depot::start
-      lines: src/lib.rs:24, src/lib.rs:-24
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::start=TEXT'; if it does not change, --same 'rewrite Mode::Idle => State::Busy'
   real edits:
   item `depot::start`:
-  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Mode::Idle` → `State::Busy` at `depot::start/tail` [semantics · code different] · not stated
+  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Mode::Idle` → `State::Busy` at `depot::start/tail` [semantics · code different]
+      not stated (src/lib.rs:24, src/lib.rs:-24); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::start=TEXT'; if it does not change, --same 'rewrite Mode::Idle => State::Busy'
       affected bodies: depot::start
       equivalence: MIR changes
+  compiled code that changes with no edit:
+  item `depot::State::Rest`:
+  ◆ f5 rename (a2; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename · no code]
+  item `depot::State`:
+  ◆ f4 rename (a1; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename · no code]
   transformations:
   item `depot::Mode::Idle`:
   ◆ f2 rename (a2; R90.2-5, the pair check holds): renamed `depot::Mode::Idle` → `depot::State::Rest` [rename · code equal]
@@ -143,10 +145,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + arrow branch `m` (src/lib.rs:23) → return (src/lib.rs:23) (depot::State::Busy)
       control flow: − arrow branch `m` (src/lib.rs:-23) → return (src/lib.rs:-23) (depot::Mode::Idle)
       control flow: … 1 more (semilla expand --step 0)
-  item `depot::State::Rest`:
-  ◆ f5 rename (a2; R90.2-5, the pair check holds): public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename · no code]
-  item `depot::State`:
-  ◆ f4 rename (a1; R90.2-5, the pair check holds): public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename · no code]
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
     depot::mode_name (src/lib.rs:23): graph changes: +2 arrows, −2 arrows; no edit in the body; equivalent (proved by equal MIR)
@@ -154,13 +152,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Mode::Idle` → `State::Busy` at `depot::start/tail` [semantics · code different] · not stated
+◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Mode::Idle` → `State::Busy` at `depot::start/tail` [semantics · code different]
     lines: src/lib.rs:24, src/lib.rs:-24
+◆ f5 rename (a2; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename · no code]
+    no position
+◆ f4 rename (a1; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename · no code]
+    no position
 ◆ f2 rename (a2; R90.2-5, the pair check holds): renamed `depot::Mode::Idle` → `depot::State::Rest` [rename · code equal]
     no position
 ◆ f1 rename (a1; R90.2-5, the pair check holds): renamed `depot::Mode` → `depot::State` [rename · code equal]
     lines: src/lib.rs:22-23, src/lib.rs:-22-23
-◆ f5 rename (a2; R90.2-5, the pair check holds): public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename · no code]
-    no position
-◆ f4 rename (a1; R90.2-5, the pair check holds): public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename · no code]
-    no position

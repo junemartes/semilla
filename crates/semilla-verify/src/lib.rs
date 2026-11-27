@@ -833,8 +833,8 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
     let input = &StepInput { step: &step, before: input.before, after: input.after };
     // The opaque inputs of each check of this step, also of the rename search (R61.15-2).
     let bases = joint::OpaqueBases::new(input.before, input.after).with_store(bodies.phase_store(input.step));
-    let mut plain = semilla_core::timing::phase(CORE_PHASE, || verify_core(input, bodies, exprs, derive_edits, false, &bases));
     if !derive_edits || input.step.claims.iter().any(is_identity) {
+        let mut plain = semilla_core::timing::phase(CORE_PHASE, || verify_core(input, bodies, exprs, derive_edits, false, &bases));
         if derive_edits {
             identity_api_facts(input, &mut plain);
         }
@@ -856,7 +856,13 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
         semilla_core::timing::phase("the comments of the facts", || comments::apply(input, &mut plain));
         return plain;
     }
-    let mut outcome = semilla_core::timing::phase("the search for a derived identity (with its core checks)", || identity::derive(input, bodies, exprs, plain, &bases));
+    // [R92.2-1] The pairs of the renamed and the moved items come before the check of the step
+    // (design 92): the plan reads the two trees, the check of the step runs one time with the
+    // claims of the pairs, and the result of each pair comes from that check. A pair that does
+    // not pass gives one more run with the pairs that pass.
+    let plan = semilla_core::timing::phase(IDENTITY_PHASE, || identity::plan(input));
+    let (claims, first) = semilla_core::timing::phase(CORE_PHASE, || identity::first_run(input, bodies, exprs, &plan, &bases));
+    let mut outcome = semilla_core::timing::phase(IDENTITY_PHASE, || identity::settle(input, bodies, exprs, plan, claims, first, &bases));
     // The search for an identity does more checks, and each check sets its own list of added
     // configurations. The oracle must have the list of this result: the output shows it.
     let _ = bodies.set_selections(input.step, &outcome.selections);
@@ -1227,6 +1233,9 @@ fn kind_reasons(input: &StepInput, report: &mut StepReport) {
 pub const CORE_PHASE: &str = "the core check of a step";
 /// The name of the count of all core checks (also those of the search for an identity).
 pub const CORE_RUNS: &str = "the core checks of all searches";
+/// The phase name of the pairs of the renamed and the moved items in the timing lines (the
+/// name of before design 92).
+pub const IDENTITY_PHASE: &str = "the search for a derived identity (with its core checks)";
 
 pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool, derived_identity: bool, shared: &joint::OpaqueBases<'a>) -> StepOutcome {
     let step = input.step;
@@ -2247,7 +2256,7 @@ fn names_in_text(text: &str, names: &BTreeSet<String>) -> bool {
 
 /// The `cfg` conditions on the path of an item: the `cfg` and `cfg_attr` attributes of each
 /// module above the item, and the inner ones of each module file (batch 5x, part B).
-fn path_conditions(workspace: &Workspace, path: &str) -> BTreeSet<String> {
+pub(crate) fn path_conditions(workspace: &Workspace, path: &str) -> BTreeSet<String> {
     let condition = |attr: &String| -> Option<String> {
         let text: String = attr.chars().filter(|c| !c.is_whitespace()).collect();
         let inner = text.trim_start_matches('#').trim_start_matches('!').trim_start_matches('[');
@@ -2354,7 +2363,9 @@ fn identity_step(
     };
     // A move keeps the `cfg` conditions on the path of the item (batch 5x, part B): a module
     // with a different condition puts the item in a different set of builds.
-    for (claim, _) in results.iter().filter(|(claim, outcome)| claim.op == "move-item" && outcome.status.is_verified()) {
+    // [R92.2-2] A derived pair has this check in the plan of the pairs (design 92): one pair
+    // that does not pass never stops the other pairs.
+    for (claim, _) in results.iter().filter(|(claim, outcome)| claim.op == "move-item" && outcome.status.is_verified() && !with_changes) {
         let Some((old, new)) = claim.at.as_ref().and_then(|at| renames.items.get(&at.item).map(|new| (&at.item, new))) else { continue };
         let (old_conditions, new_conditions) = (path_conditions(before, old), path_conditions(after, new));
         if old_conditions != new_conditions {
@@ -3691,3 +3702,5 @@ mod tests79;
 mod tests83;
 #[cfg(test)]
 mod tests90;
+#[cfg(test)]
+mod tests92;

@@ -47,23 +47,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::pick::{closure#0} |k: usize| v[k]` (src/lib.rs:-2): the template of `shop::pick` covers its item `shop::pick`
     equal MIR: `shop::other::{closure#0} |k: usize| v[k]` (src/lib.rs:6)
   changed nodes: 5 in 5 entries; 5 real edits (0 stated by the agent); 0 not mapped
-  ? 3 places: 3 different edits (f2, f3, f4)
-      in: shop::pick
-      lines: src/lib.rs:2, src/lib.rs:-2-3
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  ? 1 place: changed method_call: `get(i)` → `get(i).wrapping_add(v[0])` (f1)
-      in: shop::other
-      lines: src/lib.rs:7, src/lib.rs:-8
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::other=TEXT'; if it does not change, --same 'rewrite $a($b) => $a($b).wrapping_add(v[0])'
   real edits:
   item `shop::fresh`:
-  ◆ f5 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::fresh` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+  ◆ f5 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::fresh` (the public API changes: a different crate can now use the item) [added · code different]
+      not stated (src/lib.rs:8-12); to state it: --change 'shop::fresh=TEXT'
       affected bodies: shop::fresh
       control flow: + graph of `shop::fresh`: 6 points, 5 arrows (semilla expand --step 0)
       control flow: + graph of `shop::fresh::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   item `shop::other`:
-  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed method_call: `get(i)` → `get(i).wrapping_add(v[0])` at `shop::other/tail` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed method_call: `get(i)` → `get(i).wrapping_add(v[0])` at `shop::other/tail` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::other=TEXT'; if it does not change, --same 'rewrite $a($b) => $a($b).wrapping_add(v[0])'
       affected bodies: shop::other
       control flow: + check `bounds: v[0]` (src/lib.rs:7): ok → call `num::<impl u32>::wrapping_add`, fail → panic `bounds`
       control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:7): return → return
@@ -72,18 +66,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: `shop::other`: MIR changes
       equivalence: `shop::other::{closure#0} |k: usize| v[k]`: equivalent (proved by equal MIR)
   item `shop::pick`:
-  ◆ f2 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different] · not stated
+  ◆ f2 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different]
+      not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f2, f3, f4)
       affected bodies: shop::pick (with 2 other edits of this body)
       control flow: − graph of `shop::pick::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows; moved out to `shop::pick`: 1 check, 1 panic (semilla expand --step 0)
       equivalence: MIR changes
-  ◆ f3 add (Semilla; R90.2-3, 1 new MIR element): added statement `v[i].wrapping_add(v[j])` at `shop::pick/tail` [semantics · code different] · not stated
+  ◆ f3 add (Semilla; R90.2-3, 1 new MIR element): added statement `v[i].wrapping_add(v[j])` at `shop::pick/tail` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f2, f3, f4)
       affected bodies: shop::pick (with 2 other edits of this body)
       control flow: moved check `bounds: v[i]` (src/lib.rs:2) from `shop::pick::{closure#0}`: ok → check `bounds: v[j]`, fail → panic `bounds`
       control flow: + check `bounds: v[j]` (src/lib.rs:2): ok → call `num::<impl u32>::wrapping_add`, fail → panic `bounds`
       control flow: moved panic `bounds` (src/lib.rs:2) from `shop::pick::{closure#0}`
       control flow: … 2 more (semilla expand --step 0)
       equivalence: MIR changes
-  ◆ f4 replace (Semilla; R90.2-2, 6 changed MIR elements): deleted statement `get(i).wrapping_add(get(j))` at `shop::pick/tail` [semantics · code different] · not stated
+  ◆ f4 replace (Semilla; R90.2-2, 6 changed MIR elements): deleted statement `get(i).wrapping_add(get(j))` at `shop::pick/tail` [semantics · code different]
+      not stated (src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f2, f3, f4)
       affected bodies: shop::pick (with 2 other edits of this body)
       control flow: − call `get` [closure] (src/lib.rs:-3): return → call `get` [closure]
       control flow: − call `get` [closure] (src/lib.rs:-3): return → call `num::<impl u32>::wrapping_add`
@@ -100,13 +97,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f5 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::fresh` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+◆ f5 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::fresh` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:8-12
-◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed method_call: `get(i)` → `get(i).wrapping_add(v[0])` at `shop::other/tail` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed method_call: `get(i)` → `get(i).wrapping_add(v[0])` at `shop::other/tail` [semantics · code different]
     lines: src/lib.rs:7, src/lib.rs:-8
-◆ f2 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different] · not stated
+◆ f2 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different]
     lines: src/lib.rs:-2
-◆ f3 add (Semilla; R90.2-3, 1 new MIR element): added statement `v[i].wrapping_add(v[j])` at `shop::pick/tail` [semantics · code different] · not stated
+◆ f3 add (Semilla; R90.2-3, 1 new MIR element): added statement `v[i].wrapping_add(v[j])` at `shop::pick/tail` [semantics · code different]
     lines: src/lib.rs:2
-◆ f4 replace (Semilla; R90.2-2, 6 changed MIR elements): deleted statement `get(i).wrapping_add(get(j))` at `shop::pick/tail` [semantics · code different] · not stated
+◆ f4 replace (Semilla; R90.2-2, 6 changed MIR elements): deleted statement `get(i).wrapping_add(get(j))` at `shop::pick/tail` [semantics · code different]
     lines: src/lib.rs:-3

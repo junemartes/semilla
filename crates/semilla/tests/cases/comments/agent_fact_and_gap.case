@@ -45,13 +45,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::count` (src/lib.rs:6): the full compare: `#[same(shop::count)] fn count_same() {}`; a difference: `#[change(shop::count)] fn count_change(x: u32) -> bool { … }` or `#[different(shop::count)] fn count_different() -> bool { … }`
     MIR changes with no claim: `shop::price` (src/lib.rs:2): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
   changed nodes: 2 in 2 entries; 2 real edits (1 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `1` → `2` (f1)
-      in: shop::count
-      lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::count=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   real edits:
   item `shop::count`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::count/tail/rhs` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::count/tail/rhs` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::count=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: shop::count
       control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-7, src/lib.rs:7)
       equivalence: MIR changes
@@ -71,7 +68,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 2 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::count/tail/rhs` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::count/tail/rhs` [semantics · code different]
     lines: src/lib.rs:7, src/lib.rs:-7
 ◆ f2 replace (a1; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:-3

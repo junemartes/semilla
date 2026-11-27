@@ -193,7 +193,8 @@ fn a_step_with_no_claim_gives_equal_mir_or_mir_changes_and_starts_no_solver() {
     // [R84.4-1] "MIR changes" reads as "not decided" for the list "not stated" (R71.3-1: the form
     // of a line that the check did not decide) and for the coverage; "equal MIR" reads as
     // "equivalent": `quiet` has the state of an equivalent body.
-    assert!(text.contains("in: shop::tier\n      lines: src/lib.rs:7, src/lib.rs:-7\n      to state it: the check did not decide if the behavior changes"), "{text}");
+    // [R92.5-1] The line of the gap list is below the entry (design 92).
+    assert!(text.contains("      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes"), "{text}");
     assert!(text.contains("    equal MIR: `shop::quiet`"), "{text}");
     // [R84.6-1] The JSON, `status --verbose`, and the tool `results` of MCP have the same data.
     let status = run_env(&repo, &["status", "--verbose"], &env, 0);

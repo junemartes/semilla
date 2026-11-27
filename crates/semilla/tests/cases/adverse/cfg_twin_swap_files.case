@@ -40,28 +40,23 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::imp::value` (src/imp_unix.rs:1): the full compare: `#[same(depot::imp::value)] fn value_same() {}`; a difference: `#[change(depot::imp::value)] fn value_change() -> bool { … }` or `#[different(depot::imp::value)] fn value_different() -> bool { … }`
-  changed nodes: 2 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `1` → `2` (f1)
-      in: depot::imp#0::value
-      lines: src/imp_unix.rs:3, src/imp_unix.rs:-3
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::imp#0::value=TEXT'; if it does not change, --same 'rewrite 1 => 2'
-  ? 1 place: changed literal `2` → `1` (f2)
-      in: depot::imp#1::value
-      lines: src/imp_win.rs:3, src/imp_win.rs:-3
-      to state it: --change 'depot::imp#1::value=TEXT'
+  changed nodes: 2 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
   to state them, add these options to the command of the step: --change 'depot::imp#1::value=TEXT'
   real edits:
   file `src/imp_win.rs`:
   ◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): src/imp_win.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
+      not stated; to state it: --change 'src/imp_win.rs=TEXT'
       note: no compare: no checked configuration compiles `src/imp_win.rs`
       ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/imp_win.rs`: `#[cfg(windows)]` at `depot::imp#1`; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'src/imp_win.rs=…'
   item `depot::imp#0::value`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::imp#0::value/tail/rhs` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::imp#0::value/tail/rhs` [semantics · code different]
+      not stated (src/imp_unix.rs:3, src/imp_unix.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::imp#0::value=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: depot::imp#0::value
       equivalence: MIR changes
   syntax only:
   item `depot::imp#1::value`:
   ◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed literal `2` → `1` at `depot::imp#1::value/tail/rhs` [semantics · no compare]
+      not stated (src/imp_win.rs:3, src/imp_win.rs:-3); to state it: --change 'depot::imp#1::value=TEXT'
       note: no compare: no checked configuration compiles `depot::imp#1::value`
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
@@ -73,7 +68,7 @@ run again: semilla step 'the change' --reason 'src/imp_win.rs=<why>'
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/imp_win.rs=the reason of the test' --change 'depot::imp#1::value=the text of the test'
 ◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): src/imp_win.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
     no position
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::imp#0::value/tail/rhs` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::imp#0::value/tail/rhs` [semantics · code different]
     lines: src/imp_unix.rs:3, src/imp_unix.rs:-3
 ◆ f2 replace, syntax only (a1; R90.2-6, no MIR element; the matcher): changed literal `2` → `1` at `depot::imp#1::value/tail/rhs` [semantics · no compare]
     lines: src/imp_win.rs:3, src/imp_win.rs:-3

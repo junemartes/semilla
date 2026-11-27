@@ -60,28 +60,26 @@ fn two() {
     check_here!(m.0 > 1);
 }
 === expected
-exit: 1
-rejected: step 0 "the change" is not stored
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `<shop::Meters as std::convert::From<u32>>::from` (src/lib.rs:4): no template: the step pairs `<shop::Meters as core::convert::From<u32>>::from` with `<shop::Meters as core::convert::From<u64>>::from` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
     MIR changes with no claim: `<shop::Meters as std::convert::From<u64>>::from` (src/lib.rs:4): the template of `<shop::Meters as std::convert::From<u32>>::from` covers its item `shop::<Meters as From>::from`
-  changed nodes: 3 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop::<Meters as From>::from`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): type `u32` → `u64` in 2 places: parameter `v` of `shop::<Meters as From>::from`, `shop::Meters.0` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
-      affected bodies: shop::<Meters as From>::from, shop::one, shop::two
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): type `u32` → `u64` in 2 places: parameter `v` of `shop::<Meters as From>::from`, `shop::Meters.0` (the public API can change: a different crate can use the item) [declaration · code different]
+      not stated (src/lib.rs:1, src/lib.rs:4-6, src/lib.rs:-1, src/lib.rs:-4); to state it: --change 'shop::<Meters as From>::from=TEXT'
+      affected bodies: shop::<Meters as From>::from, shop::Meters, shop::one, shop::two
       control flow: − graph of `<shop::Meters as std::convert::From<u32>>::from`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: + graph of `<shop::Meters as std::convert::From<u64>>::from`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
-  item `shop::Meters`:
-  ◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): indirect change, cause not known: `shop::Meters` (the MIR changed, but the text did not) [indirect · code different]
-      affected bodies: shop::Meters
-      ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'shop::Meters=…'
   item `shop::impl <Meters as From>`:
-  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): generics of `shop::impl <Meters as From>`: `impl From<u32> for Meters { }` → `impl From<u64> for Meters { }` (the public API can change: a different crate can use the item); generic arguments go by position: 3 site(s) in 3 other item(s) [declaration · code different] · not stated
+  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): generics of `shop::impl <Meters as From>`: `impl From<u32> for Meters { }` → `impl From<u64> for Meters { }` (the public API can change: a different crate can use the item); generic arguments go by position: 3 site(s) in 3 other item(s) [declaration · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-3); to state it: --change 'shop::impl <Meters as From>=TEXT'
       affected bodies: shop::<Meters as From>::from, shop::one, shop::two
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 8 changed line(s) is in a fact
@@ -92,14 +90,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     2 calls: expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes: `shop::one`, `shop::two` (semilla expand --step 0)
     3 calls: expansion changed: `macro_rules! check_here` (src/lib.rs:9): only the context of the call changes: a value that the macro makes at the call (`concat!("failed at ", file!(), ":", line!())`); the context of the call changes: `shop::one/S1`, `shop::two/S1`, `shop::two/S2` (semilla expand --step 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'shop::Meters=<why>'
+
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::Meters=the reason of the test'
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `shop::<Meters as From>::from` `v: u32` → `v: u64` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
-    lines: src/lib.rs:4-6, src/lib.rs:-4
-◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): the tuple fields of `shop::Meters` changed: `(u32)` → `(u64)` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
-    lines: src/lib.rs:1, src/lib.rs:-1
-◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): indirect change, cause not known: `shop::Meters` (the MIR changed, but the text did not) [indirect · code different]
-    no position
-◆ f3 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): generics of `shop::impl <Meters as From>`: `impl From<u32> for Meters { }` → `impl From<u64> for Meters { }` (the public API can change: a different crate can use the item); generic arguments go by position: 3 site(s) in 3 other item(s) [declaration · code different] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): type `u32` → `u64` in 2 places: parameter `v` of `shop::<Meters as From>::from`, `shop::Meters.0` (the public API can change: a different crate can use the item) [declaration · code different]
+    lines: src/lib.rs:1, src/lib.rs:4-6, src/lib.rs:-1, src/lib.rs:-4
+◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): generics of `shop::impl <Meters as From>`: `impl From<u32> for Meters { }` → `impl From<u64> for Meters { }` (the public API can change: a different crate can use the item); generic arguments go by position: 3 site(s) in 3 other item(s) [declaration · code different]
     lines: src/lib.rs:3, src/lib.rs:-3

@@ -28,23 +28,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::T::a` (src/lib.rs:6): the full compare: `#[same(depot::T::a)] fn a_same() {}`; a difference: `#[change(depot::T::a)] fn a_change(this_before: &before::depot::T, this_after: &after::depot::T) -> bool { … }` or `#[different(depot::T::a)] fn a_different() -> bool { … }`
   changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `2` → `1` (f1)
-      in: depot::T::a#0
-      lines: src/lib.rs:4
-      to state it: --change 'depot::T::a#0=TEXT'
-  ? 1 place: changed literal `1` → `2` (f2)
-      in: depot::T::a#1
-      lines: src/lib.rs:5, src/lib.rs:-3-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::T::a#1=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   to state them, add these options to the command of the step: --change 'depot::T::a#0=TEXT'
   real edits:
   item `depot::T::a#1`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::T::a#1/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::T::a#1/tail` [semantics · code different]
+      not stated (src/lib.rs:5, src/lib.rs:-3-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::T::a#1=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: depot::T::a#1
       equivalence: MIR changes
   syntax only:
   item `depot::T::a#0`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed literal `2` → `1` at `depot::T::a#0/tail` [semantics · no compare]
+      not stated (src/lib.rs:4); to state it: --change 'depot::T::a#0=TEXT'
       note: no compare: no checked configuration compiles `depot::T::a#0`
       ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:3; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::T::a#0/tail=…'
   cover: each of the 4 changed line(s) is in a fact
@@ -57,7 +51,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::T::a#0=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::T::a#0=the reason of the test' --change 'depot::T::a#0=the text of the test'
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::T::a#1/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::T::a#1/tail` [semantics · code different]
     lines: src/lib.rs:5, src/lib.rs:-3-4
 ◆ f1 replace, syntax only (a1; R90.2-6, no MIR element; the matcher): changed literal `2` → `1` at `depot::T::a#0/tail` [semantics · no compare]
     lines: src/lib.rs:4

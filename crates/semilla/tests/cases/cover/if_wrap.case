@@ -48,19 +48,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:9): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(v: &[u32], live: bool) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
   changed nodes: 3 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 3 places: 3 different edits (f3, f1, f2)
-      in: depot::total
-      lines: src/lib.rs:11-15, src/lib.rs:-11-12, src/lib.rs:-14
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `depot::total`:
-  ◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): moved statement `for x in v { n += x; }` from `depot::total/S1` to `depot::total/S1/then/S0` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): moved statement `for x in v { n += x; }` from `depot::total/S1` to `depot::total/S1/then/S0` [semantics · code different]
+      not stated (src/lib.rs:11-15, src/lib.rs:-11-12, src/lib.rs:-14); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f3, f1, f2)
       affected bodies: depot::total (with 1 other edit of this body)
       control flow: + branch `live` (src/lib.rs:11): false → return, true → for `v`
       control flow: + arrow entry (src/lib.rs:9) → branch `live` (src/lib.rs:11)
       control flow: − arrow entry (src/lib.rs:-9) → for `v` (src/lib.rs:-11)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
-  ◆ f3 add (Semilla; R90.2-3, 2 new MIR elements): added `if` `if live { for x in v { n += x; } n += 1; }` (each inner statement is a moved statement of the body) at `depot::total/S1` [semantics · code different] · not stated
+  ◆ f3 add (Semilla; R90.2-3, 2 new MIR elements): added `if` `if live { for x in v { n += x; } n += 1; }` (each inner statement is a moved statement of the body) at `depot::total/S1` [semantics · code different]
+      not stated (src/lib.rs:11-15); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f3, f1, f2)
       affected bodies: depot::total (with 1 other edit of this body)
       control flow: + branch `live` (src/lib.rs:11): false → return, true → for `v`
       control flow: + arrow entry (src/lib.rs:9) → branch `live` (src/lib.rs:11)
@@ -77,9 +75,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): moved statement `for x in v { n += x; }` from `depot::total/S1` to `depot::total/S1/then/S0` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): moved statement `for x in v { n += x; }` from `depot::total/S1` to `depot::total/S1/then/S0` [semantics · code different]
     lines: src/lib.rs:11-15, src/lib.rs:-11-12, src/lib.rs:-14
-◆ f3 add (Semilla; R90.2-3, 2 new MIR elements): added `if` `if live { for x in v { n += x; } n += 1; }` (each inner statement is a moved statement of the body) at `depot::total/S1` [semantics · code different] · not stated
+◆ f3 add (Semilla; R90.2-3, 2 new MIR elements): added `if` `if live { for x in v { n += x; } n += 1; }` (each inner statement is a moved statement of the body) at `depot::total/S1` [semantics · code different]
     lines: src/lib.rs:11-15
 ◆ f2 same code (Semilla; R90.2-1, equal MIR): moved statement `n += 1` from `depot::total/S2` to `depot::total/S1/then/S1` [semantics · code equal]
     lines: src/lib.rs:11-15, src/lib.rs:-14

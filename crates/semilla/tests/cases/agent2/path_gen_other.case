@@ -120,13 +120,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `<depot::money::Price as depot::money::Scale<u64>>::scale` (src/lib.rs:11): the full compare: `#[same(<depot::money::Price as depot::money::Scale<u64>>::scale)] fn scale_same() {}`; a difference: `#[change(<depot::money::Price as depot::money::Scale<u64>>::scale)] fn scale_change() -> bool { … }` or `#[different(<depot::money::Price as depot::money::Scale<u64>>::scale)] fn scale_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed expression `self.0 * by` → `self.0 * by + 1` (f1)
-      in: depot::money::<Price as Scale>::scale#0
-      lines: src/lib.rs:11, src/lib.rs:-11
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::money::<Price as Scale>::scale#0=TEXT'; if it does not change, --same 'rewrite $a * $b => $a * $b + 1'
   real edits:
   item `depot::money::<Price as Scale>::scale#0`:
-  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0 * by` → `self.0 * by + 1` at `depot::money::<Price as Scale>::scale#0/tail/args[0]` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0 * by` → `self.0 * by + 1` at `depot::money::<Price as Scale>::scale#0/tail/args[0]` [semantics · code different]
+      not stated (src/lib.rs:11, src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::money::<Price as Scale>::scale#0=TEXT'; if it does not change, --same 'rewrite $a * $b => $a * $b + 1'
       affected bodies: depot::money::<Price as Scale>::scale#0
       control flow: + check `overflow: self.0 * by + 1` (src/lib.rs:11): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:11)
@@ -141,5 +138,5 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0 * by` → `self.0 * by + 1` at `depot::money::<Price as Scale>::scale#0/tail/args[0]` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0 * by` → `self.0 * by + 1` at `depot::money::<Price as Scale>::scale#0/tail/args[0]` [semantics · code different]
     lines: src/lib.rs:11, src/lib.rs:-11
