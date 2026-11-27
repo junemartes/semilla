@@ -83,6 +83,8 @@ pub const CODES: &[Code] = &[
     Code { code: "S0109", title: "a `cfg` predicate that does not parse", long: "A `cfg` option has the form of the Rust `cfg` attribute: a name, `key = \"value\"`, `all(…)`, `any(…)`, `not(…)`.\n\nRight:\n\n    #[same(shop::parse, cfg = \"all(unix, not(debug_assertions))\")]" },
     Code { code: "S0110", title: "a claim kind that the model cannot check yet", long: "The kind is in the language, but this version of Semilla cannot check it: the step shows the claim as \"claimed\" with the batch that checks it. It is not an error: the file is clean. Write the claim now; a later version checks it." },
     Code { code: "S0112", title: "a scope path with no definition", long: "Rustc resolves each path of a scope (also a method `shop::Bag::new` through its type, and an item of a re-export), and the path names no item of the version. The candidates are the names next to the last part that resolves.\n\nWrong:\n\n    #[same(shop::Bag::nw)]\n\nRight:\n\n    #[same(shop::Bag::new)]" },
+    Code { code: "S0113", title: "a scope path with generic arguments or an empty part", long: "A scope path names an item by its path with no generic arguments: the scope is the item, for each instance. Rustc cannot take a path with arguments or with an empty part (`shop::Table::<V>::get`, `shop::Table::`), so Semilla rejects it before the compile. A qualified path `<T as Trait>::item` keeps the arguments of `T` and of `Trait`.\n\nWrong:\n\n    #[same(shop::Table::<V>::get)]\n\nRight:\n\n    #[same(shop::Table::get)]" },
+    Code { code: "S0121", title: "an internal error of the compiler for a claim", long: "The compile of the intent crate stopped with an internal error of the compiler (a panic). Semilla gives the claim whose compile alone stops the compiler, and it does not show the text of the panic. Write the claim in another form (for example the scope path with no generic arguments), or remove it.\n\nThe line:\n\n    error[S0121]: the compiler stopped with an internal error at the claim `fn get_same`" },
     Code { code: "S0120", title: "an anchor of a claim that does not fit the syntax tree", long: "The step checks the anchors of each claim against the syntax trees of the two versions (the AST pass, design 79): the item that rustc resolves for the scope must have a node in the tree of its version, and its kind must fit the claim. `#[new(ITEM)]` needs an item that the step adds; `#[removed(ITEM)]` an item that the step removes; `#[same]`, `#[change]`, and `#[different]` one kind of item in the two versions; `#[relation(before::T, after::T)]` two types. The step shows the error at the place of the scope path, with the expected kind, and the claim is an error.\n\nWrong (the step does not add `shop::parse`):\n\n    #[new(shop::parse)]\n    fn parse_new(x: u32) -> bool { after::shop::parse(x) }\n\nRight:\n\n    #[change(shop::parse)]\n    fn parse_new(x: u32) -> bool { after::shop::parse(x) || !before::shop::parse(x) }" },
     Code { code: "S0111", title: "a hint with a body", long: "`rename`, `moved`, and `rewrite` are hints for the pairing of the old and the new code: the function has an empty body.\n\nRight:\n\n    #[rename(shop::total, shop::sum)]\n    fn renamed() {}" },
 ];
@@ -224,6 +226,17 @@ pub fn check(path: &str, text: &str) -> (Vec<Head>, Vec<Finding>) {
                 }
             }
             let attr_range = attr.syntax().text_range();
+            // [R87.3-1] A scope path that rustc cannot take: Semilla rejects it before the compile.
+            if kind.scope == Scope::Items {
+                for (arg, at) in head.scope.iter().zip(&head.scope_at) {
+                    if let Some(plain) = bad_scope_path(arg) {
+                        let range = TextRange::new(ra_ap_syntax::TextSize::from(at.2 as u32), ra_ap_syntax::TextSize::from(at.3 as u32));
+                        let fix = (!plain.is_empty()).then(|| (at.2, at.3, plain.clone()));
+                        let help = if plain.is_empty() { String::new() } else { format!(": write `{plain}`") };
+                        add("S0113", true, range, format!("the scope path `{arg}` has generic arguments or an empty part, and rustc cannot take it{help}"), fix);
+                    }
+                }
+            }
             match kind.scope {
                 Scope::Items if head.scope.is_empty() => add("S0102", true, attr_range, format!("`#[{}]` names no scope: give an item, for example `#[{}(shop::parse)]`", kind.name, kind.name), None),
                 Scope::Two if head.scope.len() != 2 => add("S0103", true, attr_range, format!("`#[{}]` has {} path(s); it needs two: `#[{}(OLD, NEW)]`", kind.name, head.scope.len(), kind.name), None),
@@ -253,6 +266,63 @@ pub fn check(path: &str, text: &str) -> (Vec<Head>, Vec<Finding>) {
         }
     }
     (heads, findings)
+}
+
+/// [R87.3-1] For a scope path of an item with generic arguments or an empty part
+/// (`shop::Table::<V>::get`, `shop::Table::`): the path with no arguments (empty if it has no
+/// such form). `None` for a path that rustc can take: a plain path, a qualified path
+/// `<T as Trait>::item`, `impl …`, `callers(…)` of such a path, a glob, or a text.
+pub fn bad_scope_path(scope: &str) -> Option<String> {
+    let text: String = scope.chars().filter(|c| !c.is_whitespace()).collect();
+    if text.starts_with('"') || scope.trim_start().starts_with("impl ") || scope.trim_start().starts_with("impl<") {
+        return None;
+    }
+    let text = match text.strip_prefix("callers(").and_then(|rest| rest.strip_suffix(')')) {
+        Some(inner) => inner.to_string(),
+        None => text,
+    };
+    let path = if text.starts_with('<') {
+        // The item after `>::` of a qualified path.
+        let mut depth = 0;
+        let mut end = None;
+        for (at, c) in text.char_indices() {
+            match c {
+                '<' => depth += 1,
+                '>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(at);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        match end.and_then(|end| text[end + 1..].strip_prefix("::")) {
+            Some(item) if !item.is_empty() && item.chars().all(|c| c.is_alphanumeric() || c == '_') => return None,
+            _ => return Some(String::new()),
+        }
+    } else {
+        text.strip_suffix("::*").unwrap_or(&text).to_string()
+    };
+    let bad = path.contains('<') || path.contains('>') || path.split("::").any(str::is_empty);
+    if !bad {
+        return None;
+    }
+    // The path with no generic arguments.
+    let mut plain = String::new();
+    let mut depth = 0;
+    for c in path.chars() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            _ if depth == 0 => plain.push(c),
+            _ => {}
+        }
+    }
+    let parts: Vec<&str> = plain.split("::").filter(|part| !part.is_empty()).collect();
+    let plain = if parts.is_empty() { String::new() } else { parts.join("::") };
+    Some(if text.ends_with("::*") && !plain.is_empty() { format!("{plain}::*") } else { plain })
 }
 
 /// The arguments of an attribute, split at each comma at the top level, with their ranges.

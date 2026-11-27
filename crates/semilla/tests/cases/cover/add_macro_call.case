@@ -30,7 +30,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `depot::three` (src/lib.rs:5): the full compare: `#[same(depot::three)] fn three_same() {}`; a difference: `#[change(depot::three)] fn three_change() -> bool { … }` or `#[different(depot::three)] fn three_different() -> bool { … }`
+    MIR changes with no claim: `depot::three` (src/lib.rs:5): no template: `depot::three` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
   new and removed items, filled in by Semilla:
   ◆ f1 derived: added macro call `make!(three)` (makes: `pub fn three`) [added · code different]
       affected bodies: depot::three

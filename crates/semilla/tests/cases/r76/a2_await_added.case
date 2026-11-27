@@ -34,7 +34,7 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 3 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
-    MIR changes with no claim: `shop::total` (src/lib.rs:5): the same MIR text; a changed callee: `shop::total::{closure#0}`; the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 3 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::total` (src/lib.rs:5): the same MIR text; a changed callee: `shop::total::{closure#0}`; the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(a: u32) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }` [the AST map: 3 node(s) of its item not mapped (complete the intent file)]
     MIR changes with no claim: `shop::total::{closure#0} { let v = get(a).await; let w = get(v).…` (src/lib.rs:5): the template of `shop::total` covers its item `shop::total` [the AST map: 3 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 3 places: 3 different edits (f1, f2, f3)

@@ -777,6 +777,9 @@ pub enum CoverState {
     /// [R77.1-4] A proved claim and the result of Semilla disagree: a defect of Semilla. Neither
     /// result explains the body.
     Disagree,
+    /// [R87.4-1] A claim names the item of the body, but the model checks the kind of the claim
+    /// later (`#[new]`, `#[removed]`, design 87): the body has a claim, and no result yet.
+    Later,
 }
 
 /// [R77.1-2] One changed body in the coverage of the claims of a step.
@@ -811,6 +814,7 @@ impl BodyCover {
             CoverState::NotExplained => format!("not explained by its claims: {name}{detail}"),
             CoverState::NoClaim => format!("MIR changes with no claim: {name}{detail}"),
             CoverState::Disagree => format!("the result of Semilla and claim {} disagree: a defect of Semilla: {name}{detail}", self.claims.join(", ")),
+            CoverState::Later => format!("with a claim that is checked later: {name}{detail}"),
         };
         // [R79.7-1] The fact of the map, next to the result of the proof.
         if self.map.is_empty() { line } else { format!("{line} [the AST map: {}]", self.map) }
@@ -829,6 +833,11 @@ pub fn coverage_line(bodies: &[BodyCover]) -> String {
     }
     if disagree > 0 {
         tail.push_str(&format!(", {disagree} with a disagreement of Semilla and a claim (a defect of Semilla)"));
+    }
+    // [R87.4-1] The bodies with a claim that the model checks later.
+    let later = count(CoverState::Later);
+    if later > 0 {
+        tail.push_str(&format!(", {later} with a claim that is checked later"));
     }
     format!("changed bodies: {} equal MIR, {} explained by claims, {} MIR changes with no claim{tail}", count(CoverState::Equivalent), count(CoverState::Claim), count(CoverState::NoClaim))
 }

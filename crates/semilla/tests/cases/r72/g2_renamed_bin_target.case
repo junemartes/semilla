@@ -38,9 +38,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
-    MIR changes with no claim: `tool::{test-harness-main}` (no place): no result of the equivalence check; no template: `tool` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library)
+    MIR changes with no claim: `tool::{test-harness-main}` (no place): no result of the equivalence check; no template: the item is in the crate `tool`, which is not a library of the workspace (a test, a bench, an example, or a binary target)
     MIR changes with no claim: `toolbox::main` (src/main.rs:1): no template: the item is in a binary target, and the intent crate links the libraries only (design 78)
-    MIR changes with no claim: `toolbox::{test-harness-main}` (no place): no result of the equivalence check; no template: `toolbox` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library)
+    MIR changes with no claim: `toolbox::{test-harness-main}` (no place): no result of the equivalence check; no template: `toolbox` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
   other facts, filled in by Semilla:
   ◆ f1 derived: moved `shop (bin "tool")::main` → `shop (bin "toolbox")::main` [move · code equal]
   ◆ f2 derived: Cargo.toml: bin [{ name = "tool", path = "src/main.rs" }] → [{ name = "toolbox", path = "src/main.rs" }] [manifest · no code]

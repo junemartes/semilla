@@ -26,7 +26,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `depot::T::a` (src/lib.rs:6): no template: `depot::T::a#1` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library)
+    MIR changes with no claim: `depot::T::a` (src/lib.rs:6): the full compare: `#[same(depot::T::a)] fn a_same() {}`; a difference: `#[change(depot::T::a)] fn a_change(this_before: &before::depot::T, this_after: &after::depot::T) -> bool { … }` or `#[different(depot::T::a)] fn a_different() -> bool { … }`
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `2` → `1` (f1)
       in: depot::T::a#0

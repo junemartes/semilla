@@ -119,7 +119,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       Semilla sees no edit in `depot::stock::<Bin as std::fmt::Display>::fmt`
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `<depot::money::Price as std::fmt::Display>::fmt` (src/lib.rs:6): the full compare: `#[same(<depot::money::Price as std::fmt::Display>::fmt)] fn fmt_same() {}`; a difference: `#[change(<depot::money::Price as std::fmt::Display>::fmt)] fn fmt_change() -> bool { … }` or `#[different(<depot::money::Price as std::fmt::Display>::fmt)] fn fmt_different() -> bool { … }`
+    MIR changes with no claim: `<depot::money::Price as std::fmt::Display>::fmt` (src/lib.rs:6): the full compare: `#[same(<depot::money::Price as core::fmt::Display>::fmt)] fn fmt_same() {}`; a difference: `#[change(<depot::money::Price as core::fmt::Display>::fmt)] fn fmt_change() -> bool { … }` or `#[different(<depot::money::Price as core::fmt::Display>::fmt)] fn fmt_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `"{}"` → `"${}"` (f1)
       in: depot::money::<Price as fmt::Display>::fmt

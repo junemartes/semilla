@@ -61,8 +61,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `extra::x` (benches/extra.rs:4): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
-    MIR changes with no claim: `extra::x::{closure#0} #[test]` (benches/extra.rs:3): the full compare: `#[same(extra::x)] fn x_same() {}`; a difference: `#[change(extra::x)] fn x_change() -> bool { … }` or `#[different(extra::x)] fn x_different() -> bool { … }`
-    MIR changes with no claim: `extra::{test-harness-main}` (no place): no result of the equivalence check; no template: `extra` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library)
+    MIR changes with no claim: `extra::x::{closure#0} #[test]` (benches/extra.rs:3): the template of `extra::x` covers its item `shop (bench "extra")::x`
+    MIR changes with no claim: `extra::{test-harness-main}` (no place): no result of the equivalence check; no template: `extra` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
   declarations, filled in by Semilla:
   ◆ f1 derived: changed macro `base`: `macro_rules! base { () => { 1 } }` → `macro_rules! base { () => { 1 + 0 } }` [declaration · code different]
       affected bodies: shop::one

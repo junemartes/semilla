@@ -45,7 +45,7 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `depot::list::last` (src/list/mod.rs:13): the signature changes (`fn first (v : & [u32]) -> u32` → `fn last (v : & [u32]) -> u32`): `#[same(depot::list::last)] fn first(v: &[u32]) -> bool { after::depot::list::last(v) == before::depot::list::last(v) }`; a difference: `#[change(depot::list::last)] fn last_change() -> bool { … }` or `#[different(depot::list::last)] fn last_different() -> bool { … }`
+    MIR changes with no claim: `depot::list::last` (src/list/mod.rs:13): no template: the step pairs `depot::list::first` with `depot::list::last` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression `0` → `v.len() - 1` (f3)
       in: depot::list::last

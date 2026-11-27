@@ -29,7 +29,7 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `shop::new_tax` (src/lib.rs:5): the signature changes (`fn old_tax (x : u32) -> u32` → `fn new_tax (x : u32 , y : u32) -> u32`): `#[same(shop::new_tax)] fn old_tax(x: u32, y: u32) -> bool { after::shop::new_tax(x, y) == before::shop::new_tax(x) }`; a difference: `#[change(shop::new_tax)] fn new_tax_change() -> bool { … }` or `#[different(shop::new_tax)] fn new_tax_different() -> bool { … }`
+    MIR changes with no claim: `shop::new_tax` (src/lib.rs:5): no template: the step pairs `shop::old_tax` with `shop::new_tax` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression `x / 10` → `x / 5 + y` (f5)
       in: shop::new_tax

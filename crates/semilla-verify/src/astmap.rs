@@ -141,12 +141,13 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
     let nodes: Vec<&Edit> = outcome.edits.iter().filter(|edit| is_node(edit)).collect();
     // [R79.5-1] One template for each item of a side: the nodes of one item share it.
     let mut templates: BTreeMap<(bool, String), String> = BTreeMap::new();
+    let mut pending = crate::template::Pending::default();
     for edit in &nodes {
         let mut found = entry(input, edit, &anchors, &pure);
         if found.state == AstState::NotMapped && found.template.is_empty() {
             let added = matches!(edit.kind, EditKind::ItemAdded | EditKind::Inserted);
             let item = if added { &edit.after } else { &edit.before }.as_ref().map(|anchor| anchor.item.clone()).unwrap_or_default();
-            found.template = templates.entry((added, item)).or_insert_with(|| template(input, outcome, edit)).clone();
+            found.template = templates.entry((added, item)).or_insert_with(|| template(input, outcome, edit, &mut pending)).clone();
         }
         map.entries.push(found);
     }
@@ -164,6 +165,8 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
     not_mapped.extend(renamed);
     outcome.not_mapped = not_mapped;
     outcome.report.ast = Some(map);
+    // [R87.1-1] The forms of each template for the gate.
+    outcome.templates.asks.extend(pending.asks);
 }
 
 /// [R79.3-6] An added or a removed container (an impl block, a trait, a module) and a member with
@@ -1137,7 +1140,7 @@ fn generics(signature: &str, name: &str) -> (String, String) {
 
 /// [R79.5-1] The claim template for a node that is not mapped (13a's template rule: each
 /// template passes `semilla intent check` as it is), or the cause why the node has none.
-fn template(input: &StepInput, outcome: &StepOutcome, edit: &Edit) -> String {
+fn template(input: &StepInput, outcome: &StepOutcome, edit: &Edit, pending: &mut crate::template::Pending) -> String {
     let side = usize::from(matches!(edit.kind, EditKind::ItemAdded | EditKind::Inserted));
     let Some(item) = (if side == 1 { &edit.after } else { &edit.before }).as_ref().map(|anchor| anchor.item.clone()) else { return "no template: the node has no item".into() };
     // The names of the item in the two trees (the rename map of the step).
@@ -1201,12 +1204,34 @@ fn template(input: &StepInput, outcome: &StepOutcome, edit: &Edit) -> String {
                 [None, None] => "no template: the type of the part has no node in the trees".into(),
             }
         }
-        ItemKind::Fn => match (found[0], found[1]) {
-            (Some(a), Some(b)) => semilla_intent::parse::same_template(&new, &a.signature, &b.signature, &lookup).unwrap_or_else(|cause| format!("no template: {cause}")),
-            (Some(a), None) => semilla_intent::parse::version_template("removed", &old, &a.signature, &lookup).unwrap_or_else(|cause| format!("no template: {cause}")),
-            (None, Some(b)) => semilla_intent::parse::version_template("new", &new, &b.signature, &lookup).unwrap_or_else(|cause| format!("no template: {cause}")),
-            (None, None) => "no template: Semilla has no item of the node".into(),
-        },
+        // [R87.2-1] The names of the item come from the name record of each tree.
+        ItemKind::Fn => {
+            let names = [found[0].map(|_| crate::template::item_names(input.before, &old)), found[1].map(|_| crate::template::item_names(input.after, &new))];
+            let named = |side: usize| names[side].as_ref().and_then(|found| found.as_ref().ok());
+            let expect: Vec<String> = (0..2).filter_map(|side| named(side).map(|found| format!("{}::{}", if side == 0 { "before" } else { "after" }, found.expect))).collect();
+            let forms = |make: &dyn Fn(bool) -> Result<String, String>| -> Result<Vec<String>, String> {
+                let mut list = vec![make(false)?];
+                if let Ok(second) = make(true)
+                    && !list.contains(&second)
+                {
+                    list.push(second);
+                }
+                Ok(list)
+            };
+            let made = match (named(0), named(1)) {
+                // [R87.2-2] A pair of two paths: no scope path names the pair.
+                (Some(a), Some(b)) if a.scope != b.scope => Err(crate::template::pair_gap(&a.scope, &b.scope)),
+                (Some(a), Some(b)) => forms(&|real| semilla_intent::parse::same_template_named(&b.scope, (&a.text, &crate::template::signature_names(input.before, a, real)), (&b.text, &crate::template::signature_names(input.after, b, real)))),
+                (Some(a), None) if found[1].is_none() => forms(&|real| semilla_intent::parse::version_template_named("removed", &a.scope, &a.text, &crate::template::signature_names(input.before, a, real))),
+                (None, Some(b)) if found[0].is_none() => forms(&|real| semilla_intent::parse::version_template_named("new", &b.scope, &b.text, &crate::template::signature_names(input.after, b, real))),
+                _ => Err(names.iter().flatten().find_map(|found| found.as_ref().err().cloned()).unwrap_or_else(|| "Semilla has no item of the node".into())),
+            };
+            let _ = &lookup;
+            match made {
+                Ok(list) => pending.note(list, expect),
+                Err(cause) => format!("no template: {cause}"),
+            }
+        }
         ItemKind::Const | ItemKind::Static => match (found[0], found[1]) {
             (Some(_), Some(_)) => semilla_intent::parse::value_template("same", &new),
             (Some(_), None) => semilla_intent::parse::value_template("removed", &old),

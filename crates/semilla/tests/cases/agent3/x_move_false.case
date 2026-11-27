@@ -119,7 +119,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     ◆ f3 stated: public API: `depot::limit` is now `depot::stock::limit` (a different crate can no longer use the old path) [move · no code]
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
-    MIR changes with no claim: `depot::stock::limit` (src/lib.rs:18): the full compare: `#[same(depot::stock::limit)] fn limit_same() {}`; a difference: `#[change(depot::stock::limit)] fn limit_change() -> bool { … }` or `#[different(depot::stock::limit)] fn limit_different() -> bool { … }`
+    MIR changes with no claim: `depot::stock::limit` (src/lib.rs:18): no template: the step pairs `depot::limit` with `depot::stock::limit` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
     MIR changes with no claim: `depot::uses_limit` (src/lib.rs:27): the same MIR text; a changed callee: `depot::stock::limit`; the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `10` → `11` (f2)

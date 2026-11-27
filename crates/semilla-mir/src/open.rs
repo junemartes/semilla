@@ -222,6 +222,10 @@ pub struct Link {
     /// trait, each method of each impl of the trait in an open crate.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<Member>,
+    /// [R87.2-1] For a type-relative path: each item of that name of the type (its inherent
+    /// impls and its trait impls). A qualified path `<T as Trait>::item` names one of them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<String>,
 }
 
 /// [R80.3-1] One item of a scope: the record name with the facade, and for a method of an impl
@@ -335,7 +339,7 @@ pub fn links(tcx: TyCtxt<'_>) -> Vec<Link> {
         for path in paths {
             let direct = get(&path, Namespace::ValueNS).or_else(|| get(&path, Namespace::TypeNS)).or_else(|| get(&path, Namespace::MacroNS));
             if let Some(def_id) = direct {
-                found.push(Link { path, resolved: Some(name_of(def_id)), near: Vec::new(), members: members(tcx, def_id) });
+                found.push(Link { path, resolved: Some(name_of(def_id)), near: Vec::new(), members: members(tcx, def_id), also: Vec::new() });
                 continue;
             }
             // A type-relative path: the last part is an item of the resolved type or trait.
@@ -356,12 +360,12 @@ pub fn links(tcx: TyCtxt<'_>) -> Vec<Link> {
                 {
                     near = tcx.module_children(module).iter().map(|child| format!("{prefix}::{}", child.ident)).collect();
                 }
-                found.push(Link { path, resolved: None, near, members: Vec::new() });
+                found.push(Link { path, resolved: None, near, members: Vec::new(), also: Vec::new() });
                 continue;
             };
             if matches!(tcx.def_kind(owner), DefKind::Mod) {
                 let near = tcx.module_children(owner).iter().map(|child| format!("{prefix}::{}", child.ident)).collect();
-                found.push(Link { path, resolved: None, near, members: Vec::new() });
+                found.push(Link { path, resolved: None, near, members: Vec::new(), also: Vec::new() });
                 continue;
             }
             let symbol = rustc_span::Symbol::intern(last);
@@ -381,7 +385,9 @@ pub fn links(tcx: TyCtxt<'_>) -> Vec<Link> {
             }
             let item = owners.iter().find_map(|owner| tcx.associated_items(*owner).filter_by_name_unhygienic(symbol).next().map(|item| item.def_id));
             let near = if item.is_none() { owners.iter().flat_map(|owner| tcx.associated_items(*owner).in_definition_order().map(|item| format!("{prefix}::{}", item.name()))).collect() } else { Vec::new() };
-            found.push(Link { path, resolved: item.map(name_of), near, members: Vec::new() });
+            let also: Vec<String> = owners.iter().flat_map(|owner| tcx.associated_items(*owner).filter_by_name_unhygienic(symbol).map(|item| item.def_id).collect::<Vec<_>>()).map(name_of).collect();
+            let also = if also.len() > 1 { also } else { Vec::new() };
+            found.push(Link { path, resolved: item.map(name_of), near, members: Vec::new(), also });
         }
     }
     found

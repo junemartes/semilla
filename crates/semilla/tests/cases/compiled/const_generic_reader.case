@@ -44,7 +44,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::Grid::<T>::ROWS` (src/lib.rs:4): the full compare: `#[same(shop::Grid::ROWS)] fn rows_same() {}`; a difference: `#[change(shop::Grid::ROWS)] fn rows_change() -> bool { … }` or `#[different(shop::Grid::ROWS)] fn rows_different() -> bool { … }`
-    MIR changes with no claim: `shop::rows` (src/lib.rs:8): the same MIR text; a constant that it names changes or has no value to compare: `shop::Grid::<T>::ROWS`; the full compare: `#[same(shop::rows)] fn rows_same() {}`; a difference: `#[change(shop::rows)] fn rows_change(x: usize) -> bool { … }` or `#[different(shop::rows)] fn rows_different() -> bool { … }`
+    MIR changes with no claim: `shop::rows` (src/lib.rs:8): the same MIR text; a constant that it names changes or has no value to compare: `shop::Grid::<T>::ROWS`; the full compare: `#[same(shop::rows)] fn rows_same_2() {}`; a difference: `#[change(shop::rows)] fn rows_change_2(x: usize) -> bool { … }` or `#[different(shop::rows)] fn rows_different_2() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: value of, see f1 (f1)
       in: shop::Grid::ROWS

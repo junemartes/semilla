@@ -25,8 +25,8 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
-    MIR changes with no claim: `<shop::Point as std::cmp::PartialEq>::eq` (src/lib.rs:1): the full compare: `#[same(<shop::Point as std::cmp::PartialEq>::eq)] fn eq_same() {}`; a difference: `#[change(<shop::Point as std::cmp::PartialEq>::eq)] fn eq_change() -> bool { … }` or `#[different(<shop::Point as std::cmp::PartialEq>::eq)] fn eq_different() -> bool { … }`
-    MIR changes with no claim: `<shop::Point as std::fmt::Debug>::fmt` (src/lib.rs:1): the full compare: `#[same(<shop::Point as std::fmt::Debug>::fmt)] fn fmt_same() {}`; a difference: `#[change(<shop::Point as std::fmt::Debug>::fmt)] fn fmt_change() -> bool { … }` or `#[different(<shop::Point as std::fmt::Debug>::fmt)] fn fmt_different() -> bool { … }`
+    MIR changes with no claim: `<shop::Point as std::cmp::PartialEq>::eq` (src/lib.rs:1): the full compare: `#[same(<shop::Point as core::cmp::PartialEq>::eq)] fn eq_same() {}`; a difference: `#[change(<shop::Point as core::cmp::PartialEq>::eq)] fn eq_change() -> bool { … }` or `#[different(<shop::Point as core::cmp::PartialEq>::eq)] fn eq_different() -> bool { … }`
+    MIR changes with no claim: `<shop::Point as std::fmt::Debug>::fmt` (src/lib.rs:1): the full compare: `#[same(<shop::Point as core::fmt::Debug>::fmt)] fn fmt_same() {}`; a difference: `#[change(<shop::Point as core::fmt::Debug>::fmt)] fn fmt_change() -> bool { … }` or `#[different(<shop::Point as core::fmt::Debug>::fmt)] fn fmt_different() -> bool { … }`
   new and removed items, filled in by Semilla:
   ◆ f1 derived: field `shop::Point.z` added: `i32` (the public API can change: a different crate can use the item) [added · code different]
       affected bodies: <shop::Point as std::cmp::PartialEq>::eq, <shop::Point as std::fmt::Debug>::fmt

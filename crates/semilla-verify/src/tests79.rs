@@ -120,6 +120,11 @@ impl BodyOracle for Claims {
     fn intent_anchors(&self, _: &Step) -> Option<Result<CompiledClaims, String>> {
         self.0.clone()
     }
+
+    /// [R87.1-1] The compiler of the test accepts the first form of each template.
+    fn check_templates(&self, _: &Step, asks: &[crate::template::Ask]) -> Option<Vec<crate::template::Verdict>> {
+        Some(asks.iter().map(|_| Ok(0)).collect())
+    }
 }
 
 /// The compiled claims of a test: the links (each path resolves to itself, unless a pair of the

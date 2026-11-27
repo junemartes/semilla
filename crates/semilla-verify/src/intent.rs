@@ -189,14 +189,18 @@ pub(crate) fn check(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
     // [R84.2-1] A step with no intent file has the coverage too: each changed body is "equal
     // MIR" or "MIR changes with no claim" with its template.
     if files.is_empty() {
-        outcome.report.coverage = coverage(input, outcome, &[], None);
+        let (cover, pending) = coverage(input, outcome, &[], None);
+        outcome.report.coverage = cover;
+        outcome.templates.merge(pending);
         return;
     }
     let Ok(parsed) = parse_files(files) else { return };
     let renames: BTreeMap<String, String> = outcome.renames.items.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
     let asked = queries(&parsed, false);
     let answers = if asked.is_empty() { None } else { bodies.intent(input.step, &renames, &asked) };
-    let cover = coverage(input, outcome, &asked, answers.as_deref());
+    let later = later_claims(&parsed);
+    let (cover, pending) = coverage_with(input, outcome, &asked, answers.as_deref(), &later);
+    outcome.templates.merge(pending);
     let index = crate::checks::BodyIndex::new(&outcome.bodies, input.after, input.before);
     outcome.explained = cover.iter().filter(|body| body.state == CoverState::Claim).filter_map(|body| index.item_of_name(&body.name)).collect();
     outcome.report.coverage = cover;
@@ -232,8 +236,30 @@ fn flow_name(text: &str, renames: &BTreeMap<String, String>, names: &std::collec
 /// [R77.1-2] The coverage of the changed bodies of a step (design 77): the state of each body of
 /// the section "control flow". A body is explained only by a proved claim that depends on it
 /// (R77.1-1) or by an equivalence proof of Semilla; a disagreement explains nothing (R77.1-4).
-fn coverage(input: &StepInput, outcome: &StepOutcome, asked: &[Query], answers: Option<&[Answer]>) -> Vec<BodyCover> {
-    let Some(flow) = &outcome.report.flow else { return Vec::new() };
+fn coverage(input: &StepInput, outcome: &StepOutcome, asked: &[Query], answers: Option<&[Answer]>) -> (Vec<BodyCover>, crate::template::Pending) {
+    coverage_with(input, outcome, asked, answers, &[])
+}
+
+/// [R87.4-1] The claims of the intent files that the model checks later and that name items
+/// (`#[new]`, `#[removed]`): the id, the attribute, the batch, and the names of the targets.
+fn later_claims(files: &[semilla_intent::File]) -> Vec<(String, String, String, Vec<String>)> {
+    let mut out = Vec::new();
+    for (file, ids) in files.iter().zip(item_ids(files)) {
+        for (item, id) in file.items.iter().zip(ids) {
+            let (Item::Claim(claim), Some(id)) = (item, id) else { continue };
+            if claim.kind != ClaimKind::Later || !matches!(claim.attribute.as_str(), "new" | "removed") {
+                continue;
+            }
+            let batch = semilla_intent::heads::KINDS.iter().find(|kind| kind.name == claim.attribute).and_then(|kind| kind.later).unwrap_or("of a later version");
+            out.push((id, claim.attribute.clone(), batch.to_string(), claim.targets.iter().map(|target| semilla_intent::plain_name(&target.name())).collect()));
+        }
+    }
+    out
+}
+
+fn coverage_with(input: &StepInput, outcome: &StepOutcome, asked: &[Query], answers: Option<&[Answer]>, later: &[(String, String, String, Vec<String>)]) -> (Vec<BodyCover>, crate::template::Pending) {
+    let mut pending = crate::template::Pending::default();
+    let Some(flow) = &outcome.report.flow else { return (Vec::new(), pending) };
     let renames: BTreeMap<String, String> = outcome.renames.items.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
     let names: std::collections::BTreeSet<&str> = flow.bodies.iter().map(|body| body.name.as_str()).collect();
     // The proved claims: the id, the kind, the bodies that each one explains, and its item.
@@ -280,7 +306,8 @@ fn coverage(input: &StepInput, outcome: &StepOutcome, asked: &[Query], answers: 
         // G4: a nested body (a closure, a constant block) is a part of its item: the template
         // of the item covers it.
         let item = match item.split_once("::{") {
-            Some((owner, _)) if !owner.is_empty() => owner.to_string(),
+            // [R87.2-1] The item of the owner body in the syntax tree.
+            Some((owner, _)) if !owner.is_empty() => index.item_of_name(owner).unwrap_or_else(|| owner.to_string()),
             _ => item,
         };
         let map = if outcome.not_mapped.contains(&item) {
@@ -322,22 +349,30 @@ fn coverage(input: &StepInput, outcome: &StepOutcome, asked: &[Query], answers: 
             (CoverState::Equivalent, Vec::new(), String::new())
         } else if claimed.contains(&body.name) || claimed_items.contains(&item) {
             (CoverState::NotExplained, Vec::new(), semilla)
+        } else if let Some((id, kind, batch, _)) = later.iter().find(|(_, _, _, targets)| {
+            let names = [semilla_intent::plain_name(&item), semilla_intent::plain_name(body.name.split("::{").next().unwrap_or(&body.name))];
+            targets.iter().any(|target| names.contains(target))
+        }) {
+            // [R87.4-1] A claim names the body, and the model checks its kind later.
+            (CoverState::Later, vec![id.clone()], format!("claim {id} (`#[{kind}]`): the check of `#[{kind}]` comes in batch {batch}"))
         } else {
             // [R84.2-1] One line with the body and a claim template (design 84).
-            let template = match templates.get(&item) {
-                Some(first) => format!("the template of `{first}` covers its item `{item}`"),
+            let cause = if body.line.starts_with("graph added") || body.line.starts_with("graph removed") { String::new() } else if verdicts.is_empty() { semilla } else { crate::equiv::joined(&verdicts, false, false).trim_start_matches("MIR changes").trim_start_matches(": ").to_string() };
+            let mut offer = match templates.get(&item) {
+                Some(first) => crate::template::Offer { none: None, what: String::new(), groups: vec![crate::template::Group { label: String::new(), templates: Vec::new(), note: format!("the template of `{first}` covers its item `{item}`") }], ..Default::default() },
                 None => {
                     templates.insert(item.clone(), body.name.clone());
-                    body_template(input, outcome, &renames, &item, body)
+                    body_template(input, outcome, &renames, &item, body, &mut pending)
                 }
             };
-            let cause = if body.line.starts_with("graph added") || body.line.starts_with("graph removed") { String::new() } else if verdicts.is_empty() { semilla } else { crate::equiv::joined(&verdicts, false, false).trim_start_matches("MIR changes").trim_start_matches(": ").to_string() };
-            let detail = if cause.is_empty() { template } else { format!("{cause}; {template}") };
+            offer.cause = cause;
+            let detail = offer.render(&|_| None, &|_| true);
+            pending.offers.push((out.len(), offer));
             (CoverState::NoClaim, Vec::new(), detail)
         };
         out.push(BodyCover { name: body.name.clone(), place: body.place.clone(), state, claims, detail, map });
     }
-    out
+    (out, pending)
 }
 
 /// The claim lines of the step (design 67, part D).
@@ -492,89 +527,138 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
 /// whose signature changes gets the property form of 13a in place of the empty claim (an empty
 /// claim cannot compare two signatures); an added or a removed body gets `#[new]` or
 /// `#[removed]`. If the AST pass prints a template for a node of the item (R79.5-1), the line
-/// names that node and gives no second copy. Each template passes `semilla intent check` when
-/// the agent fills it in.
-fn body_template(input: &StepInput, outcome: &StepOutcome, renames: &BTreeMap<String, String>, item: &str, body: &semilla_core::report::FlowBody) -> String {
+/// names that node and gives no second copy. [R87.2-1] Each path comes from the names of the
+/// item (`template::item_names`), and [R87.1-1] the gate checks each template before the step
+/// prints it.
+fn body_template(input: &StepInput, outcome: &StepOutcome, renames: &BTreeMap<String, String>, item: &str, body: &semilla_core::report::FlowBody, pending: &mut crate::template::Pending) -> crate::template::Offer {
+    use crate::template::{Group, Offer};
+    let none = |cause: String| Offer { none: Some(cause), ..Default::default() };
     // The template of the AST pass for a node of the item, if the pass gives one.
     let ast = outcome.report.ast.as_ref().and_then(|map| {
         let at = map.entries.iter().position(|entry| entry.state == semilla_core::AstState::NotMapped && entry.at.split('/').next() == Some(item) && !entry.template.is_empty() && !entry.template.starts_with("no template"))?;
-        Some(format!("the claim template of the node n{} of the AST map ({})", at + 1, semilla_core::budget::step_text_command(outcome.report.step)))
+        Some((at, format!("the claim template of the node n{} of the AST map ({})", at + 1, semilla_core::budget::step_text_command(outcome.report.step))))
     });
     if item.contains(" (bin \"") {
-        return "no template: the item is in a binary target, and the intent crate links the libraries only (design 78)".into();
+        return none("the item is in a binary target, and the intent crate links the libraries only (design 78)".into());
     }
     // R79.3-2: no claim names test, bench, or example code (the intent crate links the libraries).
     if crate::astmap::test_code(input.after, item) || crate::astmap::test_code(input.before, item) {
-        return "no template: test, bench, or example code (the intent crate links the libraries only, design 78)".into();
+        return none("test, bench, or example code (the intent crate links the libraries only, design 78)".into());
     }
     let reverse = renames.iter().find(|(_, new)| new.as_str() == item).map(|(old, _)| old.clone()).unwrap_or_else(|| item.to_string());
     let found = [input.before.items.get(&reverse), input.after.items.get(item)];
-    // An item of a trait impl: the record name of the body is its qualified path.
-    let path = if item.contains('<') && !item.contains(" (") { body.name.split("::{").next().unwrap_or(&body.name).to_string() } else { item.to_string() };
-    if path.contains(" (") || path.contains('#') || path.contains('!') || path.contains('{') || !(path.contains("::") || path.starts_with('<')) {
-        return ast.unwrap_or_else(|| format!("no template: `{path}` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library)"));
-    }
-    let short: String = path.rsplit("::").next().unwrap_or(&path).chars().map(|c| if c.is_alphanumeric() || c == '_' { c.to_ascii_lowercase() } else { '_' }).collect();
-    // The path of a type of the crate by its name: of the struct, enum, and type alias items with
-    // that name, the one in the nearest module of the item (the old tree first; a type that the
-    // step adds is in the new tree only).
-    let type_path = |name: &str| -> Option<String> {
-        let of = |tree: &semilla_syntax::Workspace| -> Option<String> {
-            let found: Vec<&String> = tree.items.iter().filter(|(path, item)| matches!(item.kind, semilla_syntax::ItemKind::Struct | semilla_syntax::ItemKind::Enum | semilla_syntax::ItemKind::Type) && path.rsplit("::").next() == Some(name)).map(|(path, _)| path).collect();
-            let mut module = item;
-            while let Some((outer, _)) = module.rsplit_once("::") {
-                let near: Vec<&&String> = found.iter().filter(|path| path.as_str() == format!("{outer}::{name}")).collect();
-                if near.len() == 1 {
-                    return Some(near[0].to_string());
-                }
-                module = outer;
-            }
-            (found.len() == 1).then(|| found[0].clone())
-        };
-        of(input.before).or_else(|| of(input.after))
+    // [R87.2-1] The names of the item in each tree that has it: the name record of the compiler.
+    let record = body.name.split("::{").next().unwrap_or(&body.name);
+    let names = match found {
+        [None, None] => [Some(crate::template::made_names(input.before, record)), Some(crate::template::made_names(input.after, record))],
+        _ => [found[0].map(|_| crate::template::item_names(input.before, &reverse)), found[1].map(|_| crate::template::item_names(input.after, item))],
     };
+    let usable: Vec<&crate::template::ItemNames> = names.iter().flatten().filter_map(|found| found.as_ref().ok()).collect();
+    let Some(first) = usable.last().copied() else {
+        // [R87.2-2] No path of the language names the body: a gap of the intent language.
+        let cause = names.iter().flatten().find_map(|found| found.as_ref().err().cloned()).unwrap_or_else(|| format!("`{}` is no item of the syntax tree (a body that the compiler makes)", body.name));
+        return match ast {
+            Some(ast) => Offer { ast: Some(ast), none: Some(cause), ..Default::default() },
+            None => none(cause),
+        };
+    };
+    let path = first.scope.clone();
+    // [R87.2-2] A pair of two paths (a rename, a twin pair): one scope path names one item in
+    // the two versions, so no scope path names the pair.
+    if let [Some(Ok(old)), Some(Ok(new))] = &names
+        && old.scope != new.scope
+    {
+        let cause = crate::template::pair_gap(&old.scope, &new.scope);
+        return match ast {
+            Some(ast) => Offer { ast: Some(ast), none: Some(cause), ..Default::default() },
+            None => none(cause),
+        };
+    }
+    // The record names that the scope path must resolve to (the property of R87.2-1).
+    let expect = |kinds: &[usize]| -> Vec<String> { kinds.iter().filter_map(|&side| names[side].as_ref().and_then(|found| found.as_ref().ok()).map(|found| format!("{}::{}", if side == 0 { "before" } else { "after" }, found.expect))).collect() };
+    let both = expect(&[0, 1]);
+    let short: String = path.rsplit("::").next().unwrap_or(&path).chars().map(|c| if c.is_alphanumeric() || c == '_' { c.to_ascii_lowercase() } else { '_' }).collect();
     let signature = |item: &semilla_syntax::Item| item.signature.split_whitespace().collect::<Vec<_>>().join(" ");
     let is_fn = |item: Option<&semilla_syntax::Item>| item.is_some_and(|item| item.kind == semilla_syntax::ItemKind::Fn);
-    let state = format!("`#[change({path})] fn {short}_change() -> bool {{ … }}` or `#[different({path})] fn {short}_different() -> bool {{ … }}`");
-    let full = |difference: &str| format!("the full compare: `#[same({path})] fn {short}_same() {{}}`; a difference: {difference}");
-    // The part that changes (R69.5-3), and the own template of the line.
-    let (what, own): (String, String) = match (found[0], found[1]) {
-        (Some(a), Some(b)) if is_fn(Some(a)) && is_fn(Some(b)) && !path.starts_with('<') => {
+    let plain_change = format!("#[change({path})] fn {short}_change() -> bool {{ … }}");
+    let different = format!("#[different({path})] fn {short}_different() -> bool {{ … }}");
+    let full = format!("#[same({path})] fn {short}_same() {{}}");
+    // [R87.1-1] Each template with its forms: the written paths of the types of other crates
+    // first, then their definition paths.
+    let forms = |make: &dyn Fn(bool) -> Result<String, String>| -> Result<Vec<String>, String> {
+        let first = make(false)?;
+        let mut list = vec![first];
+        if let Ok(second) = make(true)
+            && !list.contains(&second)
+        {
+            list.push(second);
+        }
+        Ok(list)
+    };
+    let old_names = names[0].as_ref().and_then(|found| found.as_ref().ok());
+    let new_names = names[1].as_ref().and_then(|found| found.as_ref().ok());
+    let mut note = |forms: Vec<String>, expect: Vec<String>| pending.note(forms, expect);
+    let difference = |note: &mut dyn FnMut(Vec<String>, Vec<String>) -> String, change: Vec<String>| Group { label: "a difference".into(), templates: vec![note(change, both.clone()), note(vec![different.clone()], both.clone())], note: String::new() };
+    let mut offer = Offer { ast: ast.clone(), ..Default::default() };
+    match (found[0], found[1]) {
+        (Some(a), Some(b)) if is_fn(Some(a)) && is_fn(Some(b)) => {
             let (old, new) = (signature(a), signature(b));
             // [R69.5-3] Two equal signature texts: a type of the signature (or the type of
             // `self`) can change its definition.
             let types = if old == new { changed_types(input, &reverse, item, &new) } else { Vec::new() };
-            let what = if old != new {
+            offer.what = if old != new {
                 format!("the signature changes (`{old}` → `{new}`)")
             } else if !types.is_empty() {
                 format!("a type of the signature changes ({})", types.join("; "))
             } else {
                 String::new()
             };
-            let own = if what.is_empty() {
+            let property = |real: bool| -> Result<String, String> {
+                let (Some(old_names), Some(new_names)) = (old_names, new_names) else { return Err("the item has no names in one version".into()) };
+                let (on, nn) = (crate::template::signature_names(input.before, old_names, real), crate::template::signature_names(input.after, new_names, real));
+                semilla_intent::parse::same_template_named(&path, (&old_names.text, &on), (&new_names.text, &nn))
+            };
+            if offer.what.is_empty() {
                 // A change form with the parameters of the item: the template of 13a with the
                 // body of the agent.
-                let change = semilla_intent::parse::same_template(&path, &old, &new, &type_path).ok().and_then(|text| {
-                    let head = &text[..text.find(" -> bool {")?];
-                    let params = &head[head.find('(').map(|at| at + 1).and_then(|at| head[at..].find('(').map(|next| at + next))?..];
-                    Some(format!("`#[change({path})] fn {short}_change{params} -> bool {{ … }}` or `#[different({path})] fn {short}_different() -> bool {{ … }}`"))
-                });
-                full(&change.unwrap_or(state))
+                let change = forms(&|real| {
+                    let text = property(real)?;
+                    let head = &text[..text.find(" -> bool {").ok_or("no head")?];
+                    let open = head.find('(').ok_or("no scope")? + 1;
+                    let params = &head[head[open..].find('(').map(|next| open + next).ok_or("no parameters")?..];
+                    Ok(format!("#[change({path})] fn {short}_change{params} -> bool {{ … }}"))
+                })
+                .unwrap_or_else(|_| vec![plain_change.clone()]);
+                offer.groups.push(Group { label: "the full compare".into(), templates: vec![note(vec![full.clone()], both.clone())], note: String::new() });
+                offer.groups.push(difference(&mut note, change));
             } else {
                 // An empty claim cannot compare two signatures: the property form of 13a.
-                match semilla_intent::parse::same_template(&path, &old, &new, &type_path) {
-                    Ok(template) => format!("`{template}`; a difference: {state}"),
-                    Err(cause) => format!("no property template ({cause}); a difference: {state}"),
+                match forms(&property) {
+                    Ok(list) => offer.groups.push(Group { label: String::new(), templates: vec![note(list, both.clone())], note: String::new() }),
+                    Err(cause) => offer.groups.push(Group { label: String::new(), templates: Vec::new(), note: format!("no property template ({cause})") }),
                 }
-            };
-            (what, own)
+                offer.groups.push(difference(&mut note, vec![plain_change.clone()]));
+            }
         }
-        (None, Some(b)) if is_fn(Some(b)) => ("an added body".into(), semilla_intent::parse::version_template("new", &path, &signature(b), &type_path).map(|text| format!("`{text}`")).unwrap_or_else(|cause| format!("no template: {cause}"))),
-        (Some(a), None) if is_fn(Some(a)) => ("a removed body".into(), semilla_intent::parse::version_template("removed", &reverse, &signature(a), &type_path).map(|text| format!("`{text}`")).unwrap_or_else(|cause| format!("no template: {cause}"))),
-        _ => (String::new(), full(&state)),
-    };
-    let tail = ast.unwrap_or(own);
-    if what.is_empty() { tail } else { format!("{what}: {tail}") }
+        (None, Some(b)) if is_fn(Some(b)) => {
+            offer.what = "an added body".into();
+            let list = new_names.map(|found| forms(&|real| semilla_intent::parse::version_template_named("new", &path, &found.text, &crate::template::signature_names(input.after, found, real)))).and_then(Result::ok).unwrap_or_else(|| vec![format!("#[new({path})] fn {short}_new() -> bool {{ … }}")]);
+            let _ = signature(b);
+            offer.groups.push(Group { label: String::new(), templates: vec![note(list, expect(&[1]))], note: String::new() });
+        }
+        (Some(a), None) if is_fn(Some(a)) => {
+            offer.what = "a removed body".into();
+            let path = old_names.map(|found| found.scope.clone()).unwrap_or(path.clone());
+            let list = old_names.map(|found| forms(&|real| semilla_intent::parse::version_template_named("removed", &path, &found.text, &crate::template::signature_names(input.before, found, real)))).and_then(Result::ok).unwrap_or_else(|| vec![format!("#[removed({path})] fn {short}_removed() -> bool {{ … }}")]);
+            let _ = signature(a);
+            offer.groups.push(Group { label: String::new(), templates: vec![note(list, expect(&[0]))], note: String::new() });
+        }
+        _ => {
+            offer.groups.push(Group { label: "the full compare".into(), templates: vec![note(vec![full.clone()], both.clone())], note: String::new() });
+            offer.groups.push(difference(&mut note, vec![plain_change.clone()]));
+        }
+    }
+    offer
 }
 
 /// [R69.5-3] The types that a signature names (and the type of `self` of a method) whose
@@ -704,6 +788,7 @@ fn cover_lines(step: &semilla_core::StepReport, limit: Option<usize>, indent: &s
         CoverState::Disagree => 0,
         CoverState::NotExplained => 1,
         CoverState::NoClaim => 2,
+        CoverState::Later => 2,
         CoverState::Claim => 3,
         CoverState::Equivalent => 4,
     };

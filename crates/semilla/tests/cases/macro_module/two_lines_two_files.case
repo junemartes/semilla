@@ -45,7 +45,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `depot::imp::open` (src/unix.rs:1): no template: `depot::imp#0::open` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library)
+    MIR changes with no claim: `depot::imp::open` (src/unix.rs:1): the full compare: `#[same(depot::imp::open)] fn open_same() {}`; a difference: `#[change(depot::imp::open)] fn open_change() -> bool { … }` or `#[different(depot::imp::open)] fn open_different() -> bool { … }`
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `3` → `4` (f1)
       in: depot::imp#0::open

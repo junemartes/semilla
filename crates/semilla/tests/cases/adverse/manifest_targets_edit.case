@@ -60,7 +60,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `list::first` (checks/list_checks.rs:2): the same MIR text; a changed callee: `list::first::{closure#0}`; no template: test, bench, or example code (the intent crate links the libraries only, design 78)
-    MIR changes with no claim: `list::first::{closure#0} #[test]` (checks/list_checks.rs:1): the same MIR text; a changed callee: `list::first`, `list::first::{closure#0}`; the full compare: `#[same(list::first)] fn first_same() {}`; a difference: `#[change(list::first)] fn first_change() -> bool { … }` or `#[different(list::first)] fn first_different() -> bool { … }`
+    MIR changes with no claim: `list::first::{closure#0} #[test]` (checks/list_checks.rs:1): the same MIR text; a changed callee: `list::first`, `list::first::{closure#0}`; the template of `list::first` covers its item `depot (test "list")::first`
     MIR changes with no claim: `tool::main` (cmd/tool.rs:1): no template: the item is in a binary target, and the intent crate links the libraries only (design 78)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f1)

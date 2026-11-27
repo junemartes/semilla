@@ -32,7 +32,7 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
-    MIR changes with no claim: `depot::fetch` (src/lib.rs:1): the same MIR text; a changed callee: `depot::fetch::{closure#0}`; the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `depot::fetch` (src/lib.rs:1): the same MIR text; a changed callee: `depot::fetch::{closure#0}`; the full compare: `#[same(depot::fetch)] fn fetch_same() {}`; a difference: `#[change(depot::fetch)] fn fetch_change(n: u32) -> bool { … }` or `#[different(depot::fetch)] fn fetch_different() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
     MIR changes with no claim: `depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 }` (src/lib.rs:1): the template of `depot::fetch` covers its item `depot::fetch` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: added early exit `if n == 0 { return 0; }` (f1)

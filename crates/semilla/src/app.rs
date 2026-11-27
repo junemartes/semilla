@@ -199,6 +199,10 @@ impl semilla_verify::BodyOracle for Guard<'_> {
         if self.off(step) { None } else { self.inner.expansions(step) }
     }
 
+    fn check_templates(&self, step: &Step, asks: &[semilla_verify::template::Ask]) -> Option<Vec<semilla_verify::template::Verdict>> {
+        if self.off(step) { None } else { self.inner.check_templates(step, asks) }
+    }
+
     fn equivalence_budget(&self, step: &Step) -> Option<String> {
         if self.off(step) { None } else { self.inner.equivalence_budget(step) }
     }

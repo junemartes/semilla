@@ -30,7 +30,7 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `shop::Cart::total` (src/lib.rs:1): the full compare: `#[same(shop::Cart::total)] fn total_same() {}`; a difference: `#[change(shop::Cart::total)] fn total_change() -> bool { … }` or `#[different(shop::Cart::total)] fn total_different() -> bool { … }`
+    MIR changes with no claim: `shop::Cart::total` (src/lib.rs:1): no template: `shop::Cart::total` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
   new and removed items, filled in by Semilla:
   ◆ f1 derived: added macro call `field_get!(total, sum)` (makes: `pub fn Cart::total`) [added · code different]
       affected bodies: shop::Cart::total
