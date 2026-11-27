@@ -2233,6 +2233,23 @@ pub struct ConfigNote {
     /// `release` configurations have the same relation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub same: Vec<ConfigSame>,
+    /// [R85.4-3] True if the list of a step is not the full list of design 8.12 (design 85):
+    /// the output of `semilla step` then has the line of the checked configurations too.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
+    /// [R85.3-2] The list of the options of a reviewer command, if it is not the list of each
+    /// step: the check used it in place of the lists of the steps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub option_list: Vec<String>,
+    /// [R85.4-1] What checks the other state of a condition of `not_covered`, by its text: an
+    /// option of the command line, "not on this target", or "no option of Semilla switches
+    /// it". Empty with the full list.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub condition_checks: std::collections::BTreeMap<String, String>,
+    /// [R85.4-4] The option that turns on each feature of `features_not_checked`, by its text
+    /// (`package/feature`). Empty with the full list.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub feature_checks: std::collections::BTreeMap<String, String>,
 }
 
 /// A configuration that is not in the list of a step, because a different configuration has
@@ -2356,12 +2373,22 @@ impl ConfigNote {
         if self.not_covered.is_empty() {
             return None;
         }
-        let shown: Vec<String> = self.not_covered.iter().take(Self::MOST_CONDITIONS).map(|text| format!("`{text}`")).collect();
+        let shown: Vec<String> = self.not_covered.iter().take(Self::MOST_CONDITIONS).map(|text| self.condition(text)).collect();
         let more = match self.not_covered.len().saturating_sub(Self::MOST_CONDITIONS) {
             0 => String::new(),
             count => format!(", and {count} more"),
         };
         Some(format!("! `cfg` conditions that Semilla did not check: {}{more}", shown.join(", ")))
+    }
+
+    /// [R85.4-1] The text of a condition of `not_covered` in a line: with what checks its other
+    /// state, if the note has it.
+    fn condition(&self, text: &str) -> String {
+        match self.condition_checks.get(text) {
+            Some(check) if check.starts_with('`') => format!("`{text}` ({check} checks the other state)"),
+            Some(check) => format!("`{text}` ({check})"),
+            None => format!("`{text}`"),
+        }
     }
 
     /// The line of the conditions for an agent command (batch 5x, part E). The short line has
@@ -2370,13 +2397,13 @@ impl ConfigNote {
         let first = self.not_covered.first()?;
         let count = self.not_covered.len();
         if verbose {
-            let all: Vec<String> = self.not_covered.iter().map(|text| format!("`{text}`")).collect();
+            let all: Vec<String> = self.not_covered.iter().map(|text| self.condition(text)).collect();
             return Some(format!("! `cfg` conditions that Semilla did not check: {}", all.join(", ")));
         }
         if count == 1 {
             return self.condition_line();
         }
-        Some(format!("! {count} `cfg` conditions that Semilla did not check: `{first}`, and {} more (`semilla status --verbose` shows each one)", count - 1))
+        Some(format!("! {count} `cfg` conditions that Semilla did not check: {}, and {} more (`semilla status --verbose` shows each one)", self.condition(first), count - 1))
     }
 
     /// [R77.3-8] The one line of the features that no checked configuration enables, if one
@@ -2385,7 +2412,15 @@ impl ConfigNote {
         if self.features_not_checked.is_empty() {
             return None;
         }
-        let shown: Vec<String> = self.features_not_checked.iter().take(Self::MOST_CONDITIONS).map(|text| format!("`{text}`")).collect();
+        let shown: Vec<String> = self
+            .features_not_checked
+            .iter()
+            .take(Self::MOST_CONDITIONS)
+            .map(|text| match self.feature_checks.get(text) {
+                Some(option) => format!("`{text}` (`{option}` checks it)"),
+                None => format!("`{text}`"),
+            })
+            .collect();
         let more = match self.features_not_checked.len().saturating_sub(Self::MOST_CONDITIONS) {
             0 => String::new(),
             count => format!(", and {count} more"),
@@ -2415,10 +2450,21 @@ impl ConfigNote {
         Some(format!("not in the list, because the features are the same (also for `release`): {}", list.join(", ")))
     }
 
+    /// [R85.3-2] The line of a check with the list of an option that is not the list of the
+    /// steps, if one exists.
+    pub fn option_line(&self) -> Option<String> {
+        if self.option_list.is_empty() {
+            return None;
+        }
+        let list: Vec<String> = self.option_list.iter().map(|name| format!("`{name}`")).collect();
+        Some(format!("! the configurations of the option ({}) replace the list of each step for this check; with no option, each step has its own list", list.join(", ")))
+    }
+
     /// The lines at the top of an output for the reviewer. The last line gives the scope of
     /// each compare result (design 35.5).
     pub fn lines(&self, all_steps: usize) -> Vec<String> {
         let mut lines = vec![self.checked_line()];
+        lines.extend(self.option_line());
         lines.extend(self.same_line(all_steps));
         lines.extend(self.gap_lines(all_steps));
         lines.extend(self.feature_line());
@@ -2430,6 +2476,7 @@ impl ConfigNote {
     /// The lines at the top of an output of an agent command (batch 5x, part E).
     pub fn agent_lines(&self, all_steps: usize, verbose: bool) -> Vec<String> {
         let mut lines = vec![self.checked_line()];
+        lines.extend(self.option_line());
         lines.extend(self.same_line(all_steps));
         lines.extend(self.gap_lines(all_steps));
         lines.extend(self.feature_line());

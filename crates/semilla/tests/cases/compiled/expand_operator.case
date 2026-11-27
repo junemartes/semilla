@@ -26,6 +26,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::f` (src/lib.rs:6): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
@@ -37,7 +38,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: `calc!(add a, b)` at `shop::f/tail` (src/lib.rs:6): expansion changed: changed operator `a + b` → `a * b` at `expansion` [semantics]
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::f (src/lib.rs:6): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; MIR changes; the expansion of `calc!(add a, b)` changes (semilla expand src/lib.rs:6 --step 0)
+    shop::f (src/lib.rs:6): same structure: 1 changed check; no edit in the body; MIR changes; the expansion of `calc!(add a, b)` changes (semilla expand src/lib.rs:6 --step 0)
   expansions: 1 changed, 1 equal
     `calc!(add a, b)` at `shop::f/tail` (src/lib.rs:6): expansion changed: `macro_rules! calc` (src/lib.rs:1): changed operator `a + b` → `a * b` at `expansion` [semantics]; from `macro_rules! calc` (src/lib.rs:1)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

@@ -39,6 +39,7 @@ pub fn dead() -> u32 { 2 }
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
@@ -52,7 +53,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f3 derived: src/unused.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
       control flow: + graph of `depot::unused::dead`: 2 points, 1 arrow (semilla expand --step 0)
       note: no compare: no checked configuration compiles `src/unused.rs`
-      ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/unused.rs`), so Semilla did not compare the edit; it needs a reason: --reason 'src/unused.rs=…'
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/unused.rs`; Semilla finds no option that checks it), so Semilla did not compare the edit; it needs a reason: --reason 'src/unused.rs=…'
   ◆ f1 derived: src/unused.rs: changed [file · no code]
       control flow: + graph of `depot::unused::dead`: 2 points, 1 arrow (semilla expand --step 0)
       ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/unused.rs:=…'

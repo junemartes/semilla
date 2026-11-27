@@ -30,17 +30,18 @@ table!(
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f2 derived: changed macro call `table!( A = 1, )` → `table!( A = 2, )` (made: `pub const A`; makes no item in the checked configurations) [declaration · no compare]
       expansion: `table!( A = 1, )` at `depot::table!#0` (src/lib.rs:-6): expansion removed: made `depot::A`
       note: no compare: no checked configuration compiles `depot::table!#0`
-      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:5), so Semilla did not compare the edit; it needs a reason: --reason 'depot::table!#0=…'
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:5; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::table!#0=…'
   other facts, filled in by Semilla:
   ◆ f1 derived: attributes of `depot::table!#0`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute · no compare]
       note: no compare: no checked configuration compiles `depot::table!#0`
-      ✗ spotlight: a changed `cfg` attribute (`cfg`); inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:5), so Semilla did not compare the edit; it needs a reason: --reason 'depot::table!#0=…'
+      ✗ spotlight: a changed `cfg` attribute (`cfg`); inactive code: no checked configuration compiles the changed code (`#[cfg(windows)]` at src/lib.rs:5; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::table!#0=…'
   cover: each of the 4 changed line(s) is in a fact
   expansions: 1 removed
     `table!( A = 1, )` at `depot::table!#0` (src/lib.rs:-6): expansion removed: `macro_rules! table` (src/lib.rs:1): made `depot::A`; the step removes the call or its input

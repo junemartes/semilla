@@ -58,6 +58,7 @@ exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! build code changed in step 0: depot/src/lib.rs. It runs in the sandbox during each check, and it can change each result from step 0 on. Each result `code equal` and each verified claim that depends on it has the mark (with the build code of step 0).
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   ! build code changed in this step; read this change first
   ◆ f1 derived: changed expression `Span::call_site().line() as u32` → `Span::call_site().line() as u32 + 1` at `depot::here/S0/init` [semantics · code different]
@@ -89,7 +90,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f5 derived: comment in `shop/src/lib.rs`: added `// The line of the call is in its value.` [docs · no code]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    depot::here (depot/src/lib.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    depot::here (depot/src/lib.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow; MIR changes
   expansions: 1 changed
     `depot::here!(1)` at `shop::one/tail` (shop/src/lib.rs:4): expansion changed: `proc macro depot::here` (depot/src/lib.rs:4): changed literal `2u32` → `5u32` at `expansion/elems[1]` [semantics]; from `proc macro depot::here` (depot/src/lib.rs:4)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

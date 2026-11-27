@@ -170,7 +170,7 @@ fn run79(before: &[(&str, &str)], after: &[(&str, &str)], intent: Option<&str>, 
         old.names.set(Some(std::sync::Arc::new(record_of(&old))));
         new.names.set(Some(std::sync::Arc::new(record_of(&new))));
     }
-    let mut step = Step { index: 0, intent: "test".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new() };
+    let mut step = Step { index: 0, intent: "test".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new(), configurations: None };
     if let Some(text) = intent {
         step.agent.intent = vec![IntentFile { path: "claims.rs".into(), text: text.into() }];
     }

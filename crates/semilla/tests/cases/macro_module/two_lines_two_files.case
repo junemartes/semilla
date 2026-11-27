@@ -42,6 +42,7 @@ pub fn open() -> u32 {
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
@@ -64,7 +65,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       note: no compare: no checked configuration compiles `depot::imp#1::open`
   ◆ f3 derived: src/other.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
       note: no compare: no checked configuration compiles `src/other.rs`
-      ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/other.rs`), so Semilla did not compare the edit; it needs a reason: --reason 'src/other.rs=…'
+      ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/other.rs`; Semilla finds no option that checks it), so Semilla did not compare the edit; it needs a reason: --reason 'src/other.rs=…'
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     depot::imp::open (src/unix.rs:1): same graph (the edit keeps the control flow); MIR changes

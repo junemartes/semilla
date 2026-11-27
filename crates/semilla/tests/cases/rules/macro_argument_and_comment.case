@@ -75,6 +75,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::show` (src/lib.rs:20): the full compare: `#[same(depot::show)] fn show_same() {}`; a difference: `#[change(depot::show)] fn show_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::show)] fn show_different() -> bool { … }`
@@ -103,7 +104,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed comment `// the text of the cart` → `// the full text of the cart` [docs · no code]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    depot::show (src/lib.rs:20): graph changes: +2 checks, +2 panics, +6 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    depot::show (src/lib.rs:20): graph changes: +2 checks, +2 panics, +6 arrows, −2 arrows; MIR changes
   expansions: 1 changed, 3 equal
     `format!("{} {}", c.total + 1, c.items.len() * 2)` at `depot::show/tail` (src/lib.rs:22): expansion changed: `macro format` (crate alloc): changed expression `c.total` → `c.total + 1` at `expansion/args[0]/body/tail/args[0]/args[1]` [semantics]; changed expression `c.items.len()` → `c.items.len() * 2` at `expansion/args[0]/body/tail/args[0]/args[2]` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

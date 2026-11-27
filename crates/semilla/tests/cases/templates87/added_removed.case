@@ -25,6 +25,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 4 mapped by Semilla, 3 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 6 MIR changes with no claim
     MIR changes with no claim: `<depot::Bag as depot::Weigh>::tare` (src/lib.rs:7): an added body: `#[new(<depot::Bag as depot::Weigh>::tare)] fn tare_new() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
@@ -92,9 +93,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   control flow: 6 bodies
     <depot::Bag as depot::Weigh>::tare (src/lib.rs:7): graph added: 2 points, 1 arrow
     <depot::Bag as depot::Weigh>::weigh (src/lib.rs:7): graph removed: 2 points, 1 arrow
-    depot::Bag::fresh_twice (src/lib.rs:5): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    depot::Bag::fresh_twice (src/lib.rs:5): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow; MIR changes
     depot::Shelf::<V>::fresh_empty (src/lib.rs:6): same structure: 1 changed call target; MIR changes
-    depot::fresh_sum (src/lib.rs:4): graph added: 4 points, 3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0)
+    depot::fresh_sum (src/lib.rs:4): graph added: 4 points, 3 arrows
     depot::gone (src/lib.rs:4): graph removed: 2 points, 1 arrow
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

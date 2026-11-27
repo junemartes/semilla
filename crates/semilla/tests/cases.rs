@@ -1224,6 +1224,15 @@ impl Work {
     fn semilla(&mut self, folder: &Path, args: &[String]) -> Result<Run, String> {
         let mut command = Command::new(env!("CARGO_BIN_EXE_semilla"));
         command.current_dir(folder.join("repo")).args(args);
+        // Design 85 (C6): `SEMILLA_CASES_CONFIGURATION=full` gives each command of a check the
+        // option `--configuration full`, so the run has the full list of design 8.12. A
+        // variable of the runner only: the product has no variable for the list.
+        if let Ok(list) = std::env::var("SEMILLA_CASES_CONFIGURATION")
+            && !list.is_empty()
+            && args.first().is_some_and(|name| ["step", "tag", "status", "review", "verify", "expand", "intent", "ui", "load"].contains(&name.as_str()))
+        {
+            command.arg("--configuration").arg(list);
+        }
         // One mode (design 83): each step builds the two trees, has their MIR, and runs the
         // build check. A removed variable of the mode in the environment of the test would be an
         // error, so the runner removes it.

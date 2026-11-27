@@ -162,6 +162,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 7 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 8 MIR changes with no claim
     MIR changes with no claim: `shop::bits` (src/lib.rs:46): the full compare: `#[same(shop::bits)] fn bits_same() {}`; a difference: `#[change(shop::bits)] fn bits_change(x: u32) -> bool { … }` or `#[different(shop::bits)] fn bits_different() -> bool { … }`
@@ -195,13 +196,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: `shop::wrap`: MIR changes
   cover: each of the 14 changed line(s) is in a fact
   control flow: 8 bodies
-    shop::bits (src/lib.rs:46): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
-    shop::copy_one (src/lib.rs:50): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::bits (src/lib.rs:46): same structure: 1 changed check; MIR changes
+    shop::copy_one (src/lib.rs:50): same structure: 1 changed check; MIR changes
     shop::first (src/lib.rs:55): same graph (the edit keeps the control flow); MIR changes
     shop::later (src/lib.rs:69): same graph; MIR changes (the same MIR text; a changed callee: `shop::later::{closure#0}`)
-    shop::later::{closure#0} { x + 2 } (src/lib.rs:69): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::later::{closure#0} { x + 2 } (src/lib.rs:69): same structure: 1 changed check; MIR changes
     shop::run_later (src/lib.rs:73): same graph (the edit keeps the control flow); MIR changes
-    shop::talk (src/lib.rs:42): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::talk (src/lib.rs:42): same structure: 1 changed check; MIR changes
     shop::wrap (src/lib.rs:59): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

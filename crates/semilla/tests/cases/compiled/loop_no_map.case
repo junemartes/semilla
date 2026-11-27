@@ -31,6 +31,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::steps` (src/lib.rs:1): the full compare: `#[same(shop::steps)] fn steps_same() {}`; a difference: `#[change(shop::steps)] fn steps_change(n: u32) -> bool { … }` or `#[different(shop::steps)] fn steps_different() -> bool { … }`
@@ -55,7 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body
-    shop::steps (src/lib.rs:1): same structure: 1 changed condition, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::steps (src/lib.rs:1): same structure: 1 changed condition, 1 changed check; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

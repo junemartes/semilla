@@ -29,6 +29,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f1 derived: type `u32` → `u64` in 4 places: parameter `x` of `shop::cost`, return type of `shop::cost`, parameter `x` of `shop::price`, return type of `shop::price` (the public API can change: a different crate can use the item) [declaration · code different]

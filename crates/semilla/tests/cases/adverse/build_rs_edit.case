@@ -51,6 +51,7 @@ exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! build code changed in step 0: build.rs. It runs in the sandbox during each check, and it can change each result from step 0 on. Each result `code equal` and each verified claim that depends on it has the mark (with the build code of step 0).
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   ! build code changed in this step; read this change first
   ◆ f1 derived: build.rs: changed [build code · no code]

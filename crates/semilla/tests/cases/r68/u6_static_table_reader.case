@@ -61,6 +61,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 4 MIR changes with no claim
     MIR changes with no claim: `shop::COUNT` (src/lib.rs:4): the full compare: `#[same(shop::COUNT)] fn count_same() {}`; a difference: `#[change(shop::COUNT)] fn count_change() -> bool { … }` or `#[different(shop::COUNT)] fn count_different() -> bool { … }`

@@ -1,3 +1,5 @@
+note: design 85: the rule of this case needs more than one configuration, so the case has the full list
+option: --configuration=full
 note: the same two targets; the step changes only the `hash` of the test: in each configuration (also in those with no bench), the records of the test go to the body of the test, with no point of `benches/probe.rs` (design 61.16)
 rule+: R61.16-1 R65.3-1
 must_match: equivalence: MIR changes

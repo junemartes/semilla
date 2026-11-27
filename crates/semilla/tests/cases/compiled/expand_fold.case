@@ -27,6 +27,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 5 MIR changes with no claim
     MIR changes with no claim: `shop::a` (src/lib.rs:3): the full compare: `#[same(shop::a)] fn a_same() {}`; a difference: `#[change(shop::a)] fn a_change(v: u32) -> bool { … }` or `#[different(shop::a)] fn a_different() -> bool { … }`
@@ -40,11 +41,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: 5 calls of `bump`: expansion changed: changed literal `1` → `5` at `expansion/rhs` [semantics]: `shop::a/tail`, `shop::b/tail`, `shop::c/tail`, and 2 more (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 5 bodies
-    shop::a (src/lib.rs:3): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; MIR changes; the expansion of `bump!(v)` changes (semilla expand src/lib.rs:3 --step 0)
-    shop::b (src/lib.rs:4): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; MIR changes; the expansion of `bump!(v)` changes (semilla expand src/lib.rs:4 --step 0)
-    shop::c (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; MIR changes; the expansion of `bump!(v)` changes (semilla expand src/lib.rs:5 --step 0)
-    shop::d (src/lib.rs:6): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; MIR changes; the expansion of `bump!(v)` changes (semilla expand src/lib.rs:6 --step 0)
-    shop::e (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; MIR changes; the expansion of `bump!(w * 2)` changes (semilla expand src/lib.rs:7 --step 0)
+    shop::a (src/lib.rs:3): same structure: 1 changed check; no edit in the body; MIR changes; the expansion of `bump!(v)` changes (semilla expand src/lib.rs:3 --step 0)
+    shop::b (src/lib.rs:4): same structure: 1 changed check; no edit in the body; MIR changes; the expansion of `bump!(v)` changes (semilla expand src/lib.rs:4 --step 0)
+    shop::c (src/lib.rs:5): same structure: 1 changed check; no edit in the body; MIR changes; the expansion of `bump!(v)` changes (semilla expand src/lib.rs:5 --step 0)
+    shop::d (src/lib.rs:6): same structure: 1 changed check; no edit in the body; MIR changes; the expansion of `bump!(v)` changes (semilla expand src/lib.rs:6 --step 0)
+    shop::e (src/lib.rs:7): same structure: 1 changed check; no edit in the body; MIR changes; the expansion of `bump!(w * 2)` changes (semilla expand src/lib.rs:7 --step 0)
   expansions: 5 changed
     5 calls: expansion changed: `macro_rules! bump` (src/lib.rs:1): changed literal `1` → `5` at `expansion/rhs` [semantics]; from `macro_rules! bump` (src/lib.rs:1): `shop::a/tail`, `shop::b/tail`, `shop::c/tail`, and 2 more (semilla expand --step 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

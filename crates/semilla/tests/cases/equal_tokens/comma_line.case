@@ -44,6 +44,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::rules` (src/lib.rs:5): the full compare: `#[same(depot::rules)] fn rules_same() {}`; a difference: `#[change(depot::rules)] fn rules_change() -> bool { … }` or `#[different(depot::rules)] fn rules_different() -> bool { … }`
@@ -60,7 +61,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: `vec![ Rule { name: 1, level: 2, }, Rule { name: 3, level: 5, }, ]` at `depot::rules/tail` (src/lib.rs:6): expansion changed: changed literal `4` → `5` at `expansion/args[0]/args[1]/elems[1]/fields[level]` [semantics]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    depot::rules (src/lib.rs:5): same structure: 1 changed panic call (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    depot::rules (src/lib.rs:5): same structure: 1 changed panic call; MIR changes
   expansions: 1 changed
     `vec![ Rule { name: 1, level: 2, }, Rule { name: 3, level: 5, }, ]` at `depot::rules/tail` (src/lib.rs:6): expansion changed: `macro vec` (crate alloc): changed literal `4` → `5` at `expansion/args[0]/args[1]/elems[1]/fields[level]` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

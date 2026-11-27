@@ -36,12 +36,13 @@ four"
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
   ◆ f2 derived: added `depot::Slab::name#1` (a twin of `depot::Slab::name` under `cfg(not(unix))`) with the body: `{ "one\n/// two\n//! three\nfour" }` [added · no compare]
       note: no compare: no checked configuration compiles `depot::Slab::name#1`
-      ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::Slab::name#1`; inactive code: no checked configuration compiles the changed code (`#[cfg(not(unix))]` at src/lib.rs:10), so Semilla did not compare the edit; it needs a reason: --reason 'depot::Slab::name#1=…'
+      ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::Slab::name#1`; inactive code: no checked configuration compiles the changed code (`#[cfg(not(unix))]` at src/lib.rs:10; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::Slab::name#1=…'
   other facts, filled in by Semilla:
   ◆ f1 derived: attributes of `depot::Slab::name`: added `#[cfg(unix)]` [attribute · code equal]
       ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::Slab::name=…'

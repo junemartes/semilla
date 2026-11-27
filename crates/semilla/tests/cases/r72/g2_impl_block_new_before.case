@@ -32,6 +32,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `shop::W::<u16>::get` (src/lib.rs:9): the full compare: `#[same(shop::W::get)] fn get_same() {}`; a difference: `#[change(shop::W::get)] fn get_change() -> bool { … }` or `#[different(shop::W::get)] fn get_different() -> bool { … }`
@@ -71,9 +72,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   cover: each of the 7 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::W::<u16>::get (src/lib.rs:9): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::W::<u16>::get (src/lib.rs:9): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow; MIR changes
     shop::W::<u32>::get (src/lib.rs:3): graph added: 2 points, 1 arrow
-    shop::W::<u8>::get (src/lib.rs:6): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::W::<u8>::get (src/lib.rs:6): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   note: twins: `shop::W::get#0` of the old tree and `shop::W::get#1` of the new tree are one pair (a pair by its identity); the facts name the pair `shop::W::get#1`
   note: twins: `shop::W::get#1` of the old tree and `shop::W::get#2` of the new tree are one pair (a pair by its identity); the facts name the pair `shop::W::get#2`

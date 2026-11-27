@@ -53,6 +53,7 @@ mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   ✗ fact a1 of the agent is false: `--same 'rewrite $a.total => $a.total()'`
 
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):

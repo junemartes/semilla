@@ -31,6 +31,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:2): the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
@@ -55,7 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed comment `// Log the price for the audit. // Log the tax.` → `// Log the price for the audit.` [docs · no code]
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:2): graph changes: −2 calls, +1 arrow, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::price (src/lib.rs:2): graph changes: −2 calls, +1 arrow, −3 arrows; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 

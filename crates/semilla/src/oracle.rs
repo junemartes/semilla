@@ -264,6 +264,8 @@ pub struct StepConfigs {
     /// Each configuration of the default list that is not in the list of the step, with the
     /// configuration that has the same feature state (batch 5y, C4.4). Only the `dev` names.
     pub same: Vec<(String, String)>,
+    /// [R85.4-3] True if the list of the step is not the full list (design 85).
+    pub partial: bool,
 }
 
 /// The configurations of each compared step, by the two trees of the step.
@@ -292,6 +294,45 @@ fn one_side_cause(before: &[String], after: &[String]) -> Option<String> {
     let names: Vec<String> = missing.iter().map(|name| format!("`{name}`")).collect();
     let noun = if names.len() == 1 { "feature" } else { "features" };
     Some(format!("only the code {side} the step has the {noun} {}. The code {other} the step has no such configuration: no compare", names.join(", ")))
+}
+
+/// [R85.4-4] The feature state of a selection by the folder of each package (the form of
+/// [`semilla_verify::Unit::package`]).
+fn by_folder(metadata: &serde_json::Value, features: &Features) -> BTreeMap<String, std::collections::BTreeSet<String>> {
+    let state = semilla_normal::cargo::feature_state(metadata, features);
+    package_folders(metadata).into_iter().filter_map(|(folder, name)| state.get(&name).map(|on| (folder, on.clone()))).collect()
+}
+
+/// [R85.4-4] The dependencies of each package folder, by the manifests: the name (the rename,
+/// if the manifest has one), and true for an optional dependency.
+fn dependencies_by_folder(metadata: &serde_json::Value) -> BTreeMap<String, BTreeMap<String, bool>> {
+    let folders: BTreeMap<String, String> = package_folders(metadata).into_iter().map(|(folder, name)| (name, folder)).collect();
+    let mut out = BTreeMap::new();
+    for package in metadata["packages"].as_array().into_iter().flatten() {
+        let Some(folder) = package["name"].as_str().and_then(|name| folders.get(name)) else { continue };
+        let list: &mut BTreeMap<String, bool> = out.entry(folder.clone()).or_default();
+        for dependency in package["dependencies"].as_array().into_iter().flatten() {
+            let Some(name) = dependency["rename"].as_str().or(dependency["name"].as_str()) else { continue };
+            let optional = dependency["optional"].as_bool() == Some(true);
+            // A name with an optional and a plain entry (two kinds) is used by each build.
+            let entry = list.entry(name.to_string()).or_insert(optional);
+            *entry = *entry && optional;
+        }
+    }
+    out
+}
+
+/// The package name of each package folder of a `cargo metadata` text: the folder of the
+/// manifest, relative to the workspace root (the form of [`semilla_verify::Unit::package`]).
+fn package_folders(metadata: &serde_json::Value) -> BTreeMap<String, String> {
+    let root = std::path::Path::new(metadata["workspace_root"].as_str().unwrap_or(""));
+    let mut out = BTreeMap::new();
+    for package in metadata["packages"].as_array().into_iter().flatten() {
+        let (Some(name), Some(manifest)) = (package["name"].as_str(), package["manifest_path"].as_str()) else { continue };
+        let folder = std::path::Path::new(manifest).parent().and_then(|folder| folder.strip_prefix(root).ok()).map(|folder| folder.to_string_lossy().to_string()).unwrap_or_default();
+        out.insert(folder, name.to_string());
+    }
+    out
 }
 
 /// The causes of a configuration with no check: the side that does not build (design 62).
@@ -395,6 +436,152 @@ impl NormalOracle {
         Ok(sets)
     }
 
+    /// [R85.2-3] The setting `configurations` of the manifests of the two trees of a step: the
+    /// union of the lists of the two trees, as for `feature-sets`. `None`: no tree has the
+    /// setting.
+    fn list_setting(&self, trees: &[&str]) -> Result<Option<Vec<String>>> {
+        let mut found: Option<Vec<String>> = None;
+        for tree in trees {
+            if crate::git::is_empty_tree(tree) {
+                continue;
+            }
+            let dir = self.repo.materialize(tree)?;
+            let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) else { continue };
+            if let Some(list) = crate::configs::setting(&text)? {
+                let all = found.get_or_insert_with(Vec::new);
+                all.extend(list.into_iter().filter(|entry| !all.contains(entry)).collect::<Vec<_>>());
+            }
+        }
+        Ok(found)
+    }
+
+    /// [R85.1-1] The list of the build configurations of a step: `None` for the full list of
+    /// design 8.12, else the configurations of the list of the step (design 85).
+    pub(crate) fn list_of(&self, step: &Step) -> Result<Option<Vec<Configuration>>> {
+        let setting = match &step.configurations {
+            Some(list) if list.is_empty() => self.list_setting(&[&step.tree_before, &step.tree_after])?,
+            _ => None,
+        };
+        crate::configs::resolve(step.configurations.as_deref(), setting)
+    }
+
+    /// [R85.2-2] Checks the list of a step against the manifests of its two trees: a feature of
+    /// the list that no tree has is an error. The error line gives the names of the full list.
+    pub(crate) fn check_list(&self, step: &Step) -> Result<()> {
+        let Some(list) = self.list_of(step)? else { return Ok(()) };
+        let metadata = [self.metadata(&step.tree_before), self.metadata(&step.tree_after)];
+        for config in &list {
+            let missing: Vec<Vec<String>> = metadata.iter().map(|data| data.as_ref().map(|data| semilla_normal::cargo::missing_features(data, &config.features)).unwrap_or_default()).collect();
+            // A tree that cargo cannot read has no list of features: the build gives the error.
+            let known = metadata.iter().all(Option::is_some);
+            let Some(bad) = missing[0].iter().find(|name| missing[1].contains(name)).filter(|_| known) else { continue };
+            let names: Vec<String> = self.configurations_with(&step.tree_before, &step.tree_after, &[]).map(|(list, _)| list.into_iter().map(|(config, _)| format!("`{}`", config.name())).collect()).unwrap_or_default();
+            let features = self.feature_names(&step.tree_after);
+            anyhow::bail!(
+                "the configuration `{}` has the feature `{bad}`, and no tree of the step has it (the features: {}). The configurations of the full list: {}",
+                config.name(),
+                if features.is_empty() { "none".to_string() } else { features.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ") },
+                names.join(", ")
+            );
+        }
+        Ok(())
+    }
+
+    /// [R85.4-1] The configurations that the list of a step does not check, in the order of the
+    /// search for an option: one feature with `dev`, `release`, one feature with `release`, no
+    /// default features, each set of `feature-sets`, all features. Each has the units that it
+    /// would have in each tree: the units of the first checked configuration, with the feature
+    /// atoms of the configuration (by the feature tables of the manifests) and with
+    /// `debug_assertions` on only for `dev`. The data comes from the manifests and the
+    /// compiler, not from a list of names. Empty with the full list.
+    fn predicted(&self, step: &Step) -> Result<Vec<semilla_verify::OtherConfig>> {
+        if self.list_of(step)?.is_none() {
+            return Ok(Vec::new());
+        }
+        let checked = self.checked(step)?;
+        let Some(base) = checked.first() else { return Ok(Vec::new()) };
+        let trees = [&step.tree_before, &step.tree_after];
+        let truths = trees.map(|tree| self.truth(tree, base));
+        let metadata = trees.map(|tree| self.metadata(tree));
+        // The most features that the search tries one at a time.
+        const MOST_FEATURES: usize = 64;
+        let features: Vec<String> = self.feature_names(&step.tree_after).into_iter().take(MOST_FEATURES).collect();
+        let mut candidates: Vec<Configuration> = Vec::new();
+        candidates.extend(features.iter().map(|name| Configuration::new(false, Features::Listed(vec![name.clone()]))));
+        candidates.push(Configuration::new(true, Features::Default));
+        candidates.extend(features.iter().map(|name| Configuration::new(true, Features::Listed(vec![name.clone()]))));
+        candidates.extend([false, true].map(|release| Configuration::new(release, Features::NoDefault)));
+        for set in self.feature_sets(&[&step.tree_before, &step.tree_after])?.into_iter().filter(|set| !set.is_empty()) {
+            candidates.extend([false, true].map(|release| Configuration::new(release, Features::Listed(set.clone()))));
+        }
+        candidates.extend([false, true].map(|release| Configuration::new(release, Features::All)));
+        let names: Vec<String> = checked.iter().map(|config| config.name()).collect();
+        candidates.retain(|config| !names.contains(&config.name()));
+        candidates.dedup();
+        let mut out = Vec::new();
+        for config in candidates {
+            let mut predicted: [semilla_verify::ConfigTruth; 2] = Default::default();
+            for side in 0..2 {
+                let Some(data) = &metadata[side] else { continue };
+                let state = semilla_normal::cargo::feature_state(data, &config.features);
+                let folders = package_folders(data);
+                let truth = &truths[side];
+                predicted[side] = semilla_verify::ConfigTruth {
+                    name: config.name(),
+                    known: truth.known,
+                    units: truth
+                        .units
+                        .iter()
+                        .map(|unit| {
+                            let mut cfg: std::collections::BTreeSet<String> = unit.cfg.iter().filter(|atom| !atom.starts_with("feature=") && *atom != "debug_assertions").cloned().collect();
+                            let on = folders.get(&unit.package).and_then(|name| state.get(name));
+                            cfg.extend(on.into_iter().flatten().filter(|name| !name.contains([':', '/', '?'])).map(|name| format!("feature=\"{name}\"")));
+                            if !config.release {
+                                cfg.insert("debug_assertions".to_string());
+                            }
+                            semilla_verify::Unit { cfg, ..unit.clone() }
+                        })
+                        .collect(),
+                };
+            }
+            // The root file of each target whose `required-features` the configuration has and
+            // no checked configuration has.
+            let mut roots: [std::collections::BTreeSet<String>; 2] = Default::default();
+            for side in 0..2 {
+                let Some(data) = &metadata[side] else { continue };
+                let state = semilla_normal::cargo::feature_state(data, &config.features);
+                let checked_states: Vec<_> = checked.iter().map(|known| semilla_normal::cargo::feature_state(data, &known.features)).collect();
+                let root = std::path::Path::new(data["workspace_root"].as_str().unwrap_or(""));
+                for package in data["packages"].as_array().into_iter().flatten() {
+                    let name = package["name"].as_str().unwrap_or("");
+                    let has = |state: &BTreeMap<String, std::collections::BTreeSet<String>>, target: &serde_json::Value| target["required-features"].as_array().is_some_and(|list| !list.is_empty() && list.iter().filter_map(|f| f.as_str()).all(|feature| state.get(name).is_some_and(|on| on.contains(feature))));
+                    for target in package["targets"].as_array().into_iter().flatten() {
+                        if has(&state, target) && !checked_states.iter().any(|known| has(known, target))
+                            && let Some(path) = target["src_path"].as_str().and_then(|path| std::path::Path::new(path).strip_prefix(root).ok().map(|path| path.to_string_lossy().to_string()))
+                        {
+                            roots[side].insert(path);
+                        }
+                    }
+                }
+            }
+            let states = [0, 1].map(|side| metadata[side].as_ref().map(|data| by_folder(data, &config.features)).unwrap_or_default());
+            out.push(semilla_verify::OtherConfig { name: config.name(), option: crate::configs::option_of(&config), truths: predicted, roots, states });
+        }
+        Ok(out)
+    }
+
+    /// The features of the packages of a tree, by the manifests: each entry of each feature
+    /// table but `default`, and each optional dependency.
+    fn feature_names(&self, tree: &str) -> Vec<String> {
+        let Some(data) = self.metadata(tree) else { return Vec::new() };
+        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for package in data["packages"].as_array().into_iter().flatten() {
+            names.extend(package["features"].as_object().into_iter().flatten().map(|(name, _)| name.clone()).filter(|name| name != "default"));
+            names.extend(package["dependencies"].as_array().into_iter().flatten().filter(|dependency| dependency["optional"].as_bool() == Some(true)).filter_map(|dependency| dependency["rename"].as_str().or(dependency["name"].as_str()).map(str::to_string)));
+        }
+        names.into_iter().collect()
+    }
+
     /// The `cargo metadata` data of a tree (the manifests), or `None` if cargo cannot read them.
     fn metadata(&self, tree: &str) -> Option<serde_json::Value> {
         if let Some(known) = METADATA.lock().ok().and_then(|cache| cache.get(tree).cloned()) {
@@ -444,6 +631,30 @@ impl NormalOracle {
             kept.push((selection, added));
         }
         Ok((kept.into_iter().flat_map(|(features, added)| [false, true].map(|release| (Configuration::new(release, features.clone()), added))).collect(), same))
+    }
+
+    /// [R85.1-1] The configurations of a list that is not the full list (design 85), in its
+    /// order. A configuration with the same profile and the same feature state as an earlier
+    /// one, in the two trees, is not in the list (as for the full list). The second result has
+    /// each such configuration with the earlier one. Semilla adds no configuration (R85.5-1).
+    #[allow(clippy::type_complexity)]
+    fn configurations_of(&self, before: &str, after: &str, list: &[Configuration]) -> (Vec<(Configuration, bool)>, Vec<(String, String)>) {
+        let metadata = [self.metadata(before), self.metadata(after)];
+        let mut seen: Vec<(Vec<_>, Configuration)> = Vec::new();
+        let mut kept = Vec::new();
+        let mut same = Vec::new();
+        for config in list {
+            let state: Vec<_> = metadata.iter().map(|data| data.as_ref().map(|data| semilla_normal::cargo::feature_state(data, &config.features))).collect();
+            if state.iter().all(Option::is_some)
+                && let Some((_, first)) = seen.iter().find(|(known, first)| *known == state && first.release == config.release)
+            {
+                same.push((config.name(), first.name()));
+                continue;
+            }
+            seen.push((state, config.clone()));
+            kept.push((config.clone(), false));
+        }
+        (kept, same)
     }
 
     /// The cache folder of the records of a tree at a level and a configuration.
@@ -1948,6 +2159,32 @@ impl BodyOracle for NormalOracle {
         Ok([&step.tree_before, &step.tree_after].map(|tree| checked.iter().map(|config| self.truth(tree, config)).collect()))
     }
 
+    fn full_list(&self, step: &Step) -> bool {
+        // A list with an error is not a list that checks less: the check gives the error.
+        !matches!(self.list_of(step), Ok(Some(_)))
+    }
+
+    fn other_configs(&self, step: &Step) -> Vec<semilla_verify::OtherConfig> {
+        self.predicted(step).unwrap_or_default()
+    }
+
+    fn feature_table(&self, step: &Step) -> Option<semilla_verify::FeatureTable> {
+        self.list_of(step).ok()??;
+        let checked = self.checked(step).ok()?;
+        let metadata = [self.metadata(&step.tree_before), self.metadata(&step.tree_after)];
+        let mut table = semilla_verify::FeatureTable::default();
+        for side in 0..2 {
+            let data = metadata[side].as_ref()?;
+            table.dependencies[side] = dependencies_by_folder(data);
+            for config in &checked {
+                for (folder, on) in by_folder(data, &config.features) {
+                    table.checked[side].entry(folder).or_default().extend(on);
+                }
+            }
+        }
+        Some(table)
+    }
+
     fn tests(&self, step: &Step) -> Result<Option<[std::collections::BTreeSet<String>; 2]>> {
         // A `#[test]` function has a constant with its name and the type `test::TestDescAndFn`
         // (batch 6a, B2). The N0 records of each checked configuration have it.
@@ -2046,6 +2283,10 @@ impl BodyOracle for NormalOracle {
     }
 
     fn set_selections(&self, step: &Step, selections: &[semilla_verify::Selection]) -> Result<bool> {
+        // [R85.5-1] With a list that is not the full list, Semilla adds no configuration.
+        if self.list_of(step)?.is_some() {
+            return Ok(false);
+        }
         let list: Vec<Features> = selections
             .iter()
             .map(|selection| {
@@ -2086,6 +2327,9 @@ impl NormalOracle {
     /// output.
     fn checked(&self, step: &Step) -> Result<Vec<Configuration>> {
         let key = (step.tree_before.clone(), step.tree_after.clone());
+        // [R85.1-1] The list of the step (design 85). With a list that is not the full list,
+        // Semilla adds no configuration and builds no configuration of the hint (R85.5-1).
+        let list = self.list_of(step)?;
         // The feature selections that the verifier added for a proof in this step (batch 5u,
         // part C). An added configuration is a configuration of the list as each other one.
         let (extra, hint) = {
@@ -2097,11 +2341,14 @@ impl NormalOracle {
                 }
                 return Ok(checked.clone());
             }
-            // The hint: only with the first builds of a step.
-            let hint = if state.hinted.insert(key.clone()) { std::fs::read_to_string(self.repo.cache_dir().join(HINT_FILE)).map(|text| parse_hint(&text)).unwrap_or_default() } else { Vec::new() };
+            // The hint: only with the first builds of a step, and only with the full list.
+            let hint = if list.is_none() && state.hinted.insert(key.clone()) { std::fs::read_to_string(self.repo.cache_dir().join(HINT_FILE)).map(|text| parse_hint(&text)).unwrap_or_default() } else { Vec::new() };
             (extra, hint)
         };
-        let (listed, same) = self.configurations_with(&step.tree_before, &step.tree_after, &extra)?;
+        let (listed, same) = match &list {
+            None => self.configurations_with(&step.tree_before, &step.tree_after, &extra)?,
+            Some(list) => self.configurations_of(&step.tree_before, &step.tree_after, list),
+        };
         // A feature that only one tree has (design 37.7): the configuration is a configuration
         // of that tree only. Semilla does not build it, and the output names the feature.
         let metadata = [self.metadata(&step.tree_before), self.metadata(&step.tree_after)];
@@ -2125,7 +2372,7 @@ impl NormalOracle {
         // good before the step, Semilla checks it. A step that breaks it is a compile error.
         let narrow: Vec<Configuration> = configs.iter().zip(&built).filter(|(_, error)| error.is_some()).map(|(config, _)| config.narrowed()).collect();
         let mut smaller = self.build_all(step, &narrow)?.into_iter();
-        let mut log = StepConfigs { same, ..StepConfigs::default() };
+        let mut log = StepConfigs { same, partial: list.is_some(), ..StepConfigs::default() };
         let mut checked = Vec::new();
         for ((config, added), error) in listed.into_iter().zip(built) {
             // The error of the smaller build is not in the output: the error of the build of
@@ -2155,6 +2402,18 @@ impl NormalOracle {
         }
         for (config, _) in &one_sided {
             log.not_checked.push((config.name(), one_side(config).unwrap_or_default()));
+        }
+        if checked.is_empty() && list.is_some() {
+            // [R85.8-1] No configuration of the list of the step builds: the error names each
+            // one with its cause, and gives the option that selects another one.
+            let causes: Vec<String> = log.not_checked.iter().map(|(name, cause)| format!("`{name}`: {cause}")).collect();
+            let names: Vec<String> = self.configurations_with(&step.tree_before, &step.tree_after, &[]).map(|(list, _)| list.into_iter().map(|(config, _)| format!("`{}`", config.name())).filter(|name| !log.not_checked.iter().any(|(gap, _)| format!("`{gap}`") == *name)).collect()).unwrap_or_default();
+            let side = if self.after_commit { "before the step and after it" } else { "before the step" };
+            anyhow::bail!(
+                "no configuration of the list of the step builds {side} ({}). To check another configuration, give `--configuration NAME`{} or `--configuration full`",
+                causes.join("; "),
+                if names.is_empty() { String::new() } else { format!(" (the other configurations: {})", names.join(", ")) }
+            );
         }
         if checked.is_empty() && self.after_commit {
             // Design 62: no configuration builds on the two sides of the step. Each cause is in

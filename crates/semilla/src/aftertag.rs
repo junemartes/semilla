@@ -203,7 +203,7 @@ impl App {
         // Rule R62.7-2: `--again` keeps the facts, the tags, and the reasons of the agent. The
         // check below shows each one that does not hold.
         let (agent, tags, reasons) = kept.map(|step| (step.agent, step.tags, step.reasons)).unwrap_or_default();
-        let step = Step { index: 0, intent: intent.clone(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons, syntax_only: false, build_check: None, agent, tags };
+        let step = Step { index: 0, intent: intent.clone(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons, syntax_only: false, build_check: None, agent, tags, configurations: Some(self.new_list.clone()) };
         let after_commit = AfterCommit { merge: parents.len() > 1, ..Default::default() };
         let mut set = ChangeSet { base_tree: before.clone(), head_tree: after.clone(), steps: vec![step], after_commit: Some(after_commit), ..Default::default() };
         // The check of `semilla step` for the same two trees (rule R62.3-1).

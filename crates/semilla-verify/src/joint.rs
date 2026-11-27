@@ -193,6 +193,9 @@ pub(crate) struct Joint<'a> {
     pub(crate) bodies: &'a Bodies,
     /// The rename map of the items: the path before the step to the path after it.
     pub(crate) renames: &'a BTreeMap<String, String>,
+    /// [R85.5-1] True if the list of the step is not the full list (design 85): Semilla adds
+    /// no configuration, and the text of a gap names the options that check the state.
+    pub(crate) options: bool,
 }
 
 /// The cause that keeps the rule on.
@@ -435,6 +438,11 @@ impl Joint<'_> {
                 let state: Vec<String> = valuation.iter().map(|(atom, value)| format!("{} {}", show(atom), if *value { "on" } else { "off" })).collect();
                 let selection = self.selection(name, valuation);
                 let fix = match &selection {
+                    // [R85.5-1] A list that is not the full list: the options of the state.
+                    Some(selection) if self.options => {
+                        let start = if selection.no_default { "--no-default-features " } else { "" };
+                        format!(". To check it: `{start}--features {}`", selection.features.join(","))
+                    }
                     // The added configuration is in the list, and the gap stays.
                     Some(selection) if added.contains(selection) => format!(". Semilla added the configuration `{}` for this state. The configuration does not build before the step, or it does not give this state", selection_name(selection)),
                     // An entry of `feature-sets` adds its features to the default features.
@@ -617,7 +625,7 @@ mod tests {
         let (_dir, ws) = load(features);
         let truths = [truths(list), truths(list)];
         let bodies = bodies(list.len());
-        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new(), options: false };
         joint.check(BODY, [true, true], &set(atoms), &mut Vec::new(), &mut |_, files| files.contains(LIB))
     }
 
@@ -679,7 +687,7 @@ mod tests {
             let units = seen.places.pop_first().unwrap().1;
             seen.places.insert(Some((LIB.to_string(), line)), units);
         }
-        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new(), options: false };
         joint.check(BODY, [true, true], &set(&["fa", "fc"]), &mut Vec::new(), &mut |_, files| files.contains(LIB))
     }
 
@@ -724,7 +732,7 @@ mod tests {
             seen.add(Some(&(LIB.to_string(), *line)), at, "demo.lib");
         }
         let bodies = [BTreeMap::from([(BODY.to_string(), seen.clone())]), BTreeMap::from([(BODY.to_string(), seen)])];
-        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new(), options: false };
         joint.check(BODY, [true, true], &set(atoms), &mut Vec::new(), &mut |_, files| files.contains(LIB))
     }
 
@@ -752,7 +760,7 @@ mod tests {
         let (_dir, ws) = load("fa = []\n");
         let bodies = bodies(2);
         let same = [truths(&[&[], &["fa"]]), truths(&[&[], &["fa"]])];
-        let joint = Joint { sides: [&ws, &ws], truths: &same, bodies: &bodies, renames: &BTreeMap::new() };
+        let joint = Joint { sides: [&ws, &ws], truths: &same, bodies: &bodies, renames: &BTreeMap::new(), options: false };
         assert_eq!(joint.check(BODY, [true, true], &set(&["fa"]), &mut Vec::new(), &mut |_, _| true), Ok(()));
         // The step changes the features of each configuration: no configuration has `fa` off in the two trees.
         let moved = [truths(&[&[], &["fa"]]), truths(&[&["fa"], &[]])];
@@ -769,7 +777,7 @@ mod tests {
         let (_dir, ws) = load(table);
         let sides = [truths(list), truths(list)];
         let seen = bodies(2);
-        let joint = Joint { sides: [&ws, &ws], truths: &sides, bodies: &seen, renames: &BTreeMap::new() };
+        let joint = Joint { sides: [&ws, &ws], truths: &sides, bodies: &seen, renames: &BTreeMap::new(), options: false };
         // The proof uses a condition that the unit of the body does not evaluate.
         assert_eq!(joint.check(BODY, [true, true], &set(&["fa"]), &mut Vec::new(), &mut |_, _| false), Err(Gap::Outside));
         // A body with no record of its units.
@@ -787,6 +795,8 @@ mod tests {
         assert_eq!(joint.check(BODY, [true, true], &set(&["fa"]), &mut Vec::new(), &mut |_, files| files.contains(LIB)), Err(Gap::Outside));
     }
 
+    // rule+ R85.5-1
+    // rule- R85.5-1
     #[test]
     fn a_proof_with_a_gap_gets_the_strict_result_and_the_gap_text() {
         let (_dir, ws) = load("fa = []\nfb = []\n");
@@ -802,12 +812,19 @@ mod tests {
                 Mode::Strict | Mode::Without(_) => stopped.clone(),
             })
         };
-        let settle = |list: &[&[&str]]| {
+        let settle_with = |list: &[&[&str]], options: bool| {
             let truths = [truths(list), truths(list)];
             let bodies = bodies(list.len());
-            let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+            let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new(), options };
             joint.settle(plain.clone(), &set(&["fa", "fb"]), false, &[], &run).unwrap().0
         };
+        let settle = |list: &[&[&str]]| settle_with(list, false);
+        // R85.5-1: a list that is not the full list (design 85) names the options of the state;
+        // Semilla adds no configuration.
+        let out = settle_with(&[&[], &["fa", "fb"]], true);
+        assert_eq!(out[0].config, ["not checked together: `feature = \"fa\"` on with `feature = \"fb\"` off. To check it: `--features fa`"]);
+        runs.borrow_mut().clear();
+        // R85.5-1, the negative case: the full list keeps the text of batch 5u.
         let out = settle(&[&[], &["fa", "fb"]]);
         assert_eq!(out[0].status, BodyStatus::Different { cfg_changed: false });
         assert_eq!(out[0].config, ["not checked together: `feature = \"fa\"` on with `feature = \"fb\"` off. Add `feature-sets = [[\"fa\"]]` to `[workspace.metadata.semilla]`"]);
@@ -818,7 +835,7 @@ mod tests {
         // No covered atom, or a strict result that is equal: no more runs.
         let truths = [truths(&[&[]]), truths(&[&[]])];
         let bodies = bodies(1);
-        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new(), options: false };
         runs.borrow_mut().clear();
         assert_eq!(joint.settle(plain.clone(), &BTreeSet::new(), false, &[], &run).unwrap().0, plain);
         assert!(runs.borrow().is_empty());
@@ -839,7 +856,7 @@ mod tests {
         let list: &[&[&str]] = &[&[], &["fa", "fb"], &["fa"], &["fb"]];
         let truths = [truths(list), truths(list)];
         let bodies = bodies(list.len());
-        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new(), options: false };
         let settle = |plain: Vec<BodyComparison>| {
             let runs = RefCell::new(0);
             let run = |_: &Mode| -> anyhow::Result<Vec<BodyComparison>> {
@@ -867,7 +884,7 @@ mod tests {
         let full = truths(&[&["fc"], &["fa", "fc"]]);
         let part = truths(&[&["fa", "fc"], &["fa", "fc"]]);
         let sides = [part.clone(), full.clone()];
-        let joint = Joint { sides: [&ws, &ws], truths: &sides, bodies: &after_only, renames: &BTreeMap::new() };
+        let joint = Joint { sides: [&ws, &ws], truths: &sides, bodies: &after_only, renames: &BTreeMap::new(), options: false };
         // The tree after the step has each state. The tree before the step has no part.
         assert_eq!(joint.check(BODY, [false, true], &set(&["fa"]), &mut Vec::new(), &mut |_, _| true), Ok(()));
         // The state is only in the tree with no body: the gap stays.
@@ -891,7 +908,7 @@ mod tests {
         let list: &[&[&str]] = &[&[], &["fa", "fb"]];
         let truths = [truths(list), truths(list)];
         let bodies = bodies(list.len());
-        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new(), options: false };
         for status in [BodyStatus::Different { cfg_changed: false }, BodyStatus::AfterOnly, BodyStatus::BeforeOnly] {
             let plain = vec![body(status.clone())];
             let strict = vec![body(BodyStatus::Different { cfg_changed: true })];
@@ -919,7 +936,7 @@ mod tests {
             let (_dir, ws) = load(features);
             let truths = [truths(list), truths(list)];
             let bodies = bodies(list.len());
-            let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+            let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new(), options: false };
             let valuation: Vec<(String, bool)> = valuation.iter().map(|(name, value)| (atom(name), *value)).collect();
             joint.selection(BODY, &valuation)
         };
@@ -962,7 +979,7 @@ mod tests {
         let list: &[&[&str]] = &[&[], &["fa", "fb"]];
         let truths = [truths(list), truths(list)];
         let bodies = bodies(list.len());
-        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new(), options: false };
         let pick = |name: &str| Selection { no_default: false, features: vec![name.to_string()] };
         let (out, wanted) = joint.settle(plain.clone(), &set(&["fa", "fb"]), false, &[], &run).unwrap();
         assert_eq!(wanted, [pick("fa"), pick("fb")]);

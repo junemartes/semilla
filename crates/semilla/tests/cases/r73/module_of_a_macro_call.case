@@ -30,6 +30,7 @@ pub fn at() -> u32 {
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
@@ -51,7 +52,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ✗ spotlight: the compiler reads `shop::float::first` from `src/float.rs`, a file that Semilla does not parse; it needs a reason: --reason 'shop::float::first=…'
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::float::at (src/float.rs:5): graph changes: +1 check, −1 check, +3 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; MIR changes
+    shop::float::at (src/float.rs:5): graph changes: +1 check, −1 check, +3 arrows, −3 arrows; no edit in the body; MIR changes
     shop::float::first (src/float.rs:1): graph added: 2 points, 1 arrow; no edit in the body
   expansions: 2 changed
     `here!()` at `float (no item)` (src/float.rs:6): expansion changed: `macro_rules! here` (src/lib.rs:1): only the context of the call changes: the line of the call; the context of the call changes

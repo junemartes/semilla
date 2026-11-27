@@ -51,7 +51,7 @@ fn claim(id: &str, op: &str, at: Option<&str>, args: serde_json::Value) -> Claim
 
 fn step(claims: Vec<Claim>) -> Step {
     // The tests of the compare results need a step with the compiled check (design 50).
-    Step { index: 0, intent: "test".into(), claims, tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new() }
+    Step { index: 0, intent: "test".into(), claims, tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new(), configurations: None }
 }
 
 fn run(before: &str, after: &str, claims: Vec<Claim>, bodies: &[(&str, BodyStatus)], effect: Option<Effect>) -> StepReport {

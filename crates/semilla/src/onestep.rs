@@ -55,6 +55,9 @@ pub struct StepRequest {
     pub tree: bool,
     /// Phase 1 only; phase 2 runs in the background (B1).
     pub fast: bool,
+    /// [R85.3-1] The list of the build configurations of the step (design 85): the entries of
+    /// the options. Empty: the default list.
+    pub configurations: Vec<String>,
 }
 
 /// One more place where a `--reason` text can split into a key and a reason (design 37.6).
@@ -153,6 +156,8 @@ impl StepRequest {
         if self.fast {
             parts.push("--fast".into());
         }
+        // [R85.3-1] The command to run again keeps the list of the options.
+        parts.extend(crate::configs::command_options(&self.configurations));
         parts.join(" ")
     }
 }
@@ -421,7 +426,7 @@ impl App {
         let index = session.changeset.steps.len();
         let claim_count = claims.len();
         let claim_anchors: Vec<String> = claims.iter().filter_map(|claim| claim.at.as_ref().map(|at| at.to_string())).collect();
-        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, build_check: None, agent, tags: request.tags.clone() });
+        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, build_check: None, agent, tags: request.tags.clone(), configurations: Some(request.configurations.clone()) });
         // The session to restore when the step is not stored: the counter of the stored claims.
         let mut saved = session.clone();
         saved.last_claim = highest;
@@ -589,6 +594,9 @@ impl App {
         outside.extend(result.report.build_code.as_ref().and_then(|note| note.step_line_with(index, semilla_normal::sandbox::missing().map(|missing| missing.state()).as_deref())).map(|line| format!("  {line}")));
         // A configuration of the default list with no check in this step (batch 5s, B1): one
         // line. A step with a check in each configuration has no line.
+        // [R85.4-3] A step with a list that is not the full list (design 85) has the line of
+        // the checked configurations too.
+        outside.extend(result.report.configs.iter().filter(|note| note.partial).map(|note| format!("  {}", note.checked_line())));
         outside.extend(result.report.configs.iter().flat_map(|note| note.gap_lines(1).into_iter().chain(note.feature_line())).map(|line| format!("  {line}")));
         // A configuration that Semilla added for a joint state of this step (batch 5u, part C): one line.
         outside.extend(result.report.configs.iter().flat_map(|note| note.added_line()).map(|line| format!("  {line}")));

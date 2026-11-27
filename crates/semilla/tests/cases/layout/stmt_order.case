@@ -51,6 +51,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:6): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: bool, b: &bool, v: &[u32]) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
@@ -65,7 +66,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::total (src/lib.rs:6): graph changes: +4 arrows, −4 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    depot::total (src/lib.rs:6): graph changes: +4 arrows, −4 arrows; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

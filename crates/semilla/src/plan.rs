@@ -527,7 +527,7 @@ impl App {
             let renames = semilla_verify::hints::likely_renames(&plain, &before_ws, &after_ws);
             let mut claims = semilla_verify::hints::suggest_claims_with_renames(&[], &[], &renames);
             claims.extend(semilla_verify::hints::local_rename_claims(&semilla_verify::hints::likely_local_renames(&plain, &before_ws, &after_ws)));
-            let rename_step = semilla_core::Step { index: 0, intent: String::new(), claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+            let rename_step = semilla_core::Step { index: 0, intent: String::new(), claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new(), configurations: None };
             let mut map = semilla_verify::checks::renames(&rename_step, &before_ws);
             semilla_verify::sites::resolve(&mut map, &before_ws, &after_ws);
             let edits = semilla_syntax::diff(&before_ws, &after_ws, &map);

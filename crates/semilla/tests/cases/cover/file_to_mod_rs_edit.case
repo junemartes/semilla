@@ -45,6 +45,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::larger` (src/list/mod.rs:11): the full compare: `#[same(depot::list::larger)] fn larger_same() {}`; a difference: `#[change(depot::list::larger)] fn larger_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::list::larger)] fn larger_different() -> bool { … }`

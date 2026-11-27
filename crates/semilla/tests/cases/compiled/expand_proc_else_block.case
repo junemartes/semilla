@@ -111,6 +111,7 @@ pub fn total(x: u32) -> u32 {
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
@@ -121,7 +122,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   cover: each of the 2 changed line(s) is in a fact
   expansions: 1 changed, 6 equal
     derive `depot::Level` at `shop::Cart` (shop/src/lib.rs:1): expansion changed: `derive depot::Level` (depot/src/lib.rs:6): change condition `3` → `4` at `shop::Cart::level/S0/cond/rhs` [semantics]; the input of the call changes
-    4 calls: expansion not known: `proc macro depot::deep` (depot/src/lib.rs:40): not known: the printer of the compiler cannot print a tree deeper than the limit of the driver; no changed definition, no changed input of the call, and no changed file that its code reads: `shop::total/tail/lhs`, `shop::total/tail/lhs`, `shop::total/tail/lhs`, and 1 more (semilla expand --step 0)
+    2 calls: expansion not known: `proc macro depot::deep` (depot/src/lib.rs:40): not known: the printer of the compiler cannot print a tree deeper than the limit of the driver; no changed definition, no changed input of the call, and no changed file that its code reads: `shop::total/tail/lhs`, `shop::total/tail/lhs` (semilla expand --step 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'shop::Cart=<why>'
 === positions

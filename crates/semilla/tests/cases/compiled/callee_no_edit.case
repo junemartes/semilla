@@ -30,6 +30,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::make` (src/lib.rs:7): the signature changes (`fn make () -> Food` → `fn make () -> Fuel`): `#[same(shop::make)] fn make() -> bool { let old = before::shop::make(); let new = after::shop::make(); true }`; a difference: `#[change(shop::make)] fn make_change() -> bool { … }` or `#[different(shop::make)] fn make_different() -> bool { … }`

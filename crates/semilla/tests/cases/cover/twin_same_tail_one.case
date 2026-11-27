@@ -106,6 +106,7 @@ pub fn alpha(v: &[u32]) -> u32 {
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 4 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 4 MIR changes with no claim
@@ -135,7 +136,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + arrow entry (src/lib.rs:13) → call `Small::new` (src/lib.rs:28)
       control flow: + graph of `<depot::Source as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); }`: 2 points, 1 arrow (semilla expand --step 0)
       equivalence: MIR changes
-      ✗ spotlight of f2, f3: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:18); no checked configuration compiles the changed code (`#[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]` at src/lib.rs:22), so Semilla did not compare the edit; it needs a reason: --reason 'depot::<Source as Draw>::sample/S0=…'
+      ✗ spotlight of f2, f3: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:18; not on this target); no checked configuration compiles the changed code (`#[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]` at src/lib.rs:22; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::<Source as Draw>::sample/S0=…'
   cover: each of the 27 changed line(s) is in a fact
   control flow: 4 bodies
     <depot::Other as depot::Draw<depot::Small>>::sample (src/lib.rs:34): graph added: 3 points, 2 arrows

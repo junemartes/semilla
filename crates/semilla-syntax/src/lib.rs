@@ -237,7 +237,6 @@ mod tests {
 
     const MANIFEST: &str = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
 
-    #[test]
     // rule+ R86.1-5
     #[test]
     fn the_item_index_gives_the_anchor_of_anchor_at() {

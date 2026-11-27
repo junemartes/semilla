@@ -41,6 +41,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   intent (2 claim(s); a claim is a proof only if it is proved):
   ? i1 `#[same(shop::big)] fn same_0()` (.semilla/intent/step.rs:3): claimed: a raw pointer
   ? i2 `#[same(shop::report)] fn same_1()` (.semilla/intent/step.rs:6): claimed: a raw pointer

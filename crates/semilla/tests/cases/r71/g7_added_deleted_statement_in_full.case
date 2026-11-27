@@ -83,6 +83,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 6 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::other` (src/lib.rs:5): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 3 node(s) of its item not mapped (complete the intent file)]
@@ -174,8 +175,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   cover: each of the 12 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::other (src/lib.rs:5): graph changes: +25 checks, +25 panics, +51 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
-    shop::table (src/lib.rs:1): graph changes: −25 checks, −25 panics, +1 arrow, −51 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::other (src/lib.rs:5): graph changes: +25 checks, +25 panics, +51 arrows, −1 arrow; MIR changes
+    shop::table (src/lib.rs:1): graph changes: −25 checks, −25 panics, +1 arrow, −51 arrows; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

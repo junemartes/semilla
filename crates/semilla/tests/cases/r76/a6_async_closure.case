@@ -22,6 +22,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 5 MIR changes with no claim
     MIR changes with no claim: `shop::apply` (src/lib.rs:1): the same MIR text; a changed callee: `shop::apply::{closure#0}`; the full compare: `#[same(shop::apply)] fn apply_same() {}`; a difference: `#[change(shop::apply)] fn apply_change(a: u32) -> bool { … }` or `#[different(shop::apply)] fn apply_different() -> bool { … }`
@@ -46,8 +47,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     shop::apply (src/lib.rs:1): same graph; MIR changes (the same MIR text; a changed callee: `shop::apply::{closure#0}`)
     shop::apply::{closure#0} (no place): no graph data: a record of the driver has no graph
     shop::apply::{closure#0}::{closure#0} (no place): no graph data: a record of the driver has no graph
-    shop::apply::{closure#0}::{closure#0}::{closure#0} x + 2 (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
-    shop::apply::{closure#0}::{closure#0}::{synthetic#0} x + 2 (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::apply::{closure#0}::{closure#0}::{closure#0} x + 2 (src/lib.rs:2): same structure: 1 changed check; MIR changes
+    shop::apply::{closure#0}::{closure#0}::{synthetic#0} x + 2 (src/lib.rs:2): same structure: 1 changed check; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

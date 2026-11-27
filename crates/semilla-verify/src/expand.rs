@@ -277,7 +277,7 @@ pub fn compare(old: &Expansion, new: &Expansion, crate_name: &str, exprs: &dyn E
     let load = |dir: &Path| Workspace::load(dir).map_err(|error| format!("{error:#}"));
     let before = load(&write("old", old).map_err(|error| error.to_string())?)?;
     let after = load(&write("new", new).map_err(|error| error.to_string())?)?;
-    let step = Step { index: 0, intent: "expansion".into(), claims: Vec::new(), tree_before: "old".into(), tree_after: "new".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new() };
+    let step = Step { index: 0, intent: "expansion".into(), claims: Vec::new(), tree_before: "old".into(), tree_after: "new".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new(), configurations: None };
     let outcome = crate::verify_step_with(&StepInput { step: &step, before: &before, after: &after }, &NoOracle, exprs, true);
     let module = if new.module.is_empty() { String::new() } else { format!("::{}", new.module) };
     let function = format!("{name}{module}::expansion");
@@ -1388,7 +1388,7 @@ mod tests {
             (dir, ws)
         };
         let ((_a, before), (_b, after)) = (write(old), write(new));
-        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new() };
+        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new(), configurations: None };
         let outcome = crate::verify_step_with(&StepInput { step: &step, before: &before, after: &after }, &NoOracle, &NoOracle, true);
         outcome.report.facts.iter().map(|fact| format!("{} [{}]", one_line(&fact.description).replace("`shop::f/", "`expansion/").replace("`shop::f`", "`expansion`"), fact.category.name())).collect()
     }
@@ -1599,7 +1599,7 @@ mod tests {
         let (old_lock, old_input, old_call, old_text) = old;
         let (new_lock, new_input, new_call, new_text) = new;
         let ((_a, before), (_b, after)) = (dependency_tree(&lock(old_lock), old_input), dependency_tree(&lock(new_lock), new_input));
-        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new() };
+        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new(), configurations: None };
         let oracle = Records([dependency_units(old_call, old_text), dependency_units(new_call, new_text)]);
         let outcome = crate::verify_step_with(&StepInput { step: &step, before: &before, after: &after }, &oracle, &NoOracle, true);
         let flow = outcome.report.flow.clone().unwrap_or_default();
@@ -1663,7 +1663,7 @@ mod tests {
     /// `ids` on each side (R73.1-1, R73.3-1). The lock file and the input do not change.
     fn identity_sites(def: &str, ids: [&[&str]; 2]) -> Vec<ExpansionSite> {
         let ((_a, before), (_b, after)) = (dependency_tree(&lock("1.0.0"), "1"), dependency_tree(&lock("1.0.0"), "1"));
-        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new() };
+        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: true, build_check: None, agent: Default::default(), tags: Vec::new(), configurations: None };
         let units = |text: &str, ids: &[&str]| {
             let mut units = dependency_units("depot::m!(1)", text);
             units[0].list[0].def = def.to_string();

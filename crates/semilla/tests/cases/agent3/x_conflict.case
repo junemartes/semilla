@@ -111,6 +111,7 @@ pub fn guard(v: &mut Vec<u8>) -> usize {
 exit: 1
 rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   ✗ fact a2 of the agent is false: `--same 'rename limit cap'`
 
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
@@ -147,7 +148,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   cover: each of the 5 changed line(s) is in a fact
   control flow: 2 bodies
     depot::cap (src/lib.rs:25): graph added: 2 points, 1 arrow
-    depot::uses_limit (src/lib.rs:27): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    depot::uses_limit (src/lib.rs:27): same structure: 1 changed call target, 1 changed check; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change' --same 'rename limit top'
