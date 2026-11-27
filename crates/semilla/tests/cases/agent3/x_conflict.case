@@ -126,6 +126,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       Semilla sees: f3 added `depot::cap` (the public API changes: a different crate can now use the item) [added]
       Semilla sees: f4 public API: `depot::limit` is now `depot::top` (a different crate can no longer use the old path) [rename]
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::cap` (src/lib.rs:25): an added body: the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `depot::uses_limit` (src/lib.rs:27): the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed path `limit` → `cap` (f2)
       in: depot::uses_limit
@@ -140,11 +143,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: changed path `limit` → `cap` at `depot::uses_limit/tail/lhs/callee` [semantics · code equal]
       control flow: ~ call `top` → `cap` (src/lib.rs:-26, src/lib.rs:27)
       control flow: ~ check `overflow: limit() + limit()` → `overflow: cap() + top()` (src/lib.rs:-26, src/lib.rs:27)
-      equivalence: equivalent (proved by SMT after inlining `depot::cap`, `depot::limit`, `depot::top`)
+      equivalence: MIR changes
   cover: each of the 5 changed line(s) is in a fact
   control flow: 2 bodies
     depot::cap (src/lib.rs:25): graph added: 2 points, 1 arrow
-    depot::uses_limit (src/lib.rs:27): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `depot::cap`, `depot::limit`, `depot::top`)
+    depot::uses_limit (src/lib.rs:27): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change' --same 'rename limit top'

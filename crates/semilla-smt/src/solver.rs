@@ -75,6 +75,14 @@ impl Solver {
         Solver::at(locate(std::env::var_os(SOLVER_ENV), tool_dirs, std::env::var_os("PATH"), Some(&own), repository)?)
     }
 
+    /// [R84.7-1] The path of the solver binary by the search of [`Solver::find_for`], with no run
+    /// of the binary: a step with no claim of an intent file starts no solver process (design
+    /// 84), and the key of a stored result names the solver by its path.
+    pub fn locate_for(tool_dirs: &[PathBuf], repository: Option<&Path>) -> Option<PathBuf> {
+        let own = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(TOOLS_PATH);
+        locate(std::env::var_os(SOLVER_ENV), tool_dirs, std::env::var_os("PATH"), Some(&own), repository).ok()
+    }
+
     /// Returns true if [`Solver::find`] finds a solver that runs.
     pub fn available() -> bool {
         Solver::find().is_ok()

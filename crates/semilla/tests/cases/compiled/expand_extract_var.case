@@ -19,6 +19,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
+    equal MIR: `shop::f` (src/lib.rs:3)
   declarations, filled in by Semilla:
   ◆ f1 derived: changed macro `cost`: `macro_rules! cost { ($n:expr) => {{ let total = $n * 3 + 1; total }} }` → [1] [declaration · code equal]
         [1] macro_rules! cost { ($n:expr) => {{ let base = $n * 3; let total = base + 1; total }} }

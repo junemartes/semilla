@@ -37,6 +37,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+    MIR changes with no claim: `shop::S::A` (src/lib.rs:6): the full compare: `#[same(shop::S::A)] fn a_same() {}`; a difference: `#[change(shop::S::A)] fn a_change() -> bool { … }` or `#[different(shop::S::A)] fn a_different() -> bool { … }`
+    MIR changes with no claim: `shop::S::B` (src/lib.rs:7): the full compare: `#[same(shop::S::B)] fn b_same() {}`; a difference: `#[change(shop::S::B)] fn b_change() -> bool { … }` or `#[different(shop::S::B)] fn b_different() -> bool { … }`
+    MIR changes with no claim: `shop::get` (src/lib.rs:10): the full compare: `#[same(shop::get)] fn get_same() {}`; a difference: `#[change(shop::get)] fn get_change() -> bool { … }` or `#[different(shop::get)] fn get_different() -> bool { … }`
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: value of, see f1 (f1)
       in: shop::S::A
@@ -45,49 +49,23 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: value of, see f2 (f2)
       in: shop::S::B
       lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: --change 'shop::S::B=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::S::B=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::S::B=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f1 derived: value of `shop::S::A` changed: N as u32 → (M + 1) as u32 (the public API can change: a different crate can use the item) [semantics · code different]
       affected bodies: shop::S::A, shop::get
       through: `shop::S::A` (1 body)
-      equivalence: equivalent (proved by SMT)
+      equivalence: MIR changes
       ! public API: the compare does not cover the code of a different crate
   ◆ f2 derived: value of `shop::S::B` changed: N as u32 → M as u32 (the public API can change: a different crate can use the item) [semantics · code different]
       affected bodies: shop::S::B, shop::get
       through: `shop::S::B` (1 body)
-      equivalence: different: for each input: before returns 7, after returns 6 (suggested test `semilla_test_b_a2ae87`)
+      equivalence: MIR changes
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 4 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::S::A (src/lib.rs:6): same graph (the edit keeps the control flow); equivalent (proved by SMT)
-    shop::S::B (src/lib.rs:7): same graph (the edit keeps the control flow); different (for each input: before returns 7, after returns 6; suggested test `semilla_test_b_a2ae87`)
-    shop::get (src/lib.rs:10): same graph; reads a changed constant: `shop::S::B` (7 → 6); different (for each input: before returns 14, after returns 13; suggested test `semilla_test_get_013e91`)
-  suggested tests: 2 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_b_a2ae87`: add it to `src/lib.rs`, in the module of `shop::S::B` (line 7); run it: `cargo test -p shop semilla_test_b_a2ae87`; also: `cargo test -p shop --release semilla_test_b_a2ae87`
-      #[cfg(test)]
-      mod semilla_test_b_a2ae87 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 7; the new version returns 6.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let got = &crate::S::B;
-              assert_eq!(*got, 7);
-          }
-      }
-    `semilla_test_get_013e91`: add it to `src/lib.rs`, in the module of `shop::get` (line 10); run it: `cargo test -p shop semilla_test_get_013e91`; also: `cargo test -p shop --release semilla_test_get_013e91`
-      #[cfg(test)]
-      mod semilla_test_get_013e91 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 14; the new version returns 13.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let got = crate::get();
-              assert_eq!(got, 14);
-          }
-      }
+    shop::S::A (src/lib.rs:6): same graph (the edit keeps the control flow); MIR changes
+    shop::S::B (src/lib.rs:7): same graph (the edit keeps the control flow); MIR changes
+    shop::get (src/lib.rs:10): same graph; reads a changed constant: `shop::S::B` (7 → 6); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

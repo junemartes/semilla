@@ -65,6 +65,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 2 equal MIR, 0 explained by claims, 0 MIR changes with no claim
+    equal MIR: `depot::mode_name` (src/lib.rs:15)
+    equal MIR: `depot::state::Mode::busy` (src/lib.rs:22)
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f3, f4)
       in: depot::mode_name
@@ -88,7 +91,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Busy)
       control flow: − arrow branch `m` (src/lib.rs:-16) → return (src/lib.rs:-16) (depot::Mode::Idle)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: equivalent (proved by equal MIR) (the same line for f4)
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: equivalent (proved by equal MIR) (the same line for f4)
   ◆ f4 derived: changed pattern `Mode::Busy` → `state::Mode::Busy` at `depot::mode_name/S0/arm[1].pat` [semantics · code equal]
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Idle)
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Busy)
@@ -100,8 +103,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   control flow: 2 bodies
     depot::mode_name (src/lib.rs:15): graph changes: +2 arrows, −2 arrows; equivalent (proved by equal MIR)
     depot::state::Mode::busy (src/lib.rs:22): graph changes: +2 arrows, −2 arrows; no edit in the body; equivalent (proved by equal MIR)
-    reached bodies: 1
-      depot::tests::t_limit::{closure#0} (src/lib.rs:18): reached through depot::tests::t_limit, not decided (a value of a type that the check does not model: fn t_limit() { assert_eq!(limit(), 10); } (src/lib.rs:-19))
   expansions: 1 changed, 2 equal
     `#[test]` at `depot::tests::t_limit` (src/lib.rs:18): expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

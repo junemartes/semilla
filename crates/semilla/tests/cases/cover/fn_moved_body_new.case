@@ -54,6 +54,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 5 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::probe` (src/lib.rs:4): the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 5 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 7 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 7 places: 7 different edits (f3, f4, f5, f6, f7, f1, f8)
       in: depot::probe
@@ -65,7 +67,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: ~ branch `dir == *name` → `d > 1` (src/lib.rs:-14, src/lib.rs:12)
       control flow: + arrow branch `d > 1` (src/lib.rs:12) → for `dirs()` (src/lib.rs:10) (false)
       control flow: + arrow branch `d > 1` (src/lib.rs:12) → call `Vec::<u32>::push` (src/lib.rs:13) (true)
-      equivalence: equivalent alone (proved by equal MIR); the body: not decided: a call that returns a reference (to a value): names.iter() (src/lib.rs:-13) (the same line for f8)
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
       docs of `depot::probe`, no edit in this step (src/lib.rs:3): `/// Finds the things.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f3 derived: added `if` `if result.file.is_none() { result.file = Some(0); }` at `depot::probe/S1` [semantics · code different]
@@ -73,33 +75,33 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + call `Option::<u32>::is_none` (src/lib.rs:6): return → branch `result.file.is_none()`
       control flow: + branch `result.file.is_none()` (src/lib.rs:6): false → call `dirs`, true → call `dirs`
       control flow: + arrow call `Vec::<u32>::new` (src/lib.rs:5) → call `Option::<u32>::is_none` (src/lib.rs:6) (return)
-      equivalence: not decided alone (the body has 5 edits; an edit of the fact adds or removes a node); the body: not decided: a call that returns a reference (to a value): names.iter() (src/lib.rs:-13)
+      equivalence: no result alone (the body has 5 edits; an edit of the fact adds or removes a node); the body: MIR changes
   ◆ f4 derived: added `let` `let d = dir + 1;` at `depot::probe/S2/body/S0` [semantics · code different]
       affected bodies: depot::probe (with 6 other edits of this body)
       control flow: + check `overflow: dir + 1` (src/lib.rs:11): ok → branch `d > 1`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:11)
       control flow: + arrow for `dirs()` (src/lib.rs:10) → check `overflow: dir + 1` (src/lib.rs:11) (next)
-      equivalence: not decided alone (the body has 5 edits; the edit adds or removes a node); the body: not decided: a call that returns a reference (to a value): names.iter() (src/lib.rs:-13) (the same line for f5 to f7)
+      equivalence: no result alone (the body has 5 edits; the edit adds or removes a node); the body: MIR changes
   ◆ f5 derived: deleted statement `let names = [1, 2, 3];` at `depot::probe/S1/body/S0` [semantics · code different]
       affected bodies: depot::probe (with 6 other edits of this body)
-      equivalence: the same line as f4
+      equivalence: no result alone (the body has 5 edits; the edit adds or removes a node); the body: MIR changes
       comment above the removed code at old line 12, removed in this step: see f2
   ◆ f6 derived: added `if` `if d > 1 { result.dirs.push(d); }` (each inner statement is a moved statement of the body) at `depot::probe/S2/body/S1` [semantics · code different]
       affected bodies: depot::probe (with 6 other edits of this body)
       control flow: ~ branch `dir == *name` → `d > 1` (src/lib.rs:-14, src/lib.rs:12)
       control flow: + arrow branch `d > 1` (src/lib.rs:12) → for `dirs()` (src/lib.rs:10) (false)
       control flow: + arrow branch `d > 1` (src/lib.rs:12) → call `Vec::<u32>::push` (src/lib.rs:13) (true)
-      equivalence: the same line as f4
+      equivalence: no result alone (the body has 5 edits; the edit adds or removes a node); the body: MIR changes
   ◆ f7 derived: deleted statement `for name in names.iter() { if dir == *name { result.file = Some(dir); } }` at `depot::probe/S1/body/S1` [semantics · code different]
       affected bodies: depot::probe (with 6 other edits of this body)
       control flow: − call `slice::<impl [u32]>::iter` (src/lib.rs:-13): return → for `names.iter()`
       control flow: − for `names.iter()` (src/lib.rs:-13): done → call `Vec::<u32>::push`, next → branch `dir == *name`
       control flow: ~ branch `dir == *name` → `d > 1` (src/lib.rs:-14, src/lib.rs:12)
       control flow: … 3 more (semilla expand --step 0)
-      equivalence: the same line as f4
+      equivalence: no result alone (the body has 5 edits; the edit adds or removes a node); the body: MIR changes
   ◆ f8 derived: changed path `dir` → `d` at `depot::probe/S2/body/S1/then/S0/args[0]` [semantics · code different]
       affected bodies: depot::probe (with 6 other edits of this body)
-      equivalence: the same line as f1
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   ◆ f9 derived: the compiled code of `depot::probe` changes with no edit at its place: `dirs()` [indirect · code different]
       affected bodies: depot::probe
       note: lines 10; the cause: the edits of this body at src/lib.rs:6, src/lib.rs:11, src/lib.rs:-12, src/lib.rs:12, src/lib.rs:-13, src/lib.rs:13 (the step changes no other input of the body)
@@ -107,7 +109,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f10 derived: layout of `src/lib.rs`: 5 changed lines with equal tokens; 4 changed lines of 2 items with equal tokens at a new place [layout · no code]
   cover: each of the 23 changed line(s) is in a fact
   control flow: 1 body
-    depot::probe (src/lib.rs:4): graph changes: +1 branch, +1 call, +1 check, +1 panic, −1 call, −1 for, 1 changed condition, +9 arrows, −7 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a call that returns a reference (to a value): names.iter() (src/lib.rs:-13))
+    depot::probe (src/lib.rs:4): graph changes: +1 branch, +1 call, +1 check, +1 panic, −1 call, −1 for, 1 changed condition, +9 arrows, −7 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 

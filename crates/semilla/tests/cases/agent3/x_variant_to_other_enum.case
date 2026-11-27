@@ -116,6 +116,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       Semilla sees: f1 variant `depot::Mode::Idle` removed: `Idle` (the public API can change: a different crate can use the item) [removed]
       Semilla sees: f4 changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics]
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 4 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::mode_name` (src/lib.rs:24): a type of the signature changes (the type `Mode` changes: `depot::Mode`: `enum Mode { }` → `enum Mode { }`): the claim template of the node n3 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `depot::start` (src/lib.rs:25): the signature changes (`fn start () -> Mode` → `fn start () -> Other`): `#[same(depot::start)] fn start() -> bool { let old = before::depot::start(); let new = after::depot::start(); true }`; a difference: `#[change(depot::start)] fn start_change() -> bool { … }` or `#[different(depot::start)] fn start_different() -> bool { … }`
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: removed match arm `Mode::Idle => "idle"` (f3)
       in: depot::mode_name
@@ -135,7 +138,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   declarations, filled in by Semilla:
   ◆ f2 derived: return type of `depot::start` `-> Mode` → `-> Other` (the public API can change: a different crate can use the item) [declaration · code different]
       affected bodies: depot::start (with 1 other edit of this body)
-      equivalence: equivalent alone (proved by equal MIR); the body: not decided: the return type changes
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
       ! public API: the compare does not cover the code of a different crate
   other facts, filled in by Semilla:
   ◆ f3 derived: removed match arm `Mode::Idle => "idle"` at `depot::mode_name/S0/arm[0].pat` [semantics · code different]
@@ -143,14 +146,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: − branch `m` (src/lib.rs:-23): depot::Mode::Idle → return, depot::Mode::Busy → return
       control flow: + arrow entry (src/lib.rs:24) → return (src/lib.rs:24)
       control flow: − arrow entry (src/lib.rs:-23) → branch `m` (src/lib.rs:-23)
-      equivalence: not decided: the parameters change
+      equivalence: MIR changes
   ◆ f4 derived: changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics · code different]
       affected bodies: depot::start (with 1 other edit of this body)
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: not decided: the return type changes
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   cover: each of the 7 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::mode_name (src/lib.rs:24): graph changes: −1 branch, +1 arrow, −3 arrows; not decided (the parameters change)
-    depot::start (src/lib.rs:25): same graph (the edit keeps the control flow); not decided (the return type changes)
+    depot::mode_name (src/lib.rs:24): graph changes: −1 branch, +1 arrow, −3 arrows; MIR changes
+    depot::start (src/lib.rs:25): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change'

@@ -42,6 +42,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::Grid::<T>::ROWS` (src/lib.rs:4): the full compare: `#[same(shop::Grid::ROWS)] fn rows_same() {}`; a difference: `#[change(shop::Grid::ROWS)] fn rows_change() -> bool { … }` or `#[different(shop::Grid::ROWS)] fn rows_different() -> bool { … }`
+    MIR changes with no claim: `shop::rows` (src/lib.rs:8): the same MIR text; a constant that it names changes or has no value to compare: `shop::Grid::<T>::ROWS`; the full compare: `#[same(shop::rows)] fn rows_same() {}`; a difference: `#[change(shop::rows)] fn rows_change(x: usize) -> bool { … }` or `#[different(shop::rows)] fn rows_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: value of, see f1 (f1)
       in: shop::Grid::ROWS
@@ -54,12 +57,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: − check `overflow: 2 * core::mem::size_of::<T>()` (src/lib.rs:-4): ok → return, fail → panic `overflow`
       control flow: + arrow call `size_of::<T>` (src/lib.rs:4) → check `overflow: 3 * core::mem::size_of::<T>()` (src/lib.rs:4) (return)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
+      equivalence: MIR changes
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::Grid::<T>::ROWS (src/lib.rs:4): graph changes: +1 check, −1 check, +3 arrows, −3 arrows; not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))
-    shop::rows (src/lib.rs:8): same graph; reads a changed constant: `shop::Grid::<T>::ROWS` (definition #7bc0ee4d6f74515f → definition #38eb96e1afda756d); not decided (a constant that the compiler does not evaluate here changes: `shop::Grid::<T>::ROWS::<T>` (changed: `shop::Grid::<T>::ROWS`))
+    shop::Grid::<T>::ROWS (src/lib.rs:4): graph changes: +1 check, −1 check, +3 arrows, −3 arrows; MIR changes
+    shop::rows (src/lib.rs:8): same graph; reads a changed constant: `shop::Grid::<T>::ROWS` (definition #7bc0ee4d6f74515f → definition #38eb96e1afda756d); MIR changes (the same MIR text; a constant that it names changes or has no value to compare: `shop::Grid::<T>::ROWS`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

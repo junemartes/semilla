@@ -1,7 +1,7 @@
-note: batch 10nq-fix2, E3: a body with no edit reads a generic constant whose digest passes the limit of the digest (R66.10-1): the line says that the check cannot compare the constant, with the cause, and the check stays not decided with a cause that does not say "changes"; a body that reads a constant with two known values that differ keeps "reads a changed constant"
+note: batch 10nq-fix2, E3: a body with no edit reads a generic constant whose digest passes the limit of the digest (R66.10-1): the line says that the check cannot compare the constant, with the cause, and the equal-MIR check (design 84) gives "MIR changes" with a cause that names the constant (no value to compare); a body that reads a constant with two known values that differ keeps "reads a changed constant"
 rule+: R66.11-4
 rule-: R66.11-4
-must_match: shop::far \(src/lib\.rs:\d+\): same graph; reads a constant that the check cannot compare: `shop::Big::<T>::FAR` \(the limit of the digest\); not decided \(a constant that the check cannot compare: `shop::Big::<T>::FAR::<T>` \(the limit of the digest\)\)
+must_match: shop::far \(src/lib\.rs:\d+\): same graph; reads a constant that the check cannot compare: `shop::Big::<T>::FAR` \(the limit of the digest\); MIR changes \(the same MIR text; a constant that it names changes or has no value to compare: `shop::Big::<T>::FAR`\)
 must_match: shop::price \(src/lib\.rs:\d+\): same graph; reads a changed constant: `shop::RATE` \(7 → 6\)
 must_not_match: changed constant: `shop::Big
 must_not_match: definition not known
@@ -173,6 +173,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::far` (src/lib.rs:69): the same MIR text; a constant that it names changes or has no value to compare: `shop::Big::<T>::FAR`; the full compare: `#[same(shop::far)] fn far_same() {}`; a difference: `#[change(shop::far)] fn far_change(x: usize) -> bool { … }` or `#[different(shop::far)] fn far_different() -> bool { … }`
+    MIR changes with no claim: `shop::price` (src/lib.rs:75): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(n: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: value of, see f1 (f1)
       in: shop::RATE
@@ -186,22 +189,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::far (src/lib.rs:69): same graph; reads a constant that the check cannot compare: `shop::Big::<T>::FAR` (the limit of the digest); not decided (a constant that the check cannot compare: `shop::Big::<T>::FAR::<T>` (the limit of the digest))
-    shop::price (src/lib.rs:75): same graph; reads a changed constant: `shop::RATE` (7 → 6); different (for n = 1: before returns 7, after returns 6; suggested test `semilla_test_price_40fa3e`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_price_40fa3e`: add it to `src/lib.rs`, in the module of `shop::price` (line 75); run it: `cargo test -p shop semilla_test_price_40fa3e`; also: `cargo test -p shop --release semilla_test_price_40fa3e`
-      #[cfg(test)]
-      mod semilla_test_price_40fa3e {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 7; the new version returns 6.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let n = 1;
-              let got = crate::price(n);
-              assert_eq!(got, 7);
-          }
-      }
+    shop::far (src/lib.rs:69): same graph; reads a constant that the check cannot compare: `shop::Big::<T>::FAR` (the limit of the digest); MIR changes (the same MIR text; a constant that it names changes or has no value to compare: `shop::Big::<T>::FAR`)
+    shop::price (src/lib.rs:75): same graph; reads a changed constant: `shop::RATE` (7 → 6); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

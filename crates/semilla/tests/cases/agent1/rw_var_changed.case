@@ -58,49 +58,35 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 same: rewrite `wrap($a)` => `wrap2($a)` (false: no changed place has the old form `wrap($a)` and the new form `wrap2($a)`)
       no edit of the step has the old form or the new form; the old tree has the form `wrap($a)` at 1 place(s)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::both` (src/lib.rs:8): the full compare: `#[same(depot::both)] fn both_same() {}`; a difference: `#[change(depot::both)] fn both_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart, d_before: &before::depot::Cart, d_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::both)] fn both_different() -> bool { … }`
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f1, f2)
       in: depot::both
       lines: src/lib.rs:8, src/lib.rs:-8
-      to state it: --change 'depot::both=TEXT'
-  to state them, add these options to the command of the step: --change 'depot::both=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::both=TEXT'; if it does not change, --same 'rewrite wrap => wrap2' --same 'rewrite 1 => 2'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code different]
       affected bodies: depot::both (with 1 other edit of this body)
       control flow: ~ check `overflow: c.total + 1` → `overflow: c.total + 2` (src/lib.rs:-8, src/lib.rs:8)
       control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-8, src/lib.rs:8)
       control flow: ~ check `overflow: wrap(c.total + 1) + d.total` → `overflow: wrap2(c.total + 2) + d.total` (src/lib.rs:-8, src/lib.rs:8) (the same line for f2)
-      equivalence: equivalent alone (proved by SMT after inlining `depot::wrap`, `depot::wrap2`); the body: different: for c = &Cart { 0, [] }, d = &Cart { 0, [] }: before returns 1, after returns 2 (suggested test `semilla_test_both_f469ae`)
+      equivalence: MIR changes alone; the body: MIR changes
   ◆ f2 derived: changed literal `1` → `2` at `depot::both/tail/lhs/args[0]/rhs` [semantics · code different]
       affected bodies: depot::both (with 1 other edit of this body)
       control flow: ~ check `overflow: c.total + 1` → `overflow: c.total + 2` (src/lib.rs:-8, src/lib.rs:8)
       control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-8, src/lib.rs:8)
       control flow: the same line as f1
-      equivalence: different alone: for c = &Cart { 0, [] }, d = &Cart { 0, [] }: before returns 1, after returns 2 (suggested test `semilla_test_both_f469ae`); the body: different: for c = &Cart { 0, [] }, d = &Cart { 0, [] }: before returns 1, after returns 2 (suggested test `semilla_test_both_f469ae`)
+      equivalence: MIR changes alone; the body: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::both (src/lib.rs:8): same structure: 1 changed call target, 2 changed checks (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for c = &Cart { 0, [] }, d = &Cart { 0, [] }: before returns 1, after returns 2; suggested test `semilla_test_both_f469ae`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_both_f469ae`: add it to `src/lib.rs`, in the module of `depot::both` (line 8); run it: `cargo test -p depot semilla_test_both_f469ae`; also: `cargo test -p depot --release semilla_test_both_f469ae`
-      #[cfg(test)]
-      mod semilla_test_both_f469ae {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 1; the new version returns 2.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let c = crate::Cart { total: 0, items: vec![] };
-              let d = crate::Cart { total: 0, items: vec![] };
-              let got = crate::both(&c, &d);
-              assert_eq!(got, 1);
-          }
-      }
+    depot::both (src/lib.rs:8): same structure: 1 changed call target, 2 changed checks (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --change 'depot::both=the text of the test'
-◆ f1 stated: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code different]
+the step is not accepted; the positions are from: semilla step 'the change'
+◆ f1 derived: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:-8
-◆ f2 stated: changed literal `1` → `2` at `depot::both/tail/lhs/args[0]/rhs` [semantics · code different]
+◆ f2 derived: changed literal `1` → `2` at `depot::both/tail/lhs/args[0]/rhs` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:-8

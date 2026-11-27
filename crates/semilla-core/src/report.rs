@@ -765,10 +765,15 @@ pub struct IntentClaim {
 pub enum CoverState {
     /// A proved claim depends on the body.
     Claim,
-    /// Semilla proves by itself that the behavior stays the same.
+    /// [R84.2-1] The equal-MIR check holds in each configuration (design 84): the behavior stays
+    /// the same with no solver.
     Equivalent,
-    /// No proved claim depends on the body, and Semilla does not prove it equivalent.
+    /// A claim names the item of the body, but no proved claim depends on the body, and the MIR
+    /// changes.
     NotExplained,
+    /// [R84.2-1] The MIR changes, and no claim names the item of the body: the detail has the
+    /// claim template that asks for the full compare or states the change.
+    NoClaim,
     /// [R77.1-4] A proved claim and the result of Semilla disagree: a defect of Semilla. Neither
     /// result explains the body.
     Disagree,
@@ -802,8 +807,9 @@ impl BodyCover {
         let detail = if self.detail.is_empty() { String::new() } else { format!(": {}", self.detail) };
         let line = match self.state {
             CoverState::Claim => format!("explained by claim {}: {name}", self.claims.join(", ")),
-            CoverState::Equivalent => format!("equivalent (Semilla): {name}{detail}"),
-            CoverState::NotExplained => format!("not explained: {name}{detail}"),
+            CoverState::Equivalent => format!("equal MIR: {name}{detail}"),
+            CoverState::NotExplained => format!("not explained by its claims: {name}{detail}"),
+            CoverState::NoClaim => format!("MIR changes with no claim: {name}{detail}"),
             CoverState::Disagree => format!("the result of Semilla and claim {} disagree: a defect of Semilla: {name}{detail}", self.claims.join(", ")),
         };
         // [R79.7-1] The fact of the map, next to the result of the proof.
@@ -811,13 +817,20 @@ impl BodyCover {
     }
 }
 
-/// [R77.1-2] The coverage line of a step: "changed bodies: N explained by claims, M equivalent
-/// (Semilla), K not explained" (and the count of the disagreements).
+/// [R84.6-1] The coverage line of a step (design 84, R77.1-2 before): "changed bodies: N equal
+/// MIR, M explained by claims, K MIR changes with no claim", the count of the bodies whose
+/// claims do not explain them, and the count of the disagreements (each one only if it is not 0).
 pub fn coverage_line(bodies: &[BodyCover]) -> String {
     let count = |state: CoverState| bodies.iter().filter(|body| body.state == state).count();
-    let disagree = count(CoverState::Disagree);
-    let tail = if disagree == 0 { String::new() } else { format!(", {disagree} with a disagreement of Semilla and a claim (a defect of Semilla)") };
-    format!("changed bodies: {} explained by claims, {} equivalent (Semilla), {} not explained{tail}", count(CoverState::Claim), count(CoverState::Equivalent), count(CoverState::NotExplained) + disagree)
+    let (open, disagree) = (count(CoverState::NotExplained), count(CoverState::Disagree));
+    let mut tail = String::new();
+    if open > 0 {
+        tail.push_str(&format!(", {open} MIR changes that the claims on the item do not explain"));
+    }
+    if disagree > 0 {
+        tail.push_str(&format!(", {disagree} with a disagreement of Semilla and a claim (a defect of Semilla)"));
+    }
+    format!("changed bodies: {} equal MIR, {} explained by claims, {} MIR changes with no claim{tail}", count(CoverState::Equivalent), count(CoverState::Claim), count(CoverState::NoClaim))
 }
 
 /// [R79.1-1] The state of one changed node in the map of the AST pass (design 79).

@@ -25,6 +25,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::make` (src/lib.rs:1): the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 3 places: 3 different edits (f1, f2, f3)
       in: shop::make
@@ -37,21 +39,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: − call `must_use::<String>` (src/lib.rs:-2): return → call `Vec::<u32>::new`
       control flow: ~ call `format` → `String::new` (src/lib.rs:-2, src/lib.rs:2)
       control flow: … 3 more (semilla expand --step 0)
-      equivalence: not decided alone: an array; the body: not decided: an array
+      equivalence: MIR changes alone; the body: MIR changes
   ◆ f2 derived: deleted statement `Vec::new()` at `shop::make/tail` [semantics · code different]
       affected bodies: shop::make (with 2 other edits of this body)
       control flow: ~ call `Vec::<u32>::new` → `Box::<[u32; 3]>::new_uninit` (src/lib.rs:-4, src/lib.rs:4)
-      equivalence: not decided alone (the body has 2 edits; the edit adds or removes a node); the body: not decided: an array (the same line for f3)
+      equivalence: no result alone (the body has 2 edits; the edit adds or removes a node); the body: MIR changes
   ◆ f3 derived: added macro statement `vec![n, n + 1, n + 2]` at `shop::make/tail` [semantics · code different]
       affected bodies: shop::make (with 2 other edits of this body)
       control flow: + check `overflow: n + 1` (src/lib.rs:4): ok → check `overflow: n + 2`, fail → panic `overflow`
       control flow: + check `overflow: n + 2` (src/lib.rs:4): ok → check `alignment: [$($x),+]`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:4)
       control flow: … 6 more (semilla expand --step 0)
-      equivalence: the same line as f2
+      equivalence: no result alone (the body has 2 edits; the edit adds or removes a node); the body: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    shop::make (src/lib.rs:1): graph changes: +1 call, +4 checks, +3 panics, −1 call, −1 construct, 2 changed call targets, +12 arrows, −5 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (an array)
+    shop::make (src/lib.rs:1): graph changes: +1 call, +4 checks, +3 panics, −1 call, −1 construct, 2 changed call targets, +12 arrows, −5 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   expansions: 1 added, 1 removed
     `vec![n, n + 1, n + 2]` at `shop::make/tail` (src/lib.rs:4): expansion added: `macro vec` (crate alloc): 2 line(s) of code; the step adds the call or its input
     `format!("n = {}", n)` at `shop::make/S0/init` (src/lib.rs:-2): expansion removed: `macro format` (crate alloc): 3 line(s) of code; the step removes the call or its input

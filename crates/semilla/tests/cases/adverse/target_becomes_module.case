@@ -47,6 +47,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::extra::value` (src/extra.rs:1): the full compare: `#[same(depot::extra::value)] fn value_same() {}`; a difference: `#[change(depot::extra::value)] fn value_change() -> bool { … }` or `#[different(depot::extra::value)] fn value_different() -> bool { … }`
+    MIR changes with no claim: `extra::{test-harness-main}` (no place): no result of the equivalence check; no template: `extra` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f2)
       in: depot::extra::value

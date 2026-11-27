@@ -1,5 +1,8 @@
 note: a suggested test asserts the value behind a `&mut` argument and the fields of a struct with a pattern (design 75)
+note: design 84: only a claim starts the solver, so each body of the case has an empty `#[same]` claim (the full compare of today); a false claim rejects the step
 rule+: R75.1-1
+option: --intent
+option: .semilla/intent/step.rs
 === both Cargo.toml
 [package]
 name = "depot"
@@ -25,26 +28,40 @@ pub struct Pt {
 pub fn bump(p: &mut Pt) {
     p.x += 2;
 }
+=== both .gitignore
+/.semilla/
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[same(depot::bump)]
+fn same_0() {}
 === expected
-exit: 0
-accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (the build of the compiled check)
+exit: 1
+rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  ✗ the intent claim i1 `#[same(depot::bump)] fn same_0()` (.semilla/intent/step.rs:3): false: for p = &Pt { 0, 0 }: before returns () with `*p` = Pt { 1, 0 }, after returns () with `*p` = Pt { 2, 0 } (suggested test `semilla_test_bump_f54cf7`)
+
+  intent (1 claim(s); a claim is a proof only if it is proved):
+  ✗ i1 `#[same(depot::bump)] fn same_0()` (.semilla/intent/step.rs:3): false: for p = &Pt { 0, 0 }: before returns () with `*p` = Pt { 1, 0 }, after returns () with `*p` = Pt { 2, 0 } (suggested test `semilla_test_bump_f54cf7`)
+      the input is an exact input of the two versions: correct the claim or the code
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    ✗ false: i1 `#[same(depot::bump)] fn same_0()`: for p = &Pt { 0, 0 }: before returns () with `*p` = Pt { 1, 0 }, after returns () with `*p` = Pt { 2, 0 } (suggested test `semilla_test_bump_f54cf7`)
+    AST changes: 1 mapped by claims, 0 mapped by Semilla, 0 not mapped
+    changed bodies: 0 equal MIR, 0 explained by claims, 0 MIR changes with no claim, 1 MIR changes that the claims on the item do not explain
+      not explained by its claims: `depot::bump` (src/lib.rs:7): MIR changes
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f1)
       in: depot::bump
       lines: src/lib.rs:8, src/lib.rs:-8
-      to state it: --change 'depot::bump=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::bump=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::bump=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `1` → `2` at `depot::bump/S0/rhs` [semantics · code different]
       affected bodies: depot::bump
       control flow: ~ check `overflow: p.x += 1` → `overflow: p.x += 2` (src/lib.rs:-8, src/lib.rs:8)
-      equivalence: different: for p = &Pt { 0, 0 }: before returns () with `*p` = Pt { 1, 0 }, after returns () with `*p` = Pt { 2, 0 } (suggested test `semilla_test_bump_f54cf7`)
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::bump (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for p = &Pt { 0, 0 }: before returns () with `*p` = Pt { 1, 0 }, after returns () with `*p` = Pt { 2, 0 }; suggested test `semilla_test_bump_f54cf7`)
+    depot::bump (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
     `semilla_test_bump_f54cf7`: add it to `src/lib.rs`, in the module of `depot::bump` (line 7); run it: `cargo test -p depot semilla_test_bump_f54cf7`; also: `cargo test -p depot --release semilla_test_bump_f54cf7`
       #[cfg(test)]
@@ -60,7 +77,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
           }
       }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-
+no command can succeed without a code change: fix the cause, then run the step again
 === positions
-◆ f1 derived: changed literal `1` → `2` at `depot::bump/S0/rhs` [semantics · code different]
-    lines: src/lib.rs:8, src/lib.rs:-8
+none: the runner has no accepted step for this case

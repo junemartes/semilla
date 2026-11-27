@@ -54,35 +54,19 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `a::common::setup` (tests/common/mod.rs:1): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
+    MIR changes with no claim: `b::common::setup` (tests/common/mod.rs:1): the template of `a::common::setup` covers its item `depot (test "a")::common::setup`
   tests and benches, filled in by Semilla:
   ◆ f1 derived: 2 site(s): changed literal `1` → `2` [semantics · code different]
       in: depot (test "a")::common::setup, depot (test "b")::common::setup
       affected bodies: depot (test "a")::common::setup
-      equivalence: `a::common::setup`: different: for each input: before returns 3, after returns 4 (suggested test `semilla_test_setup_058b8d`)
-      equivalence: `b::common::setup`: different: for each input: before returns 3, after returns 4 (suggested test `semilla_test_setup_058b8d`)
-      reaches: 2 bodies, no public function: a::a, a::a::{closure#0} (semilla expand --step 0); `b::common::setup`: 2 bodies, no public function: b::b, b::b::{closure#0} (semilla expand --step 0)
+      equivalence: `a::common::setup`: MIR changes
+      equivalence: `b::common::setup`: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
-    a::common::setup (tests/common/mod.rs:1): same graph (the edit keeps the control flow); different (for each input: before returns 3, after returns 4; suggested test `semilla_test_setup_058b8d`)
-    b::common::setup (tests/common/mod.rs:1): same graph (the edit keeps the control flow); different (for each input: before returns 3, after returns 4; suggested test `semilla_test_setup_058b8d`)
-    reached bodies: 4
-      a::a (tests/a.rs:3): reached through a::a::{closure#0}, a::common::setup, not decided (a value of a type that the check does not model: fn a() { assert_eq!(common::setup(), 3); } (tests/a.rs:-4))
-      a::a::{closure#0} (tests/a.rs:3): reached through a::a, not decided (a value of a type that the check does not model: fn a() { assert_eq!(common::setup(), 3); } (tests/a.rs:-4))
-      b::b (tests/b.rs:3): reached through b::b::{closure#0}, b::common::setup, not decided (a value of a type that the check does not model: fn b() { assert_eq!(common::setup(), 3); } (tests/b.rs:-4))
-      b::b::{closure#0} (tests/b.rs:3): reached through b::b, not decided (a value of a type that the check does not model: fn b() { assert_eq!(common::setup(), 3); } (tests/b.rs:-4))
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_setup_058b8d`: add it to `tests/common/mod.rs`, in the module of `a::common::setup` (line 1); run it: `cargo test -p depot semilla_test_setup_058b8d`; also: `cargo test -p depot --release semilla_test_setup_058b8d`
-      #[cfg(test)]
-      mod semilla_test_setup_058b8d {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 3; the new version returns 4.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let got = crate::common::setup();
-              assert_eq!(got, 3);
-          }
-      }
+    a::common::setup (tests/common/mod.rs:1): same graph (the edit keeps the control flow); MIR changes
+    b::common::setup (tests/common/mod.rs:1): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: inactive code: depot (test "b")::common::setup/tail/rhs (no checked configuration compiles `depot (test "b")::common::setup`)
 

@@ -50,22 +50,21 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::tests::two` (src/lib.rs:14): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
+    MIR changes with no claim: `shop::tests::two::{closure#0} #[test]` (src/lib.rs:13): the same MIR text; a changed callee: `shop::tests::two`, `shop::tests::two::{closure#0}`; the template of `shop::tests::two` covers its item `shop::tests::two`
   tests and benches, filled in by Semilla:
   ◆ f1 derived: extracted variable `x` = `2` (1 use) at `shop::tests::two/S0` [move · code different]
       ! the compiled code changes: shop::tests::two
-      equivalence: `shop::tests::two`: not decided: a value of a type that the check does not model: fn two() { assert_eq!(super::add(2), 3); } (src/lib.rs:-13)
-      equivalence: `shop::tests::two::{closure#0} #[test]`: not decided: a value of a type that the check does not model: fn two() { assert_eq!(super::add(2), 3); } (src/lib.rs:-13)
+      equivalence: `shop::tests::two`: MIR changes
+      equivalence: `shop::tests::two::{closure#0} #[test]`: MIR changes: the same MIR text; a changed callee: `shop::tests::two`, `shop::tests::two::{closure#0}`
       expansion: `assert_eq!(super::add(x), 3)` at `shop::tests::two/S1` (src/lib.rs:16): expansion changed: changed expression `2` → `x` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/args[0]` [semantics]
-      reaches: 1 body, no public function: shop::tests::two::{closure#0} (semilla expand --step 0)
   other facts, filled in by Semilla:
   ◆ f2 derived: added comment `// a comment` [docs · no code]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::tests::two (src/lib.rs:14): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn two() { assert_eq!(super::add(2), 3); } (src/lib.rs:-13))
-    shop::tests::two::{closure#0} #[test] (src/lib.rs:13): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn two() { assert_eq!(super::add(2), 3); } (src/lib.rs:-13))
-    reached bodies: 2
-      shop::tests::one::{closure#0} (src/lib.rs:8): reached through shop::tests::one, not decided (a value of a type that the check does not model: fn one() { assert_eq!(super::add(1), 2); } (src/lib.rs:-8))
-      shop::tests::two::{closure#0} (src/lib.rs:13): reached through shop::tests::two, not decided (a value of a type that the check does not model: fn two() { assert_eq!(super::add(2), 3); } (src/lib.rs:-13))
+    shop::tests::two (src/lib.rs:14): same graph (the edit keeps the control flow); MIR changes
+    shop::tests::two::{closure#0} #[test] (src/lib.rs:13): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `shop::tests::two`, `shop::tests::two::{closure#0}`)
   expansions: 3 changed, 1 equal
     2 calls: expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes: `shop::tests::one`, `shop::tests::two` (semilla expand --step 0)
     `assert_eq!(super::add(x), 3)` at `shop::tests::two/S1` (src/lib.rs:16): expansion changed: `macro assert_eq` (crate core): changed expression `2` → `x` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/args[0]` [semantics]; the input of the call changes

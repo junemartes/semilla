@@ -33,6 +33,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 3 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::total` (src/lib.rs:5): the same MIR text; a changed callee: `shop::total::{closure#0}`; the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 3 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::total::{closure#0} { let v = get(a).await; let w = get(v).…` (src/lib.rs:5): the template of `shop::total` covers its item `shop::total` [the AST map: 3 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 3 places: 3 different edits (f1, f2, f3)
       in: shop::total
@@ -41,28 +44,23 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: deleted statement `v` at `shop::total/tail` [semantics · code different]
       affected bodies: shop::total (with 2 other edits of this body)
-      equivalence: `shop::total`: not decided: a coroutine value: { let v = get(a).await; v } (src/lib.rs:-5)
-      equivalence: `shop::total::{closure#0} { let v = get(a).await; let w = get(v).…`: not decided: a coroutine body
-      reaches: 1 public function: shop::total (semilla expand --step 0)
+      equivalence: `shop::total`: MIR changes: the same MIR text; a changed callee: `shop::total::{closure#0}`
+      equivalence: `shop::total::{closure#0} { let v = get(a).await; let w = get(v).…`: MIR changes
   ◆ f2 derived: added `let` `let w = get(v).await;` at `shop::total/S1` [semantics · code different]
       affected bodies: shop::total (with 2 other edits of this body)
       control flow: + call `get` (src/lib.rs:7): return → await `get(v).await`
       control flow: + await `get(v).await` (src/lib.rs:7): done → return
       control flow: + arrow await `get(a).await` (src/lib.rs:6) → call `get` (src/lib.rs:7) (done)
-      equivalence: `shop::total`: not decided: a coroutine value: { let v = get(a).await; v } (src/lib.rs:-5)
-      equivalence: `shop::total::{closure#0} { let v = get(a).await; let w = get(v).…`: not decided: a coroutine body
-      reaches: 1 public function: shop::total (semilla expand --step 0)
+      equivalence: `shop::total`: MIR changes: the same MIR text; a changed callee: `shop::total::{closure#0}`
+      equivalence: `shop::total::{closure#0} { let v = get(a).await; let w = get(v).…`: MIR changes
   ◆ f3 derived: added statement `w` at `shop::total/tail` [semantics · code different]
       affected bodies: shop::total (with 2 other edits of this body)
-      equivalence: `shop::total`: not decided: a coroutine value: { let v = get(a).await; v } (src/lib.rs:-5)
-      equivalence: `shop::total::{closure#0} { let v = get(a).await; let w = get(v).…`: not decided: a coroutine body
-      reaches: 1 public function: shop::total (semilla expand --step 0)
+      equivalence: `shop::total`: MIR changes: the same MIR text; a changed callee: `shop::total::{closure#0}`
+      equivalence: `shop::total::{closure#0} { let v = get(a).await; let w = get(v).…`: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::total (src/lib.rs:5): same graph; not decided (a coroutine value: { let v = get(a).await; v } (src/lib.rs:-5))
-    shop::total::{closure#0} { let v = get(a).await; let w = get(v).… (src/lib.rs:5): graph changes: +1 await, +1 call, +3 arrows, −1 arrow; not decided (a coroutine body)
-    reached bodies: 1
-      shop::total (src/lib.rs:5): reached through shop::total::{closure#0}, not decided (a coroutine value: { let v = get(a).await; v } (src/lib.rs:-5))
+    shop::total (src/lib.rs:5): same graph; MIR changes (the same MIR text; a changed callee: `shop::total::{closure#0}`)
+    shop::total::{closure#0} { let v = get(a).await; let w = get(v).… (src/lib.rs:5): graph changes: +1 await, +1 call, +3 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

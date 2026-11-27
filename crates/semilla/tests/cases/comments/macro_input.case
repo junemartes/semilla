@@ -37,6 +37,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::parts` (src/lib.rs:2): the full compare: `#[same(shop::parts)] fn parts_same() {}`; a difference: `#[change(shop::parts)] fn parts_change(x: u32) -> bool { … }` or `#[different(shop::parts)] fn parts_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `10` → `5` (f1)
       in: shop::parts
@@ -46,7 +48,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `10` → `5` at `shop::parts/tail/args[1]/rhs` [semantics · code different]
       affected bodies: shop::parts
       control flow: ~ panic `vec![ // The base is first. x, // base // The tax is 10 percent. x / 10, // ten ]` → `vec![ // The base is first. x, // base // The tax is 10 percent. x / 5, // ten ]` (src/lib.rs:-3, src/lib.rs:3)
-      equivalence: not decided: a cast (BoxDerefTransmute)
+      equivalence: MIR changes
       expansion: `vec![ // The base is first. x, // base // The tax is 10 percent. x / 5, // ten ]` at `shop::parts/tail` (src/lib.rs:3): expansion changed: changed literal `10` → `5` at `expansion/args[0]/args[1]/elems[1]/rhs` [semantics]
       docs of `shop::parts`, no edit in this step (src/lib.rs:1): `/// Gives the parts of the price.`
       comment above line 7, no edit in this step (src/lib.rs:6): `// The tax is 10 percent.`
@@ -54,7 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::parts (src/lib.rs:2): same structure: 1 changed panic call (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a cast (BoxDerefTransmute))
+    shop::parts (src/lib.rs:2): same structure: 1 changed panic call (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   expansions: 1 changed
     `vec![ // The base is first. x, // base // The tax is 10 percent. x / 5, // ten ]` at `shop::parts/tail` (src/lib.rs:3): expansion changed: `macro vec` (crate alloc): changed literal `10` → `5` at `expansion/args[0]/args[1]/elems[1]/rhs` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

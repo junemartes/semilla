@@ -42,6 +42,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::clear` (src/lib.rs:9): the full compare: `#[same(depot::clear)] fn clear_same() {}`; a difference: `#[change(depot::clear)] fn clear_change() -> bool { … }` or `#[different(depot::clear)] fn clear_different() -> bool { … }` [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 3 places: 3 different edits (f3, f1, f4)
       in: depot::clear
@@ -50,11 +52,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f4 derived: added `unsafe` `unsafe { *p = 0 }` at `depot::clear/S0/then/S0` [semantics · code different]
       affected bodies: depot::clear
-      equivalence: not decided alone (the body has 3 edits; an edit of the fact adds or removes a node); the body: not decided in dev: a cast (PtrToPtr): *p = 0 (src/lib.rs:-12); not decided in release: a deref of a value that is not a reference (a `Box`, a raw pointer): *p = 0 (src/lib.rs:-12) (the same line for f3)
+      equivalence: no result alone (the body has 3 edits; an edit of the fact adds or removes a node); the body: MIR changes (the same line for f3)
       ! unsafe code: the changed body has an `unsafe` block
       comment above line 12, added in this step: see f2
   ◆ f1 derived: moved statement `if *live { *p = 0; *live = false; }` from `depot::clear/S0/body/S0` to `depot::clear/S0` (a pair by similarity (0.83)) [semantics · code equal]
-      equivalence: not decided alone in dev: a cast (PtrToPtr): *p = 0 (src/lib.rs:-12); not decided alone in release: a deref of a value that is not a reference (a `Box`, a raw pointer): *p = 0 (src/lib.rs:-12); the body: not decided in dev: a cast (PtrToPtr): *p = 0 (src/lib.rs:-12); not decided in release: a deref of a value that is not a reference (a `Box`, a raw pointer): *p = 0 (src/lib.rs:-12)
+      equivalence: MIR changes alone; the body: MIR changes
       ! unsafe code: the changed body has an `unsafe` block
   ◆ f3 derived: deleted statement `unsafe { if *live { *p = 0; *live = false; } }` (each inner statement is a moved statement of the body) at `depot::clear/S0` [semantics · code equal]
       equivalence: the same line as f4
@@ -62,7 +64,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: added comment `// SAFETY: the pointer is valid.` [docs · no code]
   cover: each of the 9 changed line(s) is in a fact
   control flow: 1 body
-    depot::clear (src/lib.rs:9): same graph (the edit keeps the control flow); not decided in dev (a cast (PtrToPtr): *p = 0 (src/lib.rs:-12)); not decided in release (a deref of a value that is not a reference (a `Box`, a raw pointer): *p = 0 (src/lib.rs:-12))
+    depot::clear (src/lib.rs:9): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: unsafe code: depot::clear/S0
   ! spotlight: unsafe code: depot::clear/S0/then/S0

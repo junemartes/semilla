@@ -61,18 +61,21 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::make` (src/lib.rs:20): a type of the signature changes (the type `Cart` changes: `depot::Cart`: + `tag: u8`): `#[same(depot::make)] fn make() -> bool { let old = before::depot::make(); let new = after::depot::make(); true }`; a difference: `#[change(depot::make)] fn make_change() -> bool { … }` or `#[different(depot::make)] fn make_different() -> bool { … }`
+    MIR changes with no claim: `depot::make2` (src/lib.rs:21): a type of the signature changes (the type `Cart` changes: `depot::Cart`: + `tag: u8`): `#[same(depot::make2)] fn make2() -> bool { let old = before::depot::make2(); let new = after::depot::make2(); true }`; a difference: `#[change(depot::make2)] fn make2_change() -> bool { … }` or `#[different(depot::make2)] fn make2_different() -> bool { … }`
   new and removed items, filled in by Semilla:
   ◆ f1 derived: field `depot::Cart.tag` added: `u8` (the public API can change: a different crate can use the item) [added · code different]
       1 site(s): add the field `tag : 7 + 1` (in depot::make)
       1 site(s): add the field `tag : 0` (in depot::make2)
       affected bodies: depot::make, depot::make2
-      equivalence: `depot::make`: not decided: the return type changes
-      equivalence: `depot::make2`: not decided: the return type changes
+      equivalence: `depot::make`: MIR changes
+      equivalence: `depot::make2`: MIR changes
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::make (src/lib.rs:20): same graph (the edit keeps the control flow); not decided (the return type changes)
-    depot::make2 (src/lib.rs:21): same graph (the edit keeps the control flow); not decided (the return type changes)
+    depot::make (src/lib.rs:20): same graph (the edit keeps the control flow); MIR changes
+    depot::make2 (src/lib.rs:21): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

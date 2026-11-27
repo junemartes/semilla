@@ -49,6 +49,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::COUNT` (src/lib.rs:3): the full compare: `#[same(shop::COUNT)] fn count_same() {}`; a difference: `#[change(shop::COUNT)] fn count_change() -> bool { … }` or `#[different(shop::COUNT)] fn count_different() -> bool { … }`
+    MIR changes with no claim: `shop::get` (src/lib.rs:6): no result of the equivalence check; the full compare: `#[same(shop::get)] fn get_same() {}`; a difference: `#[change(shop::get)] fn get_change() -> bool { … }` or `#[different(shop::get)] fn get_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: value of, see f1 (f1)
       in: shop::COUNT
@@ -58,11 +61,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: value of `shop::COUNT` changed: AtomicU32::new(5) → AtomicU32::new(7) (the public API can change: a different crate can use the item) [semantics · code different]
       affected bodies: shop::COUNT, shop::get
       through: `shop::COUNT` (1 body)
-      equivalence: not decided: a cast (Transmute)
+      equivalence: MIR changes
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::COUNT (src/lib.rs:3): same graph (the edit keeps the control flow); not decided (a cast (Transmute))
+    shop::COUNT (src/lib.rs:3): same graph (the edit keeps the control flow); MIR changes
     shop::get (src/lib.rs:6): same graph; reads a static whose initial value changes: `shop::COUNT` (value #563f4d6f415690de → value #d571420d51f3e1ba) (the check reads the static from the world)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

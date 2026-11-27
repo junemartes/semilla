@@ -66,6 +66,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 7 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 9 MIR changes with no claim
+    MIR changes with no claim: `checks::one` (tests/checks.rs:4): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
+    MIR changes with no claim: `checks::one::{closure#0} #[test]` (tests/checks.rs:3): the full compare: `#[same(checks::one)] fn one_same() {}`; a difference: `#[change(checks::one)] fn one_change() -> bool { … }` or `#[different(checks::one)] fn one_different() -> bool { … }`
+    MIR changes with no claim: `checks::two` (tests/checks.rs:10): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
+    MIR changes with no claim: `checks::two::{closure#0} #[test]` (tests/checks.rs:9): the full compare: `#[same(checks::two)] fn two_same() {}`; a difference: `#[change(checks::two)] fn two_change() -> bool { … }` or `#[different(checks::two)] fn two_different() -> bool { … }`
+    MIR changes with no claim: `checks::{test-harness-main}` (no place): no result of the equivalence check; no template: `checks` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library)
+    MIR changes with no claim: `depot::checks::one` (src/checks.rs:4): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
+    MIR changes with no claim: `depot::checks::one::{closure#0} #[test]` (src/checks.rs:-3): the template of `depot::checks::one` covers its item `depot::checks::one`
+    MIR changes with no claim: `depot::checks::two` (src/checks.rs:10): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
+    MIR changes with no claim: `depot::checks::two::{closure#0} #[test]` (src/checks.rs:-9): the template of `depot::checks::two` covers its item `depot::checks::two`
   tests and benches, filled in by Semilla:
   ◆ f3 derived: removed `depot::checks` [removed · code different]
       affected bodies: depot::checks::one, depot::checks::two

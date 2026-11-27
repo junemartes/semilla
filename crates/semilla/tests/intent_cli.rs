@@ -157,22 +157,23 @@ fn the_compiled_step_checks_each_claim() {
     assert!(claim_line(&text, "i7").contains("proved"), "{text}");
     // An `except` name that the check does not know.
     assert!(claim_line(&text, "i8").contains("claimed"), "{text}");
-    // Part E: the help for a body whose parameters change.
-    assert!(text.contains("intent help for `shop::parse`") && text.contains("#[same(shop::parse)] fn parse(x: u32, strict: bool) -> bool { after::shop::parse(x, strict) == before::shop::parse(x) }"), "{text}");
+    // Part E (design 84: the line of a body with no claim): a body whose parameters change has
+    // the template of the property form; here a claim states `shop::parse`, so it has none.
+    assert!(!text.contains("MIR changes with no claim: `shop::parse`") && text.contains("explained by claim i3: `shop::parse`"), "{text}");
 }
 
-/// The templates of the help notes of a step output (the text in backquotes after "if the
-/// behavior does not change: " and "if it changes: ").
+/// The claim templates of a step output (design 84): the template of each node of the AST map
+/// that is not mapped (`template: …`), and each template in backquotes of the line of a body
+/// with "MIR changes" and no claim. A `#[change]` or `#[different]` form gets the body `true` in
+/// place of `…` (the part of the agent).
 fn templates(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for line in text.lines().filter(|line| line.contains("intent help for ")) {
-        for mark in ["if the behavior does not change: `", "if it changes: `"] {
-            if let Some(at) = line.find(mark) {
-                let rest = &line[at + mark.len()..];
-                if let Some(end) = rest.rfind('`') {
-                    out.push(rest[..end].to_string());
-                }
-            }
+    for line in text.lines() {
+        if let Some(rest) = line.trim_start().strip_prefix("template: ") {
+            out.push(rest.to_string());
+        }
+        if line.contains("MIR changes with no claim: ") {
+            out.extend(line.split('`').filter(|piece| piece.starts_with("#[")).map(|piece| piece.replace('…', "true")));
         }
     }
     out
@@ -198,7 +199,7 @@ fn each_template_of_the_help_is_a_claim_that_intent_check_accepts() {
     let found = templates(&text);
     assert!(found.iter().any(|template| template.starts_with("#[same(shop::Cart::total)] fn total(this_before: &before::shop::Cart, this_after: &after::shop::Cart, k: u32, extra: bool) -> bool")), "{text}");
     assert!(found.iter().any(|template| template.contains("let old = before::shop::first(c_before); let new = after::shop::first(c_after); true")), "{text}");
-    assert!(text.contains("intent help for `shop::apply`: no template: the type `&dyn Fn(u8) -> u8` of the parameter `f` has no form in a claim (`dyn …`)"), "{text}");
+    assert!(text.contains("no template: the type `&dyn Fn(u8) -> u8` of the parameter `f` has no form in a claim (`dyn …`)"), "{text}");
     // Each template, in place in the intent file, passes `semilla intent check`.
     for template in &found {
         write(&repo, ".semilla/intent/try.rs", &format!("{template}\n"));
@@ -245,8 +246,8 @@ fn half_loop(x: i32) -> bool {
     // Two panics with different arguments are different panics without `except`.
     assert!(claim_line(&text, "i3").contains("false") && claim_line(&text, "i3").contains("for x = 10"), "{text}");
     assert!(claim_line(&text, "i4").contains("for x = -1"), "{text}");
-    // The help is only for a cause that a claim can close.
-    assert!(!text.contains("intent help for `shop::half`"), "{text}");
+    // A body with a claim has no template line (design 84).
+    assert!(!text.contains("MIR changes with no claim: `shop::half`"), "{text}");
 }
 
 // rule+ R67.2-3
@@ -409,12 +410,11 @@ fn setup_self_type() -> (common::TestDir, PathBuf) {
 fn the_help_names_the_changed_field_of_the_type_of_self() {
     let (_dir, repo) = setup_self_type();
     let text = run(&repo, &["step", "widen x", "--intent", ".semilla/intent/step.rs"], 0);
-    assert!(text.contains("intent help for `shop::Pt::get`") && text.contains("`fn get (& self) -> u64`: the type of `self` changes: `shop::Pt`: `x: u32` → `x: u64`"), "{text}");
+    let line = text.lines().find(|line| line.contains("MIR changes with no claim: `shop::Pt::get`")).unwrap_or_else(|| panic!("{text}"));
+    assert!(line.contains("a type of the signature changes (the type of `self` changes: `shop::Pt`: `x: u32` → `x: u64`)"), "{line}");
     assert!(!text.contains("`fn get (& self) -> u64` → `fn get (& self) -> u64`"), "{text}");
-    // The result is "not decided": the help gives a template for each case, and the receiver
-    // is a value of the old type.
-    assert!(text.contains("if the behavior does not change: `#[same(shop::Pt::get)] fn get(this_before: &before::shop::Pt, this_after: &after::shop::Pt)"), "{text}");
-    assert!(text.contains("if it changes: `#[change(shop::Pt::get, reason = \"…\")] fn get(this_before: &before::shop::Pt, this_after: &after::shop::Pt)"), "{text}");
+    // The template of the property form: the receiver is a value of each version.
+    assert!(line.contains("`#[same(shop::Pt::get)] fn get(this_before: &before::shop::Pt, this_after: &after::shop::Pt)"), "{line}");
 }
 
 // rule- R69.5-3
@@ -451,7 +451,7 @@ fn a_proved_claim_explains_its_bodies_and_the_step_shows_the_coverage() {
     assert!(section.contains("    intent: \"Add a strict mode to `parse`\""), "{section}");
     assert!(section.contains("✓ changes: i4 `#[change(shop::half)] fn half(x: i32)` (explains `shop::half`)"), "{section}");
     assert!(section.contains("✓ stays the same: i3 `#[same(shop::parse)] fn parse(x: u32)` (explains `shop::parse`)"), "{section}");
-    assert!(section.contains("changed bodies: 4 explained by claims, 0 equivalent (Semilla), 1 not explained"), "{section}");
+    assert!(section.contains("changed bodies: 0 equal MIR, 4 explained by claims, 1 MIR changes with no claim"), "{section}");
     // [R77.4-1] The hint `#[rename]` is not in the section: it explains no body.
     assert!(!section.contains("i9"), "{section}");
     // A `same` claim that ignores the panic message does not contradict a difference of the
@@ -459,11 +459,11 @@ fn a_proved_claim_explains_its_bodies_and_the_step_shows_the_coverage() {
     assert!(section.contains("explained by claim i7: `shop::limit`"), "{section}");
     assert!(!section.contains("disagree"), "{section}");
     assert!(!text.contains("--change 'shop::limit=TEXT'"), "{text}");
-    assert!(section.contains("not explained: `shop::basket_n` (src/lib.rs:12): an added body: no compare of two versions"), "{section}");
+    assert!(section.contains("MIR changes with no claim: `shop::basket_n` (src/lib.rs:12): an added body: "), "{section}");
     let status = run(&repo, &["status", "--verbose"], 0);
-    assert!(status.contains("changed bodies: 4 explained by claims, 0 equivalent (Semilla), 1 not explained"), "{status}");
+    assert!(status.contains("changed bodies: 0 equal MIR, 4 explained by claims, 1 MIR changes with no claim"), "{status}");
     let json = run(&repo, &["verify", "--json"], 0);
-    assert!(json.contains("\"coverage\"") && json.contains("\"explains\"") && json.contains("\"state\": \"not_explained\""), "{json}");
+    assert!(json.contains("\"coverage\"") && json.contains("\"explains\"") && json.contains("\"state\": \"no_claim\""), "{json}");
     // [R77.3-1] The result line counts the claims of the intent files: 6 claims (the `intent!`
     // text and the hint `#[rename]` are not claims).
     let short = run(&repo, &["status"], 0);
@@ -494,15 +494,16 @@ fn a_claim_that_is_not_proved_explains_no_body() {
     write(&repo, ".semilla/intent/step.rs", intent);
     let text = run(&repo, &["step", "strict parse", "--intent", ".semilla/intent/step.rs"], 0);
     let section = semantic_section(&text);
-    assert!(section.contains("changed bodies: 0 explained by claims, 1 equivalent (Semilla), 4 not explained"), "{section}");
-    assert!(section.contains("equivalent (Semilla): `shop::report`"), "{section}");
-    assert!(section.contains("not explained: `shop::limit` (src/lib.rs:9): different"), "{section}");
+    assert!(section.contains("changed bodies: 1 equal MIR, 0 explained by claims, 3 MIR changes with no claim, 1 MIR changes that the claims on the item do not explain"), "{section}");
+    assert!(section.contains("equal MIR: `shop::report`"), "{section}");
+    assert!(section.contains("not explained by its claims: `shop::limit` (src/lib.rs:9): MIR changes"), "{section}");
     // A claimed claim explains nothing: the item stays in the gap list.
     assert!(text.contains("--change 'shop::limit=TEXT'"), "{text}");
-    // A step with no intent file has no section.
+    // A step with no intent file has no section of the claims: the map of the AST pass and the
+    // coverage of the equal-MIR check only (design 84).
     let (_dir3, repo3) = setup();
     let text = run(&repo3, &["step", "strict parse"], 0);
-    assert!(!text.contains("semantic changes"), "{text}");
+    assert!(!text.contains("semantic changes (the claims") && text.contains("changed bodies: 1 equal MIR, 0 explained by claims, 4 MIR changes with no claim"), "{text}");
 }
 
 // rule+ R77.1-4
@@ -515,7 +516,7 @@ fn a_proved_claim_and_a_result_of_semilla_that_disagree_explain_nothing() {
     assert!(claim_line(&text, "i1").contains("proved"), "{text}");
     let section = semantic_section(&text);
     assert!(section.contains("✗ the result of Semilla and claim i1 disagree: a defect of Semilla: `shop::report` (src/lib.rs:6): Semilla: equivalent"), "{section}");
-    assert!(section.contains("0 explained by claims, 0 equivalent (Semilla), 5 not explained, 1 with a disagreement"), "{section}");
+    assert!(section.contains("0 equal MIR, 0 explained by claims, 4 MIR changes with no claim, 1 with a disagreement"), "{section}");
 }
 
 // rule+ R78.3-6
@@ -565,7 +566,7 @@ fn a_proved_claim_mir_explains_its_body_on_the_coverage_line_and_a_vacuous_one_e
     // The vacuous claim is true for any result of `shop::half`: no proof, so no body.
     let vacuous = claim_line(&text, "i2");
     assert!(vacuous.contains("claimed") && vacuous.contains("true for any result of `before::shop::half`"), "{text}");
-    assert!(!section.contains("explains `shop::half`") && section.contains("not explained: `shop::half` (src/lib.rs:4)"), "{section}");
+    assert!(!section.contains("explains `shop::half`") && section.contains("not explained by its claims: `shop::half` (src/lib.rs:4)"), "{section}");
     // An error on line 1 has the place of the file of the user.
     write(&repo, ".semilla/intent/bad.rs", "#[same(shop::report)] fn bad(x: u32) -> u8 { before::shop::report(x) }\n");
     let text = run(&repo, &["intent", "check", ".semilla/intent/bad.rs"], 1);

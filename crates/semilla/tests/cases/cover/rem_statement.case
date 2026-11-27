@@ -33,6 +33,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::run` (src/lib.rs:5): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: deleted statement `#[cfg(all())] let _b = 2;` (f1)
       in: depot::run
@@ -41,11 +43,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: deleted statement `#[cfg(all())] let _b = 2;` at `depot::run/S1` [semantics · code different]
       affected bodies: depot::run
-      equivalence: equivalent (proved by SMT)
+      equivalence: MIR changes
       note: this body uses `#[cfg(all())]`, which Semilla did not check (`depot::run`)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::run (src/lib.rs:5): same graph (the edit keeps the control flow); equivalent (proved by SMT)
+    depot::run (src/lib.rs:5): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

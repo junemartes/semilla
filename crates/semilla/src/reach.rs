@@ -22,7 +22,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use semilla_verify::equiv::{Reached, ReachReport, Verdict};
+use semilla_verify::equiv::Verdict;
 
 use super::{EquivSide, NormalOracle};
 
@@ -309,6 +309,48 @@ fn rename_back(name: &str, renames: &[(String, String)]) -> String {
     semilla_normal::paths::rename(name, &back)
 }
 
+/// [R84.1-2] The reverse closure of the changed bodies of one configuration, with no check
+/// (design 84): the start set and each body that can reach it through the reverse call graph
+/// of the two trees (the graph of the walk). No solver proves a caller equivalent, so each body
+/// of the closure stays in the set of the changed bodies, and a body that calls one of them has
+/// no proof by an equal MIR text. A closure past [`MAX_CLOSURE`] bodies names each body of the
+/// two trees (the safe side).
+pub(super) fn closure_config(old: &EquivSide, new: &EquivSide, renames: &[(String, String)]) -> ConfigReach {
+    let rename = |text: &str| if renames.is_empty() { text.to_string() } else { semilla_normal::paths::rename(text, renames) };
+    let sources = Sources::new([old, new], &rename);
+    let start = start_nodes(&start_set(old, new, renames, &rename), old, new, renames, &rename, &sources);
+    let graph = Graph::new([old, new], &rename, &sources);
+    let mut seen: BTreeSet<String> = start.clone();
+    let mut queue: std::collections::VecDeque<String> = start.into_iter().collect();
+    let mut complete = true;
+    while let Some(name) = queue.pop_front() {
+        if seen.len() > MAX_CLOSURE {
+            complete = false;
+            break;
+        }
+        for caller in graph.callers_of(&name) {
+            if seen.insert(caller.clone()) {
+                queue.push_back(caller);
+            }
+        }
+    }
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    if complete {
+        for node in &seen {
+            let name = name_of(node);
+            names.insert(name.to_string());
+            let back = rename_back(name, renames);
+            if back != name {
+                names.insert(back);
+            }
+        }
+    } else {
+        names.extend(old.records.keys().map(|name| name.to_string()));
+        names.extend(new.records.keys().map(|name| name.to_string()));
+    }
+    ConfigReach { must_inline: Arc::new(names), trait_methods: graph.trait_of.clone(), ..ConfigReach::default() }
+}
+
 impl NormalOracle {
     /// The walk of one configuration (design 61.10, part A). The nodes of the walk are the
     /// source bodies (R61.16-1): a name with records in two files is a node for each file, so a
@@ -509,7 +551,7 @@ impl NormalOracle {
             };
             let rank = |verdict: &Verdict| match verdict {
                 Verdict::Different { .. } => 2,
-                Verdict::NotDecided(_) | Verdict::NotChecked(_) => 1,
+                Verdict::NotDecided(_) | Verdict::NotChecked(_) | Verdict::MirChanges(_) => 1,
                 Verdict::Equivalent(_) => 0,
             };
             if result.as_ref().is_none_or(|known| rank(&verdict) > rank(known)) {
@@ -518,54 +560,4 @@ impl NormalOracle {
         }
         result.unwrap_or_else(|| Verdict::NotDecided("no check".into()))
     }
-}
-
-/// The report of the walk over the configurations: one entry for each reached body, with the
-/// result of each configuration (design 61.10, A3).
-pub fn report(configs: &[(String, ConfigReach)]) -> ReachReport {
-    let mut bodies: Vec<Reached> = Vec::new();
-    let mut stops: Vec<String> = Vec::new();
-    let mut stop_configs: Vec<(String, Vec<String>)> = Vec::new();
-    for (config, reach) in configs {
-        for (name, through, chain, verdict) in &reach.bodies {
-            match bodies.iter_mut().find(|known| &known.name == name) {
-                Some(known) => {
-                    for callee in through {
-                        if !known.through.contains(callee) {
-                            known.through.push(callee.clone());
-                        }
-                    }
-                    known.results.push((config.clone(), verdict.clone()));
-                }
-                None => bodies.push(Reached { name: name.clone(), through: through.clone(), chain: chain.clone(), results: vec![(config.clone(), verdict.clone())] }),
-            }
-        }
-        for stop in &reach.stops {
-            match stop_configs.iter_mut().find(|(known, _)| known == stop) {
-                Some((_, list)) => list.push(config.clone()),
-                None => stop_configs.push((stop.clone(), vec![config.clone()])),
-            }
-        }
-    }
-    // A limit of each configuration has one line.
-    for (stop, list) in stop_configs {
-        stops.push(if list.len() == configs.len() { stop } else { format!("{stop} (in {})", list.join(", ")) });
-    }
-    let mut from: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (_, reach) in configs {
-        for (name, list) in &reach.from {
-            let known = from.entry(name.clone()).or_default();
-            for body in list {
-                if !known.contains(body) {
-                    known.push(body.clone());
-                }
-            }
-        }
-    }
-    // The order of the walk.
-    let order: BTreeMap<&str, usize> = bodies.iter().enumerate().map(|(index, body)| (body.name.as_str(), index)).collect();
-    for list in from.values_mut() {
-        list.sort_by_key(|name| order.get(name.as_str()).copied().unwrap_or(usize::MAX));
-    }
-    ReachReport { bodies, stops, from }
 }

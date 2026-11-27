@@ -1,8 +1,9 @@
 //! The suggested test of each sure difference (design 75). The decision of the user
 //! (2026-11-26): "I think the probe can suggest a test to write to detect the difference. It
 //! should not manually do it." Semilla never builds or runs the code of the user in a step: each
-//! test of this file makes a repository with the crate `depot`, runs `semilla step --compiled`,
-//! and reads the suggested tests. The compile test (in the test suite of Semilla, on fixtures)
+//! test of this file makes a repository with the crate `depot`, runs `semilla step` with an
+//! empty `#[same]` claim for each item (design 84: only a claim of an intent file starts the
+//! solver, so only a false claim has a sure difference), and reads the suggested tests. The compile test (in the test suite of Semilla, on fixtures)
 //! adds each suggested test to the old tree and to the new tree and runs `cargo test`: each test
 //! passes on the old code and fails on the new code.
 
@@ -56,9 +57,25 @@ fn step(dir: &Path, old: &str, new: &str, args: &[&str]) -> String {
     semilla(dir, &repo, &all)
 }
 
-/// The line of the step section of a body.
+/// The line of the empty `#[same]` claim of an item (see [`same_claims`]).
 fn body_line<'a>(output: &'a str, name: &str) -> &'a str {
-    output.lines().find(|line| line.trim_start().starts_with(&format!("{name} ("))).unwrap_or_else(|| panic!("no line of {name}:\n{output}"))
+    output.lines().find(|line| line.contains(&format!("`#[same({name})] fn "))).unwrap_or_else(|| panic!("no claim line of {name}:\n{output}"))
+}
+
+/// The items of the main step: each one has an empty `#[same]` claim, the full compare of the
+/// item (design 78).
+const ITEMS: &[&str] = &["depot::add", "depot::shift", "depot::pick", "depot::bump", "depot::private_step", "depot::Hidden::get", "depot::push_two", "depot::inner::deep", "depot::tables::TABLE", "depot::guard"];
+
+/// An intent file in `dir` with one empty `#[same]` claim for each item, and the arguments of the
+/// step that read it.
+fn same_claims(dir: &Path, items: &[&str]) -> Vec<String> {
+    let mut text = String::from("use semilla_intent::prelude::*;\n");
+    for (index, item) in items.iter().enumerate() {
+        text.push_str(&format!("\n#[same({item})]\nfn same_{index}() {{}}\n"));
+    }
+    let path = dir.join("same.rs");
+    std::fs::write(&path, text).unwrap();
+    vec!["--intent".to_string(), path.display().to_string()]
 }
 
 const OLD: &str = r#"
@@ -151,7 +168,8 @@ fn main_output() -> &'static (String, common::TestDir) {
     static FOUND: std::sync::OnceLock<(String, common::TestDir)> = std::sync::OnceLock::new();
     FOUND.get_or_init(|| {
         let dir = common::TestDir::new();
-        let output = step(dir.path(), OLD, NEW, &[]);
+        let args = same_claims(dir.path(), ITEMS);
+        let output = step(dir.path(), OLD, NEW, &args.iter().map(String::as_str).collect::<Vec<_>>());
         (output, dir)
     })
 }
@@ -218,7 +236,7 @@ fn a_difference_that_a_test_cannot_see_gets_no_test_with_the_cause() {
     // Two panics: `#[should_panic(expected = "too big")]` takes a part of the message, and the
     // new message "x is too big" has it.
     let line = body_line(output, "depot::guard");
-    assert!(line.contains("different (for x = 10: before panics") && line.contains("no suggested test: the two versions panic"), "{line}");
+    assert!(line.contains("false: for x = 10: before panics") && line.contains("no suggested test: the two versions panic"), "{line}");
 }
 
 // rule- R75.1-2
@@ -227,8 +245,9 @@ fn a_step_with_no_sure_difference_has_no_suggested_test() {
     let old = "pub fn twice(x: u32) -> u32 {\n    x.wrapping_mul(2)\n}\n";
     let new = "pub fn twice(x: u32) -> u32 {\n    x.wrapping_add(x)\n}\n";
     let dir = common::TestDir::new();
-    let output = step(dir.path(), old, new, &[]);
-    assert!(body_line(&output, "depot::twice").contains("equivalent"), "{output}");
+    let args = same_claims(dir.path(), &["depot::twice"]);
+    let output = step(dir.path(), old, new, &args.iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(body_line(&output, "depot::twice").contains("proved"), "{output}");
     assert!(!output.contains("suggested test"), "{output}");
 }
 
@@ -248,17 +267,16 @@ fn a_false_claim_with_no_call_of_a_version_has_no_test() {
 // rule+ R75.1-4
 #[test]
 fn the_text_of_a_test_is_the_same_in_each_view_and_in_each_run() {
-    let (output, dir) = main_output();
-    let repo = dir.path().join("repo");
-    let verbose = semilla(dir.path(), &repo, &["status", "--verbose"]);
-    let json = semilla(dir.path(), &repo, &["verify", "--json"]);
+    // Design 84: only a false claim has a suggested test, and a false claim rejects the step, so
+    // no stored step has one: the view is the step output (also of the MCP tool `step`).
+    let (output, _) = main_output();
     let tests = suggested(output);
     let first = &tests[0];
-    assert!(verbose.contains(first.text.lines().nth(1).unwrap()), "{verbose}");
-    assert!(json.contains(&format!("\"name\": \"{}\"", first.name)) || json.contains(&format!("\"name\":\"{}\"", first.name)), "{json}");
+    assert!(body_line(output, &first.function).contains(&format!("suggested test `{}`", first.name)), "{output}");
     // A second step on the same change gives the same tests.
     let again = common::TestDir::new();
-    let second = step(again.path(), OLD, NEW, &[]);
+    let args = same_claims(again.path(), ITEMS);
+    let second = step(again.path(), OLD, NEW, &args.iter().map(String::as_str).collect::<Vec<_>>());
     let names = |found: &[Suggested]| found.iter().map(|test| (test.name.clone(), test.text.clone())).collect::<Vec<_>>();
     assert_eq!(names(&suggested(&second)), names(&tests));
 }

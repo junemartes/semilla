@@ -19,6 +19,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::read` (src/lib.rs:1): the full compare: `#[same(shop::read)] fn read_same() {}`; a difference: `#[change(shop::read)] fn read_change(s: &str) -> bool { … }` or `#[different(shop::read)] fn read_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression `s.parse::<u32>()` → `s.parse::<u64>()` (f1)
       in: shop::read
@@ -30,10 +32,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: ~ call `str::<impl str>::parse::<u32>` → `str::<impl str>::parse::<u64>` (src/lib.rs:-2, src/lib.rs:2)
       control flow: ~ call `Result::<u32, ParseIntError>::ok` → `Result::<u64, ParseIntError>::ok` (src/lib.rs:-2, src/lib.rs:2)
       control flow: ~ call `Option::<u32>::map::<u64, fn(u32) -> u64 {<u64 as From<u32>>::from}>` → `Option::<u64>::map::<u64, fn(u64) -> u64 {<u64 as From<u64>>::from}>` (src/lib.rs:-2, src/lib.rs:2)
-      equivalence: not decided: the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined)
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::read (src/lib.rs:1): same structure: 3 changed call targets; not decided (the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined))
+    shop::read (src/lib.rs:1): same structure: 3 changed call targets; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

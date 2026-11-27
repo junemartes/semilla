@@ -164,6 +164,11 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 7 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 2 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::Bits::first_block` (src/lib.rs:32): an added body: `#[new(shop::Bits::first_block)] fn first_block_new(this: &after::shop::Bits) -> bool { let new = after::shop::Bits::first_block(this); true }`
+    MIR changes with no claim: `shop::Bits::with_capacity_and_blocks` (src/lib.rs:15): the full compare: `#[same(shop::Bits::with_capacity_and_blocks)] fn with_capacity_and_blocks_same() {}`; a difference: `#[change(shop::Bits::with_capacity_and_blocks)] fn with_capacity_and_blocks_change() -> bool { … }` or `#[different(shop::Bits::with_capacity_and_blocks)] fn with_capacity_and_blocks_different() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    equal MIR: `shop::Bits::blocks` (src/lib.rs:40)
+    equal MIR: `shop::Bits::get_unchecked` (src/lib.rs:24)
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f4, f5)
       in: shop::Bits::with_capacity_and_blocks
@@ -178,16 +183,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f4 derived: added `let` `let first: Block = 0;` at `shop::Bits::with_capacity_and_blocks/S1` [semantics · code different]
       affected bodies: shop::Bits::with_capacity_and_blocks (with 1 other edit of this body)
-      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for usize>::min`, `std::vec::from_elem::<shop::block::sse2::Block>`)
+      equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
   ◆ f5 derived: changed expression `words * BITS` → `words * BITS + first` at `shop::Bits::with_capacity_and_blocks/S1/init/args[0]` [semantics · code different]
       affected bodies: shop::Bits::with_capacity_and_blocks (with 1 other edit of this body)
       control flow: + check `overflow: words * BITS + first` (src/lib.rs:18): ok → call `impls::<impl Ord for usize>::min`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:18)
       control flow: + arrow check `overflow: words * BITS` (src/lib.rs:18) → check `overflow: words * BITS + first` (src/lib.rs:18) (ok)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for usize>::min`, `std::vec::from_elem::<shop::block::sse2::Block>`)
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   ◆ f1 derived: parameter `subblock` of `shop::Bits::get_unchecked` renamed to `index`: `usize` [rename · code equal]
-      equivalence: not decided alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
+      equivalence: no result alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
       docs of `shop::Bits::get_unchecked`, no edit in this step (src/lib.rs:22-23):
           | /// # Safety
           | /// `subblock` is in bounds.
@@ -196,13 +201,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: ~ check `overflow: self.data.len() * SimdBlock::USIZE_COUNT` → `overflow: count * SimdBlock::USIZE_COUNT` (src/lib.rs:-32, src/lib.rs:42)
       equivalence: equivalent (proved by equal MIR)
   ◆ f3 derived: `shop::Bits::get_unchecked`: renamed local `subblock` → `index`, 1 edit(s) [rename · code equal]
-      equivalence: not decided alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
+      equivalence: no result alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
   cover: each of the 18 changed line(s) is in a fact
   control flow: 4 bodies
     shop::Bits::blocks (src/lib.rs:40): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by equal MIR)
     shop::Bits::first_block (src/lib.rs:32): graph added: 12 points, 13 arrows
     shop::Bits::get_unchecked (src/lib.rs:24): same graph (the edit keeps the control flow) (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by equal MIR)
-    shop::Bits::with_capacity_and_blocks (src/lib.rs:15): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for usize>::min`, `std::vec::from_elem::<shop::block::sse2::Block>`)
+    shop::Bits::with_capacity_and_blocks (src/lib.rs:15): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
   ! spotlight: unsafe code: shop::Bits::first_block

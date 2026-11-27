@@ -1,5 +1,8 @@
 note: a private body gets a suggested test in its module, and its public caller gets its own test (design 75)
+note: design 84: only a claim starts the solver, so each body of the case has an empty `#[same]` claim (the full compare of today); a false claim rejects the step
 rule+: R75.1-1
+option: --intent
+option: .semilla/intent/step.rs
 === both Cargo.toml
 [package]
 name = "depot"
@@ -21,29 +24,47 @@ fn step(x: u32) -> u32 {
 pub fn caller(x: u32) -> u32 {
     step(x) + 1
 }
+=== both .gitignore
+/.semilla/
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[same(depot::step)]
+fn same_0() {}
+
+#[same(depot::caller)]
+fn same_1() {}
 === expected
-exit: 0
-accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (the build of the compiled check)
+exit: 1
+rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  ✗ the intent claim i1 `#[same(depot::step)] fn same_0()` (.semilla/intent/step.rs:3): false: for x = 1: before returns 2, after returns 3 (suggested test `semilla_test_step_ff0c56`)
+  ✗ the intent claim i2 `#[same(depot::caller)] fn same_1()` (.semilla/intent/step.rs:6): false: for x = 1: before returns 3, after returns 4 (suggested test `semilla_test_caller_6ebe60`)
+
+  intent (2 claim(s); a claim is a proof only if it is proved):
+  ✗ i1 `#[same(depot::step)] fn same_0()` (.semilla/intent/step.rs:3): false: for x = 1: before returns 2, after returns 3 (suggested test `semilla_test_step_ff0c56`)
+      the input is an exact input of the two versions: correct the claim or the code
+  ✗ i2 `#[same(depot::caller)] fn same_1()` (.semilla/intent/step.rs:6): false: for x = 1: before returns 3, after returns 4 (suggested test `semilla_test_caller_6ebe60`)
+      the input is an exact input of the two versions: correct the claim or the code
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    ✗ false: i1 `#[same(depot::step)] fn same_0()`: for x = 1: before returns 2, after returns 3 (suggested test `semilla_test_step_ff0c56`)
+    ✗ false: i2 `#[same(depot::caller)] fn same_1()`: for x = 1: before returns 3, after returns 4 (suggested test `semilla_test_caller_6ebe60`)
+    AST changes: 1 mapped by claims, 0 mapped by Semilla, 0 not mapped
+    changed bodies: 0 equal MIR, 0 explained by claims, 0 MIR changes with no claim, 1 MIR changes that the claims on the item do not explain
+      not explained by its claims: `depot::step` (src/lib.rs:1): MIR changes
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `2` → `3` (f1)
       in: depot::step
       lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: --change 'depot::step=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::step=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::step=TEXT'; if it does not change, --same 'rewrite 2 => 3'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `2` → `3` at `depot::step/tail/rhs` [semantics · code different]
       affected bodies: depot::step
       control flow: ~ check `overflow: x * 2` → `overflow: x * 3` (src/lib.rs:-2, src/lib.rs:2)
-      equivalence: different: for x = 1: before returns 2, after returns 3 (suggested test `semilla_test_step_ff0c56`)
-      reaches: 1 public function: depot::caller (semilla expand --step 0)
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::step (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for x = 1: before returns 2, after returns 3; suggested test `semilla_test_step_ff0c56`)
-    reached bodies: 1
-      depot::caller (src/lib.rs:5): different through depot::step: for x = 1: before returns 3, after returns 4 (suggested test `semilla_test_caller_6ebe60`)
+    depot::step (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   suggested tests: 2 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
     `semilla_test_step_ff0c56`: add it to `src/lib.rs`, in the module of `depot::step` (line 1); run it: `cargo test -p depot semilla_test_step_ff0c56`; also: `cargo test -p depot --release semilla_test_step_ff0c56`
       #[cfg(test)]
@@ -72,7 +93,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
           }
       }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-
+no command can succeed without a code change: fix the cause, then run the step again
 === positions
-◆ f1 derived: changed literal `2` → `3` at `depot::step/tail/rhs` [semantics · code different]
-    lines: src/lib.rs:2, src/lib.rs:-2
+none: the runner has no accepted step for this case

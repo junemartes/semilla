@@ -25,48 +25,34 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::quote` (src/lib.rs:1): the full compare: `#[same(shop::quote)] fn quote_same() {}`; a difference: `#[change(shop::quote)] fn quote_change(n: u32, p: u32) -> bool { … }` or `#[different(shop::quote)] fn quote_different() -> bool { … }`
   not stated: 1 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f1, f2)
       in: shop::quote
       lines: src/lib.rs:2-3, src/lib.rs:-2-3
-      to state it: --change 'shop::quote=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::quote=TEXT'; if it does not change, --same 'rewrite t > 100 => total >= 100', and a `--same` fact (rename, move, or rewrite) that explains each other edit
   ? 2 places: changed path `t` → `total` (f3)
       in: shop::quote
       lines: src/lib.rs:3, src/lib.rs:-3
-      to state it: --same 'rewrite t => total'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::quote=TEXT' --same 'rewrite t => total'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::quote=TEXT'; if it does not change, --same 'rewrite t => total'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed pattern `t` → `total` at `shop::quote/S0/pat` [semantics · code different]
       affected bodies: shop::quote (with 1 other edit of this body)
-      equivalence: equivalent alone (proved by equal MIR); the body: different: for n = 10, p = 10: before returns 100, after returns 95 (suggested test `semilla_test_quote_7bfc77`) (the same line for f3)
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   ◆ f2 derived: change condition `t > 100` → `total >= 100` at `shop::quote/S1/cond` [semantics · code different]
       affected bodies: shop::quote (with 1 other edit of this body)
       control flow: ~ branch `t > 100` → `total >= 100` (src/lib.rs:-3, src/lib.rs:3)
       control flow: ~ check `overflow: t - 5` → `overflow: total - 5` (src/lib.rs:-3, src/lib.rs:3)
-      equivalence: different alone: for n = 10, p = 10: before returns 100, after returns 95 (suggested test `semilla_test_quote_7bfc77`); the body: different: for n = 10, p = 10: before returns 100, after returns 95 (suggested test `semilla_test_quote_7bfc77`)
+      equivalence: MIR changes alone; the body: MIR changes
   ◆ f3 derived: 2 site(s): changed path `t` → `total` [semantics · code equal]
       in: shop::quote (2)
       control flow: ~ branch `t > 100` → `total >= 100` (src/lib.rs:-3, src/lib.rs:3)
       control flow: ~ check `overflow: t - 5` → `overflow: total - 5` (src/lib.rs:-3, src/lib.rs:3)
-      equivalence: the same line as f1
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    shop::quote (src/lib.rs:1): same structure: 1 changed condition, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for n = 10, p = 10: before returns 100, after returns 95; suggested test `semilla_test_quote_7bfc77`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_quote_7bfc77`: add it to `src/lib.rs`, in the module of `shop::quote` (line 1); run it: `cargo test -p shop semilla_test_quote_7bfc77`; also: `cargo test -p shop --release semilla_test_quote_7bfc77`
-      #[cfg(test)]
-      mod semilla_test_quote_7bfc77 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 100; the new version returns 95.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let n = 10;
-              let p = 10;
-              let got = crate::quote(n, p);
-              assert_eq!(got, 100);
-          }
-      }
+    shop::quote (src/lib.rs:1): same structure: 1 changed condition, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

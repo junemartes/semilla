@@ -23,6 +23,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::run` (src/lib.rs:1): the same MIR text; a changed callee: `depot::run::{closure#0}`; the full compare: `#[same(depot::run)] fn run_same() {}`; a difference: `#[change(depot::run)] fn run_change() -> bool { … }` or `#[different(depot::run)] fn run_different() -> bool { … }`
+    MIR changes with no claim: `depot::run::{closure#0} async { 2 }` (src/lib.rs:2): the template of `depot::run` covers its item `depot::run`
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f1, f2)
       in: depot::run
@@ -31,19 +34,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f2 derived: changed literal `1` → `2` at `depot::run/tail/body/tail` [semantics · code different]
       affected bodies: depot::run
-      equivalence: `depot::run`: not decided alone (the body has 2 edits); the body: not decided: a coroutine value: async move { 1 } (src/lib.rs:-2) (the same line for f1)
-      equivalence: `depot::run::{closure#0} async { 2 }`: not decided alone: a coroutine body; the body: not decided: a coroutine body
-      reaches: 1 public function: depot::run (semilla expand --step 0)
+      equivalence: `depot::run`: no result alone (the body has 2 edits); the body: MIR changes: the same MIR text; a changed callee: `depot::run::{closure#0}` (the same line for f1)
+      equivalence: `depot::run::{closure#0} async { 2 }`: MIR changes alone; the body: MIR changes
   ◆ f1 derived: changed async: `async move {▫}` → `async {▫}` at `depot::run/tail` [semantics · code equal]
       equivalence: the same line as f2
-      equivalence: `depot::run::{closure#0} async { 2 }`: equivalent alone (proved by equal MIR); the body: not decided: a coroutine body
-      reaches: 1 public function: depot::run (semilla expand --step 0)
+      equivalence: `depot::run::{closure#0} async { 2 }`: equivalent alone (proved by equal MIR); the body: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::run (src/lib.rs:1): same graph (the edit keeps the control flow); not decided (a coroutine value: async move { 1 } (src/lib.rs:-2))
-    depot::run::{closure#0} async { 2 } (src/lib.rs:2): same graph (the edit keeps the control flow); not decided (a coroutine body)
-    reached bodies: 1
-      depot::run (src/lib.rs:1): reached through depot::run::{closure#0}, not decided (a coroutine value: async move { 1 } (src/lib.rs:-2))
+    depot::run (src/lib.rs:1): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `depot::run::{closure#0}`)
+    depot::run::{closure#0} async { 2 } (src/lib.rs:2): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   note: `▫` is in place of a child of the node (a condition, a block, an argument). It is not a cut: each edit in the child has its own fact.
 

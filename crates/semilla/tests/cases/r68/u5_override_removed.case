@@ -38,6 +38,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `<shop::Dog as shop::Speak>::name` (src/lib.rs:10): a removed body: `#[removed(shop::<Dog as Speak>::name)] fn name_removed(this: &before::shop::<Dog as Speak>) -> bool { let old = before::shop::<Dog as Speak>::name(this); true }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: edit, see f1 (f1)
       in: shop::<Dog as Speak>::name

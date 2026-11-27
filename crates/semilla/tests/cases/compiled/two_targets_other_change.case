@@ -81,34 +81,21 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::price` (src/lib.rs:16): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f1)
       in: shop::price
       lines: src/lib.rs:17, src/lib.rs:-17
-      to state it: --change 'shop::price=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::price=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `1` → `2` at `shop::price/tail/rhs` [semantics · code different]
       affected bodies: shop::price
       control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-17, src/lib.rs:17)
-      equivalence: different: for x = 0: before returns 1, after returns 2 (suggested test `semilla_test_price_7812e1`)
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:16): same structure: 1 changed check (in dev, dev, all features; 1 more result(s) in other configurations: semilla expand --step 0); different (for x = 0: before returns 1, after returns 2; suggested test `semilla_test_price_7812e1`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_price_7812e1`: add it to `src/lib.rs`, in the module of `shop::price` (line 16); run it: `cargo test -p shop semilla_test_price_7812e1`; also: `cargo test -p shop --release semilla_test_price_7812e1`; also: `cargo test -p shop --all-features semilla_test_price_7812e1`; also: `cargo test -p shop --release --all-features semilla_test_price_7812e1`
-      #[cfg(test)]
-      mod semilla_test_price_7812e1 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 1; the new version returns 2.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 0;
-              let got = crate::price(x);
-              assert_eq!(got, 1);
-          }
-      }
+    shop::price (src/lib.rs:16): same structure: 1 changed check (in dev, dev, all features; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

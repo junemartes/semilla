@@ -77,6 +77,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::list::extra` (src/list.rs:16): the full compare: `#[same(depot::list::extra)] fn extra_same() {}`; a difference: `#[change(depot::list::extra)] fn extra_change(n: u32) -> bool { … }` or `#[different(depot::list::extra)] fn extra_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `40` → `41` (f2)
       in: depot::list::extra

@@ -28,6 +28,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::report` (src/lib.rs:1): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: deleted statement `out.push(format!("middle {} {}", a, b))` (f1)
       in: shop::report
@@ -40,10 +42,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: − call `format` (src/lib.rs:-4): return → call `must_use::<String>`
       control flow: − call `must_use::<String>` (src/lib.rs:-4): return → call `Vec::<String>::push`
       control flow: … 2 more (semilla expand --step 0)
-      equivalence: not decided: an array
+      equivalence: MIR changes
   cover: each of the 1 changed line(s) is in a fact
   control flow: 1 body
-    shop::report (src/lib.rs:1): graph changes: −3 calls, −1 construct, +1 arrow, −5 arrows; not decided (an array)
+    shop::report (src/lib.rs:1): graph changes: −3 calls, −1 construct, +1 arrow, −5 arrows; MIR changes
   expansions: 1 removed, 2 equal
     `format!("middle {} {}", a, b)` at `shop::report/S2/args[0]` (src/lib.rs:-4): expansion removed: `macro format` (crate alloc): 3 line(s) of code; the step removes the call or its input
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

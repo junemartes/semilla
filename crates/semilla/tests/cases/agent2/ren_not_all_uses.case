@@ -115,34 +115,22 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     ◆ f1 stated: renamed `depot::limit` → `depot::cap` [rename · code equal]
     ◆ f3 stated: public API: `depot::limit` is now `depot::cap` (a different crate can no longer use the old path) [rename · no code]
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::uses_limit` (src/lib.rs:26): the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression `limit()` → `wrap(3)` (f2)
       in: depot::uses_limit
       lines: src/lib.rs:26, src/lib.rs:-26
-      to state it: --change 'depot::uses_limit=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::uses_limit=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::uses_limit=TEXT'; if it does not change, --same 'rewrite limit() => wrap(3)'
   other facts, filled in by Semilla:
   ◆ f2 derived: changed expression `limit()` → `wrap(3)` at `depot::uses_limit/tail/rhs` [semantics · code different]
       affected bodies: depot::uses_limit
       control flow: ~ call `cap` → `wrap` (src/lib.rs:-26, src/lib.rs:26)
       control flow: ~ check `overflow: limit() + limit()` → `overflow: cap() + wrap(3)` (src/lib.rs:-26, src/lib.rs:26)
-      equivalence: different: for each input: before returns 20, after returns 13 (suggested test `semilla_test_uses_limit_ade6e9`)
+      equivalence: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    depot::uses_limit (src/lib.rs:26): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for each input: before returns 20, after returns 13; suggested test `semilla_test_uses_limit_ade6e9`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_uses_limit_ade6e9`: add it to `src/lib.rs`, in the module of `depot::uses_limit` (line 26); run it: `cargo test -p depot semilla_test_uses_limit_ade6e9`; also: `cargo test -p depot --release semilla_test_uses_limit_ade6e9`
-      #[cfg(test)]
-      mod semilla_test_uses_limit_ade6e9 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 20; the new version returns 13.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let got = crate::uses_limit();
-              assert_eq!(got, 20);
-          }
-      }
+    depot::uses_limit (src/lib.rs:26): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

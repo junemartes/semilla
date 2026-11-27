@@ -105,33 +105,21 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::list::f3` (src/list.rs:25): the full compare: `#[same(depot::list::f3)] fn f3_same() {}`; a difference: `#[change(depot::list::f3)] fn f3_change() -> bool { … }` or `#[different(depot::list::f3)] fn f3_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f1)
       in: depot::list::f3
       lines: src/list.rs:25-26, src/list.rs:-30
-      to state it: --change 'depot::list::f3=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::list::f3=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::f3=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `1` → `2` at `depot::list::f3/S0/init` [semantics · code different]
       affected bodies: depot::list::f3
-      equivalence: different: for each input: before returns 1, after returns 2 (suggested test `semilla_test_f3_e48c92`)
+      equivalence: MIR changes
   ◆ f2 derived: layout of `src/list.rs`: 3 changed lines of 1 item with equal tokens at a new place [layout · no code]
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body
-    depot::list::f3 (src/list.rs:25): same graph (the edit keeps the control flow); different (for each input: before returns 1, after returns 2; suggested test `semilla_test_f3_e48c92`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_f3_e48c92`: add it to `src/list.rs`, in the module of `depot::list::f3` (line 30); run it: `cargo test -p depot semilla_test_f3_e48c92`; also: `cargo test -p depot --release semilla_test_f3_e48c92`
-      #[cfg(test)]
-      mod semilla_test_f3_e48c92 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 1; the new version returns 2.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let got = crate::list::f3();
-              assert_eq!(got, 1);
-          }
-      }
+    depot::list::f3 (src/list.rs:25): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

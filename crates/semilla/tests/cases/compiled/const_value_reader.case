@@ -43,6 +43,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::cap` (src/lib.rs:12): the full compare: `#[same(shop::cap)] fn cap_same() {}`; a difference: `#[change(shop::cap)] fn cap_change(n: u32) -> bool { … }` or `#[different(shop::cap)] fn cap_different() -> bool { … }`
+    MIR changes with no claim: `shop::price` (src/lib.rs:4): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(n: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: value of, see f1 (f1)
       in: shop::RATE
@@ -56,22 +59,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::cap (src/lib.rs:12): same graph; reads a changed constant: `shop::RATE` (7 → 6); equivalent (proved by SMT)
-    shop::price (src/lib.rs:4): same graph; reads a changed constant: `shop::RATE` (7 → 6); different (for n = 1: before returns 7, after returns 6; suggested test `semilla_test_price_40fa3e`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_price_40fa3e`: add it to `src/lib.rs`, in the module of `shop::price` (line 4); run it: `cargo test -p shop semilla_test_price_40fa3e`; also: `cargo test -p shop --release semilla_test_price_40fa3e`
-      #[cfg(test)]
-      mod semilla_test_price_40fa3e {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 7; the new version returns 6.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let n = 1;
-              let got = crate::price(n);
-              assert_eq!(got, 7);
-          }
-      }
+    shop::cap (src/lib.rs:12): same graph; reads a changed constant: `shop::RATE` (7 → 6); MIR changes
+    shop::price (src/lib.rs:4): same graph; reads a changed constant: `shop::RATE` (7 → 6); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -95,12 +95,13 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::Tool::grow` (src/lib.rs:34): the full compare: `#[same(depot::Tool::grow)] fn grow_same() {}`; a difference: `#[change(depot::Tool::grow)] fn grow_change(mut this_before: before::depot::Tool, mut this_after: after::depot::Tool, by: u32) -> bool { … }` or `#[different(depot::Tool::grow)] fn grow_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression `by` → `by + 1` (f1)
       in: depot::Tool::grow
       lines: src/lib.rs:24, src/lib.rs:26-27, src/lib.rs:32-42, src/lib.rs:-2-3, src/lib.rs:-8-19
-      to state it: --change 'depot::Tool::grow=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::Tool::grow=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::Tool::grow=TEXT'; if it does not change, --same 'rewrite by => by + 1'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics · code different]
       affected bodies: depot::Tool::grow
@@ -108,27 +109,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + panic `overflow` (src/lib.rs:38)
       control flow: ~ check `overflow: self.n += by` → `overflow: self.n += by + 1` (src/lib.rs:-14, src/lib.rs:38)
       control flow: … 2 more (semilla expand --step 0)
-      equivalence: different: for self = &Tool { 0 }, by = 1: before returns 1 with `*self` = Tool { 1 }, after returns 2 with `*self` = Tool { 2 } (suggested test `semilla_test_grow_56f29a`)
+      equivalence: MIR changes
   ◆ f2 derived: layout of `src/lib.rs`: 8 changed lines with equal tokens; 2 changed lines of 1 item with equal tokens at a new place [layout · no code]
   cover: each of the 38 changed line(s) is in a fact
   control flow: 1 body
-    depot::Tool::grow (src/lib.rs:34): graph changes: +1 check, +1 panic, 1 changed check, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for self = &Tool { 0 }, by = 1: before returns 1 with `*self` = Tool { 1 }, after returns 2 with `*self` = Tool { 2 }; suggested test `semilla_test_grow_56f29a`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_grow_56f29a`: add it to `src/lib.rs`, in the module of `depot::Tool::grow` (line 10); run it: `cargo test -p depot semilla_test_grow_56f29a`; also: `cargo test -p depot --release semilla_test_grow_56f29a`
-      #[cfg(test)]
-      mod semilla_test_grow_56f29a {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 1 with `*self` = Tool { 1 }; the new version returns 2 with `*self` = Tool { 2 }.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let mut arg1 = crate::Tool { n: 0 };
-              let by = 1;
-              let got = crate::Tool::grow(&mut arg1, by);
-              assert_eq!(got, 1);
-              assert!(matches!(arg1, crate::Tool { n: 1 }));
-          }
-      }
+    depot::Tool::grow (src/lib.rs:34): graph changes: +1 check, +1 panic, 1 changed check, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

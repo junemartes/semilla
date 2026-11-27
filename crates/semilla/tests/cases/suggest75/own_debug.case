@@ -1,5 +1,8 @@
 note: a type with its own `Debug` impl: a suggested test matches its fields with a pattern, so it needs no `Debug` (design 75)
+note: design 84: only a claim starts the solver, so each body of the case has an empty `#[same]` claim (the full compare of today); a false claim rejects the step
 rule+: R75.1-1
+option: --intent
+option: .semilla/intent/step.rs
 === both Cargo.toml
 [package]
 name = "depot"
@@ -29,25 +32,39 @@ impl std::fmt::Debug for Meters {
 pub fn walk(x: u32) -> Meters {
     Meters(x >> 2)
 }
+=== both .gitignore
+/.semilla/
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[same(depot::walk)]
+fn same_0() {}
 === expected
-exit: 0
-accepted: step 0 "the change" stored in group G1 "the change"
-build check: passes (the build of the compiled check)
+exit: 1
+rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  ✗ the intent claim i1 `#[same(depot::walk)] fn same_0()` (.semilla/intent/step.rs:3): false: for x = 8: before returns Meters { 4 }, after returns Meters { 2 } (suggested test `semilla_test_walk_10a69b`)
+
+  intent (1 claim(s); a claim is a proof only if it is proved):
+  ✗ i1 `#[same(depot::walk)] fn same_0()` (.semilla/intent/step.rs:3): false: for x = 8: before returns Meters { 4 }, after returns Meters { 2 } (suggested test `semilla_test_walk_10a69b`)
+      the input is an exact input of the two versions: correct the claim or the code
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    ✗ false: i1 `#[same(depot::walk)] fn same_0()`: for x = 8: before returns Meters { 4 }, after returns Meters { 2 } (suggested test `semilla_test_walk_10a69b`)
+    AST changes: 1 mapped by claims, 0 mapped by Semilla, 0 not mapped
+    changed bodies: 0 equal MIR, 0 explained by claims, 0 MIR changes with no claim, 1 MIR changes that the claims on the item do not explain
+      not explained by its claims: `depot::walk` (src/lib.rs:9): MIR changes
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed operator `x / 2` → `x >> 2` (f1)
       in: depot::walk
       lines: src/lib.rs:10, src/lib.rs:-10
-      to state it: --change 'depot::walk=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::walk=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::walk=TEXT'; if it does not change, --same 'rewrite $a / 2 => $a >> 2'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed operator `x / 2` → `x >> 2` at `depot::walk/tail/args[0]` [semantics · code different]
       affected bodies: depot::walk
-      equivalence: different: for x = 8: before returns Meters { 4 }, after returns Meters { 2 } (suggested test `semilla_test_walk_10a69b`)
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::walk (src/lib.rs:9): same graph (the edit keeps the control flow); different (for x = 8: before returns Meters { 4 }, after returns Meters { 2 }; suggested test `semilla_test_walk_10a69b`)
+    depot::walk (src/lib.rs:9): same graph (the edit keeps the control flow); MIR changes
   suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
     `semilla_test_walk_10a69b`: add it to `src/lib.rs`, in the module of `depot::walk` (line 9); run it: `cargo test -p depot semilla_test_walk_10a69b`; also: `cargo test -p depot --release semilla_test_walk_10a69b`
       #[cfg(test)]
@@ -63,7 +80,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
           }
       }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-
+no command can succeed without a code change: fix the cause, then run the step again
 === positions
-◆ f1 derived: changed operator `x / 2` → `x >> 2` at `depot::walk/tail/args[0]` [semantics · code different]
-    lines: src/lib.rs:10, src/lib.rs:-10
+none: the runner has no accepted step for this case

@@ -32,75 +32,33 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 5 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::price` (src/lib.rs:2): the signature changes (`fn price (x : u32 , n : u32) -> u32` → `fn price (x : u64 , n : u64) -> u64`): `#[same(shop::price)] fn price(x: u32, n: u32) -> bool { let old = before::shop::price(x, n); let new = after::shop::price(x, n); true }`; a difference: `#[change(shop::price)] fn price_change() -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f2, f3)
       in: shop::price
       lines: src/lib.rs:3, src/lib.rs:5, src/lib.rs:-3, src/lib.rs:-5
-      to state it: --change 'shop::price=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::price=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 10 => 5' --same 'rewrite 1 => 2'
   declarations, filled in by Semilla:
   ◆ f1 derived: type `u32` → `u64` in 3 places: parameter `x` of `shop::price`, parameter `n` of `shop::price`, return type of `shop::price` (the public API can change: a different crate can use the item) [declaration · code different]
       affected bodies: shop::price (with 4 other edits of this body)
       through: `shop::price` (1 body)
-      equivalence: equivalent alone (proved by equal MIR); the body: not decided: the return type changes
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
       ! public API: the compare does not cover the code of a different crate
       docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price with a tax of 10 percent.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   other facts, filled in by Semilla:
   ◆ f2 derived: changed literal `10` → `5` at `shop::price/S0/init/rhs` [semantics · code different]
       affected bodies: shop::price (with 4 other edits of this body)
-      equivalence: different alone in dev: for x = 9, n = 0: before returns 9, after returns 10 (suggested test `semilla_test_price_211df4`); different alone in release: for x = 10, n = 2: before returns 33, after returns 36 (suggested test `semilla_test_price_0792ce`); the body: not decided: the return type changes
+      equivalence: MIR changes alone; the body: MIR changes
   ◆ f3 derived: changed literal `1` → `2` at `shop::price/S1/init/rhs` [semantics · code different]
       affected bodies: shop::price (with 4 other edits of this body)
       control flow: ~ check `overflow: n + 1` → `overflow: n + 2` (src/lib.rs:-5, src/lib.rs:5)
-      equivalence: different alone: for x = 1, n = 0: before returns 1, after returns 2 (suggested test `semilla_test_price_329013`); the body: not decided: the return type changes
+      equivalence: MIR changes alone; the body: MIR changes
       comment above line 5, no edit in this step (src/lib.rs:4): `// One unit more for the box.`
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (the return type changes)
-  suggested tests: 3 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_price_211df4`: add it to `src/lib.rs`, in the module of `shop::price` (line 2); run it: `cargo test -p shop semilla_test_price_211df4`
-      #[cfg(test)]
-      mod semilla_test_price_211df4 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 9; the new version returns 10.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 9;
-              let n = 0;
-              let got = crate::price(x, n);
-              assert_eq!(got, 9);
-          }
-      }
-    `semilla_test_price_0792ce`: add it to `src/lib.rs`, in the module of `shop::price` (line 2); run it: `cargo test -p shop --release semilla_test_price_0792ce`
-      #[cfg(test)]
-      mod semilla_test_price_0792ce {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 33; the new version returns 36.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 10;
-              let n = 2;
-              let got = crate::price(x, n);
-              assert_eq!(got, 33);
-          }
-      }
-    `semilla_test_price_329013`: add it to `src/lib.rs`, in the module of `shop::price` (line 2); run it: `cargo test -p shop semilla_test_price_329013`; also: `cargo test -p shop --release semilla_test_price_329013`
-      #[cfg(test)]
-      mod semilla_test_price_329013 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 1; the new version returns 2.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 1;
-              let n = 0;
-              let got = crate::price(x, n);
-              assert_eq!(got, 1);
-          }
-      }
+    shop::price (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 2 comment(s) of the changed items have no edit in this step
 

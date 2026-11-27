@@ -45,6 +45,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::bill` (src/lib.rs:15): the full compare: `#[same(shop::bill)] fn bill_same() {}`; a difference: `#[change(shop::bill)] fn bill_change(n: u32) -> bool { … }` or `#[different(shop::bill)] fn bill_different() -> bool { … }`
+    MIR changes with no claim: `shop::charge` (no place): no result of the equivalence check; the full compare: `#[same(shop::charge)] fn charge_same() {}`; a difference: `#[change(shop::charge)] fn charge_change() -> bool { … }` or `#[different(shop::charge)] fn charge_different() -> bool { … }`
   declarations, filled in by Semilla:
   ◆ f1 derived: type of `shop::Item`: `type Item = Food;` → `type Item = Fuel;` (the public API can change: a different crate can use the item) [declaration · code different]
       affected bodies: shop::bill
@@ -53,22 +56,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::bill (src/lib.rs:15): same structure: 2 changed call targets; no edit in the body; different (for n = 1: before returns 5, after returns 20; suggested test `semilla_test_bill_2327fa`)
+    shop::bill (src/lib.rs:15): same structure: 2 changed call targets; no edit in the body; MIR changes
     shop::charge (no place): instance charge::<shop::Fuel>: call `<T as shop::Tax>::rate` resolves to `<shop::Fuel as shop::Tax>::rate` (before: the instance charge::<shop::Food>)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_bill_2327fa`: add it to `src/lib.rs`, in the module of `shop::bill` (line 15); run it: `cargo test -p shop semilla_test_bill_2327fa`; also: `cargo test -p shop --release semilla_test_bill_2327fa`
-      #[cfg(test)]
-      mod semilla_test_bill_2327fa {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 5; the new version returns 20.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let n = 1;
-              let got = crate::bill(n);
-              assert_eq!(got, 5);
-          }
-      }
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

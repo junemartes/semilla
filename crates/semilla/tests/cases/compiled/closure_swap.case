@@ -23,6 +23,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+    MIR changes with no claim: `shop::both` (src/lib.rs:1): the full compare: `#[same(shop::both)] fn both_same() {}`; a difference: `#[change(shop::both)] fn both_change(v: &[u32]) -> bool { … }` or `#[different(shop::both)] fn both_different() -> bool { … }`
+    MIR changes with no claim: `shop::both::{closure#0} |x| x.wrapping_mul(2)` (src/lib.rs:2): the same MIR text; a changed callee: `shop::both::{closure#0}`, `shop::both::{closure#1}`; the template of `shop::both` covers its item `shop::both`
+    MIR changes with no claim: `shop::both::{closure#1} |x| x.wrapping_add(1)` (src/lib.rs:3): the same MIR text; a changed callee: `shop::both::{closure#0}`, `shop::both::{closure#1}`; the template of `shop::both` covers its item `shop::both`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: moved statement, see f1 (f1)
       in: shop::both
@@ -32,14 +36,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: moved statement `let a: u32 = v.iter().map(|x| x.wrapping_add(1)).sum();` from `shop::both/S0` to `shop::both/S1` [semantics · code different]
       affected bodies: shop::both
       control flow: − arrow entry (src/lib.rs:-1) → call `slice::<impl [u32]>::iter` (src/lib.rs:-2)
-      equivalence: `shop::both`: not decided: the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined)
-      equivalence: `shop::both::{closure#0} |x| x.wrapping_mul(2)`: equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_mul`)
-      equivalence: `shop::both::{closure#1} |x| x.wrapping_add(1)`: equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
+      equivalence: `shop::both`: MIR changes
+      equivalence: `shop::both::{closure#0} |x| x.wrapping_mul(2)`: MIR changes: the same MIR text; a changed callee: `shop::both::{closure#0}`, `shop::both::{closure#1}`
+      equivalence: `shop::both::{closure#1} |x| x.wrapping_add(1)`: MIR changes: the same MIR text; a changed callee: `shop::both::{closure#0}`, `shop::both::{closure#1}`
   cover: each of the 2 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::both (src/lib.rs:1): graph changes: +3 arrows, −3 arrows; not decided (the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined))
-    shop::both::{closure#0} |x| x.wrapping_mul(2) (src/lib.rs:2): same graph (the edit keeps the control flow); equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_mul`)
-    shop::both::{closure#1} |x| x.wrapping_add(1) (src/lib.rs:3): same graph (the edit keeps the control flow); equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
+    shop::both (src/lib.rs:1): graph changes: +3 arrows, −3 arrows; MIR changes
+    shop::both::{closure#0} |x| x.wrapping_mul(2) (src/lib.rs:2): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `shop::both::{closure#0}`, `shop::both::{closure#1}`)
+    shop::both::{closure#1} |x| x.wrapping_add(1) (src/lib.rs:3): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `shop::both::{closure#0}`, `shop::both::{closure#1}`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::git::Repo;
 use crate::buildcode::{BuildCode, Mode};
-use crate::oracle::{NormalOracle, SmtOracle};
+use crate::oracle::NormalOracle;
 
 /// A step that the agent started but did not end.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -689,7 +689,7 @@ impl App {
         };
         let driver = semilla_normal::cargo::find_driver().ok();
         let settings = semilla_normal::cargo::settings_key(&self.repo.build_base(), driver.as_deref());
-        let solver = SmtOracle::for_repo(&self.repo).path().map(std::path::Path::to_path_buf);
+        let solver = crate::oracle::solver_path(&self.repo);
         let text = format!("{}|{}|{}|{settings}", file(std::env::current_exe().ok()), file(driver), file(solver));
         format!("{:016x}", crate::store::stable_hash(text.as_bytes()))
     }
@@ -701,7 +701,7 @@ impl App {
         let tools = [
             ("the Semilla binary", std::env::current_exe().ok()),
             ("the MIR driver", if self.no_bodies { None } else { semilla_normal::cargo::find_driver().ok() }),
-            ("the solver", SmtOracle::for_repo(&self.repo).path().map(std::path::Path::to_path_buf)),
+            ("the solver", crate::oracle::solver_path(&self.repo)),
         ];
         tools
             .into_iter()
@@ -2129,7 +2129,9 @@ impl App {
         let log = self.config_log.clone();
         let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone(), added: Default::default(), after_commit: set.after_commit.is_some() }) };
         let bodies = Guard { inner: inner.as_ref(), skip: &skip, code };
-        let exprs = SmtOracle::for_repo(&self.repo);
+        // [R84.7-1] No solver for the effect of a changed condition (design 84): only a claim of
+        // an intent file starts the solver. A plain negation keeps its effect by the syntax.
+        let exprs = semilla_verify::NoOracle;
         let trees: BTreeSet<String> = set.steps.iter().flat_map(|s| [s.tree_before.clone(), s.tree_after.clone()]).collect();
         for tree in &trees {
             self.workspace(tree)?;
@@ -2212,9 +2214,6 @@ impl App {
             report.warnings.insert(index, warning);
         }
         report.warnings.extend(self.tool_warnings());
-        if !exprs.available() {
-            report.warnings.push("Z3 is not available; condition effects are not computed (run scripts/fetch-z3.sh, or set SEMILLA_Z3)".into());
-        }
         // Design 62: the open items of a tag after the commit.
         if set.after_commit.is_some() {
             for step in report.steps.iter_mut().chain(outcomes.iter_mut().map(|outcome| &mut outcome.report)) {

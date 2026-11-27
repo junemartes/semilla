@@ -40,6 +40,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::Cart::zero` (src/lib.rs:3): an added body: `#[new(depot::Cart::zero)] fn zero_new(this: &after::depot::Cart) -> bool { let new = after::depot::Cart::zero(this); true }`
   new and removed items, filled in by Semilla:
   ◆ f1 derived: added `depot::Cart::zero` (the public API changes: a different crate can now use the item) [added · code different]
       affected bodies: depot::Cart::zero

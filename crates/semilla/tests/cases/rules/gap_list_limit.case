@@ -55,207 +55,79 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 7 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 7 MIR changes with no claim
+    MIR changes with no claim: `depot::a` (src/lib.rs:6): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
+    MIR changes with no claim: `depot::b` (src/lib.rs:7): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
+    MIR changes with no claim: `depot::conf::depth` (src/lib.rs:17): the full compare: `#[same(depot::conf::depth)] fn depth_same() {}`; a difference: `#[change(depot::conf::depth)] fn depth_change() -> bool { … }` or `#[different(depot::conf::depth)] fn depth_different() -> bool { … }`
+    MIR changes with no claim: `depot::idle` (src/lib.rs:14): the full compare: `#[same(depot::idle)] fn idle_same() {}`; a difference: `#[change(depot::idle)] fn idle_change() -> bool { … }` or `#[different(depot::idle)] fn idle_different() -> bool { … }`
+    MIR changes with no claim: `depot::limit` (src/lib.rs:11): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
+    MIR changes with no claim: `depot::wrap` (src/lib.rs:9): the full compare: `#[same(depot::wrap)] fn wrap_same() {}`; a difference: `#[change(depot::wrap)] fn wrap_change(x: u32) -> bool { … }` or `#[different(depot::wrap)] fn wrap_different() -> bool { … }`
+    MIR changes with no claim: `depot::wrap2` (src/lib.rs:10): the full compare: `#[same(depot::wrap2)] fn wrap2_same() {}`; a difference: `#[change(depot::wrap2)] fn wrap2_change(x: u32) -> bool { … }` or `#[different(depot::wrap2)] fn wrap2_different() -> bool { … }`
   not stated: 7 item(s) with 7 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `9` (f1)
       in: depot::a
       lines: src/lib.rs:6, src/lib.rs:-6
-      to state it: --change 'depot::a=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::a=TEXT'; if it does not change, --same 'rewrite 1 => 9'
   ? 1 place: changed literal `2` → `5` (f2)
       in: depot::b
       lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: --change 'depot::b=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::b=TEXT'; if it does not change, --same 'rewrite 2 => 5'
   ? 1 place: changed literal `4` → `6` (f3)
       in: depot::conf::depth
       lines: src/lib.rs:17, src/lib.rs:-17
-      to state it: --change 'depot::conf::depth=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::conf::depth=TEXT'; if it does not change, --same 'rewrite 4 => 6'
   ? 1 place: changed literal `3` → `4` (f4)
       in: depot::idle
       lines: src/lib.rs:14, src/lib.rs:-14
-      to state it: --change 'depot::idle=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::idle=TEXT'; if it does not change, --same 'rewrite 3 => 4'
   ? 1 place: changed literal `10` → `11` (f5)
       in: depot::limit
       lines: src/lib.rs:11, src/lib.rs:-11
-      to state it: --change 'depot::limit=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
   and 2 more line(s) with 2 place(s): `semilla expand --step 0` shows each line
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::a=TEXT' --change 'depot::b=TEXT' --change 'depot::conf::depth=TEXT' --change 'depot::idle=TEXT' --change 'depot::limit=TEXT'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `1` → `9` at `depot::a/tail/rhs` [semantics · code different]
       affected bodies: depot::a
       control flow: ~ check `overflow: c.total + 1` → `overflow: c.total + 9` (src/lib.rs:-6, src/lib.rs:6)
-      equivalence: different in dev: for c = &Cart { 1, [] }: before returns 2, after returns 10 (suggested test `semilla_test_a_dee467`); different in release: for c = &Cart { 0, [] }: before returns 1, after returns 9 (suggested test `semilla_test_a_038dd4`)
+      equivalence: MIR changes
   ◆ f2 derived: changed literal `2` → `5` at `depot::b/tail/rhs` [semantics · code different]
       affected bodies: depot::b
       control flow: ~ check `overflow: c.total * 2` → `overflow: c.total * 5` (src/lib.rs:-7, src/lib.rs:7)
-      equivalence: different: for c = &Cart { 1, [] }: before returns 2, after returns 5 (suggested test `semilla_test_b_9fde22`)
+      equivalence: MIR changes
   ◆ f3 derived: changed literal `4` → `6` at `depot::conf::depth/tail` [semantics · code different]
       affected bodies: depot::conf::depth
-      equivalence: different: for each input: before returns 4, after returns 6 (suggested test `semilla_test_depth_e9bb90`)
+      equivalence: MIR changes
   ◆ f4 derived: changed literal `3` → `4` at `depot::idle/tail` [semantics · code different]
       affected bodies: depot::idle
-      equivalence: different: for each input: before returns 3, after returns 4 (suggested test `semilla_test_idle_c88083`)
+      equivalence: MIR changes
       docs of `depot::idle`, no edit in this step (src/lib.rs:13): `/// Gives three.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f5 derived: changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
       affected bodies: depot::limit
-      equivalence: different: for each input: before returns 10, after returns 11 (suggested test `semilla_test_limit_76eef0`)
-      reaches: 1 public function: depot::uses_limit (semilla expand --step 0)
+      equivalence: MIR changes
   ◆ f6 derived: changed expression `x` → `x + 7` at `depot::wrap/tail` [semantics · code different]
       affected bodies: depot::wrap
       control flow: + check `overflow: x + 7` (src/lib.rs:9): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:9)
       control flow: + arrow entry (src/lib.rs:9) → check `overflow: x + 7` (src/lib.rs:9)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: different: for x = 0: before returns 0, after returns 7 (suggested test `semilla_test_wrap_ceacbd`)
-      reaches: 1 public function: depot::both (semilla expand --step 0)
+      equivalence: MIR changes
   ◆ f7 derived: changed expression `x` → `x * 3` at `depot::wrap2/tail` [semantics · code different]
       affected bodies: depot::wrap2
       control flow: + check `overflow: x * 3` (src/lib.rs:10): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:10)
       control flow: + arrow entry (src/lib.rs:10) → check `overflow: x * 3` (src/lib.rs:10)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: different: for x = 1: before returns 1, after returns 3 (suggested test `semilla_test_wrap2_4d6be4`)
+      equivalence: MIR changes
   cover: each of the 14 changed line(s) is in a fact
   control flow: 7 bodies
-    depot::a (src/lib.rs:6): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different in dev (for c = &Cart { 1, [] }: before returns 2, after returns 10; suggested test `semilla_test_a_dee467`); different in release (for c = &Cart { 0, [] }: before returns 1, after returns 9; suggested test `semilla_test_a_038dd4`)
-    depot::b (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for c = &Cart { 1, [] }: before returns 2, after returns 5; suggested test `semilla_test_b_9fde22`)
-    depot::conf::depth (src/lib.rs:17): same graph (the edit keeps the control flow); different (for each input: before returns 4, after returns 6; suggested test `semilla_test_depth_e9bb90`)
-    depot::idle (src/lib.rs:14): same graph (the edit keeps the control flow); different (for each input: before returns 3, after returns 4; suggested test `semilla_test_idle_c88083`)
-    depot::limit (src/lib.rs:11): same graph (the edit keeps the control flow); different (for each input: before returns 10, after returns 11; suggested test `semilla_test_limit_76eef0`)
-    depot::wrap (src/lib.rs:9): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for x = 0: before returns 0, after returns 7; suggested test `semilla_test_wrap_ceacbd`)
-    depot::wrap2 (src/lib.rs:10): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for x = 1: before returns 1, after returns 3; suggested test `semilla_test_wrap2_4d6be4`)
-    reached bodies: 4
-      depot::both (src/lib.rs:8): different through depot::wrap: for c = &Cart { 0, [] }, d = &Cart { 0, [] }: before returns 1, after returns 8 (suggested test `semilla_test_both_026a4c`)
-      depot::uses_limit (src/lib.rs:12): different through depot::limit: for each input: before returns 20, after returns 22 (suggested test `semilla_test_uses_limit_86c8d5`)
-      depot::tests::t_limit (src/lib.rs:19): reached through depot::limit, depot::tests::t_limit::{closure#0}, not decided (a value of a type that the check does not model: fn t_limit() { assert_eq!(limit(), 10); } (src/lib.rs:-19))
-      depot::tests::t_limit::{closure#0} (src/lib.rs:19): reached through depot::tests::t_limit, not decided (a value of a type that the check does not model: fn t_limit() { assert_eq!(limit(), 10); } (src/lib.rs:-19))
-  suggested tests: 10 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_a_dee467`: add it to `src/lib.rs`, in the module of `depot::a` (line 6); run it: `cargo test -p depot semilla_test_a_dee467`
-      #[cfg(test)]
-      mod semilla_test_a_dee467 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 2; the new version returns 10.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let c = crate::Cart { total: 1, items: vec![] };
-              let got = crate::a(&c);
-              assert_eq!(got, 2);
-          }
-      }
-    `semilla_test_a_038dd4`: add it to `src/lib.rs`, in the module of `depot::a` (line 6); run it: `cargo test -p depot --release semilla_test_a_038dd4`
-      #[cfg(test)]
-      mod semilla_test_a_038dd4 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 1; the new version returns 9.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let c = crate::Cart { total: 0, items: vec![] };
-              let got = crate::a(&c);
-              assert_eq!(got, 1);
-          }
-      }
-    `semilla_test_b_9fde22`: add it to `src/lib.rs`, in the module of `depot::b` (line 7); run it: `cargo test -p depot semilla_test_b_9fde22`; also: `cargo test -p depot --release semilla_test_b_9fde22`
-      #[cfg(test)]
-      mod semilla_test_b_9fde22 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 2; the new version returns 5.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let c = crate::Cart { total: 1, items: vec![] };
-              let got = crate::b(&c);
-              assert_eq!(got, 2);
-          }
-      }
-    `semilla_test_depth_e9bb90`: add it to `src/lib.rs`, in the module of `depot::conf::depth` (line 17); run it: `cargo test -p depot semilla_test_depth_e9bb90`; also: `cargo test -p depot --release semilla_test_depth_e9bb90`
-      #[cfg(test)]
-      mod semilla_test_depth_e9bb90 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 4; the new version returns 6.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let got = crate::conf::depth();
-              assert_eq!(got, 4);
-          }
-      }
-    `semilla_test_idle_c88083`: add it to `src/lib.rs`, in the module of `depot::idle` (line 14); run it: `cargo test -p depot semilla_test_idle_c88083`; also: `cargo test -p depot --release semilla_test_idle_c88083`
-      #[cfg(test)]
-      mod semilla_test_idle_c88083 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 3; the new version returns 4.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let got = crate::idle();
-              assert_eq!(got, 3);
-          }
-      }
-    `semilla_test_limit_76eef0`: add it to `src/lib.rs`, in the module of `depot::limit` (line 11); run it: `cargo test -p depot semilla_test_limit_76eef0`; also: `cargo test -p depot --release semilla_test_limit_76eef0`
-      #[cfg(test)]
-      mod semilla_test_limit_76eef0 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 10; the new version returns 11.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let got = crate::limit();
-              assert_eq!(got, 10);
-          }
-      }
-    `semilla_test_wrap_ceacbd`: add it to `src/lib.rs`, in the module of `depot::wrap` (line 9); run it: `cargo test -p depot semilla_test_wrap_ceacbd`; also: `cargo test -p depot --release semilla_test_wrap_ceacbd`
-      #[cfg(test)]
-      mod semilla_test_wrap_ceacbd {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 0; the new version returns 7.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 0;
-              let got = crate::wrap(x);
-              assert_eq!(got, 0);
-          }
-      }
-    `semilla_test_wrap2_4d6be4`: add it to `src/lib.rs`, in the module of `depot::wrap2` (line 10); run it: `cargo test -p depot semilla_test_wrap2_4d6be4`; also: `cargo test -p depot --release semilla_test_wrap2_4d6be4`
-      #[cfg(test)]
-      mod semilla_test_wrap2_4d6be4 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 1; the new version returns 3.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 1;
-              let got = crate::wrap2(x);
-              assert_eq!(got, 1);
-          }
-      }
-    `semilla_test_both_026a4c`: add it to `src/lib.rs`, in the module of `depot::both` (line 8); run it: `cargo test -p depot semilla_test_both_026a4c`; also: `cargo test -p depot --release semilla_test_both_026a4c`
-      #[cfg(test)]
-      mod semilla_test_both_026a4c {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 1; the new version returns 8.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let c = crate::Cart { total: 0, items: vec![] };
-              let d = crate::Cart { total: 0, items: vec![] };
-              let got = crate::both(&c, &d);
-              assert_eq!(got, 1);
-          }
-      }
-    `semilla_test_uses_limit_86c8d5`: add it to `src/lib.rs`, in the module of `depot::uses_limit` (line 12); run it: `cargo test -p depot semilla_test_uses_limit_86c8d5`; also: `cargo test -p depot --release semilla_test_uses_limit_86c8d5`
-      #[cfg(test)]
-      mod semilla_test_uses_limit_86c8d5 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 20; the new version returns 22.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let got = crate::uses_limit();
-              assert_eq!(got, 20);
-          }
-      }
+    depot::a (src/lib.rs:6): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    depot::b (src/lib.rs:7): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    depot::conf::depth (src/lib.rs:17): same graph (the edit keeps the control flow); MIR changes
+    depot::idle (src/lib.rs:14): same graph (the edit keeps the control flow); MIR changes
+    depot::limit (src/lib.rs:11): same graph (the edit keeps the control flow); MIR changes
+    depot::wrap (src/lib.rs:9): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    depot::wrap2 (src/lib.rs:10): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 

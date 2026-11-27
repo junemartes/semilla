@@ -50,6 +50,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 4 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+    MIR changes with no claim: `<shop::Cat as shop::Speak>::id` (src/lib.rs:21): an added body: `#[new(<shop::Cat as shop::Speak>::id)] fn id_new(this: &after::<shop::Cat as shop::Speak>) -> bool { let new = after::<shop::Cat as shop::Speak>::id(this); true }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `<shop::Cat as shop::Speak>::name` (src/lib.rs:18): an added body: `#[new(<shop::Cat as shop::Speak>::name)] fn name_new(this: &after::<shop::Cat as shop::Speak>) -> bool { let new = after::<shop::Cat as shop::Speak>::name(this); true }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `<shop::Dog as shop::Speak>::id` (src/lib.rs:12): an added body: `#[new(<shop::Dog as shop::Speak>::id)] fn id_new(this: &after::<shop::Dog as shop::Speak>) -> bool { let new = after::<shop::Dog as shop::Speak>::id(this); true }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
   new and removed items, filled in by Semilla:
   ◆ f1 derived: trait impl `<Cat as Speak>` added with: `fn name`, `fn id` (the public API can change: a different crate can use the item) [added · code different]
       affected bodies: shop::<Cat as Speak>::id, shop::<Cat as Speak>::name

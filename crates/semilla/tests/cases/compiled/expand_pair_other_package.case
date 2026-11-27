@@ -68,6 +68,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::price` (shop/src/lib.rs:5): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change() -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: replace macro input, see f1 (f1)
       in: shop::price
@@ -78,11 +80,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: shop::price
       control flow: ~ call `<(u8, u8) as Size>::size` → `<(u8, u8, u8) as Size>::size` (shop/src/lib.rs:-5, shop/src/lib.rs:5)
       control flow: ~ check `overflow: <(u8, u8)>::size() * 2` → `overflow: <(u8, u8, u8)>::size() * 2` (shop/src/lib.rs:-5, shop/src/lib.rs:5)
-      equivalence: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
+      equivalence: MIR changes
       expansion: `twice!(<(u8, u8, u8)>::size())` at `shop::price/tail` (shop/src/lib.rs:5): expansion changed: changed path `<(u8, u8)>::size` → `<(u8, u8, u8)>::size` at `expansion/lhs/callee` [semantics]
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (shop/src/lib.rs:5): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))
+    shop::price (shop/src/lib.rs:5): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   expansions: 1 changed, 6 equal
     `twice!(<(u8, u8, u8)>::size())` at `shop::price/tail` (shop/src/lib.rs:5): expansion changed: `macro_rules! twice` (shop/src/lib.rs:3): changed path `<(u8, u8)>::size` → `<(u8, u8, u8)>::size` at `expansion/lhs/callee` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
