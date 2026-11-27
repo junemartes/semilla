@@ -1,0 +1,66 @@
+note: R91.3-1: the step after the step changes a macro in another file; the file of the macro call comes from the store, and the expansion is new
+rule+: R91.3-1
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both src/macros.rs
+macro_rules! double {
+    ($x:expr) => {
+        $x.wrapping_mul(2)
+    };
+}
+=== old src/lib.rs
+#[macro_use]
+mod macros;
+
+pub fn twice(a: u32) -> u32 {
+    double!(a)
+}
+=== new src/lib.rs
+#[macro_use]
+mod macros;
+
+pub fn twice(a: u32) -> u32 {
+    double!(a).wrapping_add(0)
+}
+=== next src/macros.rs
+macro_rules! double {
+    ($x:expr) => {
+        $x.wrapping_mul(3)
+    };
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::twice` (src/lib.rs:4): the full compare: `#[same(shop::twice)] fn twice_same() {}`; a difference: `#[change(shop::twice)] fn twice_change(a: u32) -> bool { … }` or `#[different(shop::twice)] fn twice_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  ? 2 places: 2 different edits (f1, f2)
+      in: shop::twice
+      lines: src/lib.rs:5, src/lib.rs:-5
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::twice=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+  real edits:
+  item `shop::twice`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `double!(a)` at `shop::twice/tail` [semantics · code different] · not stated
+      affected bodies: shop::twice (with 1 other edit of this body)
+      equivalence: MIR changes
+  ◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added statement `double!(a).wrapping_add(0)` at `shop::twice/tail` [semantics · code different] · not stated
+      affected bodies: shop::twice (with 1 other edit of this body)
+      control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:5): return → return
+      control flow: + arrow call `num::<impl u32>::wrapping_mul` (src/lib.rs:5) → call `num::<impl u32>::wrapping_add` (src/lib.rs:5) (return)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::twice (src/lib.rs:4): graph changes: +1 call, +2 arrows, −1 arrow; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `double!(a)` at `shop::twice/tail` [semantics · code different] · not stated
+    lines: src/lib.rs:-5
+◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added statement `double!(a).wrapping_add(0)` at `shop::twice/tail` [semantics · code different] · not stated
+    lines: src/lib.rs:5

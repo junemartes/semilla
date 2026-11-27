@@ -1,0 +1,52 @@
+note: R91.3-1: the step after the step changes a type in another file; the file that uses the type comes from the store
+rule+: R91.3-1
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both src/price.rs
+pub struct Price(pub u32);
+=== old src/lib.rs
+pub mod price;
+
+pub fn cost(p: &price::Price) -> u64 {
+    u64::from(p.0)
+}
+=== new src/lib.rs
+pub mod price;
+
+pub fn cost(p: &price::Price) -> u64 {
+    u64::from(p.0) + 1
+}
+=== next src/price.rs
+pub struct Price(pub u16);
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::cost` (src/lib.rs:3): the full compare: `#[same(shop::cost)] fn cost_same() {}`; a difference: `#[change(shop::cost)] fn cost_change(p_before: &before::shop::price::Price, p_after: &after::shop::price::Price) -> bool { … }` or `#[different(shop::cost)] fn cost_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  ? 1 place: changed expression `u64::from(p.0)` → `u64::from(p.0) + 1` (f1)
+      in: shop::cost
+      lines: src/lib.rs:4, src/lib.rs:-4
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::cost=TEXT'; if it does not change, --same 'rewrite $a($b) => $a($b) + 1'
+  real edits:
+  item `shop::cost`:
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `u64::from(p.0)` → `u64::from(p.0) + 1` at `shop::cost/tail` [semantics · code different] · not stated
+      affected bodies: shop::cost
+      control flow: + check `overflow: u64::from(p.0) + 1` (src/lib.rs:4): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:4)
+      control flow: + arrow call `num::<impl From<u32> for u64>::from` (src/lib.rs:4) → check `overflow: u64::from(p.0) + 1` (src/lib.rs:4) (return)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::cost (src/lib.rs:3): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `u64::from(p.0)` → `u64::from(p.0) + 1` at `shop::cost/tail` [semantics · code different] · not stated
+    lines: src/lib.rs:4, src/lib.rs:-4

@@ -1337,6 +1337,71 @@ const ICE_TEXT: &str = "internal compiler error";
 /// (design 61.9, part 0). Each body of a crate that the second run builds then has the mark
 /// "no form: …". If the second build fails too, the error of the second build is the result.
 #[allow(clippy::too_many_arguments)]
+/// [R91.5-1] The split of the time of one `cargo check` from the timing lines of the driver: the
+/// count of the member crates that the driver compiled, the sum of the time in rustc before the
+/// driver, of the time of the driver, and of the time in rustc after the driver, the time of
+/// the compiles of the members (the union of their times, a parallel build counts one time),
+/// and the time of the cargo command.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DriverSplit {
+    pub crates: u64,
+    pub before: u64,
+    pub driver: u64,
+    pub after: u64,
+    pub members: u64,
+    pub total: u64,
+}
+
+impl DriverSplit {
+    /// The split of the timing lines of one build (nanoseconds). A line of another form does not
+    /// count.
+    pub fn of(lines: &str, started: std::time::SystemTime, ended: std::time::SystemTime) -> DriverSplit {
+        let nanos = |time: std::time::SystemTime| time.duration_since(std::time::UNIX_EPOCH).map(|value| value.as_nanos() as u64).unwrap_or(0);
+        let mut split = DriverSplit { total: nanos(ended).saturating_sub(nanos(started)), ..DriverSplit::default() };
+        let mut spans: Vec<(u64, u64)> = Vec::new();
+        for line in lines.lines() {
+            let parts: Vec<&str> = line.split(' ').collect();
+            let [tag, _, start, end, before, driver, after, ..] = parts.as_slice() else { continue };
+            let numbers: Option<Vec<u64>> = [start, end, before, driver, after].iter().map(|part| part.parse().ok()).collect();
+            let (Some(numbers), true) = (numbers, *tag == "semilla-driver-timing") else { continue };
+            split.crates += 1;
+            split.before += numbers[2];
+            split.driver += numbers[3];
+            split.after += numbers[4];
+            spans.push((numbers[0], numbers[1].max(numbers[0])));
+        }
+        spans.sort();
+        let mut end = 0;
+        for (start, stop) in spans {
+            if stop > end {
+                split.members += stop - start.max(end);
+                end = stop;
+            }
+        }
+        split
+    }
+}
+
+/// [R91.5-1] The split of each `cargo check` of this process, by target folder.
+static DRIVER_SPLITS: std::sync::Mutex<Vec<(PathBuf, DriverSplit)>> = std::sync::Mutex::new(Vec::new());
+
+/// [R91.5-1] Takes the splits of the builds in a target folder (the sum, if the folder had more
+/// than one build since the last call). `None`: no build with the timing lines.
+pub fn take_driver_split(target_dir: &Path) -> Option<DriverSplit> {
+    let target = std::fs::canonicalize(target_dir).unwrap_or_else(|_| target_dir.to_path_buf());
+    let mut all = DRIVER_SPLITS.lock().unwrap_or_else(|error| error.into_inner());
+    let mut found: Option<DriverSplit> = None;
+    all.retain(|(folder, split)| {
+        if *folder != target {
+            return true;
+        }
+        let sum = found.get_or_insert_with(DriverSplit::default);
+        *sum = DriverSplit { crates: sum.crates + split.crates, before: sum.before + split.before, driver: sum.driver + split.driver, after: sum.after + split.after, members: sum.members + split.members, total: sum.total + split.total };
+        false
+    });
+    found
+}
+
 fn run_check_command(
     workspace: &Path,
     level: &str,
@@ -1410,6 +1475,14 @@ fn run_check_once(
     if trait_table {
         command.env("SEMILLA_TRAIT_TABLE", &out);
     }
+    // [R91.5-1] With the timing lines on, the driver writes one timing line for each member
+    // crate that it compiles, in the folder of the temporary files of the build (the sandbox
+    // lets the build write there). The variable changes no record: cargo does not track it.
+    let timing_file = std::env::var_os("SEMILLA_TIMING").is_some().then(|| temporary.join(format!("semilla-driver-timing-{}.txt", std::process::id())));
+    if let Some(file) = &timing_file {
+        let _ = std::fs::remove_file(file);
+        command.env("SEMILLA_DRIVER_TIMING", file);
+    }
     // The sandbox (design 27). A build script and a proc macro of the tree run in this build.
     // They write only the cargo target folder and the records folder. They read only these
     // folders, the build folder, the toolchain, the cargo registry, the system folders, and the
@@ -1426,7 +1499,14 @@ fn run_check_once(
     }
     sandbox.apply(&mut command).map_err(|cause| anyhow::anyhow!("cannot start the sandbox for the check build: {cause}"))?;
     // The build runs to its end. Then Semilla stops each process that the build left.
+    let started = std::time::SystemTime::now();
     let output = crate::sandbox::run_and_stop(&mut command).context("cannot run cargo")?;
+    if let Some(file) = &timing_file {
+        let lines = std::fs::read_to_string(file).unwrap_or_default();
+        let _ = std::fs::remove_file(file);
+        let split = DriverSplit::of(&lines, started, std::time::SystemTime::now());
+        DRIVER_SPLITS.lock().unwrap_or_else(|error| error.into_inner()).push((target_dir.clone(), split));
+    }
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let text = error_text(&stdout, &String::from_utf8_lossy(&output.stderr));
@@ -1453,6 +1533,29 @@ fn run_check_once(
 #[cfg(test)]
 mod build_check_tests {
     use super::*;
+
+    /// [R91.5-1] The split of a build joins the compiles of the member crates: two compiles that
+    /// overlap count their union for the wall time, and the parts are sums over the crates.
+    // rule+ R91.5-1
+    #[test]
+    fn the_split_of_a_build_joins_the_compiles_of_the_members() {
+        let start = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(1_000);
+        let end = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(10_000);
+        let lines = "semilla-driver-timing a.lib.1.jsonl 2000 5000 1000 1500 500 7\nsemilla-driver-timing b.lib.2.jsonl 4000 6000 800 1000 200 8\n";
+        let split = DriverSplit::of(lines, start, end);
+        assert_eq!(split, DriverSplit { crates: 2, before: 1800, driver: 2500, after: 700, members: 4000, total: 9000 });
+    }
+
+    /// [R91.5-1] The negative case: a line of another form (an error text, a cut line) does not
+    /// count, and a build with no line has no member time.
+    // rule- R91.5-1
+    #[test]
+    fn a_line_of_another_form_does_not_count() {
+        let start = std::time::UNIX_EPOCH;
+        let end = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(500);
+        let lines = "error: something\nsemilla-driver-timing a.lib.1.jsonl 10 20 x 1 1 2\nsemilla-driver-timing cut 10\n";
+        assert_eq!(DriverSplit::of(lines, start, end), DriverSplit { total: 500, ..DriverSplit::default() });
+    }
 
     fn words(list: &[&str]) -> Vec<String> {
         list.iter().map(|word| word.to_string()).collect()

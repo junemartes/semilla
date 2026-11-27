@@ -971,7 +971,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             // [R89.4-2] The entries of the database that no folder of the cache can use. The
             // output of the command does not change.
-            let _ = crate::recstore::clean_database(&app.repo.cache_dir());
+            // [R91.4-1] Also each stored result of a pair of trees that no stored step has.
+            let live = app.store_live();
+            let _ = crate::recstore::clean_database(&app.repo.cache_dir(), &live);
         }
         Command::Show => println!("{}", app.check(None, false)?.tree.render()),
         Command::Tag { commit, again, .. } => {

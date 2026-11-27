@@ -158,8 +158,8 @@ impl Guard<'_> {
 }
 
 impl semilla_verify::BodyOracle for Guard<'_> {
-    fn phase_store(&self) -> Option<std::sync::Arc<dyn semilla_verify::PhaseStore>> {
-        self.inner.phase_store()
+    fn phase_store(&self, step: &Step) -> Option<std::sync::Arc<dyn semilla_verify::PhaseStore>> {
+        self.inner.phase_store(step)
     }
 
     fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> Result<Vec<semilla_verify::BodyComparison>> {
@@ -688,6 +688,10 @@ pub struct CheckResult {
 /// The format key of a stored output of `cargo metadata` (R88.5-1): the JSON text.
 const METADATA_FORMAT: &str = "semilla-metadata-1";
 
+/// [R91.2-1] The phase of the load of the files of a tree in the timing lines (the parse of the
+/// new files and the parts of the other files from the store).
+pub(crate) const FILES_PHASE: &str = "the load of the files of a tree";
+
 /// [R88.5-1] The key of the stored syntax data of a tree: the tree, the digest of the output of
 /// `cargo metadata`, and the identity of the Semilla binary (the version of the parser).
 fn syntax_key(tree: &str, metadata: &[u8], binary: &str) -> String {
@@ -840,12 +844,19 @@ impl App {
             None => run_metadata(&self.repo, tree, &dir).with_context(|| format!("read the cargo targets of tree {tree}"))?,
         };
         crate::timing("cargo metadata", started);
-        let mut ws = Workspace::load_with_metadata(&dir, &metadata).with_context(|| format!("load the workspace of tree {tree}"))?;
+        // [R91.2-1] The syntax data of each file with a stored part comes from the store: only
+        // the files with a new content or a new context are parsed.
+        let files = crate::recstore::FileSyntaxDb::of(&cache);
+        let loaded = semilla_core::timing::phase(FILES_PHASE, || Workspace::load_with_store(&dir, &metadata, files.as_ref().map(|files| files as &dyn semilla_syntax::load::FileSyntaxStore)));
+        let (from_store, parsed) = files.map(crate::recstore::FileSyntaxDb::finish).unwrap_or((0, 0));
+        let mut ws = loaded.with_context(|| format!("load the workspace of tree {tree}"))?;
         // The git tree has each entry, also a submodule and a file in an ignored folder. Its
         // modes and hashes are exact, so the diff compares them instead of the folder.
-        ws.files = self.repo.tree_entries(tree)?;
-        semilla_core::timing::count(crate::recstore::WORK_PHASE, "files parsed", ws.parsed_files.len() as u64);
-        let _ = store.put_content(&cache, crate::recstore::Kind::Syntax, &syntax_key(&metadata_bytes), semilla_syntax::stored::FORMAT, semilla_syntax::stored::encode(&ws));
+        ws.files = semilla_core::timing::phase("the git entries of a tree", || self.repo.tree_entries(tree))?;
+        let parsed = if from_store + parsed == 0 { ws.parsed_files.len() as u64 } else { parsed };
+        semilla_core::timing::count(crate::recstore::WORK_PHASE, "files from the store", from_store);
+        semilla_core::timing::count(crate::recstore::WORK_PHASE, "files parsed", parsed);
+        let _ = semilla_core::timing::phase("the write of the syntax data of a tree", || store.put_content(&cache, crate::recstore::Kind::Syntax, &syntax_key(&metadata_bytes), semilla_syntax::stored::FORMAT, semilla_syntax::stored::encode(&ws)));
         crate::timing("load the syntax workspace", started);
         self.workspaces.insert(tree.to_string(), ws.clone());
         Ok(ws)
@@ -947,6 +958,25 @@ impl App {
             }
         }
         Ok((count, size))
+    }
+
+    /// [R91.4-1] The inputs that the stored steps of the session can use: the pair of trees of
+    /// each step, and the digest of the content of each Rust file of their trees.
+    pub(crate) fn store_live(&mut self) -> crate::recstore::Live {
+        let mut live = crate::recstore::Live::default();
+        let steps = self.load_session().map(|session| session.changeset.steps).unwrap_or_default();
+        let mut trees = BTreeSet::new();
+        for step in &steps {
+            live.pairs.insert(format!("{}:{}", step.tree_before, step.tree_after));
+            trees.insert(step.tree_before.clone());
+            trees.insert(step.tree_after.clone());
+        }
+        for tree in trees {
+            if let Ok(ws) = self.workspace(&tree) {
+                live.texts.extend(ws.rust_files.values().map(|text| crate::recstore::hex_digest(text.as_bytes())));
+            }
+        }
+        live
     }
 
     /// Removes the folder of the build check (design 53.2): the build folder, the target folder

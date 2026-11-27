@@ -39,6 +39,15 @@ pub fn add(phase: &'static str, started: Instant) {
     total.runs += 1;
 }
 
+/// [R91.5-1] Adds one run of a phase with a time in nanoseconds (a time that another process
+/// measured: the timing lines of the driver).
+pub fn add_nanos(phase: &'static str, nanos: u64) {
+    let mut all = totals();
+    let total = all.entry(phase).or_default();
+    total.nanos += nanos;
+    total.runs += 1;
+}
+
 /// Adds `count` to a count of the work of a phase (with no run and no time).
 pub fn count(phase: &'static str, name: &'static str, count: u64) {
     *totals().entry(phase).or_default().counts.entry(name).or_default() += count;

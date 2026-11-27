@@ -1,0 +1,58 @@
+note: R91.3-1: the step after the step renames a module; the same text of a file in another module path has its own stored part
+rule+: R91.3-1
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both src/util.rs
+pub fn helper(a: u32) -> u32 {
+    a.wrapping_mul(2)
+}
+=== old src/lib.rs
+mod util;
+
+pub fn total(a: u32) -> u32 {
+    util::helper(a)
+}
+=== new src/lib.rs
+mod util;
+
+pub fn total(a: u32) -> u32 {
+    util::helper(a).wrapping_add(1)
+}
+=== next src/lib.rs
+#[path = "util.rs"]
+mod tools;
+
+pub fn total(a: u32) -> u32 {
+    tools::helper(a).wrapping_add(1)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::total` (src/lib.rs:3): the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(a: u32) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  ? 1 place: changed method_call: `util::helper(a)` → `util::helper(a).wrapping_add(1)` (f1)
+      in: shop::total
+      lines: src/lib.rs:4, src/lib.rs:-4
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, --same 'rewrite $a($b) => $a($b).wrapping_add(1)'
+  real edits:
+  item `shop::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `util::helper(a)` → `util::helper(a).wrapping_add(1)` at `shop::total/tail` [semantics · code different] · not stated
+      affected bodies: shop::total
+      control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:4): return → return
+      control flow: + arrow call `helper` (src/lib.rs:4) → call `num::<impl u32>::wrapping_add` (src/lib.rs:4) (return)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::total (src/lib.rs:3): graph changes: +1 call, +2 arrows, −1 arrow; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `util::helper(a)` → `util::helper(a).wrapping_add(1)` at `shop::total/tail` [semantics · code different] · not stated
+    lines: src/lib.rs:4, src/lib.rs:-4

@@ -1,0 +1,54 @@
+note: R91.3-1: the step after the step changes a callee in another file; the file of the caller comes from the store, and the caller is in the closure of the changed callee
+rule+: R91.3-1
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both src/util.rs
+pub fn helper(a: u32) -> u32 {
+    a.wrapping_mul(2)
+}
+=== old src/lib.rs
+mod util;
+
+pub fn total(a: u32) -> u32 {
+    util::helper(a).wrapping_add(1)
+}
+=== new src/lib.rs
+mod util;
+
+pub fn total(a: u32) -> u32 {
+    util::helper(a).wrapping_add(1)
+}
+
+pub fn extra() -> u32 {
+    5
+}
+=== next src/util.rs
+pub fn helper(a: u32) -> u32 {
+    a.wrapping_mul(3)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::extra` (src/lib.rs:7): an added body: `#[new(shop::extra)] fn extra_new() -> bool { let new = after::shop::extra(); true }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::extra`:
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::extra` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+      affected bodies: shop::extra
+      control flow: + graph of `shop::extra`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    shop::extra (src/lib.rs:7): graph added: 2 points, 1 arrow
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::extra` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+    lines: src/lib.rs:6-9
