@@ -49,6 +49,7 @@ impl Cart {
     pub fn len(&self) -> usize { self.items.len() }
     pub fn is_empty(&self) -> bool { self.items.is_empty() }
     pub fn push(&mut self, x: u32) { self.items.push(x) }
+    pub fn first(&self) -> Option<&u32> { self.items.first() }
 }
 impl std::fmt::Display for Cart {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.items.len()) }
@@ -68,6 +69,7 @@ impl Cart {
     pub fn len(&self) -> usize { self.len }
     pub fn is_empty(&self) -> bool { self.len == 0 }
     pub fn push(&mut self, x: u32) { self.items.push(x); self.len += 1 }
+    pub fn first(&self) -> Option<&u32> { self.items.get(0) }
 }
 impl std::fmt::Display for Cart {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.len) }
@@ -148,11 +150,13 @@ fn a_claim_on_a_scope_gives_one_line_for_each_item_and_explains_the_bodies_of_it
     assert!(text.contains("intent (6 claim(s), 1 hint(s);"), "{text}");
     // `impl TYPE`: each method of the inherent impls (not the method of the trait impl).
     let cart = claim_block(&text, "i3");
-    assert!(cart.contains("claimed: 4 item(s) of the scope `impl shop::Cart`: 3 proved, 0 false, 1 claimed"), "{cart}");
-    for item in ["new", "len", "is_empty"] {
+    // [R82.1-4] `push` takes `&mut self` of the type that changes: the places after the call are
+    // related too. `first` returns a reference (the pointer memory of batch 13e): claimed.
+    assert!(cart.contains("claimed: 5 item(s) of the scope `impl shop::Cart`: 4 proved, 0 false, 1 claimed"), "{cart}");
+    for item in ["new", "len", "is_empty", "push"] {
         assert!(cart.contains(&format!("`shop::Cart::{item}`: proved: related inputs give related outcomes")), "{item}: {cart}");
     }
-    assert!(cart.contains("`shop::Cart::push`: claimed: `&mut` comes in 13c") && !cart.contains("fmt"), "{cart}");
+    assert!(cart.contains("`shop::Cart::first`: claimed") && !cart.contains("fmt"), "{cart}");
     // `MODULE::*`: each `pub` function of the module.
     let module = claim_block(&text, "i4");
     assert!(module.contains("proved: 3 item(s) of the scope `shop::calc::*`"), "{module}");
@@ -171,10 +175,10 @@ fn a_claim_on_a_scope_gives_one_line_for_each_item_and_explains_the_bodies_of_it
     // R80.3-2: the claim on `impl shop::Cart` is claimed (one item), and its proved items
     // explain their bodies; the claimed item does not.
     let section = semantic_section(&text);
-    for item in ["new", "len", "is_empty"] {
+    for item in ["new", "len", "is_empty", "push"] {
         assert!(section.contains(&format!("explained by claim i3: `shop::Cart::{item}`")), "{item}: {section}");
     }
-    assert!(section.contains("not explained: `shop::Cart::push`"), "{section}");
+    assert!(section.contains("not explained: `shop::Cart::first`"), "{section}");
     // An empty claim on an item depends on the two versions of the item (R77.1-1): the module
     // claim explains its changed items (`uses_hidden` does not change).
     assert!(section.contains("✓ stays the same: i4 `#[same(shop::calc::*)] fn calc_module()` (explains `shop::calc::half`, `shop::calc::quarter`)"), "{section}");
@@ -197,7 +201,7 @@ fn a_scope_path_with_no_definition_is_an_error_and_a_claimed_item_explains_nothi
     write(&repo, ".semilla/intent/pr.rs", "#[same(impl shop::Cart)]\nfn cart_methods() {}\n");
     let text = run(&repo, &["step", "cache the length", "--intent", ".semilla/intent/pr.rs", "--compiled"], 0);
     let cart = claim_block(&text, "i1");
-    assert!(cart.contains("claimed: 4 item(s) of the scope `impl shop::Cart`: 0 proved, 0 false, 4 claimed"), "{cart}");
+    assert!(cart.contains("claimed: 5 item(s) of the scope `impl shop::Cart`: 0 proved, 0 false, 5 claimed"), "{cart}");
     let section = semantic_section(&text);
     assert!(!section.contains("explained by claim i1"), "{section}");
 }

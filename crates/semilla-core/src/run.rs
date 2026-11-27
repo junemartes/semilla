@@ -51,6 +51,11 @@ pub struct RunArg {
     pub name: String,
     pub expr: Result<String, String>,
     pub mode: ArgMode,
+    /// [R82.3-1] In a sequence of calls: the variable of the test that the argument is (a result
+    /// of an earlier call, or a place that the test made for an earlier call). A new variable
+    /// gets the value of `expr`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub var: Option<String>,
 }
 
 /// [R75.1-1] A Rust pattern of a value of the model: each part that the model fixes, and `_`
@@ -151,6 +156,9 @@ pub struct RunCall {
     /// True for the body of a constant or a static: the test reads its value.
     #[serde(default)]
     pub value: bool,
+    /// [R82.3-1] In a sequence of calls: the variable of the result, when a later call uses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind: Option<String>,
 }
 
 /// The calls of one sure difference: the two versions of a body for an equivalence result,
@@ -161,6 +169,10 @@ pub struct RunCase {
     /// The cause why no test can show the result, when the model knows it (a `&mut`
     /// reference inside an input).
     pub blind: Option<String>,
+    /// [R82.3-1] True for the calls of a claim in their order (one test makes them in order,
+    /// with the values that each call gives the next calls).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sequence: bool,
 }
 
 /// [R75.1-1] A suggested test: the name of its module, the place where it goes, the command that
@@ -268,6 +280,9 @@ pub fn suggest(case: &RunCase, place: &TestPlace<'_>) -> Result<SuggestedTest, S
 /// the failed path (it asserts the outcome of the model), or, for a claim with no call of the
 /// old version, one test for each call of the new version (the counterexample).
 pub fn suggest_claim(case: &RunCase, place: &TestPlace<'_>) -> Result<SuggestedTest, String> {
+    if case.sequence {
+        return suggest_sequence(case, place);
+    }
     let old: Vec<&RunCall> = case.calls.iter().filter(|call| call.side == RunSide::Before).collect();
     let (side, calls) = if old.is_empty() { (RunSide::After, case.calls.iter().collect::<Vec<_>>()) } else { (RunSide::Before, old) };
     let first = calls.first().ok_or("the claim is false by its own operations (no call of a version)")?;
@@ -281,6 +296,121 @@ pub fn suggest_claim(case: &RunCase, place: &TestPlace<'_>) -> Result<SuggestedT
         bodies.push(test_fn(&format!("call_{}", index + 1), call, &comment)?);
     }
     Ok(finish(first, &bodies, place))
+}
+
+/// [R82.3-1] The suggested test of a false claim from its calls in order (a claim MIR): one
+/// `#[test]` that makes the values, makes each call of one version in the order of the claim
+/// (a result or a place that a later call takes is a variable of the test), and asserts the
+/// outcome of the model after each call: each result and each value behind a `&mut` argument
+/// that the model fixes. A call that panics ends the test (`#[should_panic]`).
+pub fn suggest_sequence(case: &RunCase, place: &TestPlace<'_>) -> Result<SuggestedTest, String> {
+    if let Some(cause) = &case.blind {
+        return Err(format!("{cause}: a test cannot see it"));
+    }
+    let first = case.calls.first().ok_or("the claim is false by its own operations (no call of a version)")?;
+    let side = first.side;
+    if case.calls.iter().any(|call| call.side != side) {
+        return Err("the calls of the test are not of one version".into());
+    }
+    let code = if side == RunSide::Before { "old" } else { "new" };
+    let krate = first.name.trim_start_matches('<').split("::").next().unwrap_or_default().to_string();
+    let local = |text: &str| crate_path(text, &krate);
+    // The variables that a call takes as `&mut`: `let mut`.
+    let mut mutable: Vec<&str> = Vec::new();
+    for call in &case.calls {
+        for arg in &call.args {
+            if let (Some(var), ArgMode::Mut) = (&arg.var, arg.mode) {
+                mutable.push(var);
+            }
+        }
+    }
+    let binding = |var: &str| if mutable.contains(&var) { format!("let mut {var}") } else { format!("let {var}") };
+    let mut lines = vec![
+        format!("// Semilla (design 75): the claim is false for this input: {}.", place.after),
+        format!("// This test makes the calls of `{}::…` of the claim in their order on the {code} code, and asserts", side.word()),
+        "// the outcome of the model after each call.".to_string(),
+        "#[test]".to_string(),
+    ];
+    let mut body: Vec<String> = Vec::new();
+    let mut declared: Vec<String> = Vec::new();
+    let mut panics = false;
+    for (index, call) in case.calls.iter().enumerate() {
+        if call.name.contains('{') {
+            return Err("the body has no path that a test can call (a closure or a nested body)".into());
+        }
+        if call.value {
+            return Err("a constant or a static in a sequence of calls".into());
+        }
+        let mut passed = Vec::new();
+        let mut muts = Vec::new();
+        for (position, arg) in call.args.iter().enumerate() {
+            let var = match &arg.var {
+                Some(var) if declared.contains(var) => var.clone(),
+                Some(var) => {
+                    let expr = arg.expr.as_ref().map_err(|cause| format!("the input `{var}` has no Rust form: {cause}"))?;
+                    body.push(format!("{} = {};", binding(var), local(expr)));
+                    declared.push(var.clone());
+                    var.clone()
+                }
+                None => {
+                    let expr = arg.expr.as_ref().map_err(|cause| format!("the input `{}` has no Rust form: {cause}", arg.name))?;
+                    let var = format!("arg{}_{}", index + 1, position + 1);
+                    let keyword = if arg.mode == ArgMode::Mut { "let mut" } else { "let" };
+                    body.push(format!("{keyword} {var} = {};", local(expr)));
+                    var
+                }
+            };
+            passed.push(match arg.mode {
+                ArgMode::Value => var.clone(),
+                ArgMode::Ref => format!("&{var}"),
+                ArgMode::Mut => format!("&mut {var}"),
+            });
+            if arg.mode == ArgMode::Mut {
+                muts.push(var);
+            }
+        }
+        let expr = format!("{}({})", local(&call.name), passed.join(", "));
+        match &call.expect.exit {
+            RunExit::Panics(message) => {
+                lines.push(match message {
+                    Some(message) => format!("#[should_panic(expected = {message:?})]"),
+                    None => "#[should_panic]".to_string(),
+                });
+                body.push(format!("let _ = {expr};"));
+                panics = true;
+            }
+            RunExit::Aborts => return Err(format!("the {code} version aborts: a test cannot check an abort")),
+            RunExit::Returns(pat) => {
+                match (&call.bind, pat.exact()) {
+                    (Some(var), exact) => {
+                        body.push(format!("{} = {expr};", binding(var)));
+                        declared.push(var.clone());
+                        if exact {
+                            body.push(assertion(var, pat, &local));
+                        }
+                    }
+                    (None, true) => {
+                        let got = format!("got{}", index + 1);
+                        body.push(format!("let {got} = {expr};"));
+                        body.push(assertion(&got, pat, &local));
+                    }
+                    (None, false) => body.push(format!("let _ = {expr};")),
+                }
+                for (var, pat) in muts.iter().zip(&call.expect.muts) {
+                    if pat.exact() {
+                        body.push(assertion(var, pat, &local));
+                    }
+                }
+            }
+        }
+        if panics {
+            break;
+        }
+    }
+    lines.push("fn calls_in_order() {".into());
+    lines.extend(body.into_iter().map(|line| format!("    {line}")));
+    lines.push("}".into());
+    Ok(finish(first, &[lines.join("\n")], place))
 }
 
 /// The module text of a test, its name, its place, and its command.
@@ -419,11 +549,12 @@ mod tests {
             side,
             name: "depot::shift".into(),
             target: "depot.lib.1".into(),
-            args: vec![RunArg { name: "p".into(), expr: Ok("depot::Pt { x: 1, y: 2 }".into()), mode: ArgMode::Value }, RunArg { name: "v".into(), expr: Ok("vec![1]".into()), mode: ArgMode::Mut }],
+            args: vec![RunArg { name: "p".into(), expr: Ok("depot::Pt { x: 1, y: 2 }".into()), mode: ArgMode::Value, var: None }, RunArg { name: "v".into(), expr: Ok("vec![1]".into()), mode: ArgMode::Mut, var: None }],
             expect: RunOut { exit, muts },
             file: "src/lib.rs".into(),
             line: 4,
             value: false,
+            bind: None,
         }
     }
 
@@ -434,7 +565,7 @@ mod tests {
     // rule+ R75.1-1
     #[test]
     fn a_difference_gives_a_test_that_asserts_the_old_outcome_with_paths_of_the_crate() {
-        let case = RunCase { calls: vec![call(RunSide::Before, RunExit::Returns(Pat::Lit("3".into())), vec![Pat::Slice(vec![Pat::Lit("1".into()), Pat::Lit("5".into())])]), call(RunSide::After, RunExit::Returns(Pat::Lit("4".into())), vec![Pat::Slice(vec![Pat::Lit("1".into())])])], blind: None };
+        let case = RunCase { calls: vec![call(RunSide::Before, RunExit::Returns(Pat::Lit("3".into())), vec![Pat::Slice(vec![Pat::Lit("1".into()), Pat::Lit("5".into())])]), call(RunSide::After, RunExit::Returns(Pat::Lit("4".into())), vec![Pat::Slice(vec![Pat::Lit("1".into())])])], blind: None, sequence: false };
         let test = suggest(&case, &place()).unwrap();
         assert!(test.text.contains("let p = crate::Pt { x: 1, y: 2 };\n        let mut v = vec![1];\n        let got = crate::shift(p, &mut v);\n        assert_eq!(got, 3);\n        assert!(matches!(v[..], [1, 5]));"), "{}", test.text);
         assert!(test.text.starts_with("#[cfg(test)]\nmod semilla_test_shift_"), "{}", test.text);
@@ -446,17 +577,17 @@ mod tests {
     // rule- R75.1-1
     #[test]
     fn an_old_panic_gives_a_test_that_expects_the_panic_and_an_abort_gives_no_test() {
-        let case = RunCase { calls: vec![call(RunSide::Before, RunExit::Panics(Some("too big".into())), vec![Pat::Any]), call(RunSide::After, RunExit::Returns(Pat::Lit("4".into())), vec![Pat::Any])], blind: None };
+        let case = RunCase { calls: vec![call(RunSide::Before, RunExit::Panics(Some("too big".into())), vec![Pat::Any]), call(RunSide::After, RunExit::Returns(Pat::Lit("4".into())), vec![Pat::Any])], blind: None, sequence: false };
         let text = suggest(&case, &place()).unwrap().text;
         assert!(text.contains("#[should_panic(expected = \"too big\")]\n    fn old_outcome() {") && text.contains("let _ = crate::shift(p, &mut v);\n    }"), "{text}");
-        let abort = RunCase { calls: vec![call(RunSide::Before, RunExit::Aborts, vec![Pat::Any]), call(RunSide::After, RunExit::Returns(Pat::Lit("4".into())), vec![Pat::Any])], blind: None };
+        let abort = RunCase { calls: vec![call(RunSide::Before, RunExit::Aborts, vec![Pat::Any]), call(RunSide::After, RunExit::Returns(Pat::Lit("4".into())), vec![Pat::Any])], blind: None, sequence: false };
         assert!(suggest(&abort, &place()).unwrap_err().contains("aborts"));
     }
 
     // rule+ R75.1-2
     #[test]
     fn a_difference_that_no_assertion_sees_gives_no_test() {
-        let same = |a: RunExit, b: RunExit| RunCase { calls: vec![call(RunSide::Before, a, vec![Pat::Any]), call(RunSide::After, b, vec![Pat::Any])], blind: None };
+        let same = |a: RunExit, b: RunExit| RunCase { calls: vec![call(RunSide::Before, a, vec![Pat::Any]), call(RunSide::After, b, vec![Pat::Any])], blind: None, sequence: false };
         assert!(suggest(&same(RunExit::Returns(Pat::Any), RunExit::Returns(Pat::Lit("2".into()))), &place()).unwrap_err().contains("a test cannot see"));
         assert!(suggest(&same(RunExit::Panics(Some("too big".into())), RunExit::Panics(Some("x is too big".into()))), &place()).is_err());
     }
@@ -467,9 +598,53 @@ mod tests {
         let some = Pat::TupleStruct { path: "core::option::Option::Some".into(), items: vec![Pat::Any] };
         let none = Pat::Unit("core::option::Option::None".into());
         assert!(some.excludes(&none) && !some.excludes(&Pat::TupleStruct { path: "core::option::Option::Some".into(), items: vec![Pat::Lit("2".into())] }));
-        let case = RunCase { calls: vec![call(RunSide::Before, RunExit::Returns(some.clone()), vec![Pat::Any]), call(RunSide::After, RunExit::Returns(none), vec![Pat::Any])], blind: None };
+        let case = RunCase { calls: vec![call(RunSide::Before, RunExit::Returns(some.clone()), vec![Pat::Any]), call(RunSide::After, RunExit::Returns(none), vec![Pat::Any])], blind: None, sequence: false };
         assert!(suggest(&case, &place()).unwrap().text.contains("assert!(matches!(got, core::option::Option::Some(_)));"));
         assert_eq!(blind_cause(&RunOut { exit: RunExit::Panics(Some("a".into())), muts: Vec::new() }, &RunOut { exit: RunExit::Panics(Some("b".into())), muts: Vec::new() }), None);
+    }
+
+    fn seq_call(name: &str, args: Vec<RunArg>, exit: RunExit, muts: Vec<Pat>, bind: Option<&str>) -> RunCall {
+        RunCall { side: RunSide::Before, name: name.into(), target: "depot.lib.1".into(), args, expect: RunOut { exit, muts }, file: "src/lib.rs".into(), line: 4, value: false, bind: bind.map(str::to_string) }
+    }
+
+    fn arg(expr: Result<&str, &str>, mode: ArgMode, var: Option<&str>) -> RunArg {
+        RunArg { name: "arg1".into(), expr: expr.map(str::to_string).map_err(str::to_string), mode, var: var.map(str::to_string) }
+    }
+
+    // rule+ R82.3-1
+    #[test]
+    fn a_sequence_of_calls_is_one_test_with_the_values_that_each_call_gives_the_next() {
+        let counter = |n: &str| Pat::Struct { path: "depot::Counter".into(), fields: vec![("n".into(), Pat::Lit(n.into()))] };
+        let calls = vec![
+            seq_call("depot::Counter::new", Vec::new(), RunExit::Returns(counter("0")), Vec::new(), Some("value1")),
+            seq_call("depot::Counter::set", vec![arg(Ok(""), ArgMode::Mut, Some("value1")), arg(Ok("101"), ArgMode::Value, None)], RunExit::Returns(Pat::Any), vec![counter("101")], None),
+            seq_call("depot::Counter::get", vec![arg(Ok(""), ArgMode::Ref, Some("value1"))], RunExit::Returns(Pat::Lit("101".into())), Vec::new(), None),
+        ];
+        let case = RunCase { calls, blind: None, sequence: true };
+        let test = suggest_claim(&case, &place()).unwrap();
+        assert!(test.text.contains("fn calls_in_order() {\n        let mut value1 = crate::Counter::new();\n        assert!(matches!(value1, crate::Counter { n: 0 }));\n        let arg2_2 = 101;\n        let _ = crate::Counter::set(&mut value1, arg2_2);\n        assert!(matches!(value1, crate::Counter { n: 101 }));\n        let got3 = crate::Counter::get(&value1);\n        assert_eq!(got3, 101);\n    }"), "{}", test.text);
+        // A place of the test with a value of the model: a variable that the next calls take.
+        let calls = vec![
+            seq_call("depot::add_to", vec![arg(Ok("5"), ArgMode::Mut, Some("place1_1")), arg(Ok("1"), ArgMode::Value, None)], RunExit::Returns(Pat::Any), vec![Pat::Lit("6".into())], None),
+            seq_call("depot::add_to", vec![arg(Ok(""), ArgMode::Mut, Some("place1_1")), arg(Ok("2"), ArgMode::Value, None)], RunExit::Returns(Pat::Any), vec![Pat::Lit("8".into())], None),
+        ];
+        let text = suggest_claim(&RunCase { calls, blind: None, sequence: true }, &place()).unwrap().text;
+        assert!(text.contains("let mut place1_1 = 5;") && text.contains("assert_eq!(place1_1, 6);") && text.contains("let _ = crate::add_to(&mut place1_1, arg2_2);\n        assert_eq!(place1_1, 8);"), "{text}");
+    }
+
+    // rule- R82.3-1
+    #[test]
+    fn a_call_that_panics_ends_the_sequence_and_an_input_with_no_form_gives_no_test() {
+        let calls = vec![
+            seq_call("depot::Counter::new", Vec::new(), RunExit::Returns(Pat::Any), Vec::new(), Some("value1")),
+            seq_call("depot::Counter::check", vec![arg(Ok(""), ArgMode::Ref, Some("value1"))], RunExit::Panics(None), Vec::new(), None),
+            seq_call("depot::Counter::get", vec![arg(Ok(""), ArgMode::Ref, Some("value1"))], RunExit::Returns(Pat::Lit("1".into())), Vec::new(), None),
+        ];
+        let text = suggest_claim(&RunCase { calls, blind: None, sequence: true }, &place()).unwrap().text;
+        assert!(text.contains("#[should_panic]") && text.contains("let _ = crate::Counter::check(&value1);") && !text.contains("Counter::get"), "{text}");
+        let calls = vec![seq_call("depot::add_to", vec![arg(Err("the model gives no value of a part of the input"), ArgMode::Mut, Some("place1_1"))], RunExit::Returns(Pat::Any), vec![Pat::Any], None)];
+        let error = suggest_claim(&RunCase { calls, blind: None, sequence: true }, &place()).unwrap_err();
+        assert!(error.contains("has no Rust form"), "{error}");
     }
 
     #[test]

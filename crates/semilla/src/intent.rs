@@ -176,7 +176,13 @@ impl NormalOracle {
                 let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
                 let new = EquivSide::new(sides.after.get("n0").unwrap_or(&empty));
                 let walk = walks.as_ref().and_then(|walks| walks.iter().find(|(name, _)| *name == config.name()).map(|(_, walk)| walk.clone()));
-                let one = semilla_smt::mir::with_relations(&relations, || self.claim_in(&solver, query, &old, &new, &pairs, walk.as_ref(), dry, (step, &config.name()), mir.as_ref().map(|check| (&check.compiled, sources.as_slice()))));
+                let (one, used) = semilla_smt::mir::with_relations(&relations, || semilla_smt::mir::with_used_relations(|| self.claim_in(&solver, query, &old, &new, &pairs, walk.as_ref(), dry, (step, &config.name()), mir.as_ref().map(|check| (&check.compiled, sources.as_slice())))));
+                // [R82.1-5] A proof that uses a relation holds only if each body that makes or
+                // changes a value of its type keeps the relation.
+                let one = match &mir {
+                    Some(check) if !used.is_empty() => semilla_smt::mir::with_relations(&relations, || self.relation_kept(&solver, one, &used, &relations, (&old, &new), &pairs, walk.as_ref(), (step, &config.name()), &check.compiled)),
+                    _ => one,
+                };
                 results.push((config.name(), one));
             }
             answers.push(join(results, skipped, query));
@@ -291,6 +297,15 @@ impl NormalOracle {
                 let only = if in_old { "the old version only" } else { "the new version only" };
                 return One { result: IntentResult::Claimed, detail: format!("the item has a body in {only}: no compare"), reads, errors: Vec::new(), depends: Vec::new(), items, tests: Vec::new(), lines: Vec::new() };
             };
+            // [R82.1-3] A relation that fits a type of the signature of the item (a parameter, a
+            // `&mut` place, the result): the check of related inputs and outcomes (R80.1-4), never
+            // a proof by equal MIR or by the equivalence check of one type alone.
+            if let Some((compiled, _)) = mir
+                && let (Some(form_a), Some(form_b)) = (record_form(a), record_form(b))
+                && semilla_smt::mir::relation_applies(&form_a, &form_b)
+            {
+                return self.related_mir(solver, compiled, old, new, (&old_item, &new_item), &changed, reads, items, (change, config));
+            }
             let rename_text = |text: &str| semilla_normal::paths::rename(text, renames);
             let equal_proof = rename_text(&a.text) == b.text && !a.callees.iter().any(|callee| changed.contains(&rename_text(callee)) || changed.contains(callee));
             let budget = Some(claim_budget());
@@ -330,7 +345,7 @@ impl NormalOracle {
             return One { result, detail, reads, errors: Vec::new(), depends, items, tests, lines: Vec::new() };
         }
         // [R78.4-4] A property claim: the engine checks the claim MIR of rustc.
-        let mir_one = mir.map(|(compiled, sources)| self.claim_mir(solver, query, compiled, sources, old, new, (&old_item, &new_item), &changed, &hash_of, &items));
+        let mir_one = mir.map(|(compiled, sources)| self.claim_mir(solver, query, compiled, sources, old, new, (&old_item, &new_item), &changed, &hash_of, &items, (change, config)));
         // [R75.1-3] A false claim MIR names no call of a version: when the parser of 10r1 reads
         // the claim, its model runs too, and a false result of that model (an exact input too)
         // gives the line with the calls and their results, and the suggested test of the
@@ -409,7 +424,7 @@ impl NormalOracle {
 impl NormalOracle {
     /// [R78.4-4] The check of one property claim as the MIR of rustc (design 78, part D).
     #[allow(clippy::too_many_arguments)]
-    fn claim_mir(&self, solver: &semilla_smt::Solver, query: &Query, compiled: &semilla_normal::intent::Compiled, sources: &[semilla_normal::intent::Source], old: &EquivSide, new: &EquivSide, (old_item, new_item): (&str, &str), changed: &BTreeSet<String>, hash_of: &dyn Fn(Version, &str) -> Option<String>, items: &[String]) -> One {
+    fn claim_mir(&self, solver: &semilla_smt::Solver, query: &Query, compiled: &semilla_normal::intent::Compiled, sources: &[semilla_normal::intent::Source], old: &EquivSide, new: &EquivSide, (old_item, new_item): (&str, &str), changed: &BTreeSet<String>, hash_of: &dyn Fn(Version, &str) -> Option<String>, items: &[String], (change, config): (&Step, &str)) -> One {
         let claim = &query.claim;
         let module = sources.iter().position(|source| source.path == query.file.path).and_then(|index| compiled.modules.get(index));
         let find = |name: &str| compiled.records.iter().find(|record| record.name == name && record.q.is_some()).and_then(record_form);
@@ -453,17 +468,36 @@ impl NormalOracle {
             _ => None,
         }).collect();
         use semilla_smt::mir::claim::ClaimVerdict;
+        let mut tests = Vec::new();
         let (result, detail) = match checked.verdict {
             ClaimVerdict::Proved { method } => (IntentResult::Proved, format!("by {method} (the claim MIR of rustc)")),
-            // [R75.1-3] The claim MIR gives the input of the claim, not the calls of a version on
-            // its failed path: no test of the code of the user (the model of 10r1 gives one when it
-            // reads the claim).
-            ClaimVerdict::False { input, detail, .. } => (IntentResult::False, format!("for {input}: {detail} (no suggested test: the claim MIR gives no call of a version on its failed path)")),
+            // [R82.3-1] The calls of a version on the failed path, in order: the suggested test
+            // makes them and asserts the outcome of the model (Semilla runs no code of the user).
+            ClaimVerdict::False { input, detail, run: Some(mut case) } => {
+                for call in &mut case.calls {
+                    let side = if call.side == semilla_core::run::RunSide::Before { old } else { new };
+                    if let Some(record) = side.find(&call.name, "", "") {
+                        call.target = record.target.clone();
+                        call.value = record.value;
+                        if let Some(span) = &record.span {
+                            call.file = span.file.clone();
+                            call.line = span.line_start;
+                        }
+                    }
+                }
+                let note = self.suggest_claim(change, config, &case, &format!("for {input}: {detail}"));
+                let text = note.text();
+                if let semilla_core::run::TestNote::Test(found) = note {
+                    tests.push(found);
+                }
+                (IntentResult::False, format!("for {input}: {detail} ({text})"))
+            }
+            ClaimVerdict::False { input, detail, run: None } => (IntentResult::False, format!("for {input}: {detail} (no suggested test: the claim MIR gives no call of a version on its failed path)")),
             ClaimVerdict::Claimed { cause } => (IntentResult::Claimed, cause),
         };
         // [R78.4-9] A proved claim MIR explains each body of its dependence set (R77.1-1).
         let depends = if result == IntentResult::Proved { checked.depends.clone() } else { Vec::new() };
-        One { result, detail, reads, errors: Vec::new(), depends, items: items.to_vec(), tests: Vec::new(), lines: Vec::new() }
+        One { result, detail, reads, errors: Vec::new(), depends, items: items.to_vec(), tests, lines: Vec::new() }
     }
 }
 
@@ -513,6 +547,108 @@ impl NormalOracle {
         };
         let depends = if result == IntentResult::Proved { checked.depends.clone() } else { Vec::new() };
         One { result, detail, reads, errors: Vec::new(), depends, items, tests, lines: Vec::new() }
+    }
+}
+
+/// [R82.1-5] The result of the check of one relation on the bodies that make or change a value of
+/// its type: the count of the bodies that keep it, the bodies that the check does not prove (with
+/// the cause), and the first body that breaks it (its name, the text, and the suggested tests).
+#[derive(Clone, Default)]
+struct Kept {
+    kept: usize,
+    unchecked: Vec<String>,
+    broken: Option<(String, String, Vec<semilla_core::run::SuggestedTest>)>,
+}
+
+/// [R82.1-5] The most bodies of a type that the check of one relation checks.
+const MAX_KEPT: usize = 32;
+
+thread_local! {
+    /// [R82.1-5] The result of each relation in one configuration of one step.
+    static KEPT: std::cell::RefCell<BTreeMap<String, Kept>> = const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+impl NormalOracle {
+    /// [R82.1-5] A proof that uses a relation of a type is a proof only if the relation holds for
+    /// each value of the type that a body of the two versions can make or change. The set of
+    /// those bodies comes from the compiler forms (an aggregate of the type, a write into a place
+    /// of the type, a `&mut` borrow of a part of one); the related check of R80.1-4 runs on each.
+    /// All proved: the claim stays proved. A body that breaks the relation makes the claim false
+    /// with its input. Else the claim is "claimed: proved if the relation holds; not checked: …",
+    /// and it explains no body.
+    #[allow(clippy::too_many_arguments)]
+    fn relation_kept(&self, solver: &semilla_smt::Solver, mut one: One, used: &[String], relations: &[semilla_smt::mir::Relation], (old, new): (&EquivSide, &EquivSide), renames: &[(String, String)], walk: Option<&super::reach::ConfigReach>, (change, config): (&Step, &str), compiled: &semilla_normal::intent::Compiled) -> One {
+        let explains = one.result == IntentResult::Proved || (one.result == IntentResult::Claimed && !one.depends.is_empty());
+        if !explains {
+            return one;
+        }
+        let forward = |name: &str| renames.iter().find(|(from, _)| from == name).map(|(_, to)| to.clone()).unwrap_or_else(|| name.to_string());
+        let reverse = |name: &str| renames.iter().find(|(_, to)| to == name).map(|(from, _)| from.clone()).unwrap_or_else(|| name.to_string());
+        let mut notes = Vec::new();
+        let mut unchecked: Vec<String> = Vec::new();
+        let mut broken: Option<(String, String, Vec<semilla_core::run::SuggestedTest>, String)> = None;
+        let mut kept = 0;
+        for name in used {
+            let Some(relation) = relations.iter().find(|relation| &relation.name == name) else { continue };
+            let key = format!("{}|{}|{config}|{name}", change.tree_before, change.tree_after);
+            let status = match KEPT.with(|cell| cell.borrow().get(&key).cloned()) {
+                Some(found) => found,
+                None => {
+                    let mut set: BTreeSet<String> = BTreeSet::new();
+                    for (side, is_old) in [(old, true), (new, false)] {
+                        for (body, records) in &side.records {
+                            if records.iter().filter_map(|record| record_form(record)).any(|form| semilla_smt::mir::makes_or_changes(&form, relation, is_old)) {
+                                set.insert(if is_old { forward(body) } else { body.to_string() });
+                            }
+                        }
+                    }
+                    let changed = must_inline(old, new, renames, walk);
+                    let mut status = Kept::default();
+                    for (index, body) in set.iter().enumerate() {
+                        if index >= MAX_KEPT {
+                            status.unchecked.push(format!("`{body}` (past the bound of {MAX_KEPT} bodies)"));
+                            continue;
+                        }
+                        let old_body = reverse(body);
+                        if !old.records.contains_key(old_body.as_str()) || !new.records.contains_key(body.as_str()) {
+                            status.unchecked.push(format!("`{body}` (a body of one version only)"));
+                            continue;
+                        }
+                        let found = self.related_mir(solver, compiled, old, new, (&old_body, body), &changed, Vec::new(), Vec::new(), (change, config));
+                        match found.result {
+                            IntentResult::Proved => status.kept += 1,
+                            IntentResult::False if status.broken.is_none() => status.broken = Some((body.clone(), found.detail, found.tests)),
+                            IntentResult::False => status.unchecked.push(format!("`{body}` (false too)")),
+                            _ => status.unchecked.push(format!("`{body}` ({})", found.detail.chars().take(120).collect::<String>())),
+                        }
+                    }
+                    KEPT.with(|cell| cell.borrow_mut().insert(key, status.clone()));
+                    status
+                }
+            };
+            kept += status.kept;
+            unchecked.extend(status.unchecked.iter().map(|body| format!("{body} for `{}`", relation.short())));
+            if broken.is_none()
+                && let Some((body, detail, tests)) = status.broken
+            {
+                broken = Some((body, detail, tests, relation.short().to_string()));
+            }
+            notes.push(format!("`{}`", relation.short()));
+        }
+        unchecked.sort();
+        if let Some((body, detail, tests, short)) = broken {
+            one.result = IntentResult::False;
+            one.detail = format!("the relation `{short}` does not hold after `{body}`: {detail}; the proof of this claim assumes it (R82.1-5; the proof alone: {})", one.detail);
+            one.depends.clear();
+            one.tests = tests;
+        } else if !unchecked.is_empty() {
+            one.result = IntentResult::Claimed;
+            one.detail = format!("proved if the relation {} holds; not checked: {} (R82.1-5: a body that makes or changes a value of the type; the proof alone: {})", notes.join(", "), unchecked.join(", "), one.detail);
+            one.depends.clear();
+        } else {
+            one.detail = format!("{} (the relation {} holds after each body that makes or changes a value of its type: {kept} checked)", one.detail, notes.join(", "));
+        }
+        one
     }
 }
 

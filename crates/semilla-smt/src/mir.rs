@@ -699,6 +699,9 @@ struct Decls {
     /// [R75.1-1] The message at run time of each kind of a check that a run met (`overflow add`
     /// → "attempt to add with overflow"), from the compiler.
     kinds: BTreeMap<String, String>,
+    /// [R82.2-3] Each write through `&mut` in a claim run whose place has a type that the check
+    /// does not model: the text of the call and of the type.
+    unmodeled: Vec<String>,
 }
 
 /// A closure body that a run met (design 66, part A): the side, the key, the name of the body,
@@ -768,11 +771,41 @@ struct Effect {
     args: Vec<V>,
 }
 
+/// [R82.2-1] The effects of one call of a closure of a claim (`effects(|| e)`): the effects on
+/// the world in their order, and the value and the type of each place that the closure can
+/// write (a `&mut` capture) after the call.
+#[derive(Clone, Debug)]
+struct EffectSet {
+    world: Vec<Effect>,
+    places: Vec<(V, Ty)>,
+}
+
+/// [R82.3-1] One call of a version that a claim makes (in its body, its closures, or its own
+/// helpers), in the order of the path: the data of the suggested test of a false claim.
+#[derive(Clone, Debug)]
+struct TraceCall {
+    /// The callee (`before::shop::Counter::bump`).
+    name: String,
+    /// Each argument: its value, its type, and the value of its target for a reference.
+    args: Vec<(V, Option<Ty>, Option<V>)>,
+    /// The destination of the result in the claim, and its type.
+    dest: Loc,
+    dest_ty: Option<Ty>,
+    /// The result, when the call returns.
+    result: Option<V>,
+    /// The value behind each `&mut` argument after the call: the position and the value.
+    after: Vec<(usize, V)>,
+    /// The frame of an inlined call: the call is complete at its return.
+    frame: Option<usize>,
+}
+
 /// The outcome of one path.
 #[derive(Clone, Debug)]
 struct PathOut {
     pc: T,
     effects: Vec<Effect>,
+    /// [R82.3-1] The calls of a version that the claim made on the path, in order.
+    trace: Vec<TraceCall>,
     /// The calls with an order (`State::calls`): the callee and a key of its inputs.
     calls: Vec<(String, String)>,
     exit: Exit,
@@ -812,6 +845,8 @@ struct Catch {
     target: usize,
     /// The count of the effects of the path when the closure starts.
     effects: usize,
+    /// [R82.2-1] The places that the closure can write (its `&mut` captures), with their types.
+    places: Vec<(Loc, Ty)>,
     kind: CatchKind,
 }
 
@@ -820,10 +855,14 @@ enum CatchKind {
     Panics,
     Returns,
     PanicsWith,
-    /// The first closure of `same_outcome`: the value and the type of the second.
-    First { value: V, ty: Option<Ty> },
-    /// The second closure of `same_outcome`: the outcome and the effects of the first.
-    Second { first: Outcome, effects: Vec<Effect> },
+    /// The first closure of `same_outcome` (`only_effects`: of `same_effects`): the value and
+    /// the type of the second.
+    First { value: V, ty: Option<Ty>, only_effects: bool },
+    /// The second closure of `same_outcome` or `same_effects`: the outcome and the effects of the
+    /// first.
+    Second { first: Outcome, effects: EffectSet, only_effects: bool },
+    /// [R82.2-1] The closure of `effects(|| e)`.
+    Effects,
 }
 
 /// The outcome of one closure of a prelude function.
@@ -849,6 +888,10 @@ struct State {
     visits: Vec<(usize, usize)>,
     /// The number of the next frame.
     serial: usize,
+    /// [R82.2-1] The value of each `effects(|| e)` of the path: its symbol and its effects.
+    sets: Vec<(String, EffectSet)>,
+    /// [R82.3-1] The calls of a version that the claim made on the path, in order.
+    trace: Vec<TraceCall>,
 }
 
 struct Run<'a, 'b> {
@@ -1239,7 +1282,7 @@ impl<'a, 'b> Run<'a, 'b> {
                     }
                     if cause.starts_with(CUT) {
                         let cut = CutState { slots: state.slots.clone(), types: state.types.clone() };
-                        self.outs.push(PathOut { pc, effects: state.effects.clone(), calls: state.calls.clone(), exit: Exit::Cut, after: Vec::new(), cut: Some(Arc::new(cut)) });
+                        self.outs.push(PathOut { pc, effects: state.effects.clone(), trace: state.trace.clone(), calls: state.calls.clone(), exit: Exit::Cut, after: Vec::new(), cut: Some(Arc::new(cut)) });
                     } else if cause.starts_with(BOUND) {
                         self.dropped += 1;
                     } else {
@@ -1579,7 +1622,7 @@ impl<'a, 'b> Run<'a, 'b> {
                 match frame.ret {
                     None => {
                         let after = self.muts.iter().map(|slot| state.slots[*slot].clone()).collect();
-                        self.outs.push(PathOut { pc: and(&state.pc), effects: state.effects.clone(), calls: state.calls.clone(), exit: Exit::Return(value), after, cut: None });
+                        self.outs.push(PathOut { pc: and(&state.pc), effects: state.effects.clone(), trace: state.trace.clone(), calls: state.calls.clone(), exit: Exit::Return(value), after, cut: None });
                         Ok(Next::Done)
                     }
                     Some(_) if frame.catch.is_some() => {
@@ -1587,7 +1630,11 @@ impl<'a, 'b> Run<'a, 'b> {
                         self.caught(state, &catch, Outcome::Value(value))
                     }
                     Some((dest, target, _)) => {
-                        self.write(state, &dest, value)?;
+                        self.write(state, &dest, value.clone())?;
+                        // [R82.3-1] The return of an inlined call of the trace.
+                        if let Some(at) = state.trace.iter().rposition(|entry| entry.frame == Some(frame.id) && entry.result.is_none()) {
+                            self.trace_complete(state, at, value);
+                        }
                         self.jump(state, target)?;
                         Ok(Next::Continue)
                     }
@@ -1620,7 +1667,22 @@ impl<'a, 'b> Run<'a, 'b> {
                 }
                 Ok(Next::Fork(states))
             }
-            IrTermKind::Call(callee, args, dest, target, unwind) => self.call(state, callee, args, dest, *target, unwind),
+            IrTermKind::Call(callee, args, dest, target, unwind) => {
+                // [R82.3-1] A traced call of a version is complete when it returns: now for a
+                // call that the check does not inline, at the return of its frame else.
+                let (depth, traced) = (state.frames.len(), state.trace.len());
+                let mut next = self.call(state, callee, args, dest, *target, unwind)?;
+                match &mut next {
+                    Next::Continue => self.trace_done(state, depth, traced),
+                    Next::Fork(states) => {
+                        for next in states.iter_mut() {
+                            self.trace_done(next, depth, traced);
+                        }
+                    }
+                    Next::Done => {}
+                }
+                Ok(next)
+            }
             IrTermKind::Drop(place, target, ty, unwind) => {
                 let loc = self.loc(state, place)?;
                 let value = self.read(state, &loc)?;
@@ -1695,7 +1757,7 @@ impl<'a, 'b> Run<'a, 'b> {
             return;
         }
         let after: Vec<V> = self.muts.iter().map(|slot| state.slots[*slot].clone()).collect();
-        self.outs.push(PathOut { pc, effects: state.effects.clone(), calls: state.calls.clone(), exit: Exit::Abort, after, cut: None });
+        self.outs.push(PathOut { pc, effects: state.effects.clone(), trace: state.trace.clone(), calls: state.calls.clone(), exit: Exit::Abort, after, cut: None });
     }
 
     fn panic(&mut self, state: &mut State, kind: String, args: Vec<V>, unwind: &IrUnwind) -> Result<(), Stop> {
@@ -1733,7 +1795,7 @@ impl<'a, 'b> Run<'a, 'b> {
         });
         let exit = if drops.last() == Some(&V::Opq(t("abort"))) { Exit::Abort } else { Exit::Panic { kind, args, msg } };
         after.extend(drops);
-        self.outs.push(PathOut { pc, effects: state.effects.clone(), calls: state.calls.clone(), exit, after, cut: None });
+        self.outs.push(PathOut { pc, effects: state.effects.clone(), trace: state.trace.clone(), calls: state.calls.clone(), exit, after, cut: None });
         Ok(())
     }
 
@@ -1750,11 +1812,19 @@ impl<'a, 'b> Run<'a, 'b> {
             _ => None,
         };
         let first = values.first().cloned().unwrap_or(V::Undef);
-        let catch = |kind| Catch { dest: dest.clone(), target, effects: state.effects.len(), kind };
+        let catch = |kind| Catch { dest: dest.clone(), target, effects: state.effects.len(), places: Vec::new(), kind };
         match short {
             "same" => {
                 let [V::Ptr(a), V::Ptr(b)] = values.as_slice() else { return Err(Stop("the prelude function `same` takes two references".into())) };
                 let (a, b) = (self.read(state, a)?, self.read(state, b)?);
+                // [R82.2-1] Two values of `effects(|| e)`: the same effects in the same order.
+                if let (Some(x), Some(y)) = (effect_set(state, &a), effect_set(state, &b)) {
+                    let places = self.places_differ(state, &x.places, &y.places)?;
+                    let holds = not(&or(&[effects_differ(&x.world, &y.world), places]));
+                    self.write(state, &dest, V::Bool(holds))?;
+                    self.jump(state, target)?;
+                    return Ok(Next::Continue);
+                }
                 // [R80.1-2] The two types of the values: equal values of one type, the relation
                 // of two types that differ, or part by part.
                 let pointee = |ty: Option<Ty>| ty.and_then(|ty| match ty.get() {
@@ -1785,13 +1855,21 @@ impl<'a, 'b> Run<'a, 'b> {
                 let ty = ty_of(self, state, 0);
                 self.start_closure(state, first, ty, catch)
             }
-            "same_outcome" => {
-                let second = CatchKind::First { value: values.get(1).cloned().unwrap_or(V::Undef), ty: ty_of(self, state, 1) };
+            // [R82.2-2] `same_effects` compares the effects of the two calls only; `same_outcome`
+            // compares their outcomes and their effects.
+            "same_outcome" | "same_effects" => {
+                let second = CatchKind::First { value: values.get(1).cloned().unwrap_or(V::Undef), ty: ty_of(self, state, 1), only_effects: short == "same_effects" };
                 let catch = catch(second);
                 let ty = ty_of(self, state, 0);
                 self.start_closure(state, first, ty, catch)
             }
-            _ => Err(Stop(format!("the prelude function `{short}` is outside the model of the check of a claim MIR in this batch (`effects`: 13c; `old`: 13d)"))),
+            // [R82.2-1] The effects of one call.
+            "effects" => {
+                let catch = catch(CatchKind::Effects);
+                let ty = ty_of(self, state, 0);
+                self.start_closure(state, first, ty, catch)
+            }
+            _ => Err(Stop(format!("the prelude function `{short}` is outside the model of the check of a claim MIR in this batch (`old`: batch 13d)"))),
         }
     }
 
@@ -1809,6 +1887,9 @@ impl<'a, 'b> Run<'a, 'b> {
         state.types.push(None);
         let scratch = Loc { slot: state.slots.len() - 1, path: Vec::new() };
         let target = catch.target;
+        // [R82.2-1] The places that the closure can write: the target of each `&mut` capture.
+        let mut catch = catch;
+        catch.places = closure_places(&value, ty.as_ref());
         let next = self.closure_call(state, &callee, mode, vec![value, V::Unit], ty, scratch, Some(target), &IrUnwind::Drops(Vec::new()))?;
         if let Some(frame) = state.frames.last_mut() {
             frame.catch = Some(Arc::new(catch));
@@ -1816,10 +1897,31 @@ impl<'a, 'b> Run<'a, 'b> {
         Ok(next)
     }
 
+    /// [R82.2-1] The condition that two lists of places have other values after their calls:
+    /// the k-th place of each list, by the rule of `same` (equal values of one type, the
+    /// relation of two types). Two lists of other lengths: not an exact difference.
+    fn places_differ(&mut self, state: &State, a: &[(V, Ty)], b: &[(V, Ty)]) -> Result<T, Stop> {
+        if a.len() != b.len() {
+            return Ok(tx("true", false));
+        }
+        let mut parts = Vec::new();
+        for ((x, tx_), (y, ty_)) in a.iter().zip(b) {
+            parts.push(not(&self.relate(state, x, tx_, y, ty_, 0)?));
+        }
+        Ok(or(&parts))
+    }
+
     /// [R78.4-6] The outcome of the closure of a prelude function: the result of the prelude
     /// function in its destination, or the run of the second closure of `same_outcome`.
     fn caught(&mut self, state: &mut State, catch: &Catch, outcome: Outcome) -> Result<Next, Stop> {
         let effects: Vec<Effect> = state.effects.get(catch.effects..).map(<[Effect]>::to_vec).unwrap_or_default();
+        // [R82.2-1] The effects of the call: the effects on the world, and the value of each
+        // place that the closure can write, after the call.
+        let mut places = Vec::new();
+        for (loc, ty) in &catch.places {
+            places.push((self.read(state, loc)?, ty.clone()));
+        }
+        let set = EffectSet { world: effects.clone(), places };
         let panicked = matches!(outcome, Outcome::Panic { .. });
         let value = match &catch.kind {
             CatchKind::Panics => V::Bool(t(if panicked { "true" } else { "false" })),
@@ -1831,11 +1933,25 @@ impl<'a, 'b> Run<'a, 'b> {
                 V::Bool(self.flag(&fresh))
             }
             CatchKind::PanicsWith => V::Bool(t("false")),
-            CatchKind::First { value, ty } => {
-                let second = Catch { dest: catch.dest.clone(), target: catch.target, effects: state.effects.len(), kind: CatchKind::Second { first: outcome, effects } };
+            CatchKind::First { value, ty, only_effects } => {
+                let second = Catch { dest: catch.dest.clone(), target: catch.target, effects: state.effects.len(), places: Vec::new(), kind: CatchKind::Second { first: outcome, effects: set, only_effects: *only_effects } };
                 return self.start_closure(state, value.clone(), ty.clone(), second);
             }
-            CatchKind::Second { first, effects: before } => V::Bool(not(&outcomes_differ(first, before, &outcome, &effects))),
+            // [R82.2-2] The places that the two closures write are a part of their effects: a
+            // write through `&mut` is never lost (also in `same_outcome`, as the values behind
+            // the `&mut` parameters in the equivalence check).
+            CatchKind::Second { first, effects: before, only_effects } => {
+                let places = self.places_differ(state, &before.places, &set.places)?;
+                let rest = if *only_effects { effects_differ(&before.world, &set.world) } else { outcomes_differ(first, &before.world, &outcome, &set.world) };
+                V::Bool(not(&or(&[rest, places])))
+            }
+            // [R82.2-1] The value of `effects(|| e)`: a symbol of its own, and the effects of the
+            // call in the state of the path (for `same`).
+            CatchKind::Effects => {
+                let symbol = self.opaque_const(&format!("effects {}", self.decls.names.len()));
+                state.sets.push((symbol.clone(), set));
+                V::Tup(vec![V::Opq(tx(symbol, false))])
+            }
         };
         self.write(state, &catch.dest, value)?;
         self.jump(state, catch.target)?;
@@ -1849,6 +1965,7 @@ impl<'a, 'b> Run<'a, 'b> {
         }
         let dest_ty = self.place_ty(state, dest);
         let dest_loc = self.loc(state, dest)?;
+        self.trace_call(state, callee, args, &values, &dest_loc, dest_ty.as_ref());
         // [R69.3-1] The message of a panic is a value of its literal pieces: two messages with
         // other pieces are two different values, and one text gives one value. The call has no
         // effect (a `const fn` with constant arguments).
@@ -1936,7 +2053,21 @@ impl<'a, 'b> Run<'a, 'b> {
         if free
             && let Some(name) = &callee.w
         {
-            return self.free_call(state, name, &values, &dest_loc, dest_ty.as_ref(), target, unwind);
+            // [R82.1-1] The free behavior writes a free value through each `&mut` argument: a
+            // proof that needs the write of the version depends on the version.
+            let mut places = Vec::new();
+            for (arg, value) in args.iter().zip(&values) {
+                let ty = match arg {
+                    IrOp::C(place) | IrOp::M(place) => self.place_ty(state, place),
+                    IrOp::K(_) | IrOp::R(_) => None,
+                };
+                if let (V::Ptr(loc), Some(ty)) = (value, ty)
+                    && let Some(IrTy::Ref(true, inner)) = ty.get()
+                {
+                    places.push((loc.clone(), ty.at(*inner)));
+                }
+            }
+            return self.free_call(state, name, &values, &places, &dest_loc, dest_ty.as_ref(), target, unwind);
         }
         let form = if changed {
             workspace_form.clone()
@@ -2086,6 +2217,14 @@ impl<'a, 'b> Run<'a, 'b> {
             state.pc.push(tx(not(&condition).s, true));
         }
         for (position, inner_ty, target_loc) in writes {
+            // [R82.2-3] A writer of a type that the check does not model: the place gets a value
+            // with no meaning (a free function of the call), and the claim names the write.
+            if INTENT_MODEL.with(|cell| cell.get()) && has_opaque(&inner_ty, 0) {
+                let text = format!("`{renamed}` writes a place of the type `{}`", short_type(&type_name(Some(&inner_ty))));
+                if !self.decls.unmodeled.contains(&text) {
+                    self.decls.unmodeled.push(text);
+                }
+            }
             let new = self.result_value(&inner_ty, &format!("w{position}_{key}"), &flat, &sorts, 0)?;
             self.write(state, &target_loc, new)?;
         }
@@ -2108,6 +2247,64 @@ impl<'a, 'b> Run<'a, 'b> {
                 Ok(Next::Continue)
             }
         }
+    }
+
+    /// [R82.3-1] Puts a call of a version that a claim makes into the trace of the path: a call
+    /// in a claim run whose callee has the prefix of a version, outside each inlined body of a
+    /// tree (the claim body, its closures, and its own helpers).
+    fn trace_call(&mut self, state: &mut State, callee: &IrCallee, args: &[IrOp], values: &[V], dest: &Loc, dest_ty: Option<&Ty>) {
+        if !CLAIM_RUN.with(|cell| cell.get()) || callee.m.is_some() {
+            return;
+        }
+        let version = |name: &str| name.starts_with(BEFORE_PREFIX) || name.starts_with(AFTER_PREFIX);
+        let Some(name) = callee.w.as_deref().filter(|name| version(name)) else { return };
+        if state.frames.iter().any(|frame| version(&frame.name)) {
+            return;
+        }
+        let mut list = Vec::new();
+        for (arg, value) in args.iter().zip(values) {
+            let ty = match arg {
+                IrOp::C(place) | IrOp::M(place) => self.place_ty(state, place),
+                IrOp::K(_) | IrOp::R(_) => None,
+            };
+            let target = match value {
+                V::Ptr(loc) => self.read(state, loc).ok(),
+                _ => None,
+            };
+            list.push((value.clone(), ty, target));
+        }
+        state.trace.push(TraceCall { name: name.to_string(), args: list, dest: dest.clone(), dest_ty: dest_ty.cloned(), result: None, after: Vec::new(), frame: None });
+    }
+
+    /// [R82.3-1] After the call step of a traced call: an inlined call (a new frame) is complete
+    /// at the return of its frame; another call is complete now.
+    fn trace_done(&mut self, state: &mut State, depth: usize, traced: usize) {
+        if state.trace.len() <= traced || state.trace[traced].result.is_some() || state.trace[traced].frame.is_some() {
+            return;
+        }
+        if state.frames.len() > depth {
+            state.trace[traced].frame = state.frames.last().map(|frame| frame.id);
+            return;
+        }
+        let dest = state.trace[traced].dest.clone();
+        if let Ok(value) = self.read(state, &dest) {
+            self.trace_complete(state, traced, value);
+        }
+    }
+
+    /// [R82.3-1] The result of a traced call and the value behind each `&mut` argument after it.
+    fn trace_complete(&mut self, state: &mut State, at: usize, result: V) {
+        let mut after = Vec::new();
+        for (position, (value, ty, _)) in state.trace[at].args.iter().enumerate() {
+            if let (V::Ptr(loc), Some(IrTy::Ref(true, _))) = (value, ty.as_ref().and_then(|ty| ty.get()))
+                && let Ok(found) = self.read(state, loc)
+            {
+                after.push((position, found));
+            }
+        }
+        let entry = &mut state.trace[at];
+        entry.result = Some(result);
+        entry.after = after;
     }
 
     /// A call through a function pointer whose value is a closure of the workspace that the run
@@ -2289,7 +2486,7 @@ impl<'a, 'b> Run<'a, 'b> {
                 if a.e != b.e {
                     return Err(no_value());
                 }
-                let equal = eq_t(&a.s, &b.s);
+                let equal = seq_eq(&a, &b);
                 V::Bool(if model == "vec_eq" { equal } else { not(&equal) })
             }
             "vec_clear" => {
@@ -2389,7 +2586,8 @@ impl<'a, 'b> Run<'a, 'b> {
     /// [R74.2-1] A call of a version of the item of a claim with a free result (in a callee of
     /// the claim): it returns the value of [`free_parts`] and has its effect.
     #[allow(clippy::too_many_arguments)]
-    fn free_call(&mut self, state: &mut State, name: &str, values: &[V], dest: &Loc, dest_ty: Option<&Ty>, target: Option<usize>, unwind: &IrUnwind) -> Result<Next, Stop> {
+    #[allow(clippy::too_many_arguments)]
+    fn free_call(&mut self, state: &mut State, name: &str, values: &[V], places: &[(Loc, Ty)], dest: &Loc, dest_ty: Option<&Ty>, target: Option<usize>, unwind: &IrUnwind) -> Result<Next, Stop> {
         // A free write through a `&mut` argument is not in the model of this rule.
         if values.iter().any(contains_mut_ref_inside) {
             return Err(Stop("a `&mut` argument of a call with a free behavior".into()));
@@ -2402,6 +2600,13 @@ impl<'a, 'b> Run<'a, 'b> {
         let shown = (self.side.rename)(name);
         let parts = free_parts(self.decls, self.old, name, &shown, &deep, ty)?;
         state.effects.push(parts.effect);
+        let flat: Vec<T> = deep.iter().flat_map(flatten).map(|(_, term)| term).collect();
+        let sorts: Vec<String> = deep.iter().flat_map(flatten).map(|(sort, _)| sort).collect();
+        let key = format!("free_{}_{}", if self.old { "before" } else { "after" }, sym_name(name));
+        for (index, (loc, inner)) in places.iter().enumerate() {
+            let value = self.result_value(inner, &format!("m{index}_{key}"), &flat, &sorts, 0)?;
+            self.write(state, loc, value)?;
+        }
         let _ = unwind;
         let Some(target) = target else { return Err(Stop("a call with a free result that never returns".into())) };
         self.write(state, dest, parts.value)?;
@@ -3425,7 +3630,7 @@ fn fresh_state(side: &Side, cut: &CutState, head: usize, base: usize, map: &[(us
     }
     types.truncate(slots.len());
     // The locals of the top frame follow the input slots (`base`).
-    let mut state = State { slots, types, frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), calls: Vec::new(), visits: vec![(0, head)], serial: 1_000_000 };
+    let mut state = State { slots, types, frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), calls: Vec::new(), visits: vec![(0, head)], serial: 1_000_000, sets: Vec::new(), trace: Vec::new() };
     state.frames.push(Frame { ir: side.ir.clone(), base, block: head, stmt: 0, ret: None, name: String::new(), id: 0, helper: false, catch: None });
     Ok(state)
 }
@@ -3515,7 +3720,7 @@ fn differ(a: &V, b: &V) -> T {
         (V::Bv(x, w), V::Bv(y, v)) if w == v => not(&eq_t(x, y)),
         (V::Bool(x), V::Bool(y)) => not(&eq_t(x, y)),
         (V::Opq(x), V::Opq(y)) => not(&eq_t(x, y)),
-        (V::Seq(x), V::Seq(y)) if x.e == y.e => not(&eq_t(&x.s, &y.s)),
+        (V::Seq(x), V::Seq(y)) if x.e == y.e => not(&seq_eq(x, y)),
         (V::Unit, V::Unit) | (V::Undef, V::Undef) => t("false"),
         (V::Tup(x), V::Tup(y)) if x.len() == y.len() => or(&x.iter().zip(y).map(|(p, q)| differ(p, q)).collect::<Vec<_>>()),
         (V::Enum { d: dx, w: wx, ds, f: fx }, V::Enum { d: dy, w: wy, f: fy, .. }) if wx == wy && fx.len() == fy.len() => {
@@ -3559,8 +3764,64 @@ fn outcomes_differ(a: &Outcome, a_effects: &[Effect], b: &Outcome, b_effects: &[
     if matches!((a, b), (Outcome::Value(_), Outcome::Panic { .. }) | (Outcome::Panic { .. }, Outcome::Value(_))) && !(exact(a) && exact(b)) {
         return tx("true", false);
     }
-    let path = |outcome: &Outcome, effects: &[Effect]| PathOut { pc: t("true"), effects: effects.to_vec(), calls: Vec::new(), exit: exit(outcome), after: Vec::new(), cut: None };
+    let path = |outcome: &Outcome, effects: &[Effect]| PathOut { pc: t("true"), effects: effects.to_vec(), trace: Vec::new(), calls: Vec::new(), exit: exit(outcome), after: Vec::new(), cut: None };
     outcome_differs(&path(a, a_effects), &path(b, b_effects))
+}
+
+/// The condition that two sequences are equal. In a check of the intent files it also states
+/// the equality of their lengths: the formula means the same (two equal sequences have one
+/// length), and Z3 needs the part (the link `seq.len` = `bv2nat` of the length makes a query of
+/// two equal sequences slow: 11 s against 0.05 s, 60 s against 0.1 s in the queries of design
+/// 82). The equivalence check of a step keeps its formula, so a step with no intent file keeps
+/// its queries.
+fn seq_eq(x: &Sq, y: &Sq) -> T {
+    if INTENT_MODEL.with(|cell| cell.get()) {
+        and(&[eq_t(&x.s, &y.s), eq_t(&x.n, &y.n)])
+    } else {
+        eq_t(&x.s, &y.s)
+    }
+}
+
+/// [R82.2-1] The condition that two lists of effects on the world differ (the rule of
+/// `outcome_differs` for the effects).
+fn effects_differ(a: &[Effect], b: &[Effect]) -> T {
+    let path = |effects: &[Effect]| PathOut { pc: t("true"), effects: effects.to_vec(), trace: Vec::new(), calls: Vec::new(), exit: Exit::Return(V::Unit), after: Vec::new(), cut: None };
+    outcome_differs(&path(a), &path(b))
+}
+
+/// [R82.2-3] True if a type has a part that the check does not model (an opaque type).
+fn has_opaque(ty: &Ty, depth: usize) -> bool {
+    if depth > 6 {
+        return false;
+    }
+    match ty.get() {
+        Some(IrTy::Opaque { .. }) => true,
+        Some(IrTy::Tuple(items)) => items.iter().any(|item| has_opaque(&ty.at(*item), depth + 1)),
+        Some(IrTy::Adt { v, .. }) => v.iter().flatten().any(|item| has_opaque(&ty.at(*item), depth + 1)),
+        _ => false,
+    }
+}
+
+/// [R82.2-1] The effects of a value of `effects(|| e)` on a path.
+fn effect_set<'s>(state: &'s State, value: &V) -> Option<&'s EffectSet> {
+    let V::Tup(items) = value else { return None };
+    let [V::Opq(symbol)] = items.as_slice() else { return None };
+    state.sets.iter().find(|(known, _)| *known == symbol.s).map(|(_, set)| set)
+}
+
+/// [R82.2-1] The places that a closure can write: the target of each capture of a `&mut`
+/// reference, with the type of the target.
+fn closure_places(value: &V, ty: Option<&Ty>) -> Vec<(Loc, Ty)> {
+    let (V::Tup(items), Some(ty)) = (value, ty) else { return Vec::new() };
+    let Some(IrTy::Clo { v, .. }) = ty.get() else { return Vec::new() };
+    let mut places = Vec::new();
+    for (item, capture) in items.iter().zip(v) {
+        let capture = ty.at(*capture);
+        if let (V::Ptr(loc), Some(IrTy::Ref(true, inner))) = (item, capture.get()) {
+            places.push((loc.clone(), capture.at(*inner)));
+        }
+    }
+    places
 }
 
 /// The condition that two paths have different outcomes. A different list of calls is not an
@@ -3629,7 +3890,7 @@ fn run_side(side: &Side, step: &Step, inline_all: bool, decls: &mut Decls, input
 /// The start state of a side: the shared input slots, then the locals of the body.
 fn start_state(side: &Side, inputs: &[V], slots: &[V], types: &[Option<Ty>]) -> State {
     let ir = side.ir.clone();
-    let mut state = State { slots: slots.to_vec(), types: types.to_vec(), frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), calls: Vec::new(), visits: Vec::new(), serial: 0 };
+    let mut state = State { slots: slots.to_vec(), types: types.to_vec(), frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), calls: Vec::new(), visits: Vec::new(), serial: 0, sets: Vec::new(), trace: Vec::new() };
     let base = state.slots.len();
     for ty in &ir.l {
         state.slots.push(V::Undef);
@@ -3918,7 +4179,7 @@ fn run_case(decls: &Decls, slots: &[V], types: &[Option<Ty>], muts: &[usize], be
             }
             _ => (ArgMode::Value, rust_expr(value, Some(ty), model)),
         };
-        args.push(RunArg { name: name.clone(), expr, mode });
+        args.push(RunArg { name: name.clone(), expr, mode, var: None });
     }
     let outcome = |out: &PathOut, ret: &Ty| -> RunOut {
         let exit = match &out.exit {
@@ -3933,9 +4194,9 @@ fn run_case(decls: &Decls, slots: &[V], types: &[Option<Ty>], muts: &[usize], be
     // A `&mut` reference inside an input (not an argument of the call itself): a test does not
     // see its value.
     let blind = (mut_slots != muts).then(|| "a `&mut` reference inside an input".to_string());
-    let call = |side, expect| RunCall { side, name: String::new(), target: String::new(), args: args.clone(), expect, file: String::new(), line: 0, value: false };
+    let call = |side, expect| RunCall { side, name: String::new(), target: String::new(), args: args.clone(), expect, file: String::new(), line: 0, value: false, bind: None };
     let calls = vec![call(RunSide::Before, old), call(RunSide::After, new)];
-    RunCase { calls, blind }
+    RunCase { calls, blind, sequence: false }
 }
 
 /// The elements of a sequence value of a model: `(seq.++ (seq.unit #x00000001) (seq.unit
@@ -4797,6 +5058,108 @@ thread_local! {
     static RELATIONS: std::cell::RefCell<Arc<Vec<Relation>>> = std::cell::RefCell::new(Arc::new(Vec::new()));
     /// The relations whose run is open (a relation that uses itself stops).
     static RELATING: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// [R82.1-5] The relations that the checks of this thread ran (their record names).
+    static USED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// [R82.1-5] Runs `f`, and gives the record names of the relations that its checks ran: a proof
+/// that uses a relation holds only if each body that makes or changes a value of its type keeps
+/// the relation.
+pub fn with_used_relations<R>(f: impl FnOnce() -> R) -> (R, Vec<String>) {
+    let outer = USED.with(|cell| cell.replace(Vec::new()));
+    let found = f();
+    let used = USED.with(|cell| cell.replace(outer));
+    USED.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        for name in &used {
+            if !cell.contains(name) {
+                cell.push(name.clone());
+            }
+        }
+    });
+    (found, used)
+}
+
+/// [R82.1-5] True if a body can make or change a value of a type of a relation (its old type for
+/// a body of the old tree, its new type for a body of the new tree): an aggregate or a constant
+/// of the type, a write into a place of the type, or a `&mut` borrow of a part of such a place.
+/// The rule reads the compiler types of the form, never a name.
+pub fn makes_or_changes(ir: &Arc<Ir>, relation: &Relation, old: bool) -> bool {
+    let Some((a, b)) = relation.types() else { return false };
+    if ir.u.is_some() {
+        return false;
+    }
+    let wanted = if old { a } else { b };
+    let is = |id: u32| fits(&wanted, &Ty { ir: ir.clone(), id }, 0);
+    for block in &ir.b {
+        for stmt in &block.s {
+            let found = match &stmt.k {
+                IrStmtKind::Set(place, value) => {
+                    place_writes(ir, place, &wanted)
+                        || match value {
+                            IrRvalue::Agg(IrAgg::A(ty, _), _) => is(*ty),
+                            IrRvalue::Use(IrOp::K(IrConst::A(ty, ..))) => is(*ty),
+                            IrRvalue::Ref(true, borrowed) => place_part(ir, borrowed, &wanted),
+                            _ => false,
+                        }
+                }
+                IrStmtKind::SetDisc(place, _) => place_writes(ir, place, &wanted),
+                IrStmtKind::U(_) => false,
+            };
+            if found {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// [R82.1-5] The types of a place: the type of its local, then the type after each projection
+/// (`None` where the form gives no type).
+fn place_types(ir: &Arc<Ir>, place: &IrPlace) -> Vec<Option<Ty>> {
+    let mut out = Vec::new();
+    let mut ty = ir.l.get(place.l).map(|id| Ty { ir: ir.clone(), id: *id });
+    let mut variant = 0usize;
+    out.push(ty.clone());
+    for proj in &place.p {
+        ty = ty.and_then(|ty| {
+            let next = match (proj, ty.get()?) {
+                (IrProj::D, IrTy::Ref(_, inner)) => *inner,
+                (IrProj::F(index), IrTy::Adt { v, .. }) => *v.get(variant)?.get(*index)?,
+                (IrProj::F(index), IrTy::Tuple(items)) => *items.get(*index)?,
+                (IrProj::F(index), IrTy::Clo { v, .. }) => *v.get(*index)?,
+                (IrProj::V(index), _) => {
+                    variant = *index;
+                    return Some(ty.clone());
+                }
+                (IrProj::I(_) | IrProj::K(..), IrTy::Seq { e, .. }) => *e,
+                _ => return None,
+            };
+            if !matches!(proj, IrProj::V(_)) {
+                variant = 0;
+            }
+            Some(ty.at(next))
+        });
+        out.push(ty.clone());
+    }
+    out
+}
+
+/// [R82.1-5] True if a write into the place changes a value of the type: the place is a part of a
+/// value of the type (a field, a variant, an element), or a value of the type behind a reference
+/// or inside another value (a projection).
+fn place_writes(ir: &Arc<Ir>, place: &IrPlace, wanted: &Ty) -> bool {
+    if place_part(ir, place, wanted) {
+        return true;
+    }
+    !place.p.is_empty() && place_types(ir, place).last().cloned().flatten().is_some_and(|ty| fits(wanted, &ty, 0))
+}
+
+/// [R82.1-5] True if the place is a part of a value of the type (a projection after a step whose
+/// type is the type).
+fn place_part(ir: &Arc<Ir>, place: &IrPlace, wanted: &Ty) -> bool {
+    let types = place_types(ir, place);
+    place.p.iter().enumerate().any(|(at, proj)| !matches!(proj, IrProj::D) && types.get(at).cloned().flatten().is_some_and(|ty| fits(wanted, &ty, 0)))
 }
 
 /// [R80.1-1] Runs `f` with the relations of the intent files.
@@ -4879,6 +5242,39 @@ fn relation_for(old: &Ty, new: &Ty) -> Option<Relation> {
     relations().iter().find(|relation| relation.types().is_some_and(|(a, b)| !fits(&a, &b, 0) && fits(&a, old, 0) && fits(&b, new, 0))).cloned()
 }
 
+/// [R82.1-3] True if a relation of the intent files fits a type of the signature of an item: a
+/// parameter, the target of a reference parameter (a `&mut` place too), or the result, also
+/// inside a tuple, a reference, a sequence, or a struct or an enum of one definition (an
+/// `Option<T>`). Then equal MIR of the two versions is no proof: the two bodies read and write
+/// values of two types, and only the relation tells if the outcomes correspond.
+pub fn relation_applies(old: &Arc<Ir>, new: &Arc<Ir>) -> bool {
+    !relations().is_empty() && (0..=old.a.min(new.a)).any(|local| local_fits(old, new, local))
+}
+
+/// [R82.1-3] True if a relation fits the types of one local of two forms (or a part of them).
+fn local_fits(old: &Arc<Ir>, new: &Arc<Ir>, local: usize) -> bool {
+    let (Some(a), Some(b)) = (old.l.get(local), new.l.get(local)) else { return false };
+    relation_inside(&Ty { ir: old.clone(), id: *a }, &Ty { ir: new.clone(), id: *b }, 0)
+}
+
+/// [R82.1-3] True if a relation fits two types, or two parts at one place of them.
+fn relation_inside(a: &Ty, b: &Ty, depth: usize) -> bool {
+    if depth > 6 {
+        return false;
+    }
+    if relation_for(a, b).is_some() {
+        return true;
+    }
+    let all = |x: &[u32], y: &[u32]| x.len() == y.len() && x.iter().zip(y).any(|(p, q)| relation_inside(&a.at(*p), &b.at(*q), depth + 1));
+    match (a.get(), b.get()) {
+        (Some(IrTy::Ref(_, x)), Some(IrTy::Ref(_, y))) => relation_inside(&a.at(*x), &b.at(*y), depth + 1),
+        (Some(IrTy::Tuple(x)), Some(IrTy::Tuple(y))) => all(x, y),
+        (Some(IrTy::Seq { e: x, .. }), Some(IrTy::Seq { e: y, .. })) => relation_inside(&a.at(*x), &b.at(*y), depth + 1),
+        (Some(IrTy::Adt { n: nx, v: x, .. }), Some(IrTy::Adt { n: ny, v: y, .. })) if definition_of(nx) == definition_of(ny) && x.len() == y.len() => x.iter().zip(y).any(|(p, q)| all(p, q)),
+        _ => false,
+    }
+}
+
 /// The definition part of a type text (`std::option::Option<shop::Cart>` gives `Option`).
 fn definition_of(text: &str) -> String {
     type_key(text).split('<').next().unwrap_or("").to_string()
@@ -4898,6 +5294,11 @@ fn relation_run(side: &Side, step: &Step, inline_all: bool, decls: &mut Decls, s
     if RELATING.with(|cell| cell.borrow().contains(&relation.name)) {
         return Err(Stop(format!("the relation `{name}` uses itself (a relation of a recursive type is outside the model of this batch)")));
     }
+    USED.with(|cell| {
+        if !cell.borrow().contains(&relation.name) {
+            cell.borrow_mut().push(relation.name.clone());
+        }
+    });
     let mut slots = slots.to_vec();
     let mut types = types.to_vec();
     let mut inputs = Vec::new();
@@ -4946,7 +5347,7 @@ fn relation_run(side: &Side, step: &Step, inline_all: bool, decls: &mut Decls, s
 /// rule of `same`), outside a run: a run state with the slots of the values.
 #[allow(clippy::too_many_arguments)]
 fn relate_values(side: &Side, step: &Step, inline_all: bool, decls: &mut Decls, slots: &[V], types: &[Option<Ty>], (x, tx): (&V, &Ty), (y, ty): (&V, &Ty), old: bool) -> Result<T, Stop> {
-    let state = State { slots: slots.to_vec(), types: types.to_vec(), frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), calls: Vec::new(), visits: Vec::new(), serial: 0 };
+    let state = State { slots: slots.to_vec(), types: types.to_vec(), frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), calls: Vec::new(), visits: Vec::new(), serial: 0, sets: Vec::new(), trace: Vec::new() };
     let mut run = Run { side, step, inline_all, decls, steps: 0, outs: Vec::new(), stops: Vec::new(), inlined: BTreeSet::new(), muts: Vec::new(), calls: 0, old, mode: LoopMode::Plain, dropped: 0 };
     run.relate(&state, x, tx, y, ty, 0)
 }
