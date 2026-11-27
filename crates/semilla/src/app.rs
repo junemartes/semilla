@@ -163,6 +163,9 @@ struct Guard<'a> {
     /// The expansion records of each step of the default mode (R65.8-1), from the cache of
     /// the build check, by the index of the step. `Err`: the cause why the step has none.
     default_records: &'a BTreeMap<usize, DefaultRecords>,
+    /// [R79.2-1] The compiled claims of each step of the default mode with intent files: the warm
+    /// check of `semilla intent check` for the two trees of the step (R78.3-6, no build).
+    default_anchors: &'a BTreeMap<usize, std::result::Result<semilla_verify::astmap::CompiledClaims, String>>,
 }
 
 /// The expansion records of the two trees of a step of the default mode (R65.8-1), or the cause
@@ -247,6 +250,17 @@ impl semilla_verify::BodyOracle for Guard<'_> {
 
     fn reach(&self, step: &Step, renames: &BTreeMap<String, String>) -> Option<semilla_verify::equiv::ReachReport> {
         if self.off(step) { None } else { self.inner.reach(step, renames) }
+    }
+
+    fn intent_anchors(&self, step: &Step) -> Option<std::result::Result<semilla_verify::astmap::CompiledClaims, String>> {
+        // [R79.2-1] A step of the default mode reads the warm check of its two trees.
+        if !step.compiled {
+            return self.default_anchors.get(&step.index).cloned();
+        }
+        if self.skip.contains(&step.index) {
+            return Some(Err("the command does not run the build code that the change set changes".to_string()));
+        }
+        self.inner.intent_anchors(step)
     }
 
     fn intent(&self, step: &Step, renames: &BTreeMap<String, String>, queries: &[semilla_verify::intent::Query]) -> Option<Vec<semilla_verify::intent::Answer>> {
@@ -2236,6 +2250,23 @@ impl App {
         out
     }
 
+    /// [R79.2-1] The compiled claims of each step of the default mode with intent files: the warm
+    /// check of `semilla intent check` for the two trees of the step (R78.3-6). The default mode
+    /// starts no build for them: with no warm check, the cause.
+    fn default_anchors(&self, set: &ChangeSet) -> BTreeMap<usize, std::result::Result<semilla_verify::astmap::CompiledClaims, String>> {
+        let mut out = BTreeMap::new();
+        for step in set.steps.iter().filter(|step| !step.compiled && !step.agent.intent.is_empty()) {
+            let sources: Vec<semilla_normal::intent::Source> = step.agent.intent.iter().map(|file| semilla_normal::intent::Source { path: file.path.clone(), text: file.text.clone() }).collect();
+            let found = match crate::intentcrate::check_fast(&self.repo.cache_dir(), &self.repo.root, &step.tree_before, &step.tree_after, &sources) {
+                Ok(Some(check)) => crate::oracle::compiled_claims(&check, &sources),
+                Ok(None) => Err(semilla_verify::astmap::NO_COMPILED.to_string()),
+                Err(error) => Err(format!("the intent crate does not compile: {error:#}")),
+            };
+            out.insert(step.index, found);
+        }
+        out
+    }
+
     /// Checks a change set, or one step of it, with the build code state of the full change set.
     fn check_set_with(&mut self, set: &ChangeSet, require_groups: bool, code: &BuildCode) -> Result<CheckResult> {
         // A command with `--no-build-code` does not check a step that uses a tree with changed
@@ -2251,7 +2282,8 @@ impl App {
         let tree_only = off.len() == set.steps.len();
         let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies || tree_only { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone(), added: Default::default(), after_commit: set.after_commit.is_some() }) };
         let default_records = self.default_records(set);
-        let bodies = Guard { inner: inner.as_ref(), skip: &skip, code, default_records: &default_records };
+        let default_anchors = self.default_anchors(set);
+        let bodies = Guard { inner: inner.as_ref(), skip: &skip, code, default_records: &default_records, default_anchors: &default_anchors };
         let exprs = SmtOracle::for_repo(&self.repo);
         let trees: BTreeSet<String> = set.steps.iter().flat_map(|s| [s.tree_before.clone(), s.tree_after.clone()]).collect();
         for tree in &trees {
@@ -2263,7 +2295,9 @@ impl App {
         // The key of a step result has each input of the step check that is not in the step.
         // R65.8-1: the expansion records of the default steps are an input of the step check.
         let records_key: Vec<(usize, std::result::Result<usize, &String>)> = default_records.iter().map(|(index, records)| (*index, records.as_ref().map(|[old, new]| old.iter().chain(new).map(|unit| unit.list.len()).sum::<usize>()))).collect();
-        let mut memo = StepMemo { results: std::mem::take(&mut self.step_memo), inputs: format!("{:?} {} {skip:?} {code:?} {} {records_key:?}", self.mode, self.no_bodies, set.after_commit.is_some()) };
+        // [R79.2-1] The compiled claims of the default steps are an input of the step check too.
+        let anchors_key: Vec<(usize, bool)> = default_anchors.iter().map(|(index, found)| (*index, found.is_ok())).collect();
+        let mut memo = StepMemo { results: std::mem::take(&mut self.step_memo), inputs: format!("{:?} {} {skip:?} {code:?} {} {records_key:?} {anchors_key:?}", self.mode, self.no_bodies, set.after_commit.is_some()) };
         let (mut report, mut outcomes) = semilla_verify::verify_changeset_cached(set, &mut load, &bodies, &exprs, Options { require_groups, derive_edits: true }, &mut memo);
         self.step_memo = memo.results;
         // Design 67, part D: a later step that changes a body that a claim of an earlier step

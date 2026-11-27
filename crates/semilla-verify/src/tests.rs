@@ -9230,8 +9230,12 @@ fn the_gap_list_groups_equal_edits_and_gives_the_option_that_covers_them() {
     // No agent fact: the step is valid, and each fact has the origin of Semilla.
     let report = run_agent(AGENT_BASE, &mixed, &[], &[]);
     assert!(report.accepted() && report.agent_facts.is_empty() && report.facts.iter().all(|fact| fact.status == "derived"), "{:#?}", report.facts);
+    // The full text has the section of the AST pass first (design 79); this test reads the gap
+    // list.
+    let all_lines = views::agent_lines(&report, None, &|_| Vec::new());
+    let gap_lines = &all_lines[all_lines.iter().position(|line| line.starts_with("  not stated")).unwrap_or(0)..];
     assert_eq!(
-        views::agent_lines(&report, None, &|_| Vec::new()),
+        gap_lines,
         [
             "  not stated: 5 item(s) with 5 place(s) that can change the behavior of existing code and that no fact of the agent states",
             "  ? 3 places: `$a.total` => `$a.total()` (f1, f2)",

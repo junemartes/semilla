@@ -51,6 +51,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
       note: the member order needs no reason: each macro of the type (`Marker`) makes the same code in the two versions (the expansion records, R65.9-1)

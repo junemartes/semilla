@@ -23,6 +23,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f1 derived: changed macro `mkfn`: `macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v } } }` → `macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v + 1 } } }` [declaration]
       expansion: `mkfn!(rate, include!("rate.in"))` at `shop::mkfn!#0` (src/lib.rs:3): expansion changed: changed expression `10` → `10 + 1` at `shop::rate/tail` [semantics]

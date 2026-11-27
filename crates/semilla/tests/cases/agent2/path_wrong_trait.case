@@ -117,6 +117,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✗ a1 change: `<Price as Debug>::fmt` "more" (false: the tag `change` does not agree with the edit that Semilla sees)
       Semilla sees no edit in `depot::money::<Price as fmt::Debug>::fmt`
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `"{}"` → `"${}"` (f1)
       in: depot::money::<Price as fmt::Display>::fmt

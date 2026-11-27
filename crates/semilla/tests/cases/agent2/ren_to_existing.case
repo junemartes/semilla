@@ -118,6 +118,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 same: rename wrap wrap2 (false: Semilla derives no rename `wrap` → `wrap2` from the syntax tree)
       the stated pair is no fact: the new tree has the item `depot::wrap` too
       Semilla sees: f1 changed path `wrap` → `wrap2` at `depot::a/tail/callee` [semantics]
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed path `wrap` → `wrap2` (f1)
       in: depot::a

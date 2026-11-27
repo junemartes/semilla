@@ -59,6 +59,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 change: `uses_limit` "more" (false: the tag `change` does not agree with the edit that Semilla sees)
       Semilla sees only edits that keep the behavior in `depot::uses_limit`:
           1 site(s) of a rename (the name changes, the item that the name gives does not)
+  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   other facts, filled in by Semilla:
   ◆ f1 derived: renamed `depot::limit` → `depot::cap` [rename]

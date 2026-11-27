@@ -118,6 +118,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 change: `<Price as Scale<u16>>::scale` "one more" (false: the tag `change` does not agree with the edit that Semilla sees)
       `<Price as Scale<u16>>::scale` names no item, no module, and no file of the old tree or the new tree
       candidates: `depot::money::<Price as Scale<u64>>::scale#0`, `depot::money::<Price as Scale<u32>>::scale#1`, `depot::money::<Price as Scale<[T;N]>>::scale#2`, `depot::money::Scale::scale`
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression `self.0 * by` → `self.0 * by + 1` (f1)
       in: depot::money::<Price as Scale>::scale#0

@@ -26,6 +26,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f2 derived: changed macro `m`: `macro_rules! m { () => { "src/lib.rs:5" }; }` → `macro_rules! m { () => { "src/lib.rs:6" }; }` [declaration · code different]
       affected bodies: depot::f

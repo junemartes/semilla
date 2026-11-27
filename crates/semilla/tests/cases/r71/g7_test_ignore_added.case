@@ -49,6 +49,7 @@ rejected: step 0 "the change" is not stored
 build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   tests and benches, filled in by Semilla:
   ◆ f1 derived: attributes of `shop::tests::two`: added `#[ignore]` [attribute]
       expansion: `#[test]` at `shop::tests::two` (src/lib.rs:12): expansion changed: changed code `false,\n ignore_message: ::core::option::Option::None,\n source_file: "src/lib.rs",\n start_line: 13usize,\n start_col: 8usize,\n end_line: 13usize` → `true,\n ignore_message: ::core::option::Option::None,\n source_file: "src/lib.rs",\n start_line: 14usize,\n start_col: 8usize,\n end_line: 14usize`

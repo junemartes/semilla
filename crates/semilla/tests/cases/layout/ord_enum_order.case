@@ -52,6 +52,7 @@ rejected: step 0 "the change" is not stored
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f1 derived: member order of `depot::Level`: `Low, High` → `High, Low`; the discriminant values of the variants with no explicit value change [declaration]
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`PartialEq`, `PartialOrd`): the code that it makes reads the members in order; it needs a reason: --reason 'depot::Level=…'

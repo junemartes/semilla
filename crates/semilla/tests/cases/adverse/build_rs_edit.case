@@ -58,6 +58,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       diff:
         @@ line 3 @@
         +     println!("cargo:rustc-cfg=fast");
+  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   cover: each of the 1 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records
   names from the text: the build check did not run, so no build made the expansion records

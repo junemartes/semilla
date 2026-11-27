@@ -116,6 +116,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✓ a1 change: `<Price as Scale<[T;N]>>::scale` "one more" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
       places: depot::money::<Price as Scale>::scale#2/tail/args[0]/rhs
     ◆ f1 stated: changed literal `7` → `8` at `depot::money::<Price as Scale>::scale#2/tail/args[0]/rhs` [semantics]
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 2 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records

@@ -602,12 +602,23 @@ fn expr(conv: &Conv, e: &ast::Expr) -> Result<Expr, Error> {
 /// cause: a generic parameter, `Self`, `impl …`, `dyn …`, or a name that no type of the crate
 /// has. A lifetime has no meaning in a claim, so the template has none.
 pub fn same_template(path: &str, old_signature: &str, new_signature: &str, type_path: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
-    struct Sig {
-        name: String,
-        params: Vec<(String, String)>,
-        ret: String,
-    }
-    let read = |signature: &str| -> Result<Sig, String> {
+    let read = |signature: &str| read_signature(path, signature, type_path);
+    let old = read(old_signature)?;
+    let new = read(new_signature)?;
+    same_body(path, &old, &new)
+}
+
+/// The name, the parameters (the name and the claim type of each), and the claim type of the
+/// result of a signature of a function of the syntax tree.
+struct Sig {
+    name: String,
+    params: Vec<(String, String)>,
+    ret: String,
+}
+
+/// [R77.3-4] Reads a signature for a template: a type that a claim cannot name gives the cause.
+fn read_signature(path: &str, signature: &str, type_path: &dyn Fn(&str) -> Option<String>) -> Result<Sig, String> {
+    {
         let parse = ast::SourceFile::parse(&format!("{signature} {{}}"), Edition::Edition2024);
         let function = parse.tree().syntax().descendants().find_map(ast::Fn::cast).ok_or_else(|| format!("the signature `{signature}` does not parse"))?;
         let name = function.name().map(|name| name.text().to_string()).ok_or_else(|| "the signature has no name".to_string())?;
@@ -639,9 +650,11 @@ pub fn same_template(path: &str, old_signature: &str, new_signature: &str, type_
             None => "()".to_string(),
         };
         Ok(Sig { name, params, ret })
-    };
-    let old = read(old_signature)?;
-    let new = read(new_signature)?;
+    }
+}
+
+/// The template of a `same` claim for two signatures (R77.3-4, R78.1-5).
+fn same_body(path: &str, old: &Sig, new: &Sig) -> Result<String, String> {
     // [R78.1-5] Rustc checks a template: an old function takes old values and a new function
     // takes new values, so a parameter of a type of the workspace (also the receiver) is one
     // parameter of each version, and `same` relates the two.
@@ -680,6 +693,46 @@ pub fn same_template(path: &str, old_signature: &str, new_signature: &str, type_
         (false, false) => format!("!({}) || {{ let old = {old_call}; let new = {new_call}; true }}", guards.join(" && ")),
     };
     Ok(format!("#[same({path})] fn {}({}) -> bool {{ {body} }}", old.name, declared.join(", ")))
+}
+
+/// [R79.5-1] The template of a claim on a function of one version: `#[new(PATH)]` for an added
+/// function (it calls `after::PATH`), `#[removed(PATH)]` for a removed one (it calls
+/// `before::PATH`). The parameters are the parameters of the signature, with the types of that
+/// version; the agent writes the property in place of `true`. Rustc accepts the template as it
+/// is (each name is a real name of the version).
+pub fn version_template(kind: &str, path: &str, signature: &str, type_path: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
+    let version = if kind == "removed" { "before" } else { "after" };
+    let sig = read_signature(path, signature, type_path)?;
+    let params: Vec<String> = sig.params.iter().map(|(name, ty)| format!("{name}: {}", ty.replace("before::", &format!("{version}::")))).collect();
+    let args: Vec<&str> = sig.params.iter().map(|(name, _)| name.as_str()).collect();
+    let value = if kind == "removed" { "old" } else { "new" };
+    Ok(format!("#[{kind}({path})] fn {}_{kind}({}) -> bool {{ let {value} = {version}::{path}({}); true }}", sig.name, params.join(", "), args.join(", ")))
+}
+
+/// [R79.5-1] The template of a claim on a type: a `#[relation]` of the two versions that reads
+/// each field of the list (`b` is the old value, `a` the new value), or a `#[new]` or a
+/// `#[removed]` claim on a type of one version. `generics` is the list of the generic
+/// parameters of the type as the source has it (`<T: Clone>`, or empty), and `args` the
+/// arguments (`<T>`). The agent writes the relation in place of `true`.
+pub fn type_template(kind: &str, path: &str, generics: &str, args: &str, fields: &[(bool, String)]) -> String {
+    let name = path.rsplit("::").next().unwrap_or(path).to_lowercase();
+    let reads: String = fields.iter().map(|(new, field)| format!("let _ = &{}.{field}; ", if *new { "a" } else { "b" })).collect();
+    match kind {
+        "relation" => format!("#[relation(before::{path}, after::{path})] fn {name}_relation{generics}(b: &before::{path}{args}, a: &after::{path}{args}) -> bool {{ {reads}true }}"),
+        "removed" => format!("#[removed({path})] fn {name}_removed{generics}(b: &before::{path}{args}) -> bool {{ {reads}let _ = b; true }}"),
+        _ => format!("#[new({path})] fn {name}_new{generics}(a: &after::{path}{args}) -> bool {{ {reads}let _ = a; true }}"),
+    }
+}
+
+/// [R79.5-1] The template of a claim on a constant or a static: `same` relates the two values;
+/// a `new` or a `removed` claim reads the value of its version.
+pub fn value_template(kind: &str, path: &str) -> String {
+    let name = path.rsplit("::").next().unwrap_or(path).to_lowercase();
+    match kind {
+        "removed" => format!("#[removed({path})] fn {name}_removed() -> bool {{ let old = &before::{path}; true }}"),
+        "new" => format!("#[new({path})] fn {name}_new() -> bool {{ let new = &after::{path}; true }}"),
+        _ => format!("#[same({path})] fn {name}_same() -> bool {{ same(&before::{path}, &after::{path}) }}"),
+    }
 }
 
 /// The text of a type with no space next to the marks of a path (a signature of the syntax

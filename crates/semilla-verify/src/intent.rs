@@ -263,8 +263,18 @@ fn coverage(input: &StepInput, outcome: &StepOutcome, asked: &[Query], answers: 
         let items: Vec<String> = answer.items.iter().map(|name| flow_name(name, &renames, &names)).collect();
         proved.push(Proved { id: &query.id, kind: query.claim.kind, explains, items, except: !query.claim.options.except.is_empty() });
     }
+    let index = crate::checks::BodyIndex::new(&outcome.bodies, input.after, input.before);
     let mut out = Vec::new();
     for body in &flow.bodies {
+        // [R79.7-1] The map is a review aid, not a gate of the proof: the state of the body comes
+        // from the proof alone, and the fact of the map stands next to it.
+        let item = index.item_of_name(&body.name).unwrap_or_else(|| body.name.clone());
+        let map = if outcome.not_mapped.contains(&item) {
+            let count = outcome.report.ast.as_ref().map(|map| map.entries.iter().filter(|entry| entry.state == semilla_core::AstState::NotMapped && entry.at.split('/').next() == Some(item.as_str())).count()).unwrap_or(0);
+            if count == 0 { "a node of its item is not mapped (complete the intent file)".to_string() } else { format!("{count} node(s) of its item not mapped (complete the intent file)") }
+        } else {
+            String::new()
+        };
         let verdicts = outcome.verdicts.get(&body.name).cloned().unwrap_or_default();
         let equivalent = !verdicts.is_empty() && verdicts.iter().all(|(_, verdict)| matches!(verdict, Verdict::Equivalent(_)));
         let different = verdicts.iter().any(|(_, verdict)| matches!(verdict, Verdict::Different { .. }));
@@ -299,9 +309,8 @@ fn coverage(input: &StepInput, outcome: &StepOutcome, asked: &[Query], answers: 
         } else {
             (CoverState::NotExplained, Vec::new(), semilla)
         };
-        out.push(BodyCover { name: body.name.clone(), place: body.place.clone(), state, claims, detail });
+        out.push(BodyCover { name: body.name.clone(), place: body.place.clone(), state, claims, detail, map });
     }
-    let _ = input;
     out
 }
 
@@ -435,6 +444,17 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
                         }
                     }
                 }
+            }
+        }
+    }
+    // [R79.2-2] An anchor that does not fit is an error of its claim (the place and the expected
+    // kind), so the step rejects it as each other error of a claim (R67.5-2).
+    if let Some(map) = &outcome.report.ast {
+        for claim in &mut claims {
+            let found: Vec<&str> = map.errors.iter().filter_map(|error| error.strip_prefix(&format!("{} ", claim.id))).collect();
+            if !found.is_empty() {
+                claim.result = IntentResult::Error;
+                claim.detail = found.join("; ");
             }
         }
     }
@@ -577,7 +597,15 @@ pub fn lines(claims: &[IntentClaim]) -> Vec<String> {
 pub fn semantic_lines(step: &semilla_core::StepReport, limit: Option<usize>) -> Vec<String> {
     let claims = &step.intent_claims;
     if claims.is_empty() {
-        return Vec::new();
+        // [R79.6-2] A step with no intent file: the AST pass runs (the map of Semilla), and the
+        // output has its coverage line; the full text lists each node.
+        let Some(map) = &step.ast else { return Vec::new() };
+        if limit.is_some() {
+            return vec![format!("  {} (no intent file; the full text of the step lists each node)", map.line())];
+        }
+        let mut lines = vec!["  semantic changes (no intent file: the map of the AST pass):".to_string()];
+        lines.extend(crate::astmap::lines(map, None, step.step));
+        return lines;
     }
     let mut lines = vec!["  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):".to_string()];
     for claim in claims.iter().filter(|claim| claim.kind == "intent") {
@@ -592,6 +620,10 @@ pub fn semantic_lines(step: &semilla_core::StepReport, limit: Option<usize>) -> 
     }
     for claim in claims.iter().filter(|claim| claim.result == IntentResult::False) {
         lines.push(format!("    ✗ false: {} `{}`: {}", claim.id, claim.text, claim.detail));
+    }
+    // [R79.6-1] The coverage line of the AST pass, before the line of the changed bodies.
+    if let Some(map) = &step.ast {
+        lines.extend(crate::astmap::lines(map, limit, step.step));
     }
     if step.coverage.is_empty() {
         let cause = if step.flow.is_some() { "no changed body" } else { "the coverage needs `--compiled` (the default mode has no compiler data)" };

@@ -366,6 +366,52 @@ fn len(b: before::shop::Cart, a: after::shop::Cart) -> bool {
 - `✗ the result of Semilla and claim iN disagree: a defect of Semilla`: a proved claim that states a change (`change`, `different`) on a body that Semilla proves equivalent, or a proved `same` claim (with no `except` and no `change` claim on the body) on a body that Semilla finds different. Neither result explains the body then; the run of the real code (design 74) shows where the difference of Semilla is real. Report it.
 - The JSON (`coverage`, `explains` of a claim), `semilla status --verbose`, and the MCP tool `results` give the same data.
 
+**The AST pass: each change is mapped** (design 79). Semilla compiles the claims in three passes: the AST pass, the control-flow pass (a later batch), and the proof pass (the claims and the equivalence check). The AST pass runs first, in each step, also with no intent file. Each changed node of the syntax diff (an item, a statement, an expression, a field, a match arm, an attribute, a `use` line) gets exactly one entry:
+
+- `mapped by claim iN`: an anchor of your claim maps the node.
+- `mapped by Semilla (KEY)`: the matcher of Semilla pairs the node (its identity, equal tokens, a similarity, one place, an extracted or an inlined variable), or a rule of Semilla explains it: a doc or comment edit; test, bench, or example code; a removed item with no reader; an added item that no old code reaches; a `use` line that the name record shows unused, or whose readers each have their own change.
+- `not mapped`: nothing maps the node. This is a request to you: complete the intent file.
+
+The line in the section "semantic changes", before the line of the changed bodies:
+
+```
+    AST changes: 5 mapped by claims, 12 mapped by Semilla, 2 not mapped
+      n4 not mapped [R79.5-1]: added `let` `shop::caller/S0` (src/lib.rs:16): `let bits = x.count_ones();`
+          template: #[same(shop::caller)] fn caller(x: u32) -> bool { after::shop::caller(x) == before::shop::caller(x) }
+      n9 not mapped [R79.5-1]: added fn `shop::added` (src/lib.rs:21): `pub fn added(…) -> u64 { … }`
+          template: #[new(shop::added)] fn added_new(values: &[u32], scale: u8) -> bool { let new = after::shop::added(values, scale); true }
+```
+
+- A step with no intent file shows one line: `AST changes: 0 mapped by claims, M mapped by Semilla, K not mapped (no intent file; the full text of the step lists each node)`. The full text is `semilla expand --step N` (also for a rejected step) or `semilla status --verbose`.
+- `semilla status --verbose` and `semilla expand --step N` list each node with its number (`n1` to `nT`, the order of the syntax diff), its state, and the rule that decides it, and the anchors of each claim. The JSON (`ast`: `nodes`, `entries`, `anchors`, `errors`) and the MCP tool `results` give the same data.
+- A step with nodes that are not mapped passes. A false claim and an error still reject it.
+
+**What maps a node.** The anchors come from the claims that rustc compiles (the definitions that rustc resolves), never from the text of a path:
+
+| Claim | The nodes that it maps |
+|---|---|
+| `#[same(ITEM)]`, `#[change(ITEM)]`, `#[different(ITEM)]` whose body calls `before::ITEM` and `after::ITEM` (also through a function of the intent file); an empty `#[same(ITEM)]` | each node of the old item and of the new item, and each node inside them (a statement, a field, a variant, a nested item) |
+| `#[same(before::shop::f, after::shop::g)]` (one path of each version) | the old `f` and the new `g`: a rename or a move that Semilla does not find |
+| `#[new(ITEM)]` that calls `after::ITEM` | the added item |
+| `#[removed(ITEM)]` that calls `before::ITEM` | the removed item |
+| `#[relation(before::T, after::T)]` | the two types, and each field and variant that the relation reads (`b.items`, `a.entries`) |
+| a case split (`if`, `match`), a lemma, an invariant, a hint | no node of the AST pass |
+
+A property that does not call a function of its scope gives no anchor of that version (`semilla status --verbose` says so); a type, a constant, or a static of the scope is anchored by the scope path. A scope of batch 13b (`impl shop::Cart`, `shop::m::*`, `callers(…)`, a module) gives no anchor yet. An added or a removed `use` line has no claim: it is mapped when it is unused, or when each item that reads its names has its own entry or an anchor; a `pub use` line is mapped by the claims on each item that it names. An added or a removed impl block, trait, or module (and an associated type such as `type Item`) takes the state of its members: claim each method of a new impl block, by its qualified path (`#[new(<shop::Iter as core::iter::Iterator>::next)]`, the line gives the path).
+
+**The check of the anchors** is polynomial and it never searches for a map. An anchor that does not fit the trees is the error S0120 of its claim, at the place of the scope path, with the expected kind: `#[new(ITEM)]` on an item of the two trees ("expects an item that the step adds"; the error names its partner when Semilla pairs it, for example a rename that Semilla finds), `#[removed(ITEM)]` on an item of the two trees, a scope with one kind of item in one version and another kind in the other version, a relation of an item that is not a type, and a definition with no node of the source (an item that a macro makes). The step is rejected; `semilla intent explain S0120` gives the long text.
+
+**The map never changes a proof result.** The map is a review aid, not a gate of the proof. A changed body keeps its result (`explained by claim iN`, `equivalent (Semilla)`, `not explained`) also when a node of its item is not mapped; its line then ends with `[the AST map: 2 node(s) of its item not mapped (complete the intent file)]`, and each such node keeps its `not mapped` line with its template. A claim result does not depend on the map either.
+
+**The loop of the agent.**
+
+1. Run the step. Read the line `AST changes` and each `not mapped` line.
+2. Put a claim for each node that is not mapped in the intent file. Each template is a complete claim that `semilla intent check` accepts: write the property in place of `true`. A template of a changed function is a `#[same]` claim (write `#[change(…, reason = "…")]` with the new behavior if it changes); an added or a removed function gets `#[new]` or `#[removed]`; an added constant `#[new(…)]`; a field or a variant of a type a `#[relation]` that reads it. A node with no form for a claim gives `no template: CAUSE` (an item of a trait impl, a twin, a macro call, a binary target).
+3. Run `semilla intent check FILE` (fast; it also prepares the warm check that the default mode reads), then the step again.
+4. Repeat until each node is mapped. Then make each claim `proved`.
+
+In the default mode, the step reads the compiled claims of the last `semilla intent check` of the same two trees (no build). With no such check, the claims give no anchor, and the step says so: `note: the claims give no anchor: … run `semilla intent check` for the two trees of the step, or the step with `--compiled``.
+
 **The budgets.** Each budget counts solver steps, not seconds: the same trees and the same intent files give the same results on each machine and at each load. `claimed: the budget of the step` (a claim) and `not checked (the budget of the step)` (a body) are the same in each run. Only the safety time limit is a time stop, with its own cause: `the safety time limit`.
 
 A claim with a property body needs `--compiled`: the default mode shows "claimed (the check needs `--compiled`)". `#[rename]`, `#[moved]`, and `#[rewrite]` have the checks of `--same` in each mode. A `#[change(ITEM)]` claim also states its item for the gap list, as `--change` does.

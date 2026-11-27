@@ -28,6 +28,7 @@ rejected: step 0 "the change" is not stored
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
+  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f1 derived: type of `depot::Count`: `type Count = u32;` → `#[cfg(all())] type Count = u32;` (the public API can change: a different crate can use the item) [declaration]
       docs of `depot::Count`, no edit in this step (src/lib.rs:5): `/// The old doc.`

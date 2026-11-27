@@ -38,6 +38,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
         @@ line 3 @@
         -     std::fs::write(format!("{out}/mac.rs"), "macro_rules! rate { () => { 10 } }\n").unwrap();
         +     std::fs::write(format!("{out}/mac.rs"), "macro_rules! rate { () => { 12 } }\n").unwrap();
+  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   cover: each of the 2 changed line(s) is in a fact
   expansions: 1 changed
     `rate!()` at `shop::price/tail` (src/lib.rs:4): expansion changed: `macro rate` (crate shop): changed literal `10` → `12` at `expansion` [semantics]; the cause is not known: Semilla does not see the definition of `rate` (crate shop): the record has no hash of it

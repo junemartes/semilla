@@ -48,6 +48,7 @@ rejected: step 0 "the change" is not stored
 build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
   ◆ f1 derived: attributes of `shop::Item`: `#[depot::tag] #[derive(Debug, Clone)]` → `#[derive(Debug, Clone)] #[depot::tag]` [attribute]
       expansion: derived `Debug` of `shop::Item`: expansion changed: attributes of `shop::impl <Item as ::core::fmt::Debug>`: removed `#[allow(dead_code)]` [attribute]

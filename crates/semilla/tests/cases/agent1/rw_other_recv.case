@@ -61,6 +61,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
           - c.total
           + d.total()
           a fact that holds: `--same 'rewrite c.total => d.total()'` (1 site(s))
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression `c.total` → `d.total()` (f1)
       in: depot::both

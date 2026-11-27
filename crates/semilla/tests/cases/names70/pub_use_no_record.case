@@ -66,6 +66,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f1 derived: type of `shop::a::Block.x`: `u8` → `u16` [declaration]
   ◆ f2 derived: type of `shop::a::Block.y`: `u8` → `u16` (the public API can change: a `pub use` line names `Block`) [declaration]

@@ -120,6 +120,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 change: `Price::fmt` "more" (false: the tag `change` does not agree with the edit that Semilla sees)
       `Price::fmt` names 2 items: give more of the path
       candidates: `depot::money::<Price as fmt::Debug>::fmt`, `depot::money::<Price as fmt::Display>::fmt`
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `"{}"` → `"${}"` (f1)
       in: depot::money::<Price as fmt::Display>::fmt

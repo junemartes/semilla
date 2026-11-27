@@ -116,6 +116,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 same: rename wrap wrap2 (false: Semilla derives no rename `wrap` → `wrap2` from the syntax tree)
       the stated pair is no fact: the new tree has the item `depot::wrap` too
       Semilla sees no fact with one of the two names: the old tree has `wrap`, the new tree has `wrap`, the old tree has `wrap2`, the new tree has `wrap2`
+  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   other facts, filled in by Semilla:
   ◆ f1 derived: layout of `src/lib.rs`: 2 changed lines of 1 item with equal tokens at a new place [layout]

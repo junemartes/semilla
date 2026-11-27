@@ -163,6 +163,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 7 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 7 item(s) with 7 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 7 places: changed literal `1` → `2` (f1)
       in: shop::bits, shop::copy_one, shop::first, shop::later, shop::run_later, shop::talk, shop::wrap

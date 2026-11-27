@@ -196,6 +196,10 @@ pub struct StepReport {
     /// the state of each changed, added, and removed body. Empty for a step with no intent file.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub coverage: Vec<BodyCover>,
+    /// [R79.1-1] The AST pass (design 79): one map entry for each changed node of the syntax
+    /// diff, also for a step with no intent file. `None`: a record of an earlier version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ast: Option<AstMap>,
     /// The gap list (design 54.4): the edits of existing code that can change the behavior and
     /// that no agent fact states. The list is never a cause of a reject.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -789,6 +793,10 @@ pub struct BodyCover {
     /// of a disagreement.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub detail: String,
+    /// [R79.7-1] The fact of the AST map next to the proof result: the count of the nodes of the
+    /// item of the body that are not mapped. The map never changes the state.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub map: String,
 }
 
 impl BodyCover {
@@ -796,12 +804,14 @@ impl BodyCover {
     pub fn line(&self) -> String {
         let name = format!("`{}` ({})", self.name, self.place);
         let detail = if self.detail.is_empty() { String::new() } else { format!(": {}", self.detail) };
-        match self.state {
+        let line = match self.state {
             CoverState::Claim => format!("explained by claim {}: {name}", self.claims.join(", ")),
             CoverState::Equivalent => format!("equivalent (Semilla): {name}{detail}"),
             CoverState::NotExplained => format!("not explained: {name}{detail}"),
             CoverState::Disagree => format!("the result of Semilla and claim {} disagree: a defect of Semilla: {name}{detail}", self.claims.join(", ")),
-        }
+        };
+        // [R79.7-1] The fact of the map, next to the result of the proof.
+        if self.map.is_empty() { line } else { format!("{line} [the AST map: {}]", self.map) }
     }
 }
 
@@ -812,6 +822,91 @@ pub fn coverage_line(bodies: &[BodyCover]) -> String {
     let disagree = count(CoverState::Disagree);
     let tail = if disagree == 0 { String::new() } else { format!(", {disagree} with a disagreement of Semilla and a claim (a defect of Semilla)") };
     format!("changed bodies: {} explained by claims, {} equivalent (Semilla), {} not explained{tail}", count(CoverState::Claim), count(CoverState::Equivalent), count(CoverState::NotExplained) + disagree)
+}
+
+/// [R79.1-1] The state of one changed node in the map of the AST pass (design 79).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AstState {
+    /// An anchor of a claim maps the node (R79.2-3).
+    Claim,
+    /// The matcher of G2 or a rule of Semilla maps the node (R79.3-1 to R79.3-5).
+    Semilla,
+    /// No anchor and no rule maps the node: a request to the agent (R79.5-1).
+    NotMapped,
+}
+
+/// [R79.1-1] One changed node of the AST diff and its one map entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AstEntry {
+    /// The change of the node: `added`, `removed`, `changed`, `moved`.
+    pub change: String,
+    /// The kind of the node: `item`, `statement`, `docs`, `attributes`, …
+    pub node: String,
+    /// The anchor of the node (`shop::f/S2`, `shop::Cart.items`), the new side first.
+    pub at: String,
+    /// The place of the node: `FILE:LINE`.
+    pub place: String,
+    pub state: AstState,
+    /// What maps the node: the ids of the claims, or the key of Semilla.
+    pub by: String,
+    /// The identity of the rule that decides the entry (`R79.3-1`).
+    pub rule: String,
+    /// The text of the node before and after the step (empty on the side with no node).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub before: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub after: String,
+    /// [R79.5-1] The claim template for a node that is not mapped, or the cause why it has none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub template: String,
+}
+
+/// [R79.1-1] The map of the AST pass of a step (design 79).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AstMap {
+    /// [R79.1-1] The count of the changed nodes of the syntax diff (each edit of a node of a
+    /// tree), counted apart from the entries: the case runner checks that each node has exactly
+    /// one entry.
+    #[serde(default)]
+    pub nodes: usize,
+    /// One entry for each changed node, in the order of the syntax diff (the node `nI` is the
+    /// entry `I`).
+    pub entries: Vec<AstEntry>,
+    /// [R79.2-2] The errors of the check of the anchors: `ID FILE:LINE:COLUMN: message`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+    /// [R79.2-1] The anchors of the claims: `ID: KIND OLD → NEW`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anchors: Vec<String>,
+    /// Why the claims give no anchor (the step has intent files, and no compiled claims).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap: Option<String>,
+}
+
+impl AstMap {
+    /// The count of the entries in one state.
+    pub fn count(&self, state: AstState) -> usize {
+        self.entries.iter().filter(|entry| entry.state == state).count()
+    }
+
+    /// [R79.6-1] The coverage line of the AST pass: "AST changes: N mapped by claims, M mapped
+    /// by Semilla, K not mapped".
+    pub fn line(&self) -> String {
+        format!("AST changes: {} mapped by claims, {} mapped by Semilla, {} not mapped", self.count(AstState::Claim), self.count(AstState::Semilla), self.count(AstState::NotMapped))
+    }
+}
+
+impl AstEntry {
+    /// The line of the entry: the state, what maps it, the rule, the node, and the place.
+    pub fn line(&self) -> String {
+        let node = format!("{} {} `{}` ({})", self.change, self.node, self.at, self.place);
+        match self.state {
+            AstState::Claim => format!("mapped by claim {} [{}]: {node}", self.by, self.rule),
+            AstState::Semilla => format!("mapped by Semilla ({}) [{}]: {node}", self.by, self.rule),
+            AstState::NotMapped => format!("not mapped [{}]: {node}", self.rule),
+        }
+    }
 }
 
 impl IntentClaim {

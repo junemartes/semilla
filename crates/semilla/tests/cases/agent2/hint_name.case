@@ -119,6 +119,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       a name in a pattern matches only that name (`wrap`, `x`). For a variable, write `$wrap`, `$x`
       a fact that holds: `--same 'rewrite wrap($x) => wrap2($x)'` (2 site(s))
       no edit of the step has the old form or the new form; the old tree has the form `wrap(x)` at 0 place(s)
+  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: changed path `wrap` → `wrap2` (f1)
       in: depot::a, depot::b

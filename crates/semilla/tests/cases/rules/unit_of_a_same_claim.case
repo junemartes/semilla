@@ -65,6 +65,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       places: depot::a/tail/lhs, depot::b/tail/lhs
     ◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics]
         in: depot::a, depot::b
+  AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `10` → `11` (f2)
       in: depot::limit

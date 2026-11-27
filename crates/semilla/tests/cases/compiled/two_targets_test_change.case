@@ -76,6 +76,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   tests and benches, filled in by Semilla:
   ◆ f1 derived: change condition `10` → `12` (effect hint: narrow, example: x = 12) at `shop (test "probe")::hash/S0/cond/rhs` [semantics · code different]
       affected bodies: shop (test "probe")::hash
