@@ -41,7 +41,7 @@ fn write(repo: &Path, path: &str, text: &str) {
 }
 
 const OLD: &str = "pub struct Cart {\n    pub items: Vec<u32>,\n}\n\npub fn total(c: &Cart) -> u32 {\n    c.items.iter().sum()\n}\n\npub fn f(x: u32) -> u32 {\n    x + 1\n}\n\npub fn caller(x: u32) -> u32 {\n    x * 3\n}\n\nfn helper_old(x: u32) -> u32 {\n    x + 5\n}\n\npub fn uses(x: u32) -> u32 {\n    helper_old(x)\n}\n\npub const LIMIT: u32 = 10;\n\npub fn limit() -> u32 {\n    LIMIT\n}\n";
-const NEW: &str = "pub struct Cart {\n    pub entries: Vec<u32>,\n    pub len: usize,\n}\n\npub fn total(c: &Cart) -> u32 {\n    c.entries.iter().sum::<u32>() + c.len as u32\n}\n\npub fn f(x: u32) -> u32 {\n    let y = x;\n    y + 1\n}\n\npub fn caller(x: u32) -> u32 {\n    let bits = x.count_ones();\n    let _ = bits;\n    x * 3\n}\n\npub fn added(values: &[u32], scale: u8) -> u64 {\n    values.iter().map(|value| u64::from(*value) << scale).sum()\n}\n\npub fn uses(x: u32) -> u32 {\n    added(&[x], 0) as u32\n}\n\npub const LIMIT: u32 = 11;\n\npub const EXTRA: u32 = LIMIT + 1;\n\npub fn limit() -> u32 {\n    EXTRA\n}\n";
+const NEW: &str = "pub struct Cart {\n    pub entries: Vec<u32>,\n    pub len: usize,\n}\n\npub fn total(c: &Cart) -> u32 {\n    c.entries.iter().sum::<u32>() + c.len as u32\n}\n\npub fn f(x: u32) -> u32 {\n    let y = x;\n    y + 1\n}\n\npub fn caller(x: u32) -> u32 {\n    let _ = x;\n    let _ = x;\n    x * 3\n}\n\npub fn added(values: &[u32], scale: u8) -> u64 {\n    values.iter().map(|value| u64::from(*value) << scale).sum()\n}\n\npub fn uses(x: u32) -> u32 {\n    added(&[x], 0) as u32\n}\n\npub const LIMIT: u32 = 11;\n\npub const EXTRA: u32 = LIMIT + 1;\n\npub fn limit() -> u32 {\n    EXTRA\n}\n";
 
 /// A repository with the old version committed and the new version in the working tree.
 fn setup() -> (common::TestDir, PathBuf) {
@@ -121,12 +121,13 @@ fn a_body_that_semilla_proves_equivalent_stays_equivalent_with_a_node_that_is_no
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
     let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
-    // `caller` keeps its behavior (Semilla proves it), and its two new statements are not mapped:
+    // `caller` keeps its behavior (an equal MIR text, design 84), and its two new statements are
+    // not mapped:
     // the map is a review aid, so the proof result stays, with the fact of the map next to it.
     let line = text.lines().find(|line| line.contains("`shop::caller` (src/lib.rs:")).unwrap_or_else(|| panic!("{text}"));
-    assert!(line.trim_start().starts_with("equivalent (Semilla): `shop::caller`"), "{line}");
+    assert!(line.trim_start().starts_with("equal MIR: `shop::caller`"), "{line}");
     assert!(line.ends_with("[the AST map: 2 node(s) of its item not mapped (complete the intent file)]"), "{line}");
-    assert!(text.contains("1 equivalent (Semilla)") || text.contains(" equivalent (Semilla), "), "{text}");
+    assert!(text.contains("changed bodies: 1 equal MIR, "), "{text}");
 }
 
 // rule- R79.7-1
@@ -135,7 +136,7 @@ fn a_proof_does_not_remove_the_request_of_a_node_that_is_not_mapped() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
     let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
-    assert!(text.lines().any(|line| line.trim_start().starts_with("equivalent (Semilla): `shop::caller`")), "{text}");
+    assert!(text.lines().any(|line| line.trim_start().starts_with("equal MIR: `shop::caller`")), "{text}");
     // The request lines of the two nodes of `caller` stay, also when Semilla proves the body.
     for at in ["shop::caller/S0", "shop::caller/S1"] {
         assert!(text.lines().any(|line| line.contains("not mapped [R79.5-1]: added `let`") && line.contains(&format!("`{at}`"))), "{at}\n{text}");

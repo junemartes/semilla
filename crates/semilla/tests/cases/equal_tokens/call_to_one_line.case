@@ -22,6 +22,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::pad` (src/lib.rs:1): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 4 places: 4 different edits (f1, f2, f3, f4)
       in: depot::pad
@@ -33,22 +35,22 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + check `overflow: a + b` (src/lib.rs:2): ok → call `Vec::<u32>::splice::<Range<usize>, [u32; 2]>`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:2)
       control flow: + arrow entry (src/lib.rs:1) → check `overflow: a + b` (src/lib.rs:2)
-      equivalence: not decided alone (the body has 4 edits; an edit of the fact adds or removes a node); the body: not decided: a field of a value that the check does not model
+      equivalence: no result alone (the body has 4 edits; an edit of the fact adds or removes a node); the body: MIR changes
   ◆ f2 derived: changed literal `0` → `1` at `depot::pad/S0/args[0]/start` [semantics · code different]
       affected bodies: depot::pad (with 3 other edits of this body)
       control flow: − arrow entry (src/lib.rs:-1) → call `Vec::<u32>::splice::<Range<usize>, [u32; 2]>` (src/lib.rs:-2)
-      equivalence: not decided alone: a field of a value that the check does not model; the body: not decided: a field of a value that the check does not model (the same line for f3)
+      equivalence: MIR changes alone; the body: MIR changes
   ◆ f3 derived: changed literal `1` → `2` at `depot::pad/S0/args[0]/end` [semantics · code different]
       affected bodies: depot::pad (with 3 other edits of this body)
       control flow: − arrow entry (src/lib.rs:-1) → call `Vec::<u32>::splice::<Range<usize>, [u32; 2]>` (src/lib.rs:-2)
-      equivalence: the same line as f2
+      equivalence: MIR changes alone; the body: MIR changes
   ◆ f4 derived: changed path `a` → `c` at `depot::pad/S0/args[1]/elems[0]` [semantics · code different]
       affected bodies: depot::pad (with 3 other edits of this body)
       control flow: − arrow entry (src/lib.rs:-1) → call `Vec::<u32>::splice::<Range<usize>, [u32; 2]>` (src/lib.rs:-2)
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: not decided: a field of a value that the check does not model
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body
-    depot::pad (src/lib.rs:1): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a field of a value that the check does not model)
+    depot::pad (src/lib.rs:1): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

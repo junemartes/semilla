@@ -27,6 +27,8 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::inner::one` (src/lib.rs:8): an added body: `#[new(depot::inner::one)] fn one_new() -> bool { let new = after::depot::inner::one(); true }`
   new and removed items, filled in by Semilla:
   ◆ f1 derived: added `depot::inner` (the public API changes: a different crate can now use the item) [added · code different]
       affected bodies: depot::inner::one

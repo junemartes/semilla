@@ -30,45 +30,32 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error[E0635]: unknown feature `no_such_feature_of_semilla`
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::price` (src/lib.rs:1): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(n: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `2` → `1` (f3)
       in: shop::price
       lines: src/lib.rs:2, src/lib.rs:-4
-      to state it: --change 'shop::price=TEXT'
-  to state them, add these options to the command of the step: --change 'shop::price=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 2 => 1'
   other facts, filled in by Semilla:
   ◆ f3 derived: changed literal `2` → `1` at `shop::price/tail/rhs` [semantics · code different]
       affected bodies: shop::price
       control flow: ~ check `overflow: n + 2` → `overflow: n + 1` (src/lib.rs:-4, src/lib.rs:2)
-      equivalence: different: for n = 0: before returns 2, after returns 1 (suggested test `semilla_test_price_e5458e`)
+      equivalence: MIR changes
   ◆ f1 derived: attributes of `shop`: removed `#![cfg_attr(feature = "nightly", feature(no_such_feature_of_semilla))]` [attribute · code equal]
       ✗ spotlight: a changed `cfg` attribute (`cfg_attr`); it needs a reason: --reason 'shop=…'
   ◆ f2 derived: Cargo.toml: features.nightly removed ([]) [manifest · no code]
       ✗ spotlight: a build setting (profile, patch, features, lints, or a target table); it needs a reason: --reason 'Cargo.toml:features.nightly=…'
   cover: each of the 7 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for n = 0: before returns 2, after returns 1; suggested test `semilla_test_price_e5458e`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_price_e5458e`: add it to `src/lib.rs`, in the module of `shop::price` (line 3); run it: `cargo test -p shop semilla_test_price_e5458e`; also: `cargo test -p shop --release semilla_test_price_e5458e`
-      #[cfg(test)]
-      mod semilla_test_price_e5458e {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 2; the new version returns 1.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let n = 0;
-              let got = crate::price(n);
-              assert_eq!(got, 2);
-          }
-      }
+    shop::price (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: shop
   ! spotlight: features: Cargo.toml (the key of the reason: `Cargo.toml:features.nightly`)
 run again: semilla step 'the change' --reason 'shop=<why>' --reason 'Cargo.toml:features.nightly=<why>'
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop=the reason of the test' --reason 'Cargo.toml:features.nightly=the reason of the test' --change 'shop::price=the text of the test'
-◆ f3 stated: changed literal `2` → `1` at `shop::price/tail/rhs` [semantics · code different]
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop=the reason of the test' --reason 'Cargo.toml:features.nightly=the reason of the test'
+◆ f3 derived: changed literal `2` → `1` at `shop::price/tail/rhs` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-4
 ◆ f1 derived: attributes of `shop`: removed `#![cfg_attr(feature = "nightly", feature(no_such_feature_of_semilla))]` [attribute · code equal]
     lines: src/lib.rs:-1-2

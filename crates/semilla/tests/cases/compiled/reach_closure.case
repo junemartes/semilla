@@ -1,7 +1,10 @@
 note: a changed closure: the body that makes the closure and its caller are never "equivalent"
+note: design 84: the bodies have empty `#[same]` claims (the full compare of today)
 rule+: R61.10-3
 rule+: R61.12-1
 rule+: R61.12-2
+option: --intent
+option: .semilla/intent/step.rs
 === both Cargo.toml
 [package]
 name = "shop"
@@ -23,12 +26,29 @@ pub fn big(v: &[u32]) -> bool {
 pub fn report(v: &[u32]) -> u32 {
     if big(v) { 1 } else { 0 }
 }
+=== both .gitignore
+/.semilla/
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[same(shop::big)]
+fn same_0() {}
+
+#[same(shop::report)]
+fn same_1() {}
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  intent (2 claim(s); a claim is a proof only if it is proved):
+  ? i1 `#[same(shop::big)] fn same_0()` (.semilla/intent/step.rs:3): claimed: a raw pointer
+  ? i2 `#[same(shop::report)] fn same_1()` (.semilla/intent/step.rs:6): claimed: a raw pointer
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    AST changes: 1 mapped by claims, 0 mapped by Semilla, 0 not mapped
+    changed bodies: 0 equal MIR, 0 explained by claims, 0 MIR changes with no claim, 2 MIR changes that the claims on the item do not explain
+      not explained by its claims: `shop::big` (src/lib.rs:1): MIR changes: the same MIR text; a changed callee: `shop::big::{closure#0}`
+      not explained by its claims: `shop::big::{closure#0} |x| *x >= 9` (src/lib.rs:2): MIR changes
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed operator `*x > 9` → `*x >= 9` (f1)
       in: shop::big
@@ -37,16 +57,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed operator `*x > 9` → `*x >= 9` at `shop::big/tail/args[0]/body` [semantics · code different]
       affected bodies: shop::big
-      equivalence: `shop::big`: not decided: a raw pointer
-      equivalence: `shop::big::{closure#0} |x| *x >= 9`: different: for captures = &a closure, x = &9: before returns false, after returns true (no suggested test: the body has no path that a test can call (a closure or a nested body))
-      reaches: 2 public functions: shop::big, shop::report (semilla expand --step 0)
+      equivalence: `shop::big`: MIR changes: the same MIR text; a changed callee: `shop::big::{closure#0}`
+      equivalence: `shop::big::{closure#0} |x| *x >= 9`: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::big (src/lib.rs:1): same graph (the edit keeps the control flow); not decided (a raw pointer); with its nested bodies: different in `shop::big::{closure#0}`
-    shop::big::{closure#0} |x| *x >= 9 (src/lib.rs:2): same graph (the edit keeps the control flow); different (for captures = &a closure, x = &9: before returns false, after returns true; no suggested test: the body has no path that a test can call (a closure or a nested body))
-    reached bodies: 2
-      shop::big (src/lib.rs:1): reached through shop::big::{closure#0}, not decided (a raw pointer)
-      shop::report (src/lib.rs:5): reached through shop::big, not decided (a raw pointer)
+    shop::big (src/lib.rs:1): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `shop::big::{closure#0}`)
+    shop::big::{closure#0} |x| *x >= 9 (src/lib.rs:2): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -23,6 +23,12 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 5 MIR changes with no claim
+    MIR changes with no claim: `shop::apply` (src/lib.rs:1): the same MIR text; a changed callee: `shop::apply::{closure#0}`; the full compare: `#[same(shop::apply)] fn apply_same() {}`; a difference: `#[change(shop::apply)] fn apply_change(a: u32) -> bool { … }` or `#[different(shop::apply)] fn apply_different() -> bool { … }`
+    MIR changes with no claim: `shop::apply::{closure#0}` (no place): no result of the equivalence check; the template of `shop::apply` covers its item `shop::apply`
+    MIR changes with no claim: `shop::apply::{closure#0}::{closure#0}` (no place): no result of the equivalence check; the template of `shop::apply` covers its item `shop::apply`
+    MIR changes with no claim: `shop::apply::{closure#0}::{closure#0}::{closure#0} x + 2` (src/lib.rs:2): the template of `shop::apply` covers its item `shop::apply`
+    MIR changes with no claim: `shop::apply::{closure#0}::{closure#0}::{synthetic#0} x + 2` (src/lib.rs:2): the template of `shop::apply` covers its item `shop::apply`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f1)
       in: shop::apply
@@ -32,18 +38,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `1` → `2` at `shop::apply/S0/init/body/rhs` [semantics · code different]
       affected bodies: shop::apply
       control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-2, src/lib.rs:2)
-      equivalence: `shop::apply`: not decided: a coroutine value: { let f = async |x: u32| x + 1; f(a).await } (src/lib.rs:-1)
-      equivalence: `shop::apply::{closure#0}::{closure#0}::{closure#0} x + 2`: not decided: a coroutine body
-      equivalence: `shop::apply::{closure#0}::{closure#0}::{synthetic#0} x + 2`: not decided: a coroutine body
+      equivalence: `shop::apply`: MIR changes: the same MIR text; a changed callee: `shop::apply::{closure#0}`
+      equivalence: `shop::apply::{closure#0}::{closure#0}::{closure#0} x + 2`: MIR changes
+      equivalence: `shop::apply::{closure#0}::{closure#0}::{synthetic#0} x + 2`: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 5 bodies
-    shop::apply (src/lib.rs:1): same graph; not decided (a coroutine value: { let f = async |x: u32| x + 1; f(a).await } (src/lib.rs:-1))
+    shop::apply (src/lib.rs:1): same graph; MIR changes (the same MIR text; a changed callee: `shop::apply::{closure#0}`)
     shop::apply::{closure#0} (no place): no graph data: a record of the driver has no graph
     shop::apply::{closure#0}::{closure#0} (no place): no graph data: a record of the driver has no graph
-    shop::apply::{closure#0}::{closure#0}::{closure#0} x + 2 (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a coroutine body)
-    shop::apply::{closure#0}::{closure#0}::{synthetic#0} x + 2 (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a coroutine body)
-    reached bodies: 1
-      shop::apply (src/lib.rs:1): reached through shop::apply::{closure#0}, not decided (a coroutine value: { let f = async |x: u32| x + 1; f(a).await } (src/lib.rs:-1))
+    shop::apply::{closure#0}::{closure#0}::{closure#0} x + 2 (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::apply::{closure#0}::{closure#0}::{synthetic#0} x + 2 (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

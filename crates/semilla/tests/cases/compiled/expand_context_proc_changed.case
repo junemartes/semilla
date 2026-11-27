@@ -65,7 +65,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + check `overflow: Span::call_site().line() as u32 + 1` (depot/src/lib.rs:5): ok → call `Punct::new`, fail → panic `overflow`
       control flow: + panic `overflow` (depot/src/lib.rs:5)
       control flow: + arrow call `Span::line` (depot/src/lib.rs:5) → check `overflow: Span::call_site().line() as u32 + 1` (depot/src/lib.rs:5) (return)
-      equivalence: not decided: a cleanup path with a call: Span::call_site() (depot/src/lib.rs:-5)
+      equivalence: MIR changes
       expansion: `depot::here!(1)` at `shop::one/tail` (shop/src/lib.rs:4): expansion changed: changed literal `2u32` → `5u32` at `expansion/elems[1]` [semantics]
   ◆ f2 derived: depot/src/lib.rs: changed [build code · no code]
       ✗ spotlight: build code: this file is a file of a host package (a proc macro crate, or a crate that a proc macro crate or a build script uses). The compiler runs this code during each build, and it can change the code and the result of the build; it needs a reason: --reason 'depot/src/lib.rs:=…'
@@ -77,6 +77,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: depot::here
       note: lines 7; the cause: the edit of this body at depot/src/lib.rs:5 (the step changes no other input of the body) (with the build code of step 0)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::here` (depot/src/lib.rs:4): the full compare: `#[same(depot::here)] fn here_same() {}`; a difference: `#[change(depot::here)] fn here_change(input: TokenStream) -> bool { … }` or `#[different(depot::here)] fn here_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression, see f1 (f1)
       in: depot::here
@@ -87,7 +89,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f5 derived: comment in `shop/src/lib.rs`: added `// The line of the call is in its value.` [docs · no code]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    depot::here (depot/src/lib.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a cleanup path with a call: Span::call_site() (depot/src/lib.rs:-5))
+    depot::here (depot/src/lib.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   expansions: 1 changed
     `depot::here!(1)` at `shop::one/tail` (shop/src/lib.rs:4): expansion changed: `proc macro depot::here` (depot/src/lib.rs:4): changed literal `2u32` → `5u32` at `expansion/elems[1]` [semantics]; from `proc macro depot::here` (depot/src/lib.rs:4)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

@@ -27,6 +27,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::sum_to` (src/lib.rs:1): the full compare: `#[same(shop::sum_to)] fn sum_to_same() {}`; a difference: `#[change(shop::sum_to)] fn sum_to_change(n: u32) -> bool { … }` or `#[different(shop::sum_to)] fn sum_to_different() -> bool { … }`
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f1, f2)
       in: shop::sum_to
@@ -35,13 +37,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed path `sum` → `i` at `shop::sum_to/S1/body/S0/rhs/recv` [semantics · code different]
       affected bodies: shop::sum_to (with 1 other edit of this body)
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: equivalent (proved by SMT after inlining `<std::ops::Range<u32> as std::iter::IntoIterator>::into_iter`, `<std::ops::Range<u32> as std::iter::range::RangeIteratorImpl>::spec_next`, `core::num::<impl u32>::wrapping_add`, `std::iter::range::<impl std::iter::Iterator for std::ops::Range<u32>>::next`, by induction over the loop) (the same line for f2)
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   ◆ f2 derived: changed path `i` → `sum` at `shop::sum_to/S1/body/S0/rhs/args[0]` [semantics · code different]
       affected bodies: shop::sum_to (with 1 other edit of this body)
-      equivalence: the same line as f1
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::sum_to (src/lib.rs:1): same graph (the edit keeps the control flow); equivalent (proved by SMT after inlining `<std::ops::Range<u32> as std::iter::IntoIterator>::into_iter`, `<std::ops::Range<u32> as std::iter::range::RangeIteratorImpl>::spec_next`, `core::num::<impl u32>::wrapping_add`, `std::iter::range::<impl std::iter::Iterator for std::ops::Range<u32>>::next`, by induction over the loop)
+    shop::sum_to (src/lib.rs:1): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

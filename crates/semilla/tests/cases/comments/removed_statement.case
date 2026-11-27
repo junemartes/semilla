@@ -32,6 +32,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::price` (src/lib.rs:2): the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f2, f3)
       in: shop::price
@@ -42,18 +44,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: shop::price (with 1 other edit of this body)
       control flow: − call `log` (src/lib.rs:-4): return → call `log`
       control flow: − arrow entry (src/lib.rs:-2) → call `log` (src/lib.rs:-4)
-      equivalence: equivalent (proved by SMT)
+      equivalence: MIR changes
       comment that was above the removed code at old line 4, no edit in this step (src/lib.rs:3): `// Log the price for the audit.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f3 derived: deleted statement `log(tax)` at `shop::price/S2` [semantics · code different]
       affected bodies: shop::price (with 1 other edit of this body)
       control flow: − call `log` (src/lib.rs:-7): return → check `overflow: x + tax`
-      equivalence: equivalent (proved by SMT)
+      equivalence: MIR changes
       comment above the removed code at old line 7, removed in this step: see f1
   ◆ f1 derived: changed comment `// Log the price for the audit. // Log the tax.` → `// Log the price for the audit.` [docs · no code]
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:2): graph changes: −2 calls, +1 arrow, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT)
+    shop::price (src/lib.rs:2): graph changes: −2 calls, +1 arrow, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 

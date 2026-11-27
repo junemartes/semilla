@@ -336,7 +336,7 @@ impl NormalOracle {
                     }
                     (IntentResult::False, if note.is_empty() { format!("for {input}: before {before}, after {after}") } else { format!("for {input}: before {before}, after {after} ({note})") })
                 }
-                Some(Verdict::NotDecided(cause)) | Some(Verdict::NotChecked(cause)) => (IntentResult::Claimed, cause),
+                Some(Verdict::NotDecided(cause)) | Some(Verdict::NotChecked(cause)) | Some(Verdict::MirChanges(cause)) => (IntentResult::Claimed, cause),
                 None => (IntentResult::Claimed, "no check of the item".into()),
             };
             // [R77.1-1] An empty `#[same]` claim is the equivalence check of its item: a proof

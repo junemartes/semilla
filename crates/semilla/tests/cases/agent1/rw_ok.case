@@ -66,14 +66,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
         control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-6, src/lib.rs:6)
         control flow: + arrow entry (src/lib.rs:6) → call `Cart::total` (src/lib.rs:6)
         control flow: … 5 more (semilla expand --step 0)
-        equivalence: `depot::a`: equivalent (proved by SMT after inlining `depot::Cart::total`)
-        equivalence: `depot::b`: equivalent (proved by SMT after inlining `depot::Cart::total`)
+        equivalence: `depot::a`: MIR changes
+        equivalence: `depot::b`: MIR changes
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::a` (src/lib.rs:6): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
+    MIR changes with no claim: `depot::b` (src/lib.rs:7): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
   not stated: 0 item(s)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::a (src/lib.rs:6): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `depot::Cart::total`)
-    depot::b (src/lib.rs:7): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `depot::Cart::total`)
+    depot::a (src/lib.rs:6): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    depot::b (src/lib.rs:7): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -35,6 +35,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::both` (src/lib.rs:6): the full compare: `#[same(shop::both)] fn both_same() {}`; a difference: `#[change(shop::both)] fn both_change(x: u32) -> bool { … }` or `#[different(shop::both)] fn both_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: moved statement, see f1 (f1)
       in: shop::both
@@ -44,11 +46,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: moved statement `log_a(x)` from `shop::both/S0/body/S0` to `shop::both/S0/body/S1` [semantics · code different]
       affected bodies: shop::both
       control flow: − arrow entry (src/lib.rs:-6) → call `log_a` (src/lib.rs:-8)
-      equivalence: not decided: the order of the calls changes: shop::log_a, shop::log_b
+      equivalence: MIR changes
       ! unsafe code: the changed body has an `unsafe` block
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::both (src/lib.rs:6): graph changes: +3 arrows, −3 arrows; not decided (the order of the calls changes: shop::log_a, shop::log_b)
+    shop::both (src/lib.rs:6): graph changes: +3 arrows, −3 arrows; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: unsafe code: shop::both/S0/body/S1
 

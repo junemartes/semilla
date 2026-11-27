@@ -21,36 +21,23 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::tax` (src/lib.rs:1): the full compare: `#[same(depot::tax)] fn tax_same() {}`; a difference: `#[change(depot::tax)] fn tax_change(v: u32) -> bool { … }` or `#[different(depot::tax)] fn tax_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
-  ? 1 place: changed operator `v > 3` → `v >= 3` (effect hint: widen, example: v = 3) (f1)
+  ? 1 place: changed operator `v > 3` → `v >= 3` (f1)
       in: depot::tax
       lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: --change 'depot::tax=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::tax=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::tax=TEXT'; if it does not change, --same 'rewrite $a > 3 => $a >= 3'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed operator `v > 3` → `v >= 3` (effect hint: widen, example: v = 3) at `depot::tax/S0/cond` [semantics · code different]
+  ◆ f1 derived: changed operator `v > 3` → `v >= 3` at `depot::tax/S0/cond` [semantics · code different]
       affected bodies: depot::tax
       control flow: ~ branch `v > 3` → `v >= 3` (src/lib.rs:-2, src/lib.rs:2)
-      equivalence: different: for v = 3: before returns 3, after returns 1 (suggested test `semilla_test_tax_346927`)
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::tax (src/lib.rs:1): same structure: 1 changed condition; different (for v = 3: before returns 3, after returns 1; suggested test `semilla_test_tax_346927`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_tax_346927`: add it to `src/lib.rs`, in the module of `depot::tax` (line 1); run it: `cargo test -p depot semilla_test_tax_346927`; also: `cargo test -p depot --release semilla_test_tax_346927`
-      #[cfg(test)]
-      mod semilla_test_tax_346927 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 3; the new version returns 1.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let v = 3;
-              let got = crate::tax(v);
-              assert_eq!(got, 3);
-          }
-      }
+    depot::tax (src/lib.rs:1): same structure: 1 changed condition; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed operator `v > 3` → `v >= 3` (effect hint: widen, example: v = 3) at `depot::tax/S0/cond` [semantics · code different]
+◆ f1 derived: changed operator `v > 3` → `v >= 3` at `depot::tax/S0/cond` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

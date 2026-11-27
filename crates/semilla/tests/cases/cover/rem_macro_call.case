@@ -29,6 +29,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::three` (src/lib.rs:5): the full compare: `#[same(depot::three)] fn three_same() {}`; a difference: `#[change(depot::three)] fn three_change() -> bool { … }` or `#[different(depot::three)] fn three_different() -> bool { … }`
   new and removed items, filled in by Semilla:
   ◆ f1 derived: removed macro call `make!(three)` (made: `pub fn three`) [removed · code different]
       affected bodies: depot::three

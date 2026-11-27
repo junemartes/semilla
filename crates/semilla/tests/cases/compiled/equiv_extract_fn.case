@@ -25,6 +25,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::cost` (src/lib.rs:5): the full compare: `#[same(shop::cost)] fn cost_same() {}`; a difference: `#[change(shop::cost)] fn cost_change(w: u32) -> bool { … }` or `#[different(shop::cost)] fn cost_different() -> bool { … }`
+    MIR changes with no claim: `shop::ship` (src/lib.rs:1): an added body: the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` (f1)
       in: shop::cost
@@ -41,10 +44,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: − branch `w > 10` (src/lib.rs:-2): false → check `overflow: base + 1`, true → check `overflow: base + 1`
       control flow: + arrow entry (src/lib.rs:5) → call `ship` (src/lib.rs:6)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: equivalent (proved by SMT after inlining `shop::ship`)
+      equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::cost (src/lib.rs:5): graph changes: +1 call, −1 branch, +2 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `shop::ship`)
+    shop::cost (src/lib.rs:5): graph changes: +1 call, −1 branch, +2 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
     shop::ship (src/lib.rs:1): graph added: 3 points, 3 arrows
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

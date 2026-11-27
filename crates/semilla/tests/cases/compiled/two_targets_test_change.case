@@ -1,7 +1,7 @@
 note: the same two targets; the step changes only the `hash` of the test: in each configuration (also in those with no bench), the records of the test go to the body of the test, with no point of `benches/probe.rs` (design 61.16)
 rule+: R61.16-1 R65.3-1
-must_match: not decided \(a value of a type that the check does not model
-must_match: probe::hash \(tests/probe\.rs:1\): same structure: 1 changed condition; different
+must_match: equivalence: MIR changes
+must_match: probe::hash \(tests/probe\.rs:1\): same structure: 1 changed condition; MIR changes
 must_not_match: benches/probe\.rs
 === both Cargo.toml
 [package]
@@ -76,34 +76,18 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `probe::hash` (tests/probe.rs:1): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
   tests and benches, filled in by Semilla:
-  ◆ f1 derived: change condition `10` → `12` (effect hint: narrow, example: x = 12) at `shop (test "probe")::hash/S0/cond/rhs` [semantics · code different]
+  ◆ f1 derived: change condition `10` → `12` at `shop (test "probe")::hash/S0/cond/rhs` [semantics · code different]
       affected bodies: shop (test "probe")::hash
       control flow: ~ branch `x > 10` → `x > 12` (tests/probe.rs:-2, tests/probe.rs:2)
-      equivalence: different: for x = 11: before returns 12, after returns 33 (suggested test `semilla_test_hash_bc462e`)
-      reaches: 2 bodies, no public function: probe::test_hash, probe::test_hash::{closure#0} (semilla expand --step 0)
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    probe::hash (tests/probe.rs:1): same structure: 1 changed condition; different (for x = 11: before returns 12, after returns 33; suggested test `semilla_test_hash_bc462e`)
-    reached bodies: 2
-      probe::test_hash (tests/probe.rs:9): reached through probe::hash, probe::test_hash::{closure#0}, not decided (a value of a type that the check does not model: fn test_hash() { assert!(hash(2) > 0); } (tests/probe.rs:-10))
-      probe::test_hash::{closure#0} (tests/probe.rs:9): reached through probe::test_hash, not decided (a value of a type that the check does not model: fn test_hash() { assert!(hash(2) > 0); } (tests/probe.rs:-10))
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_hash_bc462e`: add it to `tests/probe.rs`, in the module of `probe::hash` (line 1); run it: `cargo test -p shop semilla_test_hash_bc462e`; also: `cargo test -p shop --release semilla_test_hash_bc462e`; also: `cargo test -p shop --all-features semilla_test_hash_bc462e`; also: `cargo test -p shop --release --all-features semilla_test_hash_bc462e`
-      #[cfg(test)]
-      mod semilla_test_hash_bc462e {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 12; the new version returns 33.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 11;
-              let got = crate::hash(x);
-              assert_eq!(got, 12);
-          }
-      }
+    probe::hash (tests/probe.rs:1): same structure: 1 changed condition; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: change condition `10` → `12` (effect hint: narrow, example: x = 12) at `shop (test "probe")::hash/S0/cond/rhs` [semantics · code different]
+◆ f1 derived: change condition `10` → `12` at `shop (test "probe")::hash/S0/cond/rhs` [semantics · code different]
     lines: tests/probe.rs:2, tests/probe.rs:-2

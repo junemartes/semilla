@@ -22,27 +22,15 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::price` (src/lib.rs:3): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(v: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
   declarations, filled in by Semilla:
   ◆ f1 derived: changed macro `base`: `macro_rules! base { ($v:expr) => { $v + 10 } }` → `macro_rules! base { ($v:expr) => { $v + 12 } }` [declaration · code different]
       affected bodies: shop::price
       expansion: `base!(v)` at `shop::price/tail` (src/lib.rs:3): expansion changed: changed literal `10` → `12` at `expansion/rhs` [semantics]
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:3): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for v = 0: before returns 10, after returns 12; suggested test `semilla_test_price_07619e`); the expansion of `base!(v)` changes (semilla expand src/lib.rs:3 --step 0)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_price_07619e`: add it to `src/lib.rs`, in the module of `shop::price` (line 3); run it: `cargo test -p shop semilla_test_price_07619e`; also: `cargo test -p shop --release semilla_test_price_07619e`
-      #[cfg(test)]
-      mod semilla_test_price_07619e {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 10; the new version returns 12.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let v = 0;
-              let got = crate::price(v);
-              assert_eq!(got, 10);
-          }
-      }
+    shop::price (src/lib.rs:3): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; MIR changes; the expansion of `base!(v)` changes (semilla expand src/lib.rs:3 --step 0)
   expansions: 1 changed
     `base!(v)` at `shop::price/tail` (src/lib.rs:3): expansion changed: `macro_rules! base` (src/lib.rs:1): changed literal `10` → `12` at `expansion/rhs` [semantics]; from `macro_rules! base` (src/lib.rs:1)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

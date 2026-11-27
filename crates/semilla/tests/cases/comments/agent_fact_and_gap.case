@@ -42,53 +42,28 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     ◆ f2 stated: changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different]
         affected bodies: shop::price
         control flow: ~ check `overflow: x + x / 10` → `overflow: x + x / 5` (src/lib.rs:-3, src/lib.rs:3)
-        equivalence: different: for x = 7: before returns 7, after returns 8 (suggested test `semilla_test_price_062502`)
+        equivalence: MIR changes
         docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price with a tax of 10 percent.`
         note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::count` (src/lib.rs:6): the full compare: `#[same(shop::count)] fn count_same() {}`; a difference: `#[change(shop::count)] fn count_change(x: u32) -> bool { … }` or `#[different(shop::count)] fn count_different() -> bool { … }`
+    MIR changes with no claim: `shop::price` (src/lib.rs:2): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f1)
       in: shop::count
       lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: --change 'shop::count=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::count=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::count=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `1` → `2` at `shop::count/tail/rhs` [semantics · code different]
       affected bodies: shop::count
       control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-7, src/lib.rs:7)
-      equivalence: different: for x = 0: before returns 1, after returns 2 (suggested test `semilla_test_count_d1b5bf`)
+      equivalence: MIR changes
       docs of `shop::count`, no edit in this step (src/lib.rs:5): `/// Gives the count plus 1.`
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::count (src/lib.rs:6): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for x = 0: before returns 1, after returns 2; suggested test `semilla_test_count_d1b5bf`)
-    shop::price (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for x = 7: before returns 7, after returns 8; suggested test `semilla_test_price_062502`)
-  suggested tests: 2 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_count_d1b5bf`: add it to `src/lib.rs`, in the module of `shop::count` (line 6); run it: `cargo test -p shop semilla_test_count_d1b5bf`; also: `cargo test -p shop --release semilla_test_count_d1b5bf`
-      #[cfg(test)]
-      mod semilla_test_count_d1b5bf {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 1; the new version returns 2.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 0;
-              let got = crate::count(x);
-              assert_eq!(got, 1);
-          }
-      }
-    `semilla_test_price_062502`: add it to `src/lib.rs`, in the module of `shop::price` (line 2); run it: `cargo test -p shop semilla_test_price_062502`; also: `cargo test -p shop --release semilla_test_price_062502`
-      #[cfg(test)]
-      mod semilla_test_price_062502 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 7; the new version returns 8.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 7;
-              let got = crate::price(x);
-              assert_eq!(got, 7);
-          }
-      }
+    shop::count (src/lib.rs:6): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::price (src/lib.rs:2): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 2 comment(s) of the changed items have no edit in this step
 

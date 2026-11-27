@@ -119,6 +119,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       Semilla sees: f4 indirect change, cause not known: `depot::money::Price::cents` (the body exists only before the step) [indirect]
       Semilla sees: f5 public API: `depot::money::Price::cents` is now `depot::money::super::stock::Bin::cents` (a different crate can no longer use the old path) [move]
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::money::<impl depot::stock::Bin>::cents` (src/lib.rs:14): the full compare: `#[same(depot::money::super::stock::Bin::cents)] fn cents_same() {}`; a difference: `#[change(depot::money::super::stock::Bin::cents)] fn cents_change(this_before: &before::depot::money::super::stock::Bin, this_after: &after::depot::money::super::stock::Bin) -> bool { … }` or `#[different(depot::money::super::stock::Bin::cents)] fn cents_different() -> bool { … }`
+    MIR changes with no claim: `depot::money::Price::cents` (src/lib.rs:13): a removed body: `#[removed(depot::money::Price::cents)] fn cents_removed(this: &before::depot::money::Price) -> bool { let old = before::depot::money::Price::cents(this); true }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed cast: `self.0` → `self.0 as u64` (f2)
       in: depot::money::super::stock::Bin::cents

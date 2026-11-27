@@ -141,9 +141,9 @@ fn agent_flow_end_to_end() {
     assert!(stored.contains("added early exit `if self.items.is_empty()") && stored.contains("changed operator"), "{stored}");
     let check = run(repo, &["check", "--full"], 0);
     assert!(check.contains("[semantics · code different]"), "{check}");
-    if workspace_root().join(".semilla/tools/z3").exists() {
-        assert!(check.contains("effect hint: widen"), "{check}");
-    }
+    // [R84.7-1] No solver for the effect of a changed condition: only a claim of an intent file
+    // starts the solver (design 84).
+    assert!(!check.contains("effect hint: widen"), "{check}");
 
     // Step 2: a change without a claim is rejected, with a hint.
     run(repo, &["old-step", "begin", "raise the max in the app"], 0);
@@ -2269,7 +2269,7 @@ fn no_reviewer_result_depends_on_a_file_of_the_repository_that_is_not_a_git_obje
         std::fs::read_to_string(&file).unwrap()
     };
     let honest = report("honest.md", &[]);
-    assert!(honest.contains("<=") && honest.contains("effect hint: "), "{honest}");
+    assert!(honest.contains("<="), "{honest}");
 
     // The attack. Each script records its run in the marker file.
     let marker = dir.path().join("marker");
@@ -2318,7 +2318,7 @@ fn no_reviewer_result_depends_on_a_file_of_the_repository_that_is_not_a_git_obje
     assert_eq!(report("stored.md", &[]), honest, "the report from the cache does not change");
     assert_eq!(report("fresh.md", &["--fresh"]), honest, "the report that `--fresh` computes is the same report");
     let fresh = run(repo, &["status", "HEAD", "--fresh", "--verbose"], 0);
-    assert!(!fresh.contains("FORGED") && fresh.contains("effect hint: "), "{fresh}");
+    assert!(!fresh.contains("FORGED") && fresh.contains("<="), "{fresh}");
     let ran = std::fs::read_to_string(&marker).unwrap_or_default();
     assert_eq!(ran, "", "no program of the repository folder ran");
 }
@@ -5056,7 +5056,7 @@ fn an_added_configuration_is_a_check_and_not_a_proof() {
     let out = run(repo, &["step", "probe"], 0);
     assert!(out.contains("Semilla added the configurations `dev, features fast`, `release, features fast`"), "{out}");
     // R61.4-5: the equivalence of each configuration, the worst first.
-    assert!(out.contains("at `shop_core::cut#0/tail/operand` [semantics · code different]\n      affected bodies: shop_core::cut#0\n      equivalence: different in dev, features fast, release, features fast: for a = "), "{out}");
+    assert!(out.contains("at `shop_core::cut#0/tail/operand` [semantics · code different]\n      affected bodies: shop_core::cut#0\n      equivalence: MIR changes in dev, features fast, release, features fast; equivalent in dev, all features, release, all features (proved by equal MIR)\n"), "{out}");
     assert!(out.contains("; equivalent in dev, all features, release, all features (proved by equal MIR)\n      note: the compiled code is equal in `dev, all features`, `release, all features`; different in `dev, features fast`, `release, features fast`"), "{out}");
     assert!(!out.contains("code equal]") && !out.contains("indirect change") && !out.contains("spotlight:"), "{out}");
     run(repo, &["undo"], 0);
@@ -6540,127 +6540,82 @@ fn each_edit_of_a_body_gets_its_own_compare_result_and_a_category_from_its_synta
     assert!(out.contains("step 0: MIR map: 0 map error(s); 2 edit(s) own a changed MIR element; 1 edit(s) with equal code in a changed body; 0 edit(s) with the doubt rule"), "{out}");
 }
 
-/// Design 61.10: a change reaches the callers of the changed body. The fact of the changed body
-/// has the line `reaches:`, the step section has the part `reached bodies:`, `status --verbose`
-/// has the chain of each body, and the Markdown review has a link for each reached public
-/// function.
-// rule+ R61.10-6
+/// The line of a claim of the intent files in a step output: the line with ` ID `.
+fn claim_line<'a>(text: &'a str, id: &str) -> &'a str {
+    text.lines().find(|line| line.contains(&format!(" {id} "))).unwrap_or_else(|| panic!("no line of {id}:\n{text}"))
+}
+
+/// An intent file with one empty `#[same]` claim for each item: the full compare of the item
+/// (design 78; design 84: only a claim starts the solver).
+fn same_claims(repo: &Path, items: &[&str]) -> Vec<&'static str> {
+    let mut text = String::from("use semilla_intent::prelude::*;\n");
+    for (index, item) in items.iter().enumerate() {
+        text.push_str(&format!("\n#[same({item})]\nfn same_{index}() {{}}\n"));
+    }
+    write(repo, ".semilla/intent/step.rs", &text);
+    vec!["--intent", ".semilla/intent/step.rs"]
+}
+
+/// Design 61.10 and design 84: the walk of the callers is a part of the proof of a claim (the
+/// bodies that the check inlines), and the step has no lines of the walk. An empty `#[same]`
+/// claim on a caller of a changed callee inlines the callee: the claim is false with the input of
+/// the caller, also through a chain of two callers.
+// rule+ R61.10-3 R61.10-5
+// rule- R61.10-3 R61.10-5
 #[test]
-fn a_change_reaches_the_callers_of_its_body_in_each_view() {
+fn a_claim_on_a_caller_inlines_the_changed_callee_and_the_step_has_no_lines_of_the_walk() {
     let dir = setup();
     let repo = &dir.path().join("repo");
-    let base = "pub mod cart;\n\npub fn tier(k: u8) -> u32 {\n    match k {\n        0 => 2,\n        1 => 4,\n        _ => 8,\n    }\n}\n\npub fn cost(k: u8, n: u32) -> u32 {\n    n.wrapping_mul(tier(k))\n}\n\npub fn quote(k: u8, n: u32) -> u32 {\n    cost(k, n).wrapping_add(1)\n}\n";
+    let base = "pub mod cart;\n\npub fn tier(k: u8) -> u32 {\n    match k {\n        0 => 2,\n        1 => 4,\n        _ => 8,\n    }\n}\n\npub fn cost(k: u8, n: u32) -> u32 {\n    n.wrapping_mul(tier(k))\n}\n\npub fn quote(k: u8, n: u32) -> u32 {\n    cost(k, n).wrapping_add(1)\n}\n\npub fn calm(n: u32) -> u32 {\n    n.wrapping_add(3)\n}\n";
     write(repo, "crates/shop-core/src/lib.rs", base);
     commit_all(repo, "tier");
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("1 => 4", "1 => 5"));
+    // [R84.1-3] With no claim: no walk, so no line `reaches:` and no part `reached bodies:`.
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("      reaches: 2 public functions: shop_core::cost, shop_core::quote (semilla expand --step 0)\n"), "{out}");
-    assert!(out.contains("    reached bodies: 2\n      shop_core::cost (crates/shop-core/src/lib.rs:11): different through shop_core::tier: for k = 1, n = 1: before returns 4, after returns 5 (suggested test `semilla_test_cost_"), "{out}");
-    assert!(out.contains("      shop_core::quote (crates/shop-core/src/lib.rs:15): different through shop_core::cost: for k = 1, n = 1: before returns 5, after returns 6 (suggested test `semilla_test_quote_"), "{out}");
-    let verbose = run(repo, &["status", "--verbose", "--wait", "600"], 0);
-    assert!(verbose.contains("          chain: shop_core::quote → shop_core::cost → shop_core::tier\n"), "{verbose}");
-    let md = dir.path().join("review.md");
-    run(repo, &["review", "--md", md.to_str().unwrap(), "--wait", "600"], 0);
-    let text = std::fs::read_to_string(&md).unwrap();
-    assert!(text.contains("; reaches: 2 public functions: "), "{text}");
-    assert!(text.contains("## Reached callers\n\n- step 0, f1: `shop_core::cost` ([crates/shop-core/src/lib.rs:11](crates/shop-core/src/lib.rs#L11)), `shop_core::quote` ([crates/shop-core/src/lib.rs:15](crates/shop-core/src/lib.rs#L15))\n"), "{text}");
+    assert!(!out.contains("reaches:") && !out.contains("reached bodies"), "{out}");
+    run(repo, &["undo"], 0);
+    let mut args = vec!["step", "probe"];
+    args.extend(same_claims(repo, &["shop_core::cost", "shop_core::quote", "shop_core::calm"]));
+    let out = run(repo, &args, 1);
+    // [R61.10-3] The claim on `cost` inlines the changed `tier`; [R61.10-5] the claim on `quote`
+    // inlines `cost` (a caller that the walk does not prove equivalent).
+    assert!(claim_line(&out, "i1").contains("false: for k = 1, n = 1: before returns 4, after returns 5") && claim_line(&out, "i1").contains("suggested test `semilla_test_cost_"), "{out}");
+    assert!(claim_line(&out, "i2").contains("false: for k = 1, n = 1: before returns 5, after returns 6"), "{out}");
+    // The negative case: `calm` calls no changed body.
+    assert!(claim_line(&out, "i3").contains("proved"), "{out}");
+    assert!(!out.contains("reached bodies"), "{out}");
 }
 
-/// Design 61.14 (R61.14-5, R61.14-6): the equivalence check of a step has one time budget, with
-/// the walk and the builds of the variants. With a budget of 0 s, no check runs: each fact line
-/// is short, and the step section has one line for the budget. With the normal budget, the same
-/// step gets its results and no line of the budget.
-// rule+ R61.14-5 R61.14-6
-// rule- R61.14-5 R61.14-6
+/// Design 61.14 and design 84: the count of the variant builds of a step (R77.2-2) stops the
+/// builds with one line for the step (R61.14-6). With no count, each variant builds.
+// rule+ R61.14-6
+// rule- R61.14-6
 // rule+ R77.2-2
 // rule- R77.2-2
 #[test]
-fn the_budget_of_the_equivalence_check_stops_each_check_with_one_line_for_the_step() {
+fn the_count_of_the_variant_builds_stops_each_variant_with_one_line_for_the_step() {
     let dir = setup();
     let repo = &dir.path().join("repo");
-    let base = "pub mod cart;\n\npub fn tier(k: u8) -> u32 {\n    match k {\n        0 => 2,\n        1 => 4,\n        _ => 8,\n    }\n}\n\npub fn cost(k: u8, n: u32) -> u32 {\n    n.wrapping_mul(tier(k)).wrapping_add(1)\n}\n";
+    let base = "pub mod cart;\n\npub fn total(n: u32) -> u32 {\n    let sum = n.wrapping_mul(3);\n    sum.wrapping_add(1)\n}\n";
     write(repo, "crates/shop-core/src/lib.rs", base);
-    commit_all(repo, "tier");
-    write(repo, "crates/shop-core/src/lib.rs", &base.replace("1 => 4", "1 => 5").replace("wrapping_add(1)", "wrapping_add(2)"));
-    let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_BUDGET", "0")]);
-    assert_eq!(code, 0, "{out}");
-    assert!(out.contains("      equivalence: not checked (the budget of the step)\n"), "{out}");
-    assert!(out.contains("  the equivalence check stopped at its budget (0 solver steps, 8 variant builds): 2 bodies not checked; semilla expand --step 0\n"), "{out}");
-    assert!(!out.contains("equivalence: different") && !out.contains("not decided (the budget"), "{out}");
-    run(repo, &["undo"], 0);
-    let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("      equivalence: different: for k = 1: before returns 4, after returns 5 (suggested test `semilla_test_"), "{out}");
-    assert!(!out.contains("not checked") && !out.contains("the equivalence check stopped"), "{out}");
-}
-
-// R66.10-5: each part of the budget stops only the work that it counts. Past the time budget
-// (here 0 s), a body whose two MIR texts are equal still gets the proof "equal MIR" (it needs no
-// solver); a body with another result is "not checked (the budget of the step)" (the negative
-// case). Past the query budget (here 0 queries), the variants of the single edits still build in
-// the time budget: the rename alone is "equivalent alone (proved by equal MIR)", and the other
-// edit alone, which needs the solver, is "not checked alone".
-// rule+ R66.10-5
-// rule- R66.10-5
-#[test]
-fn a_check_by_equal_mir_keeps_its_proof_past_the_budget() {
-    let dir = setup();
-    let repo = &dir.path().join("repo");
-    let base = "pub mod cart;\n\npub fn tier(k: u8) -> u32 {\n    match k {\n        0 => 2,\n        1 => 4,\n        _ => 8,\n    }\n}\n\npub fn total(n: u32) -> u32 {\n    let sum = n.wrapping_mul(3);\n    sum.wrapping_add(1)\n}\n";
-    write(repo, "crates/shop-core/src/lib.rs", base);
-    commit_all(repo, "tier");
-    write(repo, "crates/shop-core/src/lib.rs", &base.replace("1 => 4", "1 => 5").replace("let sum", "let all").replace("sum.wrapping", "all.wrapping"));
-    let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_BUDGET", "0")]);
-    assert_eq!(code, 0, "{out}");
-    let line = |out: &str, name: &str| out.lines().find(|line| line.trim_start().starts_with(name) && line.contains("(crates/shop-core/src/lib.rs:")).unwrap_or_default().to_string();
-    assert!(line(&out, "shop_core::total ").ends_with("equivalent (proved by equal MIR)"), "{out}");
-    assert!(line(&out, "shop_core::tier ").ends_with("not checked (the budget of the step)"), "{out}");
-    assert!(out.contains("  the equivalence check stopped at its budget (0 solver steps, 8 variant builds): 1 body not checked; semilla expand --step 0\n"), "{out}");
-    run(repo, &["undo"], 0);
+    commit_all(repo, "total");
     // One body with two edits: a rename of a local and a changed literal.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("let sum", "let all").replace("sum.wrapping", "all.wrapping").replace("wrapping_add(1)", "wrapping_add(2)"));
-    // R77.2-2: the jobs have one order, so past the query budget the body check of the second
-    // configuration is not checked in each run (before: a race of the threads decided it).
-    let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_QUERIES", "0")]);
+    let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_VARIANT_BUILDS", "0")]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("      equivalence: equivalent alone (proved by equal MIR); the body: different in dev: for n = "), "{out}");
-    assert!(out.contains("      equivalence: not checked alone (the budget of the step); the body: different in dev: for n = "), "{out}");
-}
-
-/// E2 of batch 10nq-fix2: a body check that the solver cannot finish (the identity of a
-/// division and its rest: the query reaches the timeout of the solver) uses its share of the
-/// budget (R66.9-2). Before, the builds of the variants waited for the body checks, so that
-/// check took the time of each build: a single edit lost its proof by equal MIR, also in a step
-/// that used less time than 10o.
-// rule+ R66.11-3
-// rule- R66.11-3
-#[test]
-fn a_slow_body_check_does_not_take_the_time_of_the_variant_builds() {
-    let dir = setup();
-    let repo = &dir.path().join("repo");
-    // `split` has one edit (no variant); `total` has two (a rename and a changed literal).
-    let base = "pub mod cart;\n\npub fn split(a: u64, b: u64) -> u64 {\n    let d = b | 1;\n    (a / d).wrapping_mul(d).wrapping_add(a % d)\n}\n\npub fn total(n: u32) -> u32 {\n    let sum = n.wrapping_mul(3);\n    sum.wrapping_add(1)\n}\n";
-    write(repo, "crates/shop-core/src/lib.rs", base);
-    commit_all(repo, "split");
-    let edited = base.replace("(a / d).wrapping_mul(d).wrapping_add(a % d)", "a").replace("let sum", "let all").replace("sum.wrapping", "all.wrapping").replace("wrapping_add(1)", "wrapping_add(2)");
-    write(repo, "crates/shop-core/src/lib.rs", &edited);
-    // The normal budget (R77.2-2): the check of `split` reaches the step limit of its queries and
-    // its budget in solver steps; the variant builds run next to it.
-    let started = std::time::Instant::now();
-    let (code, out) = run_env(repo, &["step", "probe"], &[]);
-    assert_eq!(code, 0, "{out}");
-    let split = out.lines().find(|line| line.trim_start().starts_with("shop_core::split (")).unwrap_or_default();
-    assert!(split.contains("not decided") || split.contains("not checked"), "{out}");
-    // The build of the variant of the rename ran next to that check: its proof by equal MIR
-    // stays. Before: "not checked alone (the budget of the step)".
-    assert!(out.contains("      equivalence: equivalent alone (proved by equal MIR); the body: different: for n = "), "{out}");
-    assert!(started.elapsed() < std::time::Duration::from_secs(120), "{:?}", started.elapsed());
+    assert!(out.contains("      equivalence: not checked alone (the budget of the step); the body: MIR changes\n"), "{out}");
+    assert!(out.contains("  the equivalence check stopped at its budget (0 variant builds): 2 facts not checked alone; semilla expand --step 0\n"), "{out}");
     run(repo, &["undo"], 0);
-    // The negative case: a budget of 0 solver steps (R77.2-2: a build is not a solver step, so
-    // each variant builds): the proof by equal MIR of the rename alone stays (R66.10-5), and each
-    // single edit whose check needs the solver is not checked.
-    let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_BUDGET", "0")]);
-    assert_eq!(code, 0, "{out}");
-    assert!(out.contains("equivalent alone (proved by equal MIR)") && out.contains("not checked alone (the budget of the step)"), "{out}");
+    let out = run(repo, &["step", "probe"], 0);
+    assert!(out.contains("      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes\n") && out.contains("      equivalence: MIR changes alone; the body: MIR changes\n"), "{out}");
+    assert!(!out.contains("not checked") && !out.contains("the equivalence check stopped"), "{out}");
+    // [R77.2-2] The budget of a claim: an empty `#[same]` claim of the body gets the result of
+    // the solver in its budget.
+    run(repo, &["undo"], 0);
+    let mut args = vec!["step", "probe"];
+    args.extend(same_claims(repo, &["shop_core::total"]));
+    let out = run(repo, &args, 1);
+    assert!(claim_line(&out, "i1").contains("false: for n = "), "{out}");
 }
 
 /// A proc macro of the crate `depot` (E1 of batch 10nq-fix2) whose output has an `if` with an
@@ -6730,7 +6685,10 @@ fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_chan
         .replace("            return 0;\n        }\n", "            return 0;\n        }\n        if $v == 5 {\n            return 5;\n        }\n")
         .replace("pub fn limit", "pub fn twice(v: u32) -> u32 {\n    v ^ 3\n}\n\npub fn limit");
     write(repo, "crates/shop-core/src/lib.rs", &edited);
-    let out = run(repo, &["step", "probe"], 0);
+    // Design 84: the results of the solver come from the claims of the intent file.
+    let mut args = vec!["step", "probe"];
+    args.extend(same_claims(repo, &["shop_core::limit", "shop_core::mask", "shop_core::order", "shop_core::tax"]));
+    let out = run(repo, &args, 1);
     // R60.4-1: the line of the fact, with the changed point and its arrows. It replaces the
     // line `branches:` of design 40.4. R60.4-7: a callee has its short form in a fact line
     // (`price`), and its full form in `status --verbose` (`shop_core::price`, below).
@@ -6744,16 +6702,23 @@ fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_chan
     // changed graph has its line; a body with no edit and the same graph has none.
     assert!(out.contains("  control flow: 5 bodies\n"), "{out}");
     assert!(out.contains("    shop_core::limit (crates/shop-core/src/lib.rs:"), "{out}");
-    // R61.6-2: the line of each body ends with its equivalence.
-    assert!(out.contains("graph changes: +1 branch, +3 arrows, −1 arrow; no edit in the body; equivalent (proved by SMT)"), "{out}");
-    assert!(out.contains("    shop_core::mask (crates/shop-core/src/lib.rs:34): same graph (the edit keeps the control flow); different (for v = 0: before returns 1, after returns 2; suggested test `semilla_test_mask_"), "{out}");
-    assert!(out.contains("    shop_core::order (crates/shop-core/src/lib.rs:22): graph changes: +1 branch, +3 arrows, −1 arrow; different (for qty = 0: before returns Ok(a value), after returns Err(Empty); suggested test `semilla_test_order_"), "{out}");
-    assert!(out.contains("    shop_core::tax (crates/shop-core/src/lib.rs:30): same structure: 1 changed condition; different (for v = 3: before returns 3, after returns 1; suggested test `semilla_test_tax_"), "{out}");
+    // R61.6-2: the line of each body ends with its equal-MIR check (design 84), and the claims
+    // give the results of the solver.
+    assert!(out.contains("graph changes: +1 branch, +3 arrows, −1 arrow; no edit in the body; MIR changes"), "{out}");
+    assert!(out.contains("    shop_core::mask (crates/shop-core/src/lib.rs:34): same graph (the edit keeps the control flow); MIR changes\n"), "{out}");
+    assert!(claim_line(&out, "i1").contains("proved: equivalent by SMT"), "{out}");
+    assert!(claim_line(&out, "i2").contains("false: for v = 0: before returns 1, after returns 2") && claim_line(&out, "i2").contains("suggested test `semilla_test_mask_"), "{out}");
+    assert!(claim_line(&out, "i3").contains("false: for qty = 0: before returns Ok(a value), after returns Err(Empty)"), "{out}");
+    assert!(claim_line(&out, "i4").contains("false: for v = 3: before returns 3, after returns 1"), "{out}");
     // R60.3-5: a new body has its full graph, not a diff.
     assert!(out.contains("    shop_core::twice (crates/shop-core/src/lib.rs:"), "{out}");
     assert!(out.contains("graph added: 2 points, 1 arrow"), "{out}");
     assert!(!out.contains("shop_core::price ("), "{out}");
-    // R60.4-3: `status --verbose` has each changed point and each arrow that is not shared.
+    // R60.4-3: `status --verbose` has each changed point and each arrow that is not shared (a
+    // step with no false claim is stored).
+    let mut args = vec!["step", "probe"];
+    args.extend(same_claims(repo, &["shop_core::limit"]));
+    run(repo, &args, 0);
     let verbose = run(repo, &["status", "--verbose", "--wait", "600"], 0);
     assert!(verbose.contains("          − arrow entry (crates/shop-core/src/lib.rs:-19) → call `shop_core::price` (crates/shop-core/src/lib.rs:-20)\n"), "{verbose}");
     // A branch from the body of a macro definition has the text of the macro call first, then
@@ -6761,8 +6726,8 @@ fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_chan
     assert!(verbose.contains("          + branch `guard!(v): v == 5` (crates/shop-core/src/lib.rs:43)\n"), "{verbose}");
     assert!(verbose.contains("          ~ branch `v > 3` → `v >= 3` (crates/shop-core/src/lib.rs:-25, crates/shop-core/src/lib.rs:31)\n"), "{verbose}");
     // R61.6-3: `status --verbose` has the method, the inlined callees, the query count, and
-    // the time of each check.
-    assert!(verbose.contains("      equivalence (in dev): equivalent (proved by SMT); no callee inlined; ") && verbose.contains(" solver quer"), "{verbose}");
+    // the time of each check (the equal-MIR check: no query).
+    assert!(verbose.contains("      equivalence (in dev): MIR changes; no callee inlined; 0 solver queries; "), "{verbose}");
     // R60.4-4: the Markdown review has a section for each body whose graph changes, with the
     // list and a flowchart. The negative case: a body with the same structure has no section.
     let md = dir.path().join("review.md");
@@ -7951,10 +7916,11 @@ fn a_step_with_no_agent_fact_is_valid_and_prints_the_gap_list_with_one_command()
     );
     assert!(out.contains(&list), "{out}");
     assert!(!out.lines().any(|line| line.starts_with("      in: ") && line.contains("tests::t")), "{out}");
-    // One complete command adds the facts to the stored step. A line whose check did not decide
-    // has the two forms, and the command does not have it (R71.3-1).
-    let command = "  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop_core::facts::inner::a=TEXT'\n";
-    assert!(out.contains(command), "{out}");
+    // A line whose check did not decide has the two forms, and the command does not have it
+    // (R71.3-1). [R84.4-1] "MIR changes" reads as "not decided": each line of this step has the
+    // two forms, so the step has no command.
+    assert!(out.contains("  ? 1 place: changed literal `1` → `5` (f5)\n      in: shop_core::facts::inner::a\n      lines: crates/shop-core/src/facts.rs:33, crates/shop-core/src/facts.rs:-27\n      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::inner::a=TEXT'; if it does not change, --same 'rewrite 1 => 5'\n"), "{out}");
+    assert!(!out.contains("  to state them, add facts to the stored step"), "{out}");
     // Each fact has the origin of Semilla, in the groups of design 48.3.
     assert!(out.contains("  tests and benches, filled in by Semilla:\n  ◆ f7 derived: changed literal `2` → `6` at `shop_core::facts::tests::t/S0/args[1]` [semantics · code different]\n"), "{out}");
     assert!(out.contains("  other facts, filled in by Semilla:\n  ◆ f1 derived: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]\n"), "{out}");
@@ -8247,7 +8213,7 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     // line `lines:` below it.
     assert!(out.contains("\n      lines: "), "{out}");
     assert!(!out.lines().zip(out.lines().skip(1)).any(|(fact, next)| fact.starts_with("  ◆ ") && next.trim_start().starts_with("lines: ")), "{out}");
-    assert!(out.contains("      tag: `method calls`\n      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::a,shop_core::facts::b,shop_core::facts::d=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()'\n") && out.contains("      not in a tag\n      to state it: --change 'shop_core::facts::inner::a=TEXT'\n"), "{out}");
+    assert!(out.contains("      tag: `method calls`\n      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::a,shop_core::facts::b,shop_core::facts::d=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()'\n") && out.contains("      not in a tag\n      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::inner::a=TEXT'; if it does not change, --same 'rewrite 1 => 5'\n"), "{out}");
     assert!(out.contains("\n  cover: each of the 18 changed line(s) is in a fact\n"), "{out}");
     // A tag does not replace a fact: each fact line and each gap line of the step with no
     // tag is in the output one time, and the stored facts are equal.

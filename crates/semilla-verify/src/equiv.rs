@@ -41,13 +41,18 @@ pub enum Verdict {
     NotDecided(String),
     /// No check: the cause (the budget of the step, design 61.14, R61.14-6).
     NotChecked(String),
+    /// [R84.1-1] The equal-MIR check of a body with no claim finds a change (design 84): the
+    /// cause when the MIR text is equal (a changed callee, a changed constant), else empty. The
+    /// check starts no solver, so it states no difference: a claim of the intent file asks for
+    /// the full compare.
+    MirChanges(String),
 }
 
 /// The result words of a check, one for each kind of verdict (R66.10-6: a cut of a line keeps
 /// them).
 pub(crate) fn result_words() -> Vec<&'static str> {
     let empty = String::new;
-    [Verdict::Equivalent(empty()), Verdict::Different { input: empty(), before: empty(), after: empty(), test: TestNote::None }, Verdict::NotDecided(empty()), Verdict::NotChecked(empty())].iter().map(Verdict::word).collect()
+    [Verdict::Equivalent(empty()), Verdict::Different { input: empty(), before: empty(), after: empty(), test: TestNote::None }, Verdict::NotDecided(empty()), Verdict::NotChecked(empty()), Verdict::MirChanges(empty())].iter().map(Verdict::word).collect()
 }
 
 /// The cause of a check that the budget of the step stopped (R61.14-6).
@@ -131,6 +136,7 @@ impl Reached {
                     (format!("reached through {through}, not decided{configs} ({shown})"), format!("reached through {through}, not decided{configs} ({key})"))
                 }
                 Verdict::NotChecked(cause) => (format!("reached through {through}, not checked{configs} ({cause})"), format!("reached through {through}, not checked{configs} ({cause})")),
+                Verdict::MirChanges(_) => (format!("reached through {through}, MIR changes{configs}"), format!("reached through {through}, MIR changes{configs}")),
             };
             texts.push(text);
             keys.push(key);
@@ -151,6 +157,7 @@ impl Verdict {
             Verdict::Different { .. } => "different",
             Verdict::NotDecided(_) => "not decided",
             Verdict::NotChecked(_) => "not checked",
+            Verdict::MirChanges(_) => "MIR changes",
         }
     }
 
@@ -158,8 +165,9 @@ impl Verdict {
         match self {
             Verdict::Different { .. } => 0,
             Verdict::NotDecided(_) => 1,
-            Verdict::NotChecked(_) => 2,
-            Verdict::Equivalent(_) => 3,
+            Verdict::MirChanges(_) => 2,
+            Verdict::NotChecked(_) => 3,
+            Verdict::Equivalent(_) => 4,
         }
     }
 
@@ -174,6 +182,9 @@ impl Verdict {
             Verdict::NotDecided(cause) => format!(": {cause}"),
             // A short text on each line: the step section has the line of the budget.
             Verdict::NotChecked(cause) => format!(" ({cause})"),
+            Verdict::MirChanges(cause) if cause.is_empty() => String::new(),
+            Verdict::MirChanges(cause) if step => format!(" ({cause})"),
+            Verdict::MirChanges(cause) => format!(": {cause}"),
         }
     }
 }
@@ -500,7 +511,9 @@ pub(crate) fn apply(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, ou
             } else {
                 let alone = match fact_results.get(&(index, *fact)) {
                     Some(found) => joined(found, false, true),
-                    None => format!("not decided alone (the body has {edits} edits{})", variant_cause.get(&(index, *fact)).map(|cause| format!("; {cause}")).unwrap_or_default()),
+                    // [R84.2-3] No variant: the fact has no result alone. The words "not decided"
+                    // are for a result of the solver, and no solver runs here.
+                    None => format!("no result alone (the body has {edits} edits{})", variant_cause.get(&(index, *fact)).map(|cause| format!("; {cause}")).unwrap_or_default()),
                 };
                 format!("{alone}; the body: {}", joined(&plain, false, false))
             };

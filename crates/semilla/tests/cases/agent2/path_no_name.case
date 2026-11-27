@@ -117,6 +117,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 change: `<Price as Display>::fmtx` "more" (false: the tag `change` does not agree with the edit that Semilla sees)
       `<Price as Display>::fmtx` names no item, no module, and no file of the old tree or the new tree
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `<depot::money::Price as std::fmt::Display>::fmt` (src/lib.rs:6): the full compare: `#[same(<depot::money::Price as std::fmt::Display>::fmt)] fn fmt_same() {}`; a difference: `#[change(<depot::money::Price as std::fmt::Display>::fmt)] fn fmt_change() -> bool { … }` or `#[different(<depot::money::Price as std::fmt::Display>::fmt)] fn fmt_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `"{}"` → `"${}"` (f1)
       in: depot::money::<Price as fmt::Display>::fmt
@@ -126,11 +128,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different]
       affected bodies: depot::money::<Price as fmt::Display>::fmt
       control flow: ~ construct `{}` (src/lib.rs:-6, src/lib.rs:6): callees −`Arguments::<'_>::new::<2, 1>` +`Arguments::<'_>::new::<4, 1>`
-      equivalence: not decided: an array
+      equivalence: MIR changes
       expansion: `write!(f, "${}", self.0)` at `depot::money::<Price as fmt::Display>::fmt/tail` (src/lib.rs:6): expansion changed: changed literal `"{0}"` → `"${0}"` at `expansion/args[0]/args[0]` [semantics]
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    <depot::money::Price as std::fmt::Display>::fmt (src/lib.rs:6): same structure: 1 changed `construct` point; not decided (an array)
+    <depot::money::Price as std::fmt::Display>::fmt (src/lib.rs:6): same structure: 1 changed `construct` point; MIR changes
   expansions: 1 changed, 2 equal
     `write!(f, "${}", self.0)` at `depot::money::<Price as fmt::Display>::fmt/tail` (src/lib.rs:6): expansion changed: `macro write` (crate core): changed literal `"{0}"` → `"${0}"` at `expansion/args[0]/args[0]` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

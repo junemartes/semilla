@@ -119,6 +119,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       a fact that holds: `--same 'rewrite wrap($x) => wrap2($x)'` (2 site(s))
       no edit of the step has the old form or the new form; the old tree has the form `wrap(x)` at 0 place(s)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::a` (src/lib.rs:30): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
+    MIR changes with no claim: `depot::b` (src/lib.rs:31): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: changed path `wrap` → `wrap2` (f1)
       in: depot::a, depot::b
@@ -129,12 +132,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: depot::a, depot::b
       control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-30, src/lib.rs:30)
       control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-31, src/lib.rs:31)
-      equivalence: `depot::a`: equivalent (proved by SMT after inlining `depot::wrap`, `depot::wrap2`)
-      equivalence: `depot::b`: equivalent (proved by SMT after inlining `depot::wrap`, `depot::wrap2`)
+      equivalence: `depot::a`: MIR changes
+      equivalence: `depot::b`: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::a (src/lib.rs:30): same structure: 1 changed call target; equivalent (proved by SMT after inlining `depot::wrap`, `depot::wrap2`)
-    depot::b (src/lib.rs:31): same structure: 1 changed call target; equivalent (proved by SMT after inlining `depot::wrap`, `depot::wrap2`)
+    depot::a (src/lib.rs:30): same structure: 1 changed call target; MIR changes
+    depot::b (src/lib.rs:31): same structure: 1 changed call target; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change'

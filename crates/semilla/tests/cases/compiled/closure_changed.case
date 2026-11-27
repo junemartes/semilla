@@ -20,6 +20,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+    MIR changes with no claim: `shop::grow` (src/lib.rs:1): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::grow::{closure#0} |x| x.wrapping_mul(3)` (src/lib.rs:2): the template of `shop::grow` covers its item `shop::grow` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a…` (src/lib.rs:3): the template of `shop::grow` covers its item `shop::grow` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f1, f2)
       in: shop::grow
@@ -32,21 +36,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + call `<Iter<'_, u32> as Iterator>::map::<u32, {closure#0}> (trait default)` (src/lib.rs:2): return → call `<Map<Iter<'_, u32>, {closure#0}> as Iterator>::sum::<u32> (trait default)`
       control flow: + call `<Map<Iter<'_, u32>, {closure#0}> as Iterator>::sum::<u32> (trait default)` (src/lib.rs:2): return → call `slice::<impl [u32]>::iter`
       control flow: … 2 more (semilla expand --step 0)
-      equivalence: `shop::grow`: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: not decided: the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined)
-      equivalence: `shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a…`: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: not decided: the parameters change
+      equivalence: `shop::grow`: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
+      equivalence: `shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a…`: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
   ◆ f2 derived: changed if: `x.wrapping_add(1)` → `if *x > k { 0 } else { x.wrapping_add(k) }` at `shop::grow/tail/recv/args[0]/body` [semantics · code different]
       affected bodies: shop::grow (with 1 other edit of this body)
       control flow: − arrow entry (src/lib.rs:-1) → call `slice::<impl [u32]>::iter` (src/lib.rs:-2)
       control flow: + branch `*x > k` (src/lib.rs:3): false → call `num::<impl u32>::wrapping_add`, true → return
       control flow: + arrow entry (src/lib.rs:3) → branch `*x > k` (src/lib.rs:3)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: `shop::grow`: not decided alone: the variant with only this edit does not compile; the body: not decided: the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined)
-      equivalence: `shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a…`: not decided alone: the variant with only this edit does not compile; the body: not decided: the parameters change
+      equivalence: `shop::grow`: not checked alone (the variant with only this edit does not compile); the body: MIR changes
+      equivalence: `shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a…`: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::grow (src/lib.rs:1): graph changes: +3 calls, +4 arrows, −1 arrow; not decided (the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined))
+    shop::grow (src/lib.rs:1): graph changes: +3 calls, +4 arrows, −1 arrow; MIR changes
     shop::grow::{closure#0} |x| x.wrapping_mul(3) (src/lib.rs:2): graph added: 3 points, 2 arrows
-    shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a… (src/lib.rs:3): graph changes: +1 branch, +3 arrows, −1 arrow; not decided (the parameters change)
+    shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a… (src/lib.rs:3): graph changes: +1 branch, +3 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

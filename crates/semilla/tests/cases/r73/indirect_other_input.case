@@ -41,6 +41,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 1 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::price` (src/lib.rs:7): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(n: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
+    MIR changes with no claim: `shop::scale` (no place): no result of the equivalence check; the full compare: `#[same(shop::scale)] fn scale_same() {}`; a difference: `#[change(shop::scale)] fn scale_change() -> bool { … }` or `#[different(shop::scale)] fn scale_different() -> bool { … }`
+    equal MIR: `shop::price::{closure#0} |i| i + s` (src/lib.rs:11)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression `n as u16` → `n` (f2)
       in: shop::price
@@ -53,14 +57,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f2 derived: changed expression `n as u16` → `n` at `shop::price/S0/init` [semantics · code different]
       affected bodies: shop::price
-      equivalence: `shop::price`: not decided: a value of a type that the check does not model
+      equivalence: `shop::price`: MIR changes
       equivalence: `shop::price::{closure#0} |i| i + s`: equivalent (proved by equal MIR)
   ◆ f3 derived: the compiled code of `shop::price` changes with no edit at its place: `scale(k)` [indirect · code different]
       affected bodies: shop::price
       note: lines 10
   cover: each of the 4 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::price (src/lib.rs:7): same structure: 1 changed call target; not decided (a value of a type that the check does not model)
+    shop::price (src/lib.rs:7): same structure: 1 changed call target; MIR changes
     shop::price::{closure#0} |i| i + s (src/lib.rs:11): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
     shop::scale (no place): instance scale::<u32>: call `<T as std::convert::Into<u64>>::into` resolves to `<u32 as std::convert::Into<u64>>::into` (before: the instance scale::<u16>)
   expansions: 1 changed

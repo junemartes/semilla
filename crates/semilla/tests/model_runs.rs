@@ -40,9 +40,17 @@ fn step(dir: &Path, old: &str, new: &str, env: &[(&str, &str)]) -> String {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "old"]);
     std::fs::write(repo.join("src/lib.rs"), new).unwrap();
+    // Design 84: only a claim starts the solver. Each function `cN` gets an empty `#[same]`
+    // claim (the full compare of today, design 78); the intent file is outside the repository.
+    let mut intent = String::from("use semilla_intent::prelude::*;\n");
+    for name in new.lines().filter_map(|line| line.strip_prefix("pub fn ")).filter_map(|rest| rest.split('(').next()) {
+        intent.push_str(&format!("\n#[same(depot::{name})]\nfn same_{name}() {{}}\n"));
+    }
+    let intent_path = dir.join("same.rs");
+    std::fs::write(&intent_path, intent).unwrap();
     let root = workspace_root();
     let mut command = Command::new(env!("CARGO_BIN_EXE_semilla"));
-    command.current_dir(&repo).args(["step", "the change"]);
+    command.current_dir(&repo).args(["step", "the change", "--intent"]).arg(&intent_path);
     command.env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"));
     command.env("SEMILLA_CACHE_DIR", dir.join("cache")).env_remove("SEMILLA_COMPILED").env_remove("SEMILLA_TEST_RULE_OFF");
     let z3 = root.join(".semilla/tools/z3");
@@ -292,10 +300,10 @@ fn classify(line: &str) -> Result<String, Got> {
     if let Some(rest) = line.split("suggested test `").nth(1) {
         return Ok(rest.split('`').next().unwrap_or_default().to_string());
     }
-    if line.contains("not decided") || line.contains("not checked") {
-        return Err(Got::NoModel(cause("not ")));
+    if line.contains("not decided") || line.contains("not checked") || line.contains(": claimed") {
+        return Err(Got::NoModel(cause(": claimed").chars().chain(cause("not ").chars()).collect()));
     }
-    if line.contains("equivalent") {
+    if line.contains("equivalent") || line.contains(": proved") {
         return Err(Got::Missed(line.to_string()));
     }
     Err(Got::NoModel(line.chars().take(160).collect()))
@@ -352,8 +360,8 @@ fn run_shapes(shapes: &[Shape], env: &[(&str, &str)]) -> Vec<(String, String, Go
                     let passed_new = suggested::passing(dir.path(), "new", &new, &tests);
                     let mut mine = Vec::new();
                     for (index, shape, point) in chunk.iter() {
-                        let name = format!("depot::c{index} (");
-                        let got = match output.lines().find(|line| line.trim_start().starts_with(&name)).map(classify) {
+                        let name = format!("`#[same(depot::c{index})] fn ");
+                        let got = match output.lines().find(|line| line.contains(&name)).map(classify) {
                             Some(Ok(test)) => {
                                 let text = tests.iter().find(|found| found.name == test).map(|found| found.text.clone()).unwrap_or_default();
                                 if !passed_old.contains(&test) {
@@ -460,8 +468,8 @@ fn rule_lines() -> &'static BTreeMap<&'static str, (String, String)> {
         let output = step(dir.path(), &old, &new, &[]);
         let tests = suggested::suggested(&output);
         shapes.iter().enumerate().map(|(index, (name, _))| {
-            let head = format!("depot::c{index} (");
-            let line = output.lines().find(|line| line.trim_start().starts_with(&head)).unwrap_or_else(|| panic!("no line of {name}:\n{output}")).to_string();
+            let head = format!("`#[same(depot::c{index})] fn ");
+            let line = output.lines().find(|line| line.contains(&head)).unwrap_or_else(|| panic!("no line of {name}:\n{output}")).to_string();
             let test = line.split("suggested test `").nth(1).and_then(|rest| rest.split('`').next()).and_then(|test| tests.iter().find(|found| found.name == test)).map(|found| found.text.clone()).unwrap_or_default();
             (*name, (line, test))
         }).collect()
@@ -492,7 +500,7 @@ fn a_capacity_that_a_machine_can_lack_has_no_sure_outcome() {
     // 2^60 elements of 4 bytes: below the capacity overflow, but no machine has the memory. A
     // run aborts (`handle_alloc_error`); the model has an abort path that is never exact.
     let (line, _) = &rule_lines()["capacity_large"];
-    assert!(line.contains("not decided") && !line.contains("before returns []") && !line.contains("suggested test"), "{line}");
+    assert!(line.contains(": claimed") && !line.contains("before returns []") && !line.contains("suggested test"), "{line}");
 }
 
 // rule- R75.2-3
@@ -517,5 +525,5 @@ fn the_mir_of_first_last_and_is_empty_of_a_slice_replaces_the_list_entries() {
 #[test]
 fn the_mir_of_first_does_not_model_a_slice_of_elements_that_the_sequence_model_does_not_have() {
     let (line, _) = &rule_lines()["first_pair"];
-    assert!(line.contains("not decided"), "{line}");
+    assert!(line.contains(": claimed"), "{line}");
 }

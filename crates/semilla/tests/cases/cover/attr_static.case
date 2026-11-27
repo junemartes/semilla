@@ -28,15 +28,17 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
+    equal MIR: `depot::NAME` (src/lib.rs:7)
   declarations, filled in by Semilla:
   ◆ f1 derived: type of `depot::NAME`: `static NAME: &str = "depot";` → `#[cfg(all())] static NAME: &str = "depot";` (the public API can change: a different crate can use the item) [declaration · code equal]
-      equivalence: not decided alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
+      equivalence: no result alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
       ! public API: the compare does not cover the code of a different crate
       docs of `depot::NAME`, no edit in this step (src/lib.rs:5): `/// The old doc.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   other facts, filled in by Semilla:
   ◆ f2 derived: attributes of `depot::NAME`: added `#[cfg(all())]` [attribute · code equal]
-      equivalence: not decided alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
+      equivalence: no result alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
       ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::NAME=…'
   cover: each of the 1 changed line(s) is in a fact
   control flow: 1 body

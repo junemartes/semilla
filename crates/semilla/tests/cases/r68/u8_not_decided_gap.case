@@ -22,6 +22,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::pick` (src/lib.rs:1): the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::pick::{closure#0} |k: usize| v[k]` (src/lib.rs:-2): the template of `shop::pick` covers its item `shop::pick` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f1, f2)
       in: shop::pick
@@ -34,14 +37,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: moved panic `bounds` (src/lib.rs:2) from `shop::pick::{closure#0}`
       control flow: − call `get` [closure] (src/lib.rs:-3): return → call `num::<impl u32>::wrapping_add`
       control flow: … 2 more (semilla expand --step 0)
-      equivalence: not decided alone: a raw pointer: v[k] (src/lib.rs:-2); the body: not decided: a raw pointer: v[k] (src/lib.rs:-2)
+      equivalence: MIR changes alone; the body: MIR changes
   ◆ f2 derived: deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different]
       affected bodies: shop::pick (with 1 other edit of this body)
       control flow: − graph of `shop::pick::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows; moved out to `shop::pick`: 1 check, 1 panic (semilla expand --step 0)
-      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: not decided: a raw pointer: v[k] (src/lib.rs:-2)
+      equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::pick (src/lib.rs:1): graph changes: −1 call, +3 arrows, −2 arrows; moved in from `shop::pick::{closure#0}`: 1 check, 1 panic; not decided (a raw pointer: v[k] (src/lib.rs:-2))
+    shop::pick (src/lib.rs:1): graph changes: −1 call, +3 arrows, −2 arrows; moved in from `shop::pick::{closure#0}`: 1 check, 1 panic; MIR changes
     shop::pick::{closure#0} |k: usize| v[k] (src/lib.rs:-2): graph removed: 4 points, 3 arrows; moved out to `shop::pick`: 1 check, 1 panic
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

@@ -31,52 +31,26 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::f` (src/lib.rs:1): the full compare: `#[same(depot::f)] fn f_same() {}`; a difference: `#[change(depot::f)] fn f_change(x: u32) -> bool { … }` or `#[different(depot::f)] fn f_different() -> bool { … }`
   not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 3 places: 3 different edits (f2, f1, f3)
       in: depot::f
       lines: src/lib.rs:3-4, src/lib.rs:-3-4
-      to state it: --change 'depot::f=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::f=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::f=TEXT'; if it does not change, --same 'rewrite 20 => 10' --same 'rewrite 10 => 21', and a `--same` fact (rename, move, or rewrite) that explains each other edit
   other facts, filled in by Semilla:
   ◆ f1 derived: moved match arm `1 => 10` from `depot::f/S0/arm[0].pat` to `depot::f/S0/arm[1].pat` [semantics · code different]
       affected bodies: depot::f (with 2 other edits of this body)
-      equivalence: equivalent alone (proved by equal MIR); the body: different: for x = 1: before returns 10, after returns 21 (suggested test `semilla_test_f_7b23c4`)
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   ◆ f2 derived: changed literal `20` → `10` at `depot::f/S0/arm[1].body` [semantics · code different]
       affected bodies: depot::f (with 2 other edits of this body)
-      equivalence: different alone: for x = 2: before returns 20, after returns 10 (suggested test `semilla_test_f_60d1cb`); the body: different: for x = 1: before returns 10, after returns 21 (suggested test `semilla_test_f_7b23c4`)
+      equivalence: MIR changes alone; the body: MIR changes
   ◆ f3 derived: changed literal `10` → `21` at `depot::f/S0/arm[0].body` [semantics · code different]
       affected bodies: depot::f (with 2 other edits of this body)
-      equivalence: different alone: for x = 1: before returns 10, after returns 21 (suggested test `semilla_test_f_7b23c4`); the body: different: for x = 1: before returns 10, after returns 21 (suggested test `semilla_test_f_7b23c4`)
+      equivalence: MIR changes alone; the body: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    depot::f (src/lib.rs:1): same graph (the edit keeps the control flow); different (for x = 1: before returns 10, after returns 21; suggested test `semilla_test_f_7b23c4`)
-  suggested tests: 2 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_f_7b23c4`: add it to `src/lib.rs`, in the module of `depot::f` (line 1); run it: `cargo test -p depot semilla_test_f_7b23c4`; also: `cargo test -p depot --release semilla_test_f_7b23c4`
-      #[cfg(test)]
-      mod semilla_test_f_7b23c4 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 10; the new version returns 21.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 1;
-              let got = crate::f(x);
-              assert_eq!(got, 10);
-          }
-      }
-    `semilla_test_f_60d1cb`: add it to `src/lib.rs`, in the module of `depot::f` (line 1); run it: `cargo test -p depot semilla_test_f_60d1cb`; also: `cargo test -p depot --release semilla_test_f_60d1cb`
-      #[cfg(test)]
-      mod semilla_test_f_60d1cb {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 20; the new version returns 10.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 2;
-              let got = crate::f(x);
-              assert_eq!(got, 20);
-          }
-      }
+    depot::f (src/lib.rs:1): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

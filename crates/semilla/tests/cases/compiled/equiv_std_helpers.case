@@ -92,6 +92,17 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 17 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 10 MIR changes with no claim
+    MIR changes with no claim: `shop::chk` (src/lib.rs:17): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 3 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::diff` (src/lib.rs:26): the claim template of the node n4 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::fit` (src/lib.rs:30): the claim template of the node n6 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::has` (src/lib.rs:34): the full compare: `#[same(shop::has)] fn has_same() {}`; a difference: `#[change(shop::has)] fn has_change(o: Option<u32>) -> bool { … }` or `#[different(shop::has)] fn has_different() -> bool { … }`
+    MIR changes with no claim: `shop::hi` (src/lib.rs:5): the claim template of the node n9 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::lo` (src/lib.rs:1): the claim template of the node n11 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::or_zero` (src/lib.rs:38): the claim template of the node n13 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::sat` (src/lib.rs:9): the claim template of the node n15 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::sat_sub` (src/lib.rs:13): the claim template of the node n17 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `shop::wrap` (src/lib.rs:22): the full compare: `#[same(shop::wrap)] fn wrap_same() {}`; a difference: `#[change(shop::wrap)] fn wrap_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::wrap)] fn wrap_different() -> bool { … }`
   not stated: 10 item(s) with 19 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 3 places: 3 different edits (f1, f2, f3)
       in: shop::chk
@@ -118,114 +129,114 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different]
       affected bodies: shop::chk (with 2 other edits of this body)
       control flow: ~ call `num::<impl u32>::checked_add` → `num::<impl u32>::overflowing_add` (src/lib.rs:-18, src/lib.rs:18) (the same line for f2)
-      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::overflowing_add`) (the same line for f2, f3)
+      equivalence: MIR changes
   ◆ f2 derived: added `let` `let (v, o) = a.overflowing_add(b);` at `shop::chk/S0` [semantics · code different]
       affected bodies: shop::chk (with 2 other edits of this body)
       control flow: the same line as f1
-      equivalence: the same line as f1
+      equivalence: MIR changes
   ◆ f3 derived: added `if` `if o { None } else { Some(v) }` at `shop::chk/S1` [semantics · code different]
       affected bodies: shop::chk (with 2 other edits of this body)
       control flow: + branch `o` (src/lib.rs:19): false → return, true → return
       control flow: + arrow call `num::<impl u32>::overflowing_add` (src/lib.rs:18) → branch `o` (src/lib.rs:19) (return)
-      equivalence: the same line as f1
+      equivalence: MIR changes
   ◆ f4 derived: deleted statement `a.abs_diff(b)` at `shop::diff/tail` [semantics · code different]
       affected bodies: shop::diff (with 1 other edit of this body)
       control flow: − call `num::<impl u32>::abs_diff` (src/lib.rs:-26): return → return
       control flow: − arrow entry (src/lib.rs:-25) → call `num::<impl u32>::abs_diff` (src/lib.rs:-26)
-      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::abs_diff`)
+      equivalence: MIR changes
   ◆ f5 derived: added `if` `if a > b { a - b } else { b - a }` at `shop::diff/S0` [semantics · code different]
       affected bodies: shop::diff (with 1 other edit of this body)
       control flow: + branch `a > b` (src/lib.rs:27): false → check `overflow: b - a`, true → check `overflow: a - b`
       control flow: + check `overflow: b - a` (src/lib.rs:27): ok → return, fail → panic `overflow`
       control flow: + check `overflow: a - b` (src/lib.rs:27): ok → return, fail → panic `overflow`
       control flow: … 2 more (semilla expand --step 0)
-      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::abs_diff`)
+      equivalence: MIR changes
   ◆ f6 derived: deleted statement `a.clamp(10, 20)` at `shop::fit/tail` [semantics · code different]
       affected bodies: shop::fit (with 1 other edit of this body)
       control flow: − call `impls::<impl Ord for u32>::clamp` (src/lib.rs:-30): return → return
       control flow: − arrow entry (src/lib.rs:-29) → call `impls::<impl Ord for u32>::clamp` (src/lib.rs:-30)
-      equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::clamp`)
+      equivalence: MIR changes
   ◆ f7 derived: added `if` `if a < 10 { 10 } else if a > 20 { 20 } else { a }` at `shop::fit/S0` [semantics · code different]
       affected bodies: shop::fit (with 1 other edit of this body)
       control flow: + branch `a < 10` (src/lib.rs:31): false → branch `a > 20`, true → return
       control flow: + branch `a > 20` (src/lib.rs:31): false → return, true → return
       control flow: + arrow entry (src/lib.rs:30) → branch `a < 10` (src/lib.rs:31)
-      equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::clamp`)
+      equivalence: MIR changes
   ◆ f8 derived: changed expression `o.is_some()` → `!o.is_none()` at `shop::has/tail` [semantics · code different]
       affected bodies: shop::has
       control flow: ~ call `Option::<u32>::is_some` → `Option::<u32>::is_none` (src/lib.rs:-34, src/lib.rs:35)
-      equivalence: equivalent (proved by SMT after inlining `std::option::Option::<u32>::is_none`, `std::option::Option::<u32>::is_some`)
+      equivalence: MIR changes
   ◆ f9 derived: deleted statement `a.max(b)` at `shop::hi/tail` [semantics · code different]
       affected bodies: shop::hi (with 1 other edit of this body)
       control flow: − call `impls::<impl Ord for u32>::max` (src/lib.rs:-6): return → return
       control flow: − arrow entry (src/lib.rs:-5) → call `impls::<impl Ord for u32>::max` (src/lib.rs:-6)
-      equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::max`)
+      equivalence: MIR changes
   ◆ f10 derived: added `if` `if a >= b { a } else { b }` at `shop::hi/S0` [semantics · code different]
       affected bodies: shop::hi (with 1 other edit of this body)
       control flow: + branch `a >= b` (src/lib.rs:6): false → return, true → return
       control flow: + arrow entry (src/lib.rs:5) → branch `a >= b` (src/lib.rs:6)
-      equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::max`)
+      equivalence: MIR changes
   ◆ f11 derived: deleted statement `a.min(b)` at `shop::lo/tail` [semantics · code different]
       affected bodies: shop::lo (with 1 other edit of this body)
       control flow: − call `impls::<impl Ord for u32>::min` (src/lib.rs:-2): return → return
       control flow: − arrow entry (src/lib.rs:-1) → call `impls::<impl Ord for u32>::min` (src/lib.rs:-2)
-      equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`)
+      equivalence: MIR changes
   ◆ f12 derived: added `if` `if a <= b { a } else { b }` at `shop::lo/S0` [semantics · code different]
       affected bodies: shop::lo (with 1 other edit of this body)
       control flow: + branch `a <= b` (src/lib.rs:2): false → return, true → return
       control flow: + arrow entry (src/lib.rs:1) → branch `a <= b` (src/lib.rs:2)
-      equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`)
+      equivalence: MIR changes
   ◆ f13 derived: deleted statement `o.unwrap_or(0)` at `shop::or_zero/tail` [semantics · code different]
       affected bodies: shop::or_zero (with 1 other edit of this body)
       control flow: − call `Option::<u32>::unwrap_or` (src/lib.rs:-38): return → return
       control flow: − arrow entry (src/lib.rs:-37) → call `Option::<u32>::unwrap_or` (src/lib.rs:-38)
-      equivalence: equivalent (proved by SMT after inlining `std::option::Option::<u32>::unwrap_or`)
+      equivalence: MIR changes
   ◆ f14 derived: added `match` `match o { Some(v) => v, None => 0 }` at `shop::or_zero/S0` [semantics · code different]
       affected bodies: shop::or_zero (with 1 other edit of this body)
       control flow: + branch `o` (src/lib.rs:39): std::option::Option::None → return, std::option::Option::Some → return
       control flow: + arrow entry (src/lib.rs:38) → branch `o` (src/lib.rs:39)
-      equivalence: equivalent (proved by SMT after inlining `std::option::Option::<u32>::unwrap_or`)
+      equivalence: MIR changes
   ◆ f15 derived: deleted statement `a.saturating_add(b)` at `shop::sat/tail` [semantics · code different]
       affected bodies: shop::sat (with 1 other edit of this body)
       control flow: ~ call `num::<impl u32>::saturating_add` → `num::<impl u32>::checked_add` (src/lib.rs:-10, src/lib.rs:10) (the same line for f16)
-      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::saturating_add`) (the same line for f16)
+      equivalence: MIR changes
   ◆ f16 derived: added `match` `match a.checked_add(b) { Some(v) => v, None => u32::MAX }` at `shop::sat/S0` [semantics · code different]
       affected bodies: shop::sat (with 1 other edit of this body)
       control flow: + branch `a.checked_add(b)` (src/lib.rs:10): std::option::Option::None → return, std::option::Option::Some → return
       control flow: the same line as f15
       control flow: + arrow call `num::<impl u32>::checked_add` (src/lib.rs:10) → branch `a.checked_add(b)` (src/lib.rs:10) (return)
-      equivalence: the same line as f15
+      equivalence: MIR changes
   ◆ f17 derived: deleted statement `a.saturating_sub(b)` at `shop::sat_sub/tail` [semantics · code different]
       affected bodies: shop::sat_sub (with 1 other edit of this body)
       control flow: − call `num::<impl u32>::saturating_sub` (src/lib.rs:-14): return → return
       control flow: − arrow entry (src/lib.rs:-13) → call `num::<impl u32>::saturating_sub` (src/lib.rs:-14)
-      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::saturating_sub`)
+      equivalence: MIR changes
   ◆ f18 derived: added `if` `if a > b { a - b } else { 0 }` at `shop::sat_sub/S0` [semantics · code different]
       affected bodies: shop::sat_sub (with 1 other edit of this body)
       control flow: + branch `a > b` (src/lib.rs:14): false → return, true → check `overflow: a - b`
       control flow: + check `overflow: a - b` (src/lib.rs:14): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:14)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::saturating_sub`)
+      equivalence: MIR changes
   ◆ f19 derived: changed method_call: `a.wrapping_sub(b)` → `a.wrapping_add(b.wrapping_neg())` at `shop::wrap/tail` [semantics · code different]
       affected bodies: shop::wrap
       control flow: + call `num::<impl u32>::wrapping_neg` (src/lib.rs:23): return → call `num::<impl u32>::wrapping_add`
       control flow: ~ call `num::<impl u32>::wrapping_sub` → `num::<impl u32>::wrapping_add` (src/lib.rs:-22, src/lib.rs:23)
       control flow: + arrow entry (src/lib.rs:22) → call `num::<impl u32>::wrapping_neg` (src/lib.rs:23)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`, `core::num::<impl u32>::wrapping_neg`, `core::num::<impl u32>::wrapping_sub`)
+      equivalence: MIR changes
   cover: each of the 21 changed line(s) is in a fact
   control flow: 10 bodies
-    shop::chk (src/lib.rs:17): graph changes: +1 branch, 1 changed call target, +3 arrows, −1 arrow; equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::overflowing_add`)
-    shop::diff (src/lib.rs:26): graph changes: +1 branch, +2 checks, +2 panics, −1 call, +7 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `core::num::<impl u32>::abs_diff`)
-    shop::fit (src/lib.rs:30): graph changes: +2 branches, −1 call, +5 arrows, −2 arrows; equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::clamp`)
-    shop::has (src/lib.rs:34): same structure: 1 changed call target; equivalent (proved by SMT after inlining `std::option::Option::<u32>::is_none`, `std::option::Option::<u32>::is_some`)
-    shop::hi (src/lib.rs:5): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::max`)
-    shop::lo (src/lib.rs:1): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`)
-    shop::or_zero (src/lib.rs:38): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; equivalent (proved by SMT after inlining `std::option::Option::<u32>::unwrap_or`)
-    shop::sat (src/lib.rs:9): graph changes: +1 branch, 1 changed call target, +3 arrows, −1 arrow; equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::saturating_add`)
-    shop::sat_sub (src/lib.rs:13): graph changes: +1 branch, +1 check, +1 panic, −1 call, +5 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `core::num::<impl u32>::saturating_sub`)
-    shop::wrap (src/lib.rs:22): graph changes: +1 call, 1 changed call target, +2 arrows, −1 arrow; equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`, `core::num::<impl u32>::wrapping_neg`, `core::num::<impl u32>::wrapping_sub`)
+    shop::chk (src/lib.rs:17): graph changes: +1 branch, 1 changed call target, +3 arrows, −1 arrow; MIR changes
+    shop::diff (src/lib.rs:26): graph changes: +1 branch, +2 checks, +2 panics, −1 call, +7 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::fit (src/lib.rs:30): graph changes: +2 branches, −1 call, +5 arrows, −2 arrows; MIR changes
+    shop::has (src/lib.rs:34): same structure: 1 changed call target; MIR changes
+    shop::hi (src/lib.rs:5): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; MIR changes
+    shop::lo (src/lib.rs:1): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; MIR changes
+    shop::or_zero (src/lib.rs:38): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; MIR changes
+    shop::sat (src/lib.rs:9): graph changes: +1 branch, 1 changed call target, +3 arrows, −1 arrow; MIR changes
+    shop::sat_sub (src/lib.rs:13): graph changes: +1 branch, +1 check, +1 panic, −1 call, +5 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::wrap (src/lib.rs:22): graph changes: +1 call, 1 changed call target, +2 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

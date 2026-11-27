@@ -31,33 +31,21 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::outer::inner::deep` (src/outer/inner.rs:2): the full compare: `#[same(depot::outer::inner::deep)] fn deep_same() {}`; a difference: `#[change(depot::outer::inner::deep)] fn deep_change() -> bool { … }` or `#[different(depot::outer::inner::deep)] fn deep_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f1)
       in: depot::outer::inner::deep
       lines: src/outer.rs:-5, src/outer/inner.rs:4
-      to state it: --change 'depot::outer::inner::deep=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::outer::inner::deep=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::outer::inner::deep=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `1` → `2` at `depot::outer::inner::deep/tail/rhs` [semantics · code different]
       affected bodies: depot::outer::inner::deep
-      equivalence: different: for each input: before returns 5, after returns 6 (suggested test `semilla_test_deep_f32c6e`)
+      equivalence: MIR changes
   ◆ f2 derived: source place of `depot::outer::inner`: a block in `src/outer.rs` → file `src/outer/inner.rs`; 0 of 1 item and 6 old lines and 4 new lines keep their tokens [move · no code]
   cover: each of the 13 changed line(s) is in a fact
   control flow: 1 body
-    depot::outer::inner::deep (src/outer/inner.rs:2): same graph (the edit keeps the control flow); different (for each input: before returns 5, after returns 6; suggested test `semilla_test_deep_f32c6e`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_deep_f32c6e`: add it to `src/outer.rs`, in the module of `depot::outer::inner::deep` (line 3); run it: `cargo test -p depot semilla_test_deep_f32c6e`; also: `cargo test -p depot --release semilla_test_deep_f32c6e`
-      #[cfg(test)]
-      mod semilla_test_deep_f32c6e {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 5; the new version returns 6.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let got = crate::outer::inner::deep();
-              assert_eq!(got, 5);
-          }
-      }
+    depot::outer::inner::deep (src/outer/inner.rs:2): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

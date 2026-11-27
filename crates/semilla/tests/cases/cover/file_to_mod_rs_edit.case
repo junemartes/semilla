@@ -46,6 +46,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::list::larger` (src/list/mod.rs:11): the full compare: `#[same(depot::list::larger)] fn larger_same() {}`; a difference: `#[change(depot::list::larger)] fn larger_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::list::larger)] fn larger_different() -> bool { … }`
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f1, f2)
       in: depot::list::larger
@@ -54,7 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed path `a` → `b` at `depot::list::larger/S0/init/args[0]` [semantics · code different]
       affected bodies: depot::list::larger (with 1 other edit of this body)
-      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::max`, `std::cmp::max::<u32>`) (the same line for f2)
+      equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes (the same line for f2)
       docs of `depot::list::larger`, no edit in this step (src/list/mod.rs:10): `/// The larger one.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f2 derived: changed path `b` → `a` at `depot::list::larger/S0/init/args[1]` [semantics · code different]
@@ -63,7 +65,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f3 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move · no code]
   cover: each of the 28 changed line(s) is in a fact
   control flow: 1 body
-    depot::list::larger (src/list/mod.rs:11): same graph (the edit keeps the control flow); equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::max`, `std::cmp::max::<u32>`)
+    depot::list::larger (src/list/mod.rs:11): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 

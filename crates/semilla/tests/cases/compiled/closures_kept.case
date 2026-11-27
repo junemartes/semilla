@@ -23,6 +23,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 2 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::keep` (src/lib.rs:1): the full compare: `#[same(shop::keep)] fn keep_same() {}`; a difference: `#[change(shop::keep)] fn keep_change(v: &[u32]) -> bool { … }` or `#[different(shop::keep)] fn keep_different() -> bool { … }`
+    equal MIR: `shop::keep::{closure#0} |x| x.wrapping_add(1)` (src/lib.rs:2)
+    equal MIR: `shop::keep::{closure#1} |x| x.wrapping_mul(2)` (src/lib.rs:3)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed operator `a ^ b` → `a | b` (f1)
       in: shop::keep
@@ -31,12 +35,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed operator `a ^ b` → `a | b` at `shop::keep/tail` [semantics · code different]
       affected bodies: shop::keep
-      equivalence: `shop::keep`: not decided: the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined)
+      equivalence: `shop::keep`: MIR changes
       equivalence: `shop::keep::{closure#0} |x| x.wrapping_add(1)`: equivalent (proved by equal MIR)
       equivalence: `shop::keep::{closure#1} |x| x.wrapping_mul(2)`: equivalent (proved by equal MIR)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::keep (src/lib.rs:1): same graph (the edit keeps the control flow); not decided (the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined))
+    shop::keep (src/lib.rs:1): same graph (the edit keeps the control flow); MIR changes
     shop::keep::{closure#0} |x| x.wrapping_add(1) (src/lib.rs:2): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
     shop::keep::{closure#1} |x| x.wrapping_mul(2) (src/lib.rs:3): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

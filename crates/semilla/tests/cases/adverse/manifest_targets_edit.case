@@ -58,6 +58,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+    MIR changes with no claim: `list::first` (checks/list_checks.rs:2): the same MIR text; a changed callee: `list::first::{closure#0}`; no template: test, bench, or example code (the intent crate links the libraries only, design 78)
+    MIR changes with no claim: `list::first::{closure#0} #[test]` (checks/list_checks.rs:1): the same MIR text; a changed callee: `list::first`, `list::first::{closure#0}`; the full compare: `#[same(list::first)] fn first_same() {}`; a difference: `#[change(list::first)] fn first_change() -> bool { … }` or `#[different(list::first)] fn first_different() -> bool { … }`
+    MIR changes with no claim: `tool::main` (cmd/tool.rs:1): no template: the item is in a binary target, and the intent crate links the libraries only (design 78)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f1)
       in: depot (bin "tool")::main
@@ -67,18 +71,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: 3 site(s): changed literal `1` → `2` [semantics · code different]
       in: depot (bin "tool")::main, depot (test "list")::first (2)
       affected bodies: depot (bin "tool")::main, depot (test "list")::first
-      equivalence: `list::first`: not decided: a value of a type that the check does not model: fn first() { assert_eq!(depot::list::first(&[1])… (checks/list_checks.rs:-2)
-      equivalence: `list::first::{closure#0} #[test]`: not decided: a value of a type that the check does not model: fn first() { assert_eq!(depot::list::first(&[1])… (checks/list_checks.rs:-2)
-      equivalence: `tool::main`: not decided: an array
+      equivalence: `list::first`: MIR changes: the same MIR text; a changed callee: `list::first::{closure#0}`
+      equivalence: `list::first::{closure#0} #[test]`: MIR changes: the same MIR text; a changed callee: `list::first`, `list::first::{closure#0}`
+      equivalence: `tool::main`: MIR changes
       expansion: `assert_eq!(depot::list::first(&[2]), 2)` at `depot (test "list")::first/S0` (checks/list_checks.rs:3): expansion changed: 2 site(s): changed literal `1` → `2` [semantics]
-      reaches: 1 body, no public function: list::first::{closure#0} (semilla expand --step 0)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 3 bodies
-    list::first (checks/list_checks.rs:2): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn first() { assert_eq!(depot::list::first(&[1])… (checks/list_checks.rs:-2))
-    list::first::{closure#0} #[test] (checks/list_checks.rs:1): same graph (the edit keeps the control flow); not decided (a value of a type that the check does not model: fn first() { assert_eq!(depot::list::first(&[1])… (checks/list_checks.rs:-2))
-    tool::main (cmd/tool.rs:1): same graph (the edit keeps the control flow); not decided (an array)
-    reached bodies: 1
-      list::first::{closure#0} (checks/list_checks.rs:1): reached through list::first, not decided (a value of a type that the check does not model: fn first() { assert_eq!(depot::list::first(&[1])… (checks/list_checks.rs:-2))
+    list::first (checks/list_checks.rs:2): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `list::first::{closure#0}`)
+    list::first::{closure#0} #[test] (checks/list_checks.rs:1): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `list::first`, `list::first::{closure#0}`)
+    tool::main (cmd/tool.rs:1): same graph (the edit keeps the control flow); MIR changes
   expansions: 1 changed, 2 equal
     `assert_eq!(depot::list::first(&[2]), 2)` at `depot (test "list")::first/S0` (checks/list_checks.rs:3): expansion changed: `macro assert_eq` (crate core): 2 site(s): changed literal `1` → `2` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

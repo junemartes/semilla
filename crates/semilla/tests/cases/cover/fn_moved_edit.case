@@ -65,6 +65,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::beta` (src/lib.rs:19): the full compare: `#[same(depot::beta)] fn beta_same() {}`; a difference: `#[change(depot::beta)] fn beta_change(v: &[u32]) -> bool { … }` or `#[different(depot::beta)] fn beta_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed operator `*x > best` → `*x >= best` (f1)
       in: depot::beta
@@ -74,10 +76,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics · code different]
       affected bodies: depot::beta
       control flow: ~ branch `*x > best` → `*x >= best` (src/lib.rs:-12, src/lib.rs:22)
-      equivalence: not decided: a call that returns a reference (to a value): v (src/lib.rs:-11)
+      equivalence: MIR changes
   cover: each of the 20 changed line(s) is in a fact
   control flow: 1 body
-    depot::beta (src/lib.rs:19): same structure: 1 changed condition; not decided (a call that returns a reference (to a value): v (src/lib.rs:-11))
+    depot::beta (src/lib.rs:19): same structure: 1 changed condition; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

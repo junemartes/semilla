@@ -60,12 +60,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     ◆ f1 stated: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code equal]
         control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-8, src/lib.rs:8)
         control flow: ~ check `overflow: wrap(c.total + 1) + d.total` → `overflow: wrap2(c.total + 1) + d.total` (src/lib.rs:-8, src/lib.rs:8)
-        equivalence: equivalent (proved by SMT after inlining `depot::wrap`, `depot::wrap2`)
+        equivalence: MIR changes
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::both` (src/lib.rs:8): the full compare: `#[same(depot::both)] fn both_same() {}`; a difference: `#[change(depot::both)] fn both_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart, d_before: &before::depot::Cart, d_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::both)] fn both_different() -> bool { … }`
   not stated: 0 item(s)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::both (src/lib.rs:8): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `depot::wrap`, `depot::wrap2`)
+    depot::both (src/lib.rs:8): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

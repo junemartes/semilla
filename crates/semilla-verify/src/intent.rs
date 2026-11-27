@@ -6,7 +6,7 @@
 //! compiler data of each version and checks it (`semilla_smt::mir::claim`). The result of a
 //! claim is a line of the step: it never changes a fact, a gap, or a compare result.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use semilla_core::{BodyCover, CoverState, IntentClaim, IntentFile, IntentResult};
@@ -186,7 +186,10 @@ pub fn queries(files: &[semilla_intent::File], dry: bool) -> Vec<Query> {
 /// they leave the gap list (R77.1-3).
 pub(crate) fn check(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut StepOutcome) {
     let files = &input.step.agent.intent;
+    // [R84.2-1] A step with no intent file has the coverage too: each changed body is "equal
+    // MIR" or "MIR changes with no claim" with its template.
     if files.is_empty() {
+        outcome.report.coverage = coverage(input, outcome, &[], None);
         return;
     }
     let Ok(parsed) = parse_files(files) else { return };
@@ -244,6 +247,14 @@ fn coverage(input: &StepInput, outcome: &StepOutcome, asked: &[Query], answers: 
         except: bool,
     }
     let mut proved: Vec<Proved> = Vec::new();
+    // [R84.2-1] The bodies of the items that a claim names (each result): a body of such an item
+    // is not "MIR changes with no claim".
+    let mut claimed: BTreeSet<String> = BTreeSet::new();
+    for (at, _) in asked.iter().enumerate() {
+        if let Some(answer) = answers.and_then(|answers| answers.get(at)) {
+            claimed.extend(answer.items.iter().map(|name| flow_name(name, &renames, &names)));
+        }
+    }
     for (at, query) in asked.iter().enumerate() {
         let answer = answers.and_then(|answers| answers.get(at));
         // [R80.3-2] A claim on a scope with a claimed item: each proved item explains its bodies.
@@ -259,11 +270,19 @@ fn coverage(input: &StepInput, outcome: &StepOutcome, asked: &[Query], answers: 
         proved.push(Proved { id: &query.id, kind: query.claim.kind, explains, items, except: !query.claim.options.except.is_empty() });
     }
     let index = crate::checks::BodyIndex::new(&outcome.bodies, input.after, input.before);
+    let claimed_items: BTreeSet<String> = claimed.iter().map(|name| index.item_of_name(name).unwrap_or_else(|| name.clone())).collect();
+    let mut templates: BTreeMap<String, String> = BTreeMap::new();
     let mut out = Vec::new();
     for body in &flow.bodies {
         // [R79.7-1] The map is a review aid, not a gate of the proof: the state of the body comes
         // from the proof alone, and the fact of the map stands next to it.
         let item = index.item_of_name(&body.name).unwrap_or_else(|| body.name.clone());
+        // G4: a nested body (a closure, a constant block) is a part of its item: the template
+        // of the item covers it.
+        let item = match item.split_once("::{") {
+            Some((owner, _)) if !owner.is_empty() => owner.to_string(),
+            _ => item,
+        };
         let map = if outcome.not_mapped.contains(&item) {
             let count = outcome.report.ast.as_ref().map(|map| map.entries.iter().filter(|entry| entry.state == semilla_core::AstState::NotMapped && entry.at.split('/').next() == Some(item.as_str())).count()).unwrap_or(0);
             if count == 0 { "a node of its item is not mapped (complete the intent file)".to_string() } else { format!("{count} node(s) of its item not mapped (complete the intent file)") }
@@ -301,8 +320,20 @@ fn coverage(input: &StepInput, outcome: &StepOutcome, asked: &[Query], answers: 
             (CoverState::Claim, explaining, String::new())
         } else if equivalent {
             (CoverState::Equivalent, Vec::new(), String::new())
-        } else {
+        } else if claimed.contains(&body.name) || claimed_items.contains(&item) {
             (CoverState::NotExplained, Vec::new(), semilla)
+        } else {
+            // [R84.2-1] One line with the body and a claim template (design 84).
+            let template = match templates.get(&item) {
+                Some(first) => format!("the template of `{first}` covers its item `{item}`"),
+                None => {
+                    templates.insert(item.clone(), body.name.clone());
+                    body_template(input, outcome, &renames, &item, body)
+                }
+            };
+            let cause = if body.line.starts_with("graph added") || body.line.starts_with("graph removed") { String::new() } else if verdicts.is_empty() { semilla } else { crate::equiv::joined(&verdicts, false, false).trim_start_matches("MIR changes").trim_start_matches(": ").to_string() };
+            let detail = if cause.is_empty() { template } else { format!("{cause}; {template}") };
+            (CoverState::NoClaim, Vec::new(), detail)
         };
         out.push(BodyCover { name: body.name.clone(), place: body.place.clone(), state, claims, detail, map });
     }
@@ -327,7 +358,6 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
         }
     };
     let renames: BTreeMap<String, String> = outcome.renames.items.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
-    help_notes(input, &renames, outcome);
     let (asked, answers) = match outcome.intent_answers.take() {
         Some(found) => found,
         None => {
@@ -456,64 +486,95 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
     outcome.report.intent_claims = claims;
 }
 
-/// [R67.6-1] The help for a body whose equivalence check gives "not decided" (design 67, part
-/// E): a cause that a property claim can close (the parameters or the return type change)
-/// gives the two signatures and a template of a `#[same]` claim; a cause that no claim of
-/// this batch can close says so. Only a step with an intent file gets the help: a step with no
-/// intent file keeps its output.
-fn help_notes(input: &StepInput, renames: &BTreeMap<String, String>, outcome: &mut StepOutcome) {
-    let Some(flow) = &outcome.report.flow else { return };
-    let index = crate::checks::BodyIndex::new(&outcome.bodies, input.after, input.before);
-    // [R77.3-4] The path of a type of the crate by its name, for the template: the one struct,
-    // enum, or type alias of the old version with that name.
-    let type_path = |name: &str| -> Option<String> {
-        let found: Vec<&String> = input.before.items.iter().filter(|(path, item)| matches!(item.kind, semilla_syntax::ItemKind::Struct | semilla_syntax::ItemKind::Enum | semilla_syntax::ItemKind::Type) && path.rsplit("::").next() == Some(name)).map(|(path, _)| path).collect();
-        (found.len() == 1).then(|| found[0].clone())
-    };
-    let mut notes = Vec::new();
-    for body in &flow.bodies {
-        let line = &body.line;
-        // [R77.3-4] The causes come from the results of the body (each configuration), not from
-        // the text of its line; the item comes from the name of the body (the compiler name).
-        let causes: Vec<String> = outcome.verdicts.get(&body.name).into_iter().flatten().filter_map(|(_, verdict)| match verdict {
-            Verdict::NotDecided(cause) => Some(cause.clone()),
-            _ => None,
-        }).collect();
-        let has = |text: &str| causes.iter().any(|cause| cause.starts_with(text)) || line.contains(&format!("not decided ({text})"));
-        let item = index.item_of_name(&body.name).unwrap_or_else(|| body.name.clone());
-        let reverse = renames.iter().find(|(_, new)| **new == item).map(|(old, _)| old.clone()).unwrap_or_else(|| item.clone());
-        let signature = |workspace: &semilla_syntax::Workspace, path: &str| workspace.items.get(path).map(|item| item.signature.split_whitespace().collect::<Vec<_>>().join(" "));
-        if has("the parameters change") || has("the return type changes") {
-            let cause = if has("the parameters change") { "the parameters change" } else { "the return type changes" };
-            let (Some(old), Some(new)) = (signature(input.before, &reverse), signature(input.after, &item)) else {
-                notes.push(format!("intent help for `{}`: the equivalence check cannot compare the two versions ({cause}); Semilla has no signature of the item `{item}` in the two versions, so it gives no template", body.name));
-                continue;
-            };
-            // [R69.5-3] The note names the part that changes. Two equal signature texts: a type
-            // of the signature (or the type of `self`) changes its definition.
-            let change = if old == new {
-                let types = changed_types(input, &reverse, &item, &new);
-                if types.is_empty() { format!("`{new}` (the same text; a type that it names changes)") } else { format!("`{new}`: {}", types.join("; ")) }
-            } else {
-                format!("`{old}` → `{new}`")
-            };
-            notes.push(format!("intent help for `{}`: the equivalence check cannot compare the two versions ({cause}): {change}. A property claim relates them", body.name));
-            // [R69.5-3] The result is "not decided", so the help is neutral: a template for each
-            // case, each on its own line. [R77.3-4] Each template is a complete claim that
-            // `semilla intent check` accepts.
-            match semilla_intent::parse::same_template(&item, &old, &new, &type_path) {
-                Ok(template) => {
-                    let change_form = template.replacen("#[same(", "#[change(", 1).replacen(")] fn", ", reason = \"…\")] fn", 1);
-                    notes.push(format!("intent help for `{}`: if the behavior does not change: `{template}`", body.name));
-                    notes.push(format!("intent help for `{}`: if it changes: `{change_form}` (a body with the new behavior)", body.name));
-                }
-                Err(cause) => notes.push(format!("intent help for `{}`: no template: {cause}", body.name)),
-            }
-        } else if has("a loop") || causes.iter().any(|cause| cause.contains("has no form") || cause.contains("no form of this body")) || line.contains("not decided (a loop") || line.contains("has no form") || line.contains("no form of this body") {
-            notes.push(format!("intent help for `{}`: no claim of this batch can close this cause (a loop needs the loop relations of batch 10r2; a body with no MIR needs `#[assume]` of batch 10r3)", body.name));
-        }
+/// [R84.2-2] The claim template of a body with "MIR changes" and no claim (design 84): an empty
+/// `#[same(ITEM)]` claim asks for the full compare of the item (design 78), and a `#[change]` or
+/// `#[different]` claim states a difference; the agent writes its body in place of `…`. An item
+/// whose signature changes gets the property form of 13a in place of the empty claim (an empty
+/// claim cannot compare two signatures); an added or a removed body gets `#[new]` or
+/// `#[removed]`. If the AST pass prints a template for a node of the item (R79.5-1), the line
+/// names that node and gives no second copy. Each template passes `semilla intent check` when
+/// the agent fills it in.
+fn body_template(input: &StepInput, outcome: &StepOutcome, renames: &BTreeMap<String, String>, item: &str, body: &semilla_core::report::FlowBody) -> String {
+    // The template of the AST pass for a node of the item, if the pass gives one.
+    let ast = outcome.report.ast.as_ref().and_then(|map| {
+        let at = map.entries.iter().position(|entry| entry.state == semilla_core::AstState::NotMapped && entry.at.split('/').next() == Some(item) && !entry.template.is_empty() && !entry.template.starts_with("no template"))?;
+        Some(format!("the claim template of the node n{} of the AST map ({})", at + 1, semilla_core::budget::step_text_command(outcome.report.step)))
+    });
+    if item.contains(" (bin \"") {
+        return "no template: the item is in a binary target, and the intent crate links the libraries only (design 78)".into();
     }
-    outcome.report.notes.extend(notes);
+    // R79.3-2: no claim names test, bench, or example code (the intent crate links the libraries).
+    if crate::astmap::test_code(input.after, item) || crate::astmap::test_code(input.before, item) {
+        return "no template: test, bench, or example code (the intent crate links the libraries only, design 78)".into();
+    }
+    let reverse = renames.iter().find(|(_, new)| new.as_str() == item).map(|(old, _)| old.clone()).unwrap_or_else(|| item.to_string());
+    let found = [input.before.items.get(&reverse), input.after.items.get(item)];
+    // An item of a trait impl: the record name of the body is its qualified path.
+    let path = if item.contains('<') && !item.contains(" (") { body.name.split("::{").next().unwrap_or(&body.name).to_string() } else { item.to_string() };
+    if path.contains(" (") || path.contains('#') || path.contains('!') || path.contains('{') || !(path.contains("::") || path.starts_with('<')) {
+        return ast.unwrap_or_else(|| format!("no template: `{path}` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library)"));
+    }
+    let short: String = path.rsplit("::").next().unwrap_or(&path).chars().map(|c| if c.is_alphanumeric() || c == '_' { c.to_ascii_lowercase() } else { '_' }).collect();
+    // The path of a type of the crate by its name: of the struct, enum, and type alias items with
+    // that name, the one in the nearest module of the item (the old tree first; a type that the
+    // step adds is in the new tree only).
+    let type_path = |name: &str| -> Option<String> {
+        let of = |tree: &semilla_syntax::Workspace| -> Option<String> {
+            let found: Vec<&String> = tree.items.iter().filter(|(path, item)| matches!(item.kind, semilla_syntax::ItemKind::Struct | semilla_syntax::ItemKind::Enum | semilla_syntax::ItemKind::Type) && path.rsplit("::").next() == Some(name)).map(|(path, _)| path).collect();
+            let mut module = item;
+            while let Some((outer, _)) = module.rsplit_once("::") {
+                let near: Vec<&&String> = found.iter().filter(|path| path.as_str() == format!("{outer}::{name}")).collect();
+                if near.len() == 1 {
+                    return Some(near[0].to_string());
+                }
+                module = outer;
+            }
+            (found.len() == 1).then(|| found[0].clone())
+        };
+        of(input.before).or_else(|| of(input.after))
+    };
+    let signature = |item: &semilla_syntax::Item| item.signature.split_whitespace().collect::<Vec<_>>().join(" ");
+    let is_fn = |item: Option<&semilla_syntax::Item>| item.is_some_and(|item| item.kind == semilla_syntax::ItemKind::Fn);
+    let state = format!("`#[change({path})] fn {short}_change() -> bool {{ … }}` or `#[different({path})] fn {short}_different() -> bool {{ … }}`");
+    let full = |difference: &str| format!("the full compare: `#[same({path})] fn {short}_same() {{}}`; a difference: {difference}");
+    // The part that changes (R69.5-3), and the own template of the line.
+    let (what, own): (String, String) = match (found[0], found[1]) {
+        (Some(a), Some(b)) if is_fn(Some(a)) && is_fn(Some(b)) && !path.starts_with('<') => {
+            let (old, new) = (signature(a), signature(b));
+            // [R69.5-3] Two equal signature texts: a type of the signature (or the type of
+            // `self`) can change its definition.
+            let types = if old == new { changed_types(input, &reverse, item, &new) } else { Vec::new() };
+            let what = if old != new {
+                format!("the signature changes (`{old}` → `{new}`)")
+            } else if !types.is_empty() {
+                format!("a type of the signature changes ({})", types.join("; "))
+            } else {
+                String::new()
+            };
+            let own = if what.is_empty() {
+                // A change form with the parameters of the item: the template of 13a with the
+                // body of the agent.
+                let change = semilla_intent::parse::same_template(&path, &old, &new, &type_path).ok().and_then(|text| {
+                    let head = &text[..text.find(" -> bool {")?];
+                    let params = &head[head.find('(').map(|at| at + 1).and_then(|at| head[at..].find('(').map(|next| at + next))?..];
+                    Some(format!("`#[change({path})] fn {short}_change{params} -> bool {{ … }}` or `#[different({path})] fn {short}_different() -> bool {{ … }}`"))
+                });
+                full(&change.unwrap_or(state))
+            } else {
+                // An empty claim cannot compare two signatures: the property form of 13a.
+                match semilla_intent::parse::same_template(&path, &old, &new, &type_path) {
+                    Ok(template) => format!("`{template}`; a difference: {state}"),
+                    Err(cause) => format!("no property template ({cause}); a difference: {state}"),
+                }
+            };
+            (what, own)
+        }
+        (None, Some(b)) if is_fn(Some(b)) => ("an added body".into(), semilla_intent::parse::version_template("new", &path, &signature(b), &type_path).map(|text| format!("`{text}`")).unwrap_or_else(|cause| format!("no template: {cause}"))),
+        (Some(a), None) if is_fn(Some(a)) => ("a removed body".into(), semilla_intent::parse::version_template("removed", &reverse, &signature(a), &type_path).map(|text| format!("`{text}`")).unwrap_or_else(|cause| format!("no template: {cause}"))),
+        _ => (String::new(), full(&state)),
+    };
+    let tail = ast.unwrap_or(own);
+    if what.is_empty() { tail } else { format!("{what}: {tail}") }
 }
 
 /// [R69.5-3] The types that a signature names (and the type of `self` of a method) whose
@@ -596,10 +657,13 @@ pub fn semantic_lines(step: &semilla_core::StepReport, limit: Option<usize>) -> 
         // output has its coverage line; the full text lists each node.
         let Some(map) = &step.ast else { return Vec::new() };
         if limit.is_some() {
-            return vec![format!("  {} (no intent file; the full text of the step lists each node)", map.line())];
+            let mut lines = vec![format!("  {} (no intent file; the full text of the step lists each node)", map.line())];
+            lines.extend(cover_lines(step, limit, "  "));
+            return lines;
         }
-        let mut lines = vec!["  semantic changes (no intent file: the map of the AST pass):".to_string()];
+        let mut lines = vec!["  semantic changes (no intent file: the map of the AST pass and the equal-MIR check):".to_string()];
         lines.extend(crate::astmap::lines(map, None, step.step));
+        lines.extend(cover_lines(step, None, "    "));
         return lines;
     }
     let mut lines = vec!["  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):".to_string()];
@@ -625,22 +689,36 @@ pub fn semantic_lines(step: &semilla_core::StepReport, limit: Option<usize>) -> 
         lines.push(format!("    changed bodies: {cause}"));
         return lines;
     }
-    lines.push(format!("    {}", semilla_core::report::coverage_line(&step.coverage)));
+    lines.extend(cover_lines(step, limit, "    "));
+    lines
+}
+
+/// [R84.6-1] The coverage line of the changed bodies and the line of each body (design 84), the
+/// worst state first. With `limit`, the first lines (each disagreement) and a count.
+fn cover_lines(step: &semilla_core::StepReport, limit: Option<usize>, indent: &str) -> Vec<String> {
+    if step.coverage.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![format!("{indent}{}", semilla_core::report::coverage_line(&step.coverage))];
     let rank = |state: CoverState| match state {
         CoverState::Disagree => 0,
         CoverState::NotExplained => 1,
-        CoverState::Claim => 2,
-        CoverState::Equivalent => 3,
+        CoverState::NoClaim => 2,
+        CoverState::Claim => 3,
+        CoverState::Equivalent => 4,
     };
     let mut bodies: Vec<&BodyCover> = step.coverage.iter().collect();
     bodies.sort_by_key(|body| rank(body.state));
     let shown = limit.map(|most| most.max(bodies.iter().filter(|body| body.state == CoverState::Disagree).count())).unwrap_or(bodies.len());
+    // R76.1-1: a long line of the short output is cut, and it names the full text of the step.
+    let command = semilla_core::budget::step_text_command(step.step);
     for body in bodies.iter().take(shown) {
         let mark = if body.state == CoverState::Disagree { "✗ " } else { "" };
-        lines.push(format!("      {mark}{}", body.line()));
+        let line = format!("{indent}  {mark}{}", body.line());
+        lines.push(if limit.is_some() { crate::views::fit_line(&line, &command) } else { line });
     }
     if bodies.len() > shown {
-        lines.push(format!("      … {} more (semilla status --verbose)", bodies.len() - shown));
+        lines.push(format!("{indent}  … {} more (semilla status --verbose)", bodies.len() - shown));
     }
     lines
 }

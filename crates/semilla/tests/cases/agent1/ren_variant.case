@@ -62,6 +62,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
         control flow: − arrow branch `m` (src/lib.rs:-16) → return (src/lib.rs:-16) (depot::Mode::Idle)
     ◆ f2 stated: public API: `depot::Mode::Idle` is now `depot::Mode::Rest` (a different crate can no longer use the old path) [rename · no code]
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
+    equal MIR: `depot::mode_name` (src/lib.rs:16)
   not stated: 0 item(s)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body

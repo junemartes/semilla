@@ -30,12 +30,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
         control flow: + arrow entry (src/lib.rs:1) → check `overflow: a + b` (src/lib.rs:2)
         control flow: + arrow check `overflow: a + b` (src/lib.rs:2) → check `overflow: a + b` (src/lib.rs:2) (ok)
         control flow: … 4 more (semilla expand --step 0)
-        equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`, `std::cmp::min::<u32>`)
+        equivalence: MIR changes
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::g` (src/lib.rs:1): the full compare: `#[same(shop::g)] fn g_same() {}`; a difference: `#[change(shop::g)] fn g_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::g)] fn g_different() -> bool { … }`
   not stated: 0 item(s)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::g (src/lib.rs:1): graph changes: 1 changed call target, +3 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`, `std::cmp::min::<u32>`)
+    shop::g (src/lib.rs:1): graph changes: 1 changed call target, +3 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

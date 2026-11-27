@@ -30,32 +30,20 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error: a and b
   ! features that no checked configuration enables: `shop/a`, `shop/b`; no result covers the code or the dependencies that they enable
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::base` (src/lib.rs:5): the full compare: `#[same(shop::base)] fn base_same() {}`; a difference: `#[change(shop::base)] fn base_change() -> bool { … }` or `#[different(shop::base)] fn base_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `3` → `30` (f1)
       in: shop::base
       lines: src/lib.rs:5, src/lib.rs:-5
-      to state it: --change 'shop::base=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::base=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::base=TEXT'; if it does not change, --same 'rewrite 3 => 30'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `3` → `30` at `shop::base/tail` [semantics · code different]
       affected bodies: shop::base
-      equivalence: different: for each input: before returns 3, after returns 30 (suggested test `semilla_test_base_876fbb`)
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::base (src/lib.rs:5): same graph (the edit keeps the control flow); different (for each input: before returns 3, after returns 30; suggested test `semilla_test_base_876fbb`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_base_876fbb`: add it to `src/lib.rs`, in the module of `shop::base` (line 5); run it: `cargo test -p shop semilla_test_base_876fbb`; also: `cargo test -p shop --release semilla_test_base_876fbb`
-      #[cfg(test)]
-      mod semilla_test_base_876fbb {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 3; the new version returns 30.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let got = crate::base();
-              assert_eq!(got, 3);
-          }
-      }
+    shop::base (src/lib.rs:5): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

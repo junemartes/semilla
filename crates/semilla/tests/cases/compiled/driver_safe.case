@@ -163,6 +163,15 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 7 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 8 MIR changes with no claim
+    MIR changes with no claim: `shop::bits` (src/lib.rs:46): the full compare: `#[same(shop::bits)] fn bits_same() {}`; a difference: `#[change(shop::bits)] fn bits_change(x: u32) -> bool { … }` or `#[different(shop::bits)] fn bits_different() -> bool { … }`
+    MIR changes with no claim: `shop::copy_one` (src/lib.rs:50): the full compare: `#[same(shop::copy_one)] fn copy_one_same() {}`; a difference: `#[change(shop::copy_one)] fn copy_one_change(a: &[u8; 4], mut b_before: [u8; 4], mut b_after: [u8; 4]) -> bool { … }` or `#[different(shop::copy_one)] fn copy_one_different() -> bool { … }`
+    MIR changes with no claim: `shop::first` (src/lib.rs:55): the full compare: `#[same(shop::first)] fn first_same() {}`; a difference: `#[change(shop::first)] fn first_change() -> bool { … }` or `#[different(shop::first)] fn first_different() -> bool { … }`
+    MIR changes with no claim: `shop::later` (src/lib.rs:69): the same MIR text; a changed callee: `shop::later::{closure#0}`; the full compare: `#[same(shop::later)] fn later_same() {}`; a difference: `#[change(shop::later)] fn later_change(x: u32) -> bool { … }` or `#[different(shop::later)] fn later_different() -> bool { … }`
+    MIR changes with no claim: `shop::later::{closure#0} { x + 2 }` (src/lib.rs:69): the template of `shop::later` covers its item `shop::later`
+    MIR changes with no claim: `shop::run_later` (src/lib.rs:73): the full compare: `#[same(shop::run_later)] fn run_later_same() {}`; a difference: `#[change(shop::run_later)] fn run_later_change() -> bool { … }` or `#[different(shop::run_later)] fn run_later_different() -> bool { … }`
+    MIR changes with no claim: `shop::talk` (src/lib.rs:42): the full compare: `#[same(shop::talk)] fn talk_same() {}`; a difference: `#[change(shop::talk)] fn talk_change() -> bool { … }` or `#[different(shop::talk)] fn talk_different() -> bool { … }`
+    MIR changes with no claim: `shop::wrap` (src/lib.rs:59): the full compare: `#[same(shop::wrap)] fn wrap_same() {}`; a difference: `#[change(shop::wrap)] fn wrap_change() -> bool { … }` or `#[different(shop::wrap)] fn wrap_different() -> bool { … }`
   not stated: 7 item(s) with 7 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 7 places: changed literal `1` → `2` (f1)
       in: shop::bits, shop::copy_one, shop::first, shop::later, shop::run_later, shop::talk, shop::wrap
@@ -176,28 +185,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: ~ check `overflow: b[0] + 1 as u8` → `overflow: b[0] + 2 as u8` (src/lib.rs:-52, src/lib.rs:52)
       control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-70, src/lib.rs:70)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: `shop::bits`: not decided: the difference depends on the result of a call or on a value that the check does not model
-      equivalence: `shop::copy_one`: not decided: a raw pointer
-      equivalence: `shop::first`: different: for it = a value: before returns (a value, 1), after returns (a value, 2) (no suggested test: the input `it` has no Rust form: an input of the type `I` has no value in the model)
-      equivalence: `shop::later`: not decided: a coroutine value: { x + 1 } (src/lib.rs:-69)
-      equivalence: `shop::later::{closure#0} { x + 2 }`: not decided: a coroutine body
-      equivalence: `shop::run_later`: not decided: a coroutine value: { x + 1 } (src/lib.rs:-69)
-      equivalence: `shop::talk`: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
-      equivalence: `shop::wrap`: not decided: a value of a type that the compiler does not normalize here: Some(base.make()) (src/lib.rs:-60)
-      reaches: 1 public function: shop::use_all (semilla expand --step 0); `shop::later::{closure#0} { x + 2 }`: 1 public function: shop::later (semilla expand --step 0)
+      equivalence: `shop::bits`: MIR changes
+      equivalence: `shop::copy_one`: MIR changes
+      equivalence: `shop::first`: MIR changes
+      equivalence: `shop::later`: MIR changes: the same MIR text; a changed callee: `shop::later::{closure#0}`
+      equivalence: `shop::later::{closure#0} { x + 2 }`: MIR changes
+      equivalence: `shop::run_later`: MIR changes
+      equivalence: `shop::talk`: MIR changes
+      equivalence: `shop::wrap`: MIR changes
   cover: each of the 14 changed line(s) is in a fact
   control flow: 8 bodies
-    shop::bits (src/lib.rs:46): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (the difference depends on the result of a call or on a value that the check does not model)
-    shop::copy_one (src/lib.rs:50): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a raw pointer)
-    shop::first (src/lib.rs:55): same graph (the edit keeps the control flow); different (for it = a value: before returns (a value, 1), after returns (a value, 2); no suggested test: the input `it` has no Rust form: an input of the type `I` has no value in the model)
-    shop::later (src/lib.rs:69): same graph; not decided (a coroutine value: { x + 1 } (src/lib.rs:-69))
-    shop::later::{closure#0} { x + 2 } (src/lib.rs:69): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a coroutine body)
-    shop::run_later (src/lib.rs:73): same graph (the edit keeps the control flow); not decided (a coroutine value: { x + 1 } (src/lib.rs:-69))
-    shop::talk (src/lib.rs:42): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))
-    shop::wrap (src/lib.rs:59): same graph (the edit keeps the control flow); not decided (a value of a type that the compiler does not normalize here: Some(base.make()) (src/lib.rs:-60))
-    reached bodies: 2
-      shop::later (src/lib.rs:69): reached through shop::later::{closure#0}, not decided (a coroutine value: { x + 1 } (src/lib.rs:-69))
-      shop::use_all (src/lib.rs:64): reached through shop::first, shop::talk, shop::wrap, not decided (a cast (PointerCoercion(Unsize)): &Dog (src/lib.rs:-66))
+    shop::bits (src/lib.rs:46): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::copy_one (src/lib.rs:50): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::first (src/lib.rs:55): same graph (the edit keeps the control flow); MIR changes
+    shop::later (src/lib.rs:69): same graph; MIR changes (the same MIR text; a changed callee: `shop::later::{closure#0}`)
+    shop::later::{closure#0} { x + 2 } (src/lib.rs:69): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::run_later (src/lib.rs:73): same graph (the edit keeps the control flow); MIR changes
+    shop::talk (src/lib.rs:42): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
+    shop::wrap (src/lib.rs:59): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

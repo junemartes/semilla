@@ -4,9 +4,8 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use semilla_core::Step;
-use semilla_core::report::Effect;
 use semilla_normal::cargo::{Configuration, Features};
-use semilla_verify::{BodyComparison, BodyOracle, BodyStatus, EffectCheck, ExprOracle};
+use semilla_verify::{BodyComparison, BodyOracle, BodyStatus};
 
 use crate::git::Repo;
 
@@ -1292,18 +1291,9 @@ fn variant_order(queries: &[semilla_verify::equiv::Query], rank: &dyn Fn(&str) -
 /// [R77.2-1] The safety time limit of one solver query of the equivalence check (design 61, C8):
 /// the result of a query comes from its limit in solver steps.
 pub(crate) const EQUIV_TIMEOUT: std::time::Duration = semilla_smt::budget::SAFETY_QUERY;
-/// The budget of the equivalence check of one step: the most solver queries, and the most solver
-/// steps (R77.2-2).
-const EQUIV_QUERIES: usize = 400;
-
-/// The query budget of a step: `EQUIV_QUERIES`, or `SEMILLA_EQUIV_QUERIES=N` (for a test of the
-/// budget).
-fn equiv_queries() -> usize {
-    std::env::var("SEMILLA_EQUIV_QUERIES").ok().and_then(|text| text.trim().parse::<usize>().ok()).unwrap_or(EQUIV_QUERIES)
-}
-/// [R77.2-2] The budget of the equivalence check of a step in solver steps (the body checks of the
-/// step and of the variants, in their order), or `SEMILLA_EQUIV_BUDGET=STEPS` (for a test of the
-/// budget).
+/// [R77.2-2] The budget in solver steps of the walk that the claims of a step use (design 61.10),
+/// or `SEMILLA_EQUIV_BUDGET=STEPS` (for a test of the budget). [R84.1-1] The equal-MIR check of a
+/// body with no claim has no budget: it starts no solver.
 pub(crate) const EQUIV_STEPS: u64 = 200_000_000;
 /// [R77.2-2] The budget of one body check in solver steps (R66.9-2 in solver steps).
 pub(crate) const BODY_STEPS: u64 = 60_000_000;
@@ -1513,25 +1503,31 @@ fn changed_callees(a: &semilla_normal::BodyRecord, b: &semilla_normal::BodyRecor
     found.into_iter().collect()
 }
 
-impl NormalOracle {
-    /// Checks one query of the equivalence check (design 61). `old` and `new` are the records of
-    /// the two sides of the configuration. `reach` is the walk of the configuration: the set of
-    /// the bodies to inline and the trait methods of the impl methods.
-    #[allow(clippy::too_many_arguments)]
-    fn equivalence_one(&self, solver: &semilla_smt::Solver, query: &semilla_verify::equiv::Query, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], renamed: bool, reach: &reach::ConfigReach, budget: Option<semilla_smt::budget::Budget>) -> Option<semilla_verify::equiv::Answer> {
-        let a = old.find(&query.old.0, &query.old.1, "")?;
-        let b = new.find(&query.new.0, &query.new.1, &a.unit)?;
-        let rename_text = |text: &str| if renamed { semilla_normal::paths::rename(text, renames) } else { text.to_string() };
-        let callees = changed_callees(a, b, &reach.must_inline, &reach.trait_methods, &rename_text);
-        // An equal MIR text at N0 is a proof with no solver only if no callee changes: else the
-        // body-local result has its own name, and the check inlines each changed callee.
-        let mut answer = self.check_pair(solver, a, b, old, new, renames, renamed, &reach.must_inline, callees.is_empty(), budget)?;
-        if !callees.is_empty() && rename_text(&a.text) == b.text {
-            answer.local = Some(format!("same body code; changed callee: {}", callees.join(", ")));
-        }
-        Some(answer)
-    }
+/// [R84.1-1] The equal-MIR check of one query (design 84): the two records are equal if the N0
+/// texts are equal after the rename map of the step, no callee is in the closure of the changed
+/// bodies (R84.1-2), and each constant that the texts name by its path has the same values
+/// (R64.5-2). No solver and no budget: the result is "equal MIR" or "MIR changes".
+fn equal_mir(query: &semilla_verify::equiv::Query, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], renamed: bool, closure: &reach::ConfigReach) -> Option<semilla_verify::equiv::Answer> {
+    use semilla_verify::equiv::{Answer, Verdict};
+    let a = old.find(&query.old.0, &query.old.1, "")?;
+    let b = new.find(&query.new.0, &query.new.1, &a.unit)?;
+    let rename_text = |text: &str| if renamed { semilla_normal::paths::rename(text, renames) } else { text.to_string() };
+    let callees = changed_callees(a, b, &closure.must_inline, &closure.trait_methods, &rename_text);
+    let consts = changed_consts(Some(&a.cv), Some(&b.cv));
+    let quoted = |list: Vec<String>| list.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
+    let verdict = if rename_text(&a.text) != b.text {
+        Verdict::MirChanges(String::new())
+    } else if !callees.is_empty() {
+        Verdict::MirChanges(format!("the same MIR text; a changed callee: {}", quoted(callees)))
+    } else if !consts.is_empty() {
+        Verdict::MirChanges(format!("the same MIR text; a constant that it names changes or has no value to compare: {}", quoted(consts.into_iter().map(|(path, _, _)| path).collect())))
+    } else {
+        Verdict::Equivalent("equal MIR".into())
+    };
+    Some(Answer { verdict, inlined: Vec::new(), queries: 0, millis: 0, local: None })
+}
 
+impl NormalOracle {
     /// Checks two records with each body of `changed` inlined. `equal_proof`: an equal MIR text
     /// at N0 is a proof (only for a body with no changed callee).
     #[allow(clippy::too_many_arguments)]
@@ -1787,236 +1783,93 @@ impl BodyOracle for NormalOracle {
 
     fn equivalence(&self, step: &Step, renames: &BTreeMap<String, String>, queries: &[semilla_verify::equiv::Query]) -> Vec<Option<semilla_verify::equiv::Answer>> {
         use semilla_verify::equiv::{Answer, Verdict};
-        let Ok(solver) = semilla_smt::Solver::find_for(&crate::store::tool_dirs(&self.repo.root), Some(&self.repo.root)) else {
-            return queries.iter().map(|_| Some(Answer { verdict: Verdict::NotDecided("no SMT solver".into()), inlined: Vec::new(), queries: 0, millis: 0, local: None })).collect();
-        };
-        let solver = solver.with_timeout(EQUIV_TIMEOUT);
+        // [R84.1-1] The equal-MIR check of each changed body (design 84): the compare of the MIR
+        // texts of the two versions after the normal forms that need no solver. It starts no
+        // solver process and has no budget in solver steps. Only a claim of an intent file runs
+        // the full compare (the tries with the solver, design 78).
         let Ok(checked) = self.checked(step) else { return vec![None; queries.len()] };
         let renames: Vec<(String, String)> = renames.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
-        // [R77.2-2] One budget in solver steps for the body checks of the step and of the
-        // variants, and the query budget. A job is the check of one query; its result and its
-        // cost (solver steps and queries) depend only on the trees, never on the order of the
-        // threads. The jobs have one order (the bodies of the step, then the variants): a job gets
-        // its own result only if the jobs before it in the order used less than each budget; else
-        // it gets the result past the budget (R66.10-5: a proof by two equal MIR texts, else "not
-        // checked (the budget of the step)"). So the same trees give the same results on each
-        // machine and at each load. [R77.2-3] The safety time limit stops the rest of the work
-        // with its own cause.
-        let step_steps = equiv_steps();
-        let queries_limit = equiv_queries();
         let started = std::time::Instant::now();
         let safety = started + SAFETY_STEP;
-        let threads = std::thread::available_parallelism().map(|count| count.get()).unwrap_or(4).clamp(1, 8);
-        type Walks = Option<std::sync::Arc<Vec<(String, reach::ConfigReach)>>>;
-        // The cost of each job: the solver steps and the queries (`None` until it ends).
-        type Cost = (u64, usize);
-        // The prefix rule: the sum of the known costs of the jobs before a position.
-        let over = |costs: &[Option<Cost>], at: usize| -> bool {
-            let (steps, count) = costs[..at].iter().flatten().fold((0u64, 0usize), |(a, b), (x, y)| (a.saturating_add(*x), b + y));
-            steps >= step_steps || count > queries_limit
-        };
-        // Runs the checks of some queries in up to 8 threads. `variant`: the records of the
-        // variant tree of the queries. `walks`: the walk of each configuration (design 61.10),
-        // for the queries of the step. `order`: the position of each job in the order of the
-        // step; `costs`: the cost of each position. Each job gives its answer, its cost, and true
-        // if it ran past the budget.
-        let run = |jobs: &[(usize, usize)], variant: Option<&[semilla_normal::BodyRecord]>, walks: &Walks, costs: &std::sync::Mutex<Vec<Option<Cost>>>| -> Vec<(usize, Option<Answer>, bool)> {
-            let walk_of = |config: &str| walks.as_ref().and_then(|walks| walks.iter().find(|(name, _)| name == config).map(|(_, reach)| reach.clone()));
-            let next = std::sync::atomic::AtomicUsize::new(0);
-            let results: std::sync::Mutex<Vec<(usize, Option<Answer>, bool)>> = std::sync::Mutex::new(Vec::new());
-            // The changed bodies of the variant (one variant tree for each call).
-            let changed: std::sync::OnceLock<reach::ConfigReach> = std::sync::OnceLock::new();
-            std::thread::scope(|scope| {
-                for _ in 0..threads.min(jobs.len().max(1)) {
-                    scope.spawn(|| loop {
-                        let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some((index, position)) = jobs.get(at).copied() else { break };
-                        let query = &queries[index];
-                        // R66.10-5: past the budget (the known costs before this position use
-                        // it), a check still gives the proof of two equal MIR texts (no solver).
-                        let late = over(&costs.lock().unwrap_or_else(|error| error.into_inner()), position);
-                        let budget = if late { semilla_smt::budget::Budget::with_safety(0, Some(safety)) } else { body_budget(step_steps, safety) };
-                        let before = semilla_smt::budget::used();
-                        let answer = {
-                            let config = checked.iter().find(|config| config.name() == query.config);
-                            let sides = config.and_then(|config| self.sides(step, config).ok());
-                            sides.and_then(|sides| {
-                                let empty = Vec::new();
-                                let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
-                                match variant {
-                                    None => {
-                                        let new = EquivSide::new(sides.after.get("n0").unwrap_or(&empty));
-                                        let walk = walk_of(&query.config).unwrap_or_else(|| reach::ConfigReach { must_inline: std::sync::Arc::new(changed_names(&old, &new, &renames)), ..Default::default() });
-                                        self.equivalence_one(&solver, query, &old, &new, &renames, true, &walk, Some(budget))
-                                    }
-                                    Some(records) => {
-                                        let new = EquivSide::new(records);
-                                        let walk = changed.get_or_init(|| reach::ConfigReach { must_inline: std::sync::Arc::new(changed_names(&old, &new, &[])), ..Default::default() });
-                                        self.equivalence_one(&solver, query, &old, &new, &[], false, walk, Some(budget))
-                                    }
-                                }
-                            })
-                        };
-                        let cost = (semilla_smt::budget::used() - before, answer.as_ref().map(|answer| answer.queries).unwrap_or(0));
-                        costs.lock().unwrap_or_else(|error| error.into_inner())[position] = Some(cost);
-                        results.lock().unwrap_or_else(|error| error.into_inner()).push((index, answer, late));
-                    });
-                }
-            });
-            results.into_inner().unwrap_or_else(|error| error.into_inner())
-        };
-        // The order of the value (R61.14-5): first each check that needs no build (each body of
-        // the step), then the variants of the facts.
-        // The bodies in the first configuration come first: a stop of the budget leaves a result
-        // of each body in at least one configuration when it can.
-        let rank = |config: &str| checked.iter().position(|known| known.name() == config).unwrap_or(usize::MAX);
-        let mut plain: Vec<usize> = (0..queries.len()).filter(|index| queries[*index].variant.is_none()).collect();
-        plain.sort_by_key(|index| (rank(&queries[*index].config), *index));
-        let keys = variant_order(queries, &rank);
-        // The position of each job in the one order: the plain jobs, then the jobs of each variant.
-        let mut order: Vec<usize> = plain.clone();
-        for (_, config_name, files) in &keys {
-            let key = (config_name.clone(), files.clone());
-            order.extend((0..queries.len()).filter(|index| queries[*index].variant.as_ref().is_some_and(|files| query_key(&queries[*index], files) == key)));
-        }
-        let position_of: BTreeMap<usize, usize> = order.iter().enumerate().map(|(position, index)| (*index, position)).collect();
-        let costs: std::sync::Mutex<Vec<Option<Cost>>> = std::sync::Mutex::new(vec![None; order.len()]);
-        let with_positions = |list: Vec<usize>| -> Vec<(usize, usize)> { list.into_iter().map(|index| (index, position_of[&index])).collect() };
-        // A variant changes only files of the step. With the build code of the base in the two
-        // trees of the step, the variant has it too, and it builds in the delta build folder of
-        // the configuration: only the changed crates compile again (R61.14-5).
-        let clean = self.code.clean.contains(&step.tree_before) && self.code.clean.contains(&step.tree_after);
-        let safety_answer = || Some(Answer { verdict: Verdict::NotChecked(semilla_smt::budget::SAFETY_CAUSE.into()), inlined: Vec::new(), queries: 0, millis: 0, local: None });
-        // [R77.2-2] The builds of the variants and their checks, one build at a time. A build is
-        // not a solver step: a count of builds bounds them (`VARIANT_BUILDS`), and the safety time
-        // limit stops them.
-        let variants = || -> Vec<(usize, Option<Answer>, bool)> {
-            let mut out = Vec::new();
-            for (at, (_, config_name, files)) in keys.iter().enumerate() {
-                let key = (config_name.clone(), files.clone());
-                let jobs: Vec<usize> = (0..queries.len()).filter(|index| queries[*index].variant.as_ref().is_some_and(|files| query_key(&queries[*index], files) == key)).collect();
-                let config = checked.iter().find(|config| config.name() == key.0);
-                // [R77.2-2] At most `VARIANT_BUILDS` builds of a variant for each step, in the
-                // order of R66.11-3 (each fact in the first configuration first): a count, so the
-                // same step gets the same results on each machine.
-                if at >= variant_builds() {
-                    out.extend(jobs.into_iter().map(|index| (index, Some(Answer { verdict: Verdict::NotChecked(semilla_verify::equiv::BUDGET_CAUSE.into()), inlined: Vec::new(), queries: 0, millis: 0, local: None }), false)));
-                    continue;
-                }
-                if std::time::Instant::now() >= safety {
-                    out.extend(jobs.into_iter().map(|index| (index, safety_answer(), false)));
-                    continue;
-                }
-                let found = config.filter(|_| clean).and_then(|config| {
-                    let files: BTreeMap<String, Option<String>> = key.1.iter().map(|(path, text)| (path.clone(), Some(text.clone()))).collect();
-                    let tree = self.repo.tree_with(&step.tree_before, &files).ok()?;
-                    self.added.lock().unwrap_or_else(|error| error.into_inner()).variants.insert(tree.clone());
-                    self.records_with(&tree, "n0", config).ok()
-                });
-                match found {
-                    Some(records) => out.extend(run(&with_positions(jobs), Some(&records), &None, &costs).into_iter().map(|(index, answer, late)| (index, answer, late))),
-                    None => out.extend(jobs.into_iter().map(|index| (index, Some(Answer { verdict: Verdict::NotDecided("the variant with only this edit does not compile".into()), inlined: Vec::new(), queries: 0, millis: 0, local: None }), false))),
-                }
-            }
-            crate::timing(&format!("the builds and the checks of {} variants of the equivalence check", keys.len()), started);
-            out
-        };
-        // [R66.11-3] The builds of the variants do not wait for the solver: they run in a thread
-        // next to the walk and the body checks of the step.
-        let (plain_answers, variant_answers, walks) = std::thread::scope(|scope| {
-            let builds = scope.spawn(variants);
-            // The walk of each configuration (design 61.10): the bodies that each check must
-            // inline. It needs no build, so it runs first, with its own budget (R77.2-2).
-            let walks: Walks = self.reach_all(step, &renames.iter().cloned().collect(), reach::WALK_STEPS.min(step_steps));
-            crate::timing("the walk of the equivalence check", started);
-            let found = run(&with_positions(plain.clone()), None, &walks, &costs);
-            crate::timing(&format!("the walk and {} body checks of the equivalence check", plain.len()), started);
-            (found, builds.join().unwrap_or_default(), walks)
-        });
-        // [R77.2-2] The prefix rule after each job ended: a job that ran with its own budget, but
-        // that the costs of the jobs before it put past a budget, gets the result past the budget
-        // (each cost is known now, so the result does not depend on the threads).
-        let costs = costs.into_inner().unwrap_or_else(|error| error.into_inner());
+        let answer = |verdict: Verdict| Some(Answer { verdict, inlined: Vec::new(), queries: 0, millis: 0, local: None });
         let mut answers: Vec<Option<Answer>> = vec![None; queries.len()];
-        for (index, answer, late) in plain_answers.into_iter().chain(variant_answers) {
-            let position = position_of.get(&index).copied();
-            let past = position.is_some_and(|position| over(&costs, position));
-            let answer = match (past, late, answer) {
-                // The result past the budget is the result of `check_pair` with a budget of 0: the
-                // proof by two equal MIR texts (the first test of `check_pair`), else "not checked".
-                (true, false, Some(answer)) if !matches!(&answer.verdict, Verdict::NotChecked(cause) if cause == semilla_smt::budget::SAFETY_CAUSE) => Some(if matches!(&answer.verdict, Verdict::Equivalent(method) if method == "equal MIR") {
-                    answer
-                } else {
-                    Answer { verdict: Verdict::NotChecked(semilla_verify::equiv::BUDGET_CAUSE.into()), inlined: Vec::new(), queries: 0, millis: 0, local: None }
-                }),
-                (_, _, answer) => answer,
-            };
-            answers[index] = answer;
-        }
-        let total: u64 = costs.iter().flatten().map(|(steps, _)| *steps).sum();
-        let largest = costs.iter().flatten().map(|(steps, _)| *steps).max().unwrap_or(0);
-        crate::timing(&format!("the equivalence check ({} queries, {total} solver steps, the largest job {largest}; a budget of {step_steps} solver steps)", queries.len()), started);
-        // [R75.1-1] A suggested test for each sure difference of the step: the results of the
-        // bodies, of the facts alone (in the tree of the variant), and of the walk.
-        let variant_trees: Vec<Option<String>> = queries
-            .iter()
-            .map(|query| {
-                let files = query.variant.as_ref()?;
-                let files: BTreeMap<String, Option<String>> = files.iter().map(|(path, text)| (path.clone(), Some(text.clone()))).collect();
-                self.repo.tree_with(&step.tree_before, &files).ok()
-            })
-            .collect();
-        let mut walk_copy: Option<Vec<(String, reach::ConfigReach)>> = walks.as_ref().map(|walks| walks.as_ref().clone());
-        {
-            let mut items: Vec<(&str, &str, &str, &mut semilla_verify::equiv::Verdict)> = Vec::new();
-            for ((query, answer), variant) in queries.iter().zip(answers.iter_mut()).zip(&variant_trees) {
-                let Some(answer) = answer else { continue };
-                let after = match (&query.variant, variant) {
-                    (None, _) => step.tree_after.as_str(),
-                    (Some(_), Some(tree)) => tree.as_str(),
-                    (Some(_), None) => continue,
-                };
-                items.push((query.config.as_str(), step.tree_before.as_str(), after, &mut answer.verdict));
+        // The bodies of the step: one set of sides and one closure (R84.1-2) for each
+        // configuration.
+        let plain: Vec<usize> = (0..queries.len()).filter(|index| queries[*index].variant.is_none()).collect();
+        for config in &checked {
+            let jobs: Vec<usize> = plain.iter().copied().filter(|index| queries[*index].config == config.name()).collect();
+            if jobs.is_empty() {
+                continue;
             }
-            for (config, walk) in walk_copy.iter_mut().flatten() {
-                for (_, _, _, verdict) in &mut walk.bodies {
-                    items.push((config.as_str(), step.tree_before.as_str(), step.tree_after.as_str(), verdict));
+            let Ok(sides) = self.sides(step, config) else { continue };
+            let empty = Vec::new();
+            let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
+            let new = EquivSide::new(sides.after.get("n0").unwrap_or(&empty));
+            let closure = reach::closure_config(&old, &new, &renames);
+            for index in jobs {
+                answers[index] = equal_mir(&queries[index], &old, &new, &renames, true, &closure);
+            }
+        }
+        crate::timing(&format!("the equal-MIR check of {} bodies", plain.len()), started);
+        // [R84.5-1] The variant of each fact (the result "alone", R66.11-3): the build of the
+        // variant and its equal-MIR compare. The count of the builds stays (R77.2-2).
+        let rank = |config: &str| checked.iter().position(|known| known.name() == config).unwrap_or(usize::MAX);
+        let keys = variant_order(queries, &rank);
+        let clean = self.code.clean.contains(&step.tree_before) && self.code.clean.contains(&step.tree_after);
+        for (at, (_, config_name, files)) in keys.iter().enumerate() {
+            let key = (config_name.clone(), files.clone());
+            let jobs: Vec<usize> = (0..queries.len()).filter(|index| queries[*index].variant.as_ref().is_some_and(|files| query_key(&queries[*index], files) == key)).collect();
+            let config = checked.iter().find(|config| config.name() == key.0);
+            if at >= variant_builds() {
+                for index in jobs {
+                    answers[index] = answer(Verdict::NotChecked(semilla_verify::equiv::BUDGET_CAUSE.into()));
+                }
+                continue;
+            }
+            if std::time::Instant::now() >= safety {
+                for index in jobs {
+                    answers[index] = answer(Verdict::NotChecked(semilla_smt::budget::SAFETY_CAUSE.into()));
+                }
+                continue;
+            }
+            let found = config.filter(|_| clean).and_then(|config| {
+                let files: BTreeMap<String, Option<String>> = key.1.iter().map(|(path, text)| (path.clone(), Some(text.clone()))).collect();
+                let tree = self.repo.tree_with(&step.tree_before, &files).ok()?;
+                self.added.lock().unwrap_or_else(|error| error.into_inner()).variants.insert(tree.clone());
+                let records = self.records_with(&tree, "n0", config).ok()?;
+                let sides = self.sides(step, config).ok()?;
+                Some((records, sides))
+            });
+            match found {
+                Some((records, sides)) => {
+                    let empty = Vec::new();
+                    let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
+                    let new = EquivSide::new(&records);
+                    let closure = reach::closure_config(&old, &new, &[]);
+                    for index in jobs {
+                        answers[index] = equal_mir(&queries[index], &old, &new, &[], false, &closure);
+                    }
+                }
+                None => {
+                    for index in jobs {
+                        answers[index] = answer(Verdict::NotChecked("the variant with only this edit does not compile".into()));
+                    }
                 }
             }
-            self.suggest(step, &mut items);
         }
-        if let Some(copy) = walk_copy {
-            let key = (step.tree_before.clone(), step.tree_after.clone());
-            self.added.lock().unwrap_or_else(|error| error.into_inner()).reached.insert(key, std::sync::Arc::new(copy));
-        }
+        crate::timing(&format!("the builds and the equal-MIR checks of {} variants", keys.len()), started);
         answers
     }
 
     fn equivalence_budget(&self, _step: &Step) -> Option<String> {
-        Some(format!("{} solver steps, {} variant builds", equiv_steps(), variant_builds()))
+        // [R84.5-1] The equal-MIR check has no budget in solver steps; the count of the variant
+        // builds stays.
+        Some(format!("{} variant builds", variant_builds()))
     }
 
-    fn reach(&self, step: &Step, renames: &BTreeMap<String, String>) -> Option<semilla_verify::equiv::ReachReport> {
-        let renames: Vec<(String, String)> = renames.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
-        let limit = reach::WALK_STEPS.min(equiv_steps());
-        let mut walks = self.reach_all(step, &renames.into_iter().collect(), limit)?;
-        // [R75.1-1] A walk with no test yet (a step with no other check): its tests.
-        let open = walks.iter().any(|(_, walk)| walk.bodies.iter().any(|(_, _, _, verdict)| matches!(verdict, semilla_verify::equiv::Verdict::Different { test: semilla_verify::equiv::TestNote::Open(_), .. })));
-        if open {
-            let mut copy = walks.as_ref().clone();
-            let mut items: Vec<(&str, &str, &str, &mut semilla_verify::equiv::Verdict)> = Vec::new();
-            for (config, walk) in copy.iter_mut() {
-                for (_, _, _, verdict) in &mut walk.bodies {
-                    items.push((config.as_str(), step.tree_before.as_str(), step.tree_after.as_str(), verdict));
-                }
-            }
-            self.suggest(step, &mut items);
-            walks = std::sync::Arc::new(copy);
-            let key = (step.tree_before.clone(), step.tree_after.clone());
-            self.added.lock().unwrap_or_else(|error| error.into_inner()).reached.insert(key, walks.clone());
-        }
-        Some(reach::report(&walks))
-    }
+    // [R84.1-3] No walk of the reverse call graph for the step section: the walk checks each
+    // caller with the solver (design 61.10). A claim runs the walk inside its proof (the bodies
+    // to inline), and the trait method of the oracle gives no report.
 
     fn defs(&self, step: &Step) -> Result<[semilla_verify::DefMap; 2]> {
         let checked = self.checked(step)?;
@@ -2344,56 +2197,11 @@ impl NormalOracle {
     }
 }
 
-/// The SMT checks with Z3. Without a solver, every check gives "not proved".
-pub struct SmtOracle {
-    solver: Option<semilla_smt::Solver>,
-}
-
-impl SmtOracle {
-    /// The solver for a check of `repo`. The search never takes a solver from the repository
-    /// folder (I5): see [`semilla_smt::Solver::find_for`].
-    pub fn for_repo(repo: &Repo) -> SmtOracle {
-        SmtOracle { solver: semilla_smt::Solver::find_for(&crate::store::tool_dirs(&repo.root), Some(&repo.root)).ok() }
-    }
-
-    /// The path of the solver binary, if one is found.
-    pub fn path(&self) -> Option<&std::path::Path> {
-        self.solver.as_ref().map(|solver| solver.path())
-    }
-
-    pub fn available(&self) -> bool {
-        self.solver.is_some()
-    }
-
-    fn env(types: &BTreeMap<String, String>) -> semilla_smt::TypeEnv {
-        let mut env = semilla_smt::TypeEnv::new();
-        for (name, ty) in types {
-            env.insert_text(name, ty);
-        }
-        env
-    }
-}
-
-impl ExprOracle for SmtOracle {
-    fn classify(&self, before: &str, after: &str, types: &BTreeMap<String, String>) -> Option<EffectCheck> {
-        let solver = self.solver.as_ref()?;
-        let result = semilla_smt::classify_condition(solver, before, after, &Self::env(types)).ok()?;
-        let mut witness = result.witness;
-        if result.panic_conditions_differ {
-            let none = result.notes.iter().find(|n| n.starts_with("no example of the panic difference"));
-            let note = match (result.panic_witness, none) {
-                (Some(w), _) => format!("the panic conditions differ, for example {w}"),
-                (None, Some(none)) => format!("the panic conditions differ ({})", none.trim_start_matches("no example of the panic difference: ").to_string().replace("the integer type of", "no example: the integer type of")),
-                (None, None) => "the panic conditions differ".into(),
-            };
-            witness = Some(match witness {
-                Some(w) => format!("{w}; {note}"),
-                None => note,
-            });
-        }
-        let effect = if result.panic_conditions_differ && result.effect == Effect::Equivalent { Effect::Unrelated } else { result.effect };
-        Some(EffectCheck { effect, witness })
-    }
+/// [R84.7-1] The path of the solver for a check of `repo`, with no run of it (design 84): only a
+/// claim of an intent file starts the solver. The search never takes a solver from the
+/// repository folder (I5): see [`semilla_smt::Solver::find_for`].
+pub fn solver_path(repo: &Repo) -> Option<std::path::PathBuf> {
+    semilla_smt::Solver::locate_for(&crate::store::tool_dirs(&repo.root), Some(&repo.root))
 }
 
 #[cfg(test)]

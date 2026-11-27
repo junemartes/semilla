@@ -39,6 +39,8 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::Tool::b` (src/lib.rs:5): the full compare: `#[same(depot::Tool::b)] fn b_same() {}`; a difference: `#[change(depot::Tool::b)] fn b_change() -> bool { … }` or `#[different(depot::Tool::b)] fn b_different() -> bool { … }`
   new and removed items, filled in by Semilla:
   ◆ f1 derived: added macro call `getter!(b)` (makes: `pub fn Tool::b`) [added · code different]
       affected bodies: depot::Tool::b

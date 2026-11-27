@@ -37,6 +37,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 1 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::T::{constant#0} if ON { M as usize + 1 } else { 1 }` (src/lib.rs:6): the full compare: `#[same(shop::T)] fn t_same() {}`; a difference: `#[change(shop::T)] fn t_change() -> bool { … }` or `#[different(shop::T)] fn t_different() -> bool { … }`
+    equal MIR: `shop::T` (src/lib.rs:5)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: value of, see f1 (f1)
       in: shop::T
@@ -46,12 +49,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: value of `shop::T` changed: `{ let d = [0u8; if ON { N as usize } else { 1 }]; d.len() }` → `{ let d = [0u8; if ON { M as usize + 1 } else { 1 }]; d.len() }` (the public API can change: a different crate can use the item) [semantics · code different]
       affected bodies: shop::T
       equivalence: `shop::T`: equivalent (proved by equal MIR)
-      equivalence: `shop::T::{constant#0} if ON { M as usize + 1 } else { 1 }`: equivalent (proved by SMT)
+      equivalence: `shop::T::{constant#0} if ON { M as usize + 1 } else { 1 }`: MIR changes
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::T (src/lib.rs:5): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
-    shop::T::{constant#0} if ON { M as usize + 1 } else { 1 } (src/lib.rs:6): same graph (the edit keeps the control flow); equivalent (proved by SMT)
+    shop::T (src/lib.rs:5): same graph (the edit keeps the control flow); equivalent (proved by equal MIR); with its nested bodies: MIR changes in `shop::T::{constant#0}`
+    shop::T::{constant#0} if ON { M as usize + 1 } else { 1 } (src/lib.rs:6): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

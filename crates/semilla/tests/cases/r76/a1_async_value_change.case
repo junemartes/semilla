@@ -32,6 +32,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::total` (src/lib.rs:5): the same MIR text; a changed callee: `shop::total::{closure#0}`; the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(a: u32) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
+    MIR changes with no claim: `shop::total::{closure#0} { let v = get(a).await; if v > 3 { v * …` (src/lib.rs:5): the template of `shop::total` covers its item `shop::total`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `2` → `3` (f1)
       in: shop::total
@@ -41,15 +44,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `2` → `3` at `shop::total/S1/then/tail/rhs` [semantics · code different]
       affected bodies: shop::total
       control flow: ~ check `overflow: v * 2` → `overflow: v * 3` (src/lib.rs:-7, src/lib.rs:7)
-      equivalence: `shop::total`: not decided: a coroutine value: { let v = get(a).await; if v > 3 { v * 2 } else … (src/lib.rs:-5)
-      equivalence: `shop::total::{closure#0} { let v = get(a).await; if v > 3 { v * …`: not decided: a coroutine body
-      reaches: 1 public function: shop::total (semilla expand --step 0)
+      equivalence: `shop::total`: MIR changes: the same MIR text; a changed callee: `shop::total::{closure#0}`
+      equivalence: `shop::total::{closure#0} { let v = get(a).await; if v > 3 { v * …`: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::total (src/lib.rs:5): same graph; not decided (a coroutine value: { let v = get(a).await; if v > 3 { v * 2 } else … (src/lib.rs:-5))
-    shop::total::{closure#0} { let v = get(a).await; if v > 3 { v * … (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a coroutine body)
-    reached bodies: 1
-      shop::total (src/lib.rs:5): reached through shop::total::{closure#0}, not decided (a coroutine value: { let v = get(a).await; if v > 3 { v * 2 } else … (src/lib.rs:-5))
+    shop::total (src/lib.rs:5): same graph; MIR changes (the same MIR text; a changed callee: `shop::total::{closure#0}`)
+    shop::total::{closure#0} { let v = get(a).await; if v > 3 { v * … (src/lib.rs:5): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

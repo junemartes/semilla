@@ -172,17 +172,17 @@ fn a_false_claim_mir_gets_the_test_of_its_calls_and_a_claim_with_no_call_gets_no
     assert!(none.contains("false") && none.contains("for x = 9") && none.contains("no suggested test: the claim MIR gives no call of a version on its failed path"), "{text}");
 }
 
-/// The templates of the help notes of a step output (the text in backquotes after "if the
-/// behavior does not change: ").
+/// The claim templates of a step output (design 84): the template of each node of the AST map
+/// that is not mapped, and each `#[same]` template of the line of a body with "MIR changes" and
+/// no claim.
 fn templates(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for line in text.lines().filter(|line| line.contains("intent help for ")) {
-        let mark = "if the behavior does not change: `";
-        if let Some(at) = line.find(mark) {
-            let rest = &line[at + mark.len()..];
-            if let Some(end) = rest.rfind('`') {
-                out.push(rest[..end].to_string());
-            }
+    for line in text.lines() {
+        if let Some(rest) = line.trim_start().strip_prefix("template: ") {
+            out.push(rest.to_string());
+        }
+        if line.contains("MIR changes with no claim: ") {
+            out.extend(line.split('`').filter(|piece| piece.starts_with("#[same(")).map(str::to_string));
         }
     }
     out
@@ -193,7 +193,9 @@ fn templates(text: &str) -> Vec<String> {
 fn the_help_template_of_an_item_with_mut_gives_a_place_of_each_version() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", "intent!(\"Cache the count of a document\");\n");
-    let text = run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs"], 0);
+    run(&repo, &["step", "cache the count", "--intent", ".semilla/intent/pr.rs"], 0);
+    // The full text: the short output cuts a long line (R76.1-1).
+    let text = run(&repo, &["status", "--verbose"], 0);
     let found = templates(&text);
     // R82.3-2 (positive): `&mut self` and a `&mut` parameter are a value of each version that
     // the call takes as `&mut`; the claim compares the values after the calls.

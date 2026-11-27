@@ -31,6 +31,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::fetch` (src/lib.rs:1): the same MIR text; a changed callee: `depot::fetch::{closure#0}`; the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 }` (src/lib.rs:1): the template of `depot::fetch` covers its item `depot::fetch` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: added early exit `if n == 0 { return 0; }` (f1)
       in: depot::fetch
@@ -41,18 +44,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: depot::fetch
       control flow: + branch `n == 0` (src/lib.rs:2): false → check `overflow: n + 1`, true → return
       control flow: + arrow entry (src/lib.rs:1) → branch `n == 0` (src/lib.rs:2)
-      equivalence: `depot::fetch`: not decided: a coroutine value: { n + 1 } (src/lib.rs:-1)
-      equivalence: `depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 }`: not decided: a coroutine body
-      reaches: 1 public function: depot::fetch (semilla expand --step 0)
+      equivalence: `depot::fetch`: MIR changes: the same MIR text; a changed callee: `depot::fetch::{closure#0}`
+      equivalence: `depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 }`: MIR changes
   ◆ f2 derived: the compiled code of `depot::fetch` changes with no edit at its place: `{ n + 1 }` (before the step) [indirect · code different]
       affected bodies: depot::fetch
       note: lines before the step 1; the cause: the edit of this body at src/lib.rs:2 (the step changes no other input of the body)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::fetch (src/lib.rs:1): same graph; not decided (a coroutine value: { n + 1 } (src/lib.rs:-1))
-    depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 } (src/lib.rs:1): graph changes: +1 branch, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (a coroutine body)
-    reached bodies: 1
-      depot::fetch (src/lib.rs:1): reached through depot::fetch::{closure#0}, not decided (a coroutine value: { n + 1 } (src/lib.rs:-1))
+    depot::fetch (src/lib.rs:1): same graph; MIR changes (the same MIR text; a changed callee: `depot::fetch::{closure#0}`)
+    depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 } (src/lib.rs:1): graph changes: +1 branch, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -32,6 +32,9 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::float::at` (src/float.rs:5): the full compare: `#[same(shop::float::at)] fn at_same() {}`; a difference: `#[change(shop::float::at)] fn at_change() -> bool { … }` or `#[different(shop::float::at)] fn at_different() -> bool { … }`
+    MIR changes with no claim: `shop::float::first` (src/float.rs:1): the full compare: `#[same(shop::float::first)] fn first_same() {}`; a difference: `#[change(shop::float::first)] fn first_change() -> bool { … }` or `#[different(shop::float::first)] fn first_different() -> bool { … }`
   other facts, filled in by Semilla:
   ◆ f1 derived: src/float.rs: changed [file · code different]
       affected bodies: shop::float::at, shop::float::first
@@ -48,21 +51,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ✗ spotlight: the compiler reads `shop::float::first` from `src/float.rs`, a file that Semilla does not parse; it needs a reason: --reason 'shop::float::first=…'
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::float::at (src/float.rs:5): graph changes: +1 check, −1 check, +3 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; different (for each input: before returns 2, after returns 6; suggested test `semilla_test_at_924514`)
+    shop::float::at (src/float.rs:5): graph changes: +1 check, −1 check, +3 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); no edit in the body; MIR changes
     shop::float::first (src/float.rs:1): graph added: 2 points, 1 arrow; no edit in the body
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_at_924514`: add it to `src/float.rs`, in the module of `shop::float::at` (line 1); run it: `cargo test -p shop semilla_test_at_924514`; also: `cargo test -p shop --release semilla_test_at_924514`
-      #[cfg(test)]
-      mod semilla_test_at_924514 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 2; the new version returns 6.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let got = crate::float::at();
-              assert_eq!(got, 2);
-          }
-      }
   expansions: 2 changed
     `here!()` at `float (no item)` (src/float.rs:6): expansion changed: `macro_rules! here` (src/lib.rs:1): only the context of the call changes: the line of the call; the context of the call changes
     `load!()` at `shop::load!#0` (src/lib.rs:4): expansion changed: `macro_rules! load` (src/lib.rs:2): changed literal `2u32` → `6u32` at `shop::float::at/tail/lhs` [semantics]; added `shop::float::first` (the public API changes: a different crate can now use the item) [added]; the code of the call reads `src/float.rs`, which the step changes

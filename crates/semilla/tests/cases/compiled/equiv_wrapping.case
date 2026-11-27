@@ -19,12 +19,13 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::next` (src/lib.rs:1): the full compare: `#[same(shop::next)] fn next_same() {}`; a difference: `#[change(shop::next)] fn next_change(x: u32) -> bool { … }` or `#[different(shop::next)] fn next_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression `x.wrapping_add(1)` → `x + 1` (f1)
       in: shop::next
       lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: --change 'shop::next=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::next=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::next=TEXT'; if it does not change, --same 'rewrite $a.wrapping_add(1) => $a + 1'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed expression `x.wrapping_add(1)` → `x + 1` at `shop::next/tail` [semantics · code different]
       affected bodies: shop::next
@@ -32,24 +33,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + panic `overflow` (src/lib.rs:2)
       control flow: − call `num::<impl u32>::wrapping_add` (src/lib.rs:-2): return → return
       control flow: … 2 more (semilla expand --step 0)
-      equivalence: different in dev: for x = 4294967295: before returns 0, after panics (overflow add) (suggested test `semilla_test_next_52a653`); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::next (src/lib.rs:1): graph changes: +1 check, +1 panic, −1 call, +3 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different in dev (for x = 4294967295: before returns 0, after panics (overflow add); suggested test `semilla_test_next_52a653`); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_next_52a653`: add it to `src/lib.rs`, in the module of `shop::next` (line 1); run it: `cargo test -p shop semilla_test_next_52a653`
-      #[cfg(test)]
-      mod semilla_test_next_52a653 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 0; the new version panics (overflow add).
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 4294967295;
-              let got = crate::next(x);
-              assert_eq!(got, 0);
-          }
-      }
+    shop::next (src/lib.rs:1): graph changes: +1 check, +1 panic, −1 call, +3 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

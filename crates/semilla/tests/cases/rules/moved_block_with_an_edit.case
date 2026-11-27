@@ -64,6 +64,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 4 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 2 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::state::Mode::rank` (src/lib.rs:23): the full compare: `#[same(depot::state::Mode::rank)] fn rank_same() {}`; a difference: `#[change(depot::state::Mode::rank)] fn rank_change(this_before: &before::depot::state::Mode, this_after: &after::depot::state::Mode) -> bool { … }` or `#[different(depot::state::Mode::rank)] fn rank_different() -> bool { … }`
+    equal MIR: `depot::mode_name` (src/lib.rs:15)
+    equal MIR: `depot::state::Mode::busy` (src/lib.rs:22)
   not stated: 2 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f4, f5)
       in: depot::mode_name
@@ -72,8 +76,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: changed literal `1` → `2` (f3)
       in: depot::state::Mode::rank
       lines: src/lib.rs:23, src/lib.rs:-22
-      to state it: --change 'depot::state::Mode::rank=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::state::Mode::rank=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::state::Mode::rank=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   new and removed items, filled in by Semilla:
   ◆ f6 derived: added `depot::state` (the public API changes: a different crate can now use the item) [added · code equal]
       ! public API: the compare does not cover the code of a different crate
@@ -88,14 +91,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f3 derived: changed literal `1` → `2` at `depot::state::Mode::rank/tail` [semantics · code different]
       affected bodies: depot::state::Mode::rank
-      equivalence: different: for self = &Idle: before returns 1, after returns 2 (suggested test `semilla_test_rank_e18156`)
+      equivalence: MIR changes
   ◆ f1 derived: moved `depot::Mode` → `depot::state::Mode`, with 1 impl [move · code equal]
   ◆ f4 derived: changed pattern `Mode::Idle` → `state::Mode::Idle` at `depot::mode_name/S0/arm[0].pat` [semantics · code equal]
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Idle)
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Busy)
       control flow: − arrow branch `m` (src/lib.rs:-16) → return (src/lib.rs:-16) (depot::Mode::Idle)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: equivalent (proved by equal MIR) (the same line for f5)
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: equivalent (proved by equal MIR) (the same line for f5)
   ◆ f5 derived: changed pattern `Mode::Busy` → `state::Mode::Busy` at `depot::mode_name/S0/arm[1].pat` [semantics · code equal]
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Idle)
       control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Busy)
@@ -107,23 +110,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   control flow: 3 bodies
     depot::mode_name (src/lib.rs:15): graph changes: +2 arrows, −2 arrows; equivalent (proved by equal MIR)
     depot::state::Mode::busy (src/lib.rs:22): graph changes: +2 arrows, −2 arrows; no edit in the body; equivalent (proved by equal MIR)
-    depot::state::Mode::rank (src/lib.rs:23): same graph (the edit keeps the control flow); different (for self = &Idle: before returns 1, after returns 2; suggested test `semilla_test_rank_e18156`)
-    reached bodies: 1
-      depot::tests::t_limit::{closure#0} (src/lib.rs:18): reached through depot::tests::t_limit, not decided (a value of a type that the check does not model: fn t_limit() { assert_eq!(limit(), 10); } (src/lib.rs:-19))
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_rank_e18156`: add it to `src/lib.rs`, in the module of `depot::Mode::rank` (line 22); run it: `cargo test -p depot semilla_test_rank_e18156`; also: `cargo test -p depot --release semilla_test_rank_e18156`
-      #[cfg(test)]
-      mod semilla_test_rank_e18156 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 1; the new version returns 2.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let arg1 = crate::state::Mode::Idle;
-              let got = crate::Mode::rank(&arg1);
-              assert_eq!(got, 1);
-          }
-      }
+    depot::state::Mode::rank (src/lib.rs:23): same graph (the edit keeps the control flow); MIR changes
   expansions: 1 changed, 2 equal
     `#[test]` at `depot::tests::t_limit` (src/lib.rs:18): expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

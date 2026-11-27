@@ -76,6 +76,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::show` (src/lib.rs:20): the full compare: `#[same(depot::show)] fn show_same() {}`; a difference: `#[change(depot::show)] fn show_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::show)] fn show_different() -> bool { … }`
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f2, f3)
       in: depot::show
@@ -88,7 +90,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + panic `overflow` (src/lib.rs:22)
       control flow: + check `overflow: c.items.len() * 2` (src/lib.rs:22): ok → construct `{}`, fail → panic `overflow`
       control flow: … 4 more (semilla expand --step 0)
-      equivalence: not decided alone: an array; the body: not decided: an array
+      equivalence: MIR changes alone; the body: MIR changes
       expansion: `format!("{} {}", c.total + 1, c.items.len() * 2)` at `depot::show/tail` (src/lib.rs:22): expansion changed: changed expression `c.total` → `c.total + 1` at `expansion/args[0]/body/tail/args[0]/args[1]` [semantics]; changed expression `c.items.len()` → `c.items.len() * 2` at `expansion/args[0]/body/tail/args[0]/args[2]` [semantics] (also the change of f3)
       comment above line 22, changed in this step: see f1
   ◆ f3 derived: changed expression `c.items.len()` → `c.items.len() * 2` at `depot::show/tail/args[2]` [semantics · code different]
@@ -97,11 +99,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + panic `overflow` (src/lib.rs:22)
       control flow: + check `overflow: c.items.len() * 2` (src/lib.rs:22): ok → construct `{}`, fail → panic `overflow`
       control flow: … 4 more (semilla expand --step 0)
-      equivalence: not decided alone: an array; the body: not decided: an array
+      equivalence: MIR changes alone; the body: MIR changes
   ◆ f1 derived: changed comment `// the text of the cart` → `// the full text of the cart` [docs · no code]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    depot::show (src/lib.rs:20): graph changes: +2 checks, +2 panics, +6 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); not decided (an array)
+    depot::show (src/lib.rs:20): graph changes: +2 checks, +2 panics, +6 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   expansions: 1 changed, 3 equal
     `format!("{} {}", c.total + 1, c.items.len() * 2)` at `depot::show/tail` (src/lib.rs:22): expansion changed: `macro format` (crate alloc): changed expression `c.total` → `c.total + 1` at `expansion/args[0]/body/tail/args[0]/args[1]` [semantics]; changed expression `c.items.len()` → `c.items.len() * 2` at `expansion/args[0]/body/tail/args[0]/args[2]` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

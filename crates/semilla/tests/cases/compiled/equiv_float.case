@@ -19,6 +19,8 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::scale` (src/lib.rs:1): the full compare: `#[same(shop::scale)] fn scale_same() {}`; a difference: `#[change(shop::scale)] fn scale_change(x: f64) -> bool { … }` or `#[different(shop::scale)] fn scale_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression `x * 2.0` → `x + x` (f1)
       in: shop::scale
@@ -27,10 +29,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed expression `x * 2.0` → `x + x` at `shop::scale/tail` [semantics · code different]
       affected bodies: shop::scale
-      equivalence: not decided: the operation `mul` on a value that the check does not model (a float, a pointer): x * 2.0 (src/lib.rs:-2)
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::scale (src/lib.rs:1): same graph (the edit keeps the control flow); not decided (the operation `mul` on a value that the check does not model (a float, a pointer): x * 2.0 (src/lib.rs:-2))
+    shop::scale (src/lib.rs:1): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -42,12 +42,13 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::rules::base` (src/rules.rs:4): the full compare: `#[same(shop::rules::base)] fn base_same() {}`; a difference: `#[change(shop::rules::base)] fn base_change(x: u32) -> bool { … }` or `#[different(shop::rules::base)] fn base_different() -> bool { … }`
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression `x` → `x + 1` (f2)
       in: shop::rules::base
       lines: src/rules.rs:4, src/rules.rs:-4
-      to state it: --change 'shop::rules::base=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::rules::base=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::rules::base=TEXT'; if it does not change, --same 'rewrite x => x + 1'
   other facts, filled in by Semilla:
   ◆ f2 derived: changed expression `x` → `x + 1` at `shop::rules::base/tail` [semantics · code different]
       affected bodies: shop::rules::base
@@ -55,8 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + panic `overflow` (src/rules.rs:4)
       control flow: + arrow entry (src/rules.rs:4) → check `overflow: x + 1` (src/rules.rs:4)
       control flow: … 1 more (semilla expand --step 0)
-      equivalence: different: for x = 0: before returns 0, after returns 1 (suggested test `semilla_test_base_7efb7d`)
-      reaches: 1 public function: shop::price (semilla expand --step 0)
+      equivalence: MIR changes
       docs of `shop::rules::base`, no edit in this step (src/rules.rs:3): `/// Gives the base price.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f1 derived: visibility of `shop::tools`: `private` → `pub` (the public API changes: a different crate can now use the item) [visibility · code equal]
@@ -67,36 +67,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
           | //! The tax is 10 percent.
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    shop::rules::base (src/rules.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); different (for x = 0: before returns 0, after returns 1; suggested test `semilla_test_base_7efb7d`)
-    reached bodies: 1
-      shop::price (src/lib.rs:4): different through shop::rules::base: for x = 0: before returns 0, after returns 1 (suggested test `semilla_test_price_02e31e`)
-  suggested tests: 2 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_base_7efb7d`: add it to `src/rules.rs`, in the module of `shop::rules::base` (line 4); run it: `cargo test -p shop semilla_test_base_7efb7d`; also: `cargo test -p shop --release semilla_test_base_7efb7d`
-      #[cfg(test)]
-      mod semilla_test_base_7efb7d {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 0; the new version returns 1.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 0;
-              let got = crate::rules::base(x);
-              assert_eq!(got, 0);
-          }
-      }
-    `semilla_test_price_02e31e`: add it to `src/lib.rs`, in the module of `shop::price` (line 4); run it: `cargo test -p shop semilla_test_price_02e31e`; also: `cargo test -p shop --release semilla_test_price_02e31e`
-      #[cfg(test)]
-      mod semilla_test_price_02e31e {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns 0; the new version returns 1.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let x = 0;
-              let got = crate::price(x);
-              assert_eq!(got, 0);
-          }
-      }
+    shop::rules::base (src/rules.rs:4): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla expand --step 0); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 3 comment(s) of the changed items have no edit in this step
 

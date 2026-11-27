@@ -1011,7 +1011,7 @@ fn side_text(edit: &Edit, side: usize, trees: [&Workspace; 2]) -> String {
 /// True for code of a test, a bench, or an example: a `#[test]` function, a `cfg(test)` module,
 /// an item of a test, bench, or example target (R79.3-2). The intent crate links the libraries
 /// (design 78), so no claim names such an item.
-fn test_code(tree: &Workspace, item: &str) -> bool {
+pub(crate) fn test_code(tree: &Workspace, item: &str) -> bool {
     tree.items.get(item).is_some_and(|found| found.test) || [" (test \"", " (bench \"", " (example \""].iter().any(|root| item.contains(root))
 }
 

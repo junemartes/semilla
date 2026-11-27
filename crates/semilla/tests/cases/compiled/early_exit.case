@@ -32,35 +32,22 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::order` (src/lib.rs:5): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: added early exit `if q == 0 { return None; }` (f1)
       in: depot::order
       lines: src/lib.rs:6-8
-      to state it: --change 'depot::order=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::order=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::order=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f1 derived: added early exit `if q == 0 { return None; }` at `depot::order/S0` [semantics · code different]
       affected bodies: depot::order
       control flow: + branch `q == 0` (src/lib.rs:6): false → call `price`, true → return
       control flow: + arrow entry (src/lib.rs:5) → branch `q == 0` (src/lib.rs:6)
-      equivalence: different: for q = 0: before returns Some(a value), after returns None (suggested test `semilla_test_order_cbeca8`)
+      equivalence: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    depot::order (src/lib.rs:5): graph changes: +1 branch, +3 arrows, −1 arrow; different (for q = 0: before returns Some(a value), after returns None; suggested test `semilla_test_order_cbeca8`)
-  suggested tests: 1 (design 75: each one passes on the old code and fails on the new code; Semilla does not run them)
-    `semilla_test_order_cbeca8`: add it to `src/lib.rs`, in the module of `depot::order` (line 5); run it: `cargo test -p depot semilla_test_order_cbeca8`; also: `cargo test -p depot --release semilla_test_order_cbeca8`
-      #[cfg(test)]
-      mod semilla_test_order_cbeca8 {
-          // Semilla (design 75): the two versions differ for this input.
-          // The old version returns Some(a value); the new version returns None.
-          // This test passes on the old code and fails on the new code.
-          #[test]
-          fn old_outcome() {
-              let q = 0;
-              let got = crate::order(q);
-              assert!(matches!(got, std::option::Option::Some(_)));
-          }
-      }
+    depot::order (src/lib.rs:5): graph changes: +1 branch, +3 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -176,7 +176,7 @@ fn a_claim_on_a_scope_gives_one_line_for_each_item_and_explains_the_bodies_of_it
     for item in ["new", "len", "is_empty", "push"] {
         assert!(section.contains(&format!("explained by claim i3: `shop::Cart::{item}`")), "{item}: {section}");
     }
-    assert!(section.contains("not explained: `shop::Cart::first`"), "{section}");
+    assert!(section.contains("MIR changes with no claim: `shop::Cart::first`"), "{section}");
     // An empty claim on an item depends on the two versions of the item (R77.1-1): the module
     // claim explains its changed items (`uses_hidden` does not change).
     assert!(section.contains("✓ stays the same: i4 `#[same(shop::calc::*)] fn calc_module()` (explains `shop::calc::half`, `shop::calc::quarter`)"), "{section}");
