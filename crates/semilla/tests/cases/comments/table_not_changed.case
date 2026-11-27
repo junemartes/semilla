@@ -33,16 +33,17 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed nodes: 0 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
-  transformations:
+  compiled code that changes with no edit:
   item `shop::rules::tax`:
-  ◆ f2 move (Semilla; R90.2-5, the pair check holds): public API: `shop::tax` is now `shop::rules::tax` (a different crate can no longer use the old path) [move · no code]
+  ◆ f2 move (Semilla; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `shop::tax` is now `shop::rules::tax` (a different crate can no longer use the old path) [move · no code]
+  transformations:
   item `shop::tax`:
   ◆ f1 move (Semilla; R90.2-5, the pair check holds): moved `shop::tax` → `shop::rules::tax` [move · code equal]
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 move (Semilla; R90.2-5, the pair check holds): public API: `shop::tax` is now `shop::rules::tax` (a different crate can no longer use the old path) [move · no code]
+◆ f2 move (Semilla; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `shop::tax` is now `shop::rules::tax` (a different crate can no longer use the old path) [move · no code]
     no position
 ◆ f1 move (Semilla; R90.2-5, the pair check holds): moved `shop::tax` → `shop::rules::tax` [move · code equal]
     lines: src/lib.rs:6-7, src/lib.rs:-3-4

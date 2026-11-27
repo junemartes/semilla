@@ -60,7 +60,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot (test "a")::common::setup`:
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed literal `1` → `2` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed literal `1` → `2` [semantics · code different]
+      not stated (tests/common/mod.rs:3, tests/common/mod.rs:-3); to state it: --change 'depot (test "a")::common::setup=TEXT'
       in: depot (test "a")::common::setup, depot (test "b")::common::setup
       affected bodies: depot (test "a")::common::setup
       equivalence: `a::common::setup`: MIR changes
@@ -73,5 +74,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! spotlight: inactive code: depot (test "b")::common::setup/tail/rhs (no checked configuration compiles `depot (test "b")::common::setup`)
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed literal `1` → `2` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed literal `1` → `2` [semantics · code different]
     lines: tests/common/mod.rs:3, tests/common/mod.rs:-3

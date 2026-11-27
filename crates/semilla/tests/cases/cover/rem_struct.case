@@ -27,21 +27,15 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 3 in 1 entries; 0 real edits (0 stated by the agent); 3 not mapped
-    n1 not mapped [R79.5-1]: removed struct `depot::Pair` (src/lib.rs:-5): not mapped, syntax only in f1: `/// The new doc.\n/// One more line.\n#[cfg(all())]\npub struct Pair { pub left: u32, pub right: u8 }`
-        template: #[removed(depot::Pair)] fn pair_removed(b: &before::depot::Pair) -> bool { let _ = b; true }
-    n2 not mapped [R79.5-1]: removed field `depot::Pair.left` (src/lib.rs:-8): not mapped, syntax only in f1: `pub struct Pair { pub left: u32, pub right: u8 }`
-        template: #[removed(depot::Pair)] fn pair_removed(b: &before::depot::Pair) -> bool { let _ = b; true }
-    n3 not mapped [R79.5-1]: removed field `depot::Pair.right` (src/lib.rs:-8): not mapped, syntax only in f1: `pub struct Pair { pub left: u32, pub right: u8 }`
-        template: #[removed(depot::Pair)] fn pair_removed(b: &before::depot::Pair) -> bool { let _ = b; true }
-  not mapped:
+  changed nodes: 3 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
   item `depot::Pair`:
-  ◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1); 3 nodes): removed `depot::Pair` (the public API changes: a different crate can no longer use the item) [removed · no code]
+  ◆ f1 delete, syntax only (Semilla; R92.3-1, no MIR element and no partner; a different crate can use it (a public item); 3 nodes): removed `depot::Pair` (the public API changes: a different crate can no longer use the item) [removed · no code]
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::Pair
 
 === positions
-◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1); 3 nodes): removed `depot::Pair` (the public API changes: a different crate can no longer use the item) [removed · no code]
+◆ f1 delete, syntax only (Semilla; R92.3-1, no MIR element and no partner; a different crate can use it (a public item); 3 nodes): removed `depot::Pair` (the public API changes: a different crate can no longer use the item) [removed · no code]
     lines: src/lib.rs:-5-8

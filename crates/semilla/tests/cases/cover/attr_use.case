@@ -31,7 +31,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
   syntax only:
   item `depot::use#0`:
-  ◆ f1 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher; 2 nodes): changed `use` line: `/// The old doc. pub use std::fmt::Debug;` → `/// The old doc. #[cfg(all())] pub use std::fmt::Debug;` in `depot` (the public names are the same) [import · code equal]
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher; an old node and a new node of one fact: the old node becomes the new node (R92.6-1); 2 nodes): changed `use` line: `/// The old doc. pub use std::fmt::Debug;` → `/// The old doc. #[cfg(all())] pub use std::fmt::Debug;` in `depot` (the public names are the same) [import · code equal]
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::use#0`; it needs a reason: --reason 'depot::use#0=…'
       docs of `depot::use#0`, no edit in this step (src/lib.rs:5): `/// The old doc.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
@@ -42,5 +42,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::use#0=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::use#0=the reason of the test'
-◆ f1 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher; 2 nodes): changed `use` line: `/// The old doc. pub use std::fmt::Debug;` → `/// The old doc. #[cfg(all())] pub use std::fmt::Debug;` in `depot` (the public names are the same) [import · code equal]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher; an old node and a new node of one fact: the old node becomes the new node (R92.6-1); 2 nodes): changed `use` line: `/// The old doc. pub use std::fmt::Debug;` → `/// The old doc. #[cfg(all())] pub use std::fmt::Debug;` in `depot` (the public names are the same) [import · code equal]
     lines: src/lib.rs:6

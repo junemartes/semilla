@@ -28,13 +28,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     equal MIR: `shop::keep::{closure#0} |x| x.wrapping_add(1)` (src/lib.rs:2)
     equal MIR: `shop::keep::{closure#1} |x| x.wrapping_mul(2)` (src/lib.rs:3)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed operator `a ^ b` → `a | b` (f1)
-      in: shop::keep
-      lines: src/lib.rs:4, src/lib.rs:-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::keep=TEXT'; if it does not change, --same 'rewrite $a ^ $b => $a | $b'
   real edits:
   item `shop::keep`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `a ^ b` → `a | b` at `shop::keep/tail` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `a ^ b` → `a | b` at `shop::keep/tail` [semantics · code different]
+      not stated (src/lib.rs:4, src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::keep=TEXT'; if it does not change, --same 'rewrite $a ^ $b => $a | $b'
       affected bodies: shop::keep
       equivalence: `shop::keep`: MIR changes
       equivalence: `shop::keep::{closure#0} |x| x.wrapping_add(1)`: equivalent (proved by equal MIR)
@@ -47,5 +44,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `a ^ b` → `a | b` at `shop::keep/tail` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `a ^ b` → `a | b` at `shop::keep/tail` [semantics · code different]
     lines: src/lib.rs:4, src/lib.rs:-4

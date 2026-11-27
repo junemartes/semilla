@@ -30,17 +30,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 4 in 3 entries; 1 real edits (0 stated by the agent); 1 not mapped
     n1 not mapped [R90.6-1]: changed expression `shop::quote/S0/pat` (src/lib.rs:2): not mapped in f1: `t` → `total`
         template: #[same(shop::quote)] fn quote(n: u32, p: u32) -> bool { after::shop::quote(n, p) == before::shop::quote(n, p) }
-  ? 2 places: 2 different edits (f1, f2)
-      in: shop::quote
-      lines: src/lib.rs:2-3, src/lib.rs:-2-3
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::quote=TEXT'; if it does not change, --same 'rewrite t > 100 => total >= 100', and a `--same` fact (rename, move, or rewrite) that explains each other edit
-  ? 2 places: changed path `t` → `total` (f3)
-      in: shop::quote
-      lines: src/lib.rs:3, src/lib.rs:-3
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::quote=TEXT'; if it does not change, --same 'rewrite t => total'
   real edits:
   item `shop::quote`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): change condition `t > 100` → `total >= 100` at `shop::quote/S1/cond` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): change condition `t > 100` → `total >= 100` at `shop::quote/S1/cond` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::quote=TEXT'; if it does not change, --same 'rewrite t > 100 => total >= 100', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: shop::quote (with 1 other edit of this body)
       control flow: ~ branch `t > 100` → `total >= 100` (src/lib.rs:-3, src/lib.rs:3)
       control flow: ~ check `overflow: t - 5` → `overflow: total - 5` (src/lib.rs:-3, src/lib.rs:3)
@@ -48,6 +41,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   not mapped:
   item `shop::quote`:
   ◆ f1 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed pattern `t` → `total` at `shop::quote/S0/pat` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::quote=TEXT'; if it does not change, --same 'rewrite t > 100 => total >= 100', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: shop::quote (with 1 other edit of this body)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   transformations:
@@ -63,7 +57,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): change condition `t > 100` → `total >= 100` at `shop::quote/S1/cond` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): change condition `t > 100` → `total >= 100` at `shop::quote/S1/cond` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:-3
 ◆ f1 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed pattern `t` → `total` at `shop::quote/S0/pat` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

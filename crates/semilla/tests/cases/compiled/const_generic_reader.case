@@ -46,13 +46,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::Grid::<T>::ROWS` (src/lib.rs:4): the full compare: `#[same(shop::Grid::ROWS)] fn rows_same() {}`; a difference: `#[change(shop::Grid::ROWS)] fn rows_change() -> bool { … }` or `#[different(shop::Grid::ROWS)] fn rows_different() -> bool { … }`
     MIR changes with no claim: `shop::rows` (src/lib.rs:8): the same MIR text; a constant that it names changes or has no value to compare: `shop::Grid::<T>::ROWS`; the full compare: `#[same(shop::rows)] fn rows_same_2() {}`; a difference: `#[change(shop::rows)] fn rows_change_2(x: usize) -> bool { … }` or `#[different(shop::rows)] fn rows_different_2() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: value of, see f1 (f1)
-      in: shop::Grid::ROWS
-      lines: src/lib.rs:4, src/lib.rs:-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Grid::ROWS=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `shop::Grid::ROWS`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::Grid::ROWS` changed: 2 * core::mem::size_of::<T>() → 3 * core::mem::size_of::<T>() (the public API can change: a different crate can use the item) [semantics · code different] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::Grid::ROWS` changed: 2 * core::mem::size_of::<T>() → 3 * core::mem::size_of::<T>() (the public API can change: a different crate can use the item) [semantics · code different]
+      not stated (src/lib.rs:4, src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Grid::ROWS=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::Grid::ROWS
       control flow: + check `overflow: 3 * core::mem::size_of::<T>()` (src/lib.rs:4): ok → return, fail → panic `overflow`
       control flow: − check `overflow: 2 * core::mem::size_of::<T>()` (src/lib.rs:-4): ok → return, fail → panic `overflow`
@@ -67,5 +64,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::Grid::ROWS` changed: 2 * core::mem::size_of::<T>() → 3 * core::mem::size_of::<T>() (the public API can change: a different crate can use the item) [semantics · code different] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::Grid::ROWS` changed: 2 * core::mem::size_of::<T>() → 3 * core::mem::size_of::<T>() (the public API can change: a different crate can use the item) [semantics · code different]
     lines: src/lib.rs:4, src/lib.rs:-4

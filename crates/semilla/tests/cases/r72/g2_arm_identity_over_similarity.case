@@ -33,21 +33,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::f` (src/lib.rs:1): the full compare: `#[same(depot::f)] fn f_same() {}`; a difference: `#[change(depot::f)] fn f_change(x: u32) -> bool { … }` or `#[different(depot::f)] fn f_different() -> bool { … }`
-  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
-  ? 3 places: 3 different edits (f2, f1, f3)
-      in: depot::f
-      lines: src/lib.rs:3-4, src/lib.rs:-3-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::f=TEXT'; if it does not change, --same 'rewrite 20 => 10' --same 'rewrite 10 => 21', and a `--same` fact (rename, move, or rewrite) that explains each other edit
+  changed nodes: 3 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::f`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): moved match arm `1 => 10` from `depot::f/S0/arm[0].pat` to `depot::f/S0/arm[1].pat` [semantics · code different] · not stated
-      affected bodies: depot::f (with 2 other edits of this body)
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 3 nodes; one change (R92.6-1)): moved match arm `1 => 10` from `depot::f/S0/arm[0].pat` to `depot::f/S0/arm[1].pat`; changed literal `20` → `10` at `depot::f/S0/arm[1].body`; changed literal `10` → `21` at `depot::f/S0/arm[0].body` [semantics · code different]
+      not stated (src/lib.rs:3-4, src/lib.rs:-3-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::f=TEXT'; if it does not change, --same 'rewrite 20 => 10' --same 'rewrite 10 => 21', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f1)
+      affected bodies: depot::f (with 1 other edit of this body)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
-  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed literal `20` → `10` at `depot::f/S0/arm[1].body` [semantics · code different] · not stated
-      affected bodies: depot::f (with 2 other edits of this body)
-      equivalence: MIR changes alone; the body: MIR changes
-  ◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): changed literal `10` → `21` at `depot::f/S0/arm[0].body` [semantics · code different] · not stated
-      affected bodies: depot::f (with 2 other edits of this body)
       equivalence: MIR changes alone; the body: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
@@ -55,9 +47,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): moved match arm `1 => 10` from `depot::f/S0/arm[0].pat` to `depot::f/S0/arm[1].pat` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 3 nodes; one change (R92.6-1)): moved match arm `1 => 10` from `depot::f/S0/arm[0].pat` to `depot::f/S0/arm[1].pat`; changed literal `20` → `10` at `depot::f/S0/arm[1].body`; changed literal `10` → `21` at `depot::f/S0/arm[0].body` [semantics · code different]
     lines: src/lib.rs:3-4, src/lib.rs:-3-4
-◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed literal `20` → `10` at `depot::f/S0/arm[1].body` [semantics · code different] · not stated
-    lines: src/lib.rs:3, src/lib.rs:-4
-◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): changed literal `10` → `21` at `depot::f/S0/arm[0].body` [semantics · code different] · not stated
-    lines: src/lib.rs:4, src/lib.rs:-3

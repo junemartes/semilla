@@ -45,12 +45,14 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 2 in 5 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 5 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `src/list.rs`:
   ◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/list.rs`: removed `// A plain comment.` [docs · no code]
+      not stated (src/list.rs:-4); to state it: --change 'src/list.rs=TEXT'
   file `src/list/mod.rs`:
   ◆ f5 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/list/mod.rs`: added `// A changed comment.` [docs · no code]
+      not stated (src/list/mod.rs:4); to state it: --change 'src/list/mod.rs=TEXT'
   transformations:
   item `depot::list`:
   ◆ f3 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 10 lines keep their tokens [move · no code]

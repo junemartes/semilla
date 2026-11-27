@@ -65,34 +65,35 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::tests::t_limit` (src/lib.rs:19): the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`; no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `depot::tests::t_limit::{closure#0} #[test]` (src/lib.rs:19): the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`; the template of `depot::tests::t_limit` covers its item `depot::tests::t_limit`
   changed nodes: 6 in 6 entries; 5 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `10` → `11` (f3)
-      in: depot::limit
-      lines: src/lib.rs:10, src/lib.rs:-10-11
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
   real edits:
   item `depot::Cart::count`:
-  ◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::Cart::count` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
+  ◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::Cart::count` (the public API changes: a different crate can no longer use the item) [removed · code different]
+      not stated (src/lib.rs:-4); to state it: --change 'depot::Cart::count=TEXT'
       affected bodies: depot::Cart::count
       control flow: − graph of `depot::Cart::count`: 3 points, 2 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   item `depot::limit`:
-  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
+  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
+      not stated (src/lib.rs:10, src/lib.rs:-10-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
       affected bodies: depot::limit
       equivalence: MIR changes
   item `depot::tests::t_fresh`:
-  ◆ f6 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::tests::t_fresh` [added · code different] · not stated
+  ◆ f6 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::tests::t_fresh` [added · code different]
+      not stated (src/lib.rs:20); to state it: --change 'depot::tests::t_fresh=TEXT'
       affected bodies: depot::tests::t_fresh
       control flow: + graph of `depot::tests::t_fresh`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: + graph of `depot::tests::t_fresh::{closure#0} #[test]`: 4 points, 3 arrows (semilla expand --step 0)
       expansion: `#[test]` at `depot::tests::t_fresh` (src/lib.rs:20): expansion added: makes `depot::tests::test`, `depot::tests::t_fresh`
   item `depot::tests::t_limit`:
-  ◆ f4 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed macro: `assert_eq!(limit(), 10);` → `assert!(limit() > 9);` at `depot::tests::t_limit/S0` [semantics · code different] · not stated
+  ◆ f4 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed macro: `assert_eq!(limit(), 10);` → `assert!(limit() > 9);` at `depot::tests::t_limit/S0` [semantics · code different]
+      not stated (src/lib.rs:19, src/lib.rs:-19); to state it: --change 'depot::tests::t_limit=TEXT'
       affected bodies: depot::tests::t_limit
       equivalence: `depot::tests::t_limit`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`
       equivalence: `depot::tests::t_limit::{closure#0} #[test]`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`
       expansion: `assert!(limit() > 9)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: deleted statement `{ match (&limit(), &10) { (left_val, right_val) => { if !(*left_val == *right_val) { let kind = ::core::panicking::AssertKind::Eq; ::core::panicking::assert_failed(kind, &*lef… (113 characters more; `semilla expand f4 --step 0` shows the full line) …() > 9) { ::core::panicking::panic("assertion failed: limit() > 9") }` at `expansion/S0` [semantics]
   item `depot::wrap2`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `depot::wrap2` added: `_y: u32` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `depot::wrap2` added: `_y: u32` (the public API can change: a different crate can use the item) [declaration · code different]
+      not stated (src/lib.rs:9); to state it: --change 'depot::wrap2=TEXT'
       affected bodies: depot::wrap2
       ! public API: the compare does not cover the code of a different crate
   syntax only:
@@ -114,15 +115,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::Cart::count` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
+◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::Cart::count` (the public API changes: a different crate can no longer use the item) [removed · code different]
     lines: src/lib.rs:-4
-◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
+◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
     lines: src/lib.rs:10, src/lib.rs:-10-11
-◆ f6 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::tests::t_fresh` [added · code different] · not stated
+◆ f6 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::tests::t_fresh` [added · code different]
     lines: src/lib.rs:20
-◆ f4 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed macro: `assert_eq!(limit(), 10);` → `assert!(limit() > 9);` at `depot::tests::t_limit/S0` [semantics · code different] · not stated
+◆ f4 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed macro: `assert_eq!(limit(), 10);` → `assert!(limit() > 9);` at `depot::tests::t_limit/S0` [semantics · code different]
     lines: src/lib.rs:19, src/lib.rs:-19
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `depot::wrap2` added: `_y: u32` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `depot::wrap2` added: `_y: u32` (the public API can change: a different crate can use the item) [declaration · code different]
     lines: src/lib.rs:9
 ◆ f5 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `depot::FRESH` (the public API changes: a different crate can now use the item) [added · no code]
     lines: src/lib.rs:14

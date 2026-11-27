@@ -24,16 +24,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::closed` (src/lib.rs:1): the full compare: `#[same(shop::closed)] fn closed_same() {}`; a difference: `#[change(shop::closed)] fn closed_change(a: bool, b: bool) -> bool { … }` or `#[different(shop::closed)] fn closed_different() -> bool { … }`
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: 2 different edits (f1, f2)
-      in: shop::closed
-      lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::closed=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `shop::closed`:
-  ◆ f1 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `!(a && b)` at `shop::closed/tail` [semantics · code different] · not stated
+  ◆ f1 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `!(a && b)` at `shop::closed/tail` [semantics · code different]
+      not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::closed=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: shop::closed (with 1 other edit of this body)
       equivalence: MIR changes
-  ◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added statement `!a && !b` at `shop::closed/tail` [semantics · code different] · not stated
+  ◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added statement `!a && !b` at `shop::closed/tail` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::closed=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: shop::closed (with 1 other edit of this body)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
@@ -42,7 +40,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `!(a && b)` at `shop::closed/tail` [semantics · code different] · not stated
+◆ f1 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `!(a && b)` at `shop::closed/tail` [semantics · code different]
     lines: src/lib.rs:-2
-◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added statement `!a && !b` at `shop::closed/tail` [semantics · code different] · not stated
+◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added statement `!a && !b` at `shop::closed/tail` [semantics · code different]
     lines: src/lib.rs:2

@@ -1,9 +1,9 @@
-note: design 54.4: the step output has 5 lines of the gap list at most, then the count of the other lines.
+note: design 54.4 and R92.5-1: each entry of the gap list has its line "not stated" (7 lines, no line "and N more"); the one command has the options of the first 5 lines that the check decided (here none: each line has the two forms)
 rule+: R54.4-4
 exit: 0
 must_match: changed nodes: 7 in 7 entries; 7 real edits \(0 stated by the agent\)
-must_match: (\n  \? 1 place: .*\n.*\n.*\n.*){5}\n  and 2 more line\(s\)
-must_not_match: (\n  \? 1 place: .*\n.*\n.*\n.*){6}\n  and 2 more line
+must_match: (?s)(\n      not stated \(.*){7}
+must_not_match: more line\(s\)
 === both Cargo.toml
 [package]
 name = "depot"
@@ -64,54 +64,39 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::wrap` (src/lib.rs:9): the full compare: `#[same(depot::wrap)] fn wrap_same() {}`; a difference: `#[change(depot::wrap)] fn wrap_change(x: u32) -> bool { … }` or `#[different(depot::wrap)] fn wrap_different() -> bool { … }`
     MIR changes with no claim: `depot::wrap2` (src/lib.rs:10): the full compare: `#[same(depot::wrap2)] fn wrap2_same() {}`; a difference: `#[change(depot::wrap2)] fn wrap2_change(x: u32) -> bool { … }` or `#[different(depot::wrap2)] fn wrap2_different() -> bool { … }`
   changed nodes: 7 in 7 entries; 7 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `1` → `9` (f1)
-      in: depot::a
-      lines: src/lib.rs:6, src/lib.rs:-6
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::a=TEXT'; if it does not change, --same 'rewrite 1 => 9'
-  ? 1 place: changed literal `2` → `5` (f2)
-      in: depot::b
-      lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::b=TEXT'; if it does not change, --same 'rewrite 2 => 5'
-  ? 1 place: changed literal `4` → `6` (f3)
-      in: depot::conf::depth
-      lines: src/lib.rs:17, src/lib.rs:-17
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::conf::depth=TEXT'; if it does not change, --same 'rewrite 4 => 6'
-  ? 1 place: changed literal `3` → `4` (f4)
-      in: depot::idle
-      lines: src/lib.rs:14, src/lib.rs:-14
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::idle=TEXT'; if it does not change, --same 'rewrite 3 => 4'
-  ? 1 place: changed literal `10` → `11` (f5)
-      in: depot::limit
-      lines: src/lib.rs:11, src/lib.rs:-11
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
-  and 2 more line(s) with 2 place(s): `semilla expand --step 0` shows each line
   real edits:
   item `depot::a`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `9` at `depot::a/tail/rhs` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `9` at `depot::a/tail/rhs` [semantics · code different]
+      not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::a=TEXT'; if it does not change, --same 'rewrite 1 => 9'
       affected bodies: depot::a
       control flow: ~ check `overflow: c.total + 1` → `overflow: c.total + 9` (src/lib.rs:-6, src/lib.rs:6)
       equivalence: MIR changes
   item `depot::b`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `5` at `depot::b/tail/rhs` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `5` at `depot::b/tail/rhs` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::b=TEXT'; if it does not change, --same 'rewrite 2 => 5'
       affected bodies: depot::b
       control flow: ~ check `overflow: c.total * 2` → `overflow: c.total * 5` (src/lib.rs:-7, src/lib.rs:7)
       equivalence: MIR changes
   item `depot::conf::depth`:
-  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `4` → `6` at `depot::conf::depth/tail` [semantics · code different] · not stated
+  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `4` → `6` at `depot::conf::depth/tail` [semantics · code different]
+      not stated (src/lib.rs:17, src/lib.rs:-17); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::conf::depth=TEXT'; if it does not change, --same 'rewrite 4 => 6'
       affected bodies: depot::conf::depth
       equivalence: MIR changes
   item `depot::idle`:
-  ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::idle/tail` [semantics · code different] · not stated
+  ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::idle/tail` [semantics · code different]
+      not stated (src/lib.rs:14, src/lib.rs:-14); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::idle=TEXT'; if it does not change, --same 'rewrite 3 => 4'
       affected bodies: depot::idle
       equivalence: MIR changes
       docs of `depot::idle`, no edit in this step (src/lib.rs:13): `/// Gives three.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   item `depot::limit`:
-  ◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
+  ◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
+      not stated (src/lib.rs:11, src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
       affected bodies: depot::limit
       equivalence: MIR changes
   item `depot::wrap2`:
-  ◆ f7 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x * 3` at `depot::wrap2/tail` [semantics · code different] · not stated
+  ◆ f7 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x * 3` at `depot::wrap2/tail` [semantics · code different]
+      not stated (src/lib.rs:10, src/lib.rs:-10); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::wrap2=TEXT'; if it does not change, --same 'rewrite x => x * 3'
       affected bodies: depot::wrap2
       control flow: + check `overflow: x * 3` (src/lib.rs:10): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:10)
@@ -119,7 +104,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
   item `depot::wrap`:
-  ◆ f6 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 7` at `depot::wrap/tail` [semantics · code different] · not stated
+  ◆ f6 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 7` at `depot::wrap/tail` [semantics · code different]
+      not stated (src/lib.rs:9, src/lib.rs:-9); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::wrap=TEXT'; if it does not change, --same 'rewrite x => x + 7'
       affected bodies: depot::wrap
       control flow: + check `overflow: x + 7` (src/lib.rs:9): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:9)
@@ -139,17 +125,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `9` at `depot::a/tail/rhs` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `9` at `depot::a/tail/rhs` [semantics · code different]
     lines: src/lib.rs:6, src/lib.rs:-6
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `5` at `depot::b/tail/rhs` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `5` at `depot::b/tail/rhs` [semantics · code different]
     lines: src/lib.rs:7, src/lib.rs:-7
-◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `4` → `6` at `depot::conf::depth/tail` [semantics · code different] · not stated
+◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `4` → `6` at `depot::conf::depth/tail` [semantics · code different]
     lines: src/lib.rs:17, src/lib.rs:-17
-◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::idle/tail` [semantics · code different] · not stated
+◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::idle/tail` [semantics · code different]
     lines: src/lib.rs:14, src/lib.rs:-14
-◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
+◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
     lines: src/lib.rs:11, src/lib.rs:-11
-◆ f7 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x * 3` at `depot::wrap2/tail` [semantics · code different] · not stated
+◆ f7 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x * 3` at `depot::wrap2/tail` [semantics · code different]
     lines: src/lib.rs:10, src/lib.rs:-10
-◆ f6 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 7` at `depot::wrap/tail` [semantics · code different] · not stated
+◆ f6 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 7` at `depot::wrap/tail` [semantics · code different]
     lines: src/lib.rs:9, src/lib.rs:-9

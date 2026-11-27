@@ -23,13 +23,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::half` (src/lib.rs:1): the full compare: `#[same(depot::half)] fn half_same() {}`; a difference: `#[change(depot::half)] fn half_change(q: u32) -> bool { … }` or `#[different(depot::half)] fn half_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: added macro statement `assert!(q > 0, "no zero");` (f1)
-      in: depot::half
-      lines: src/lib.rs:2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::half=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `depot::half`:
-  ◆ f1 add (Semilla; R90.2-3, 5 new MIR elements): added macro statement `assert!(q > 0, "no zero");` at `depot::half/S0` [semantics · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, 5 new MIR elements): added macro statement `assert!(q > 0, "no zero");` at `depot::half/S0` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::half=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::half
       control flow: + branch `q > 0` (src/lib.rs:2): false → panic `assert!(q > 0, "no zero")`, true → return
       control flow: + panic `assert!(q > 0, "no zero")` (src/lib.rs:2)
@@ -43,5 +40,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, 5 new MIR elements): added macro statement `assert!(q > 0, "no zero");` at `depot::half/S0` [semantics · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, 5 new MIR elements): added macro statement `assert!(q > 0, "no zero");` at `depot::half/S0` [semantics · code different]
     lines: src/lib.rs:2

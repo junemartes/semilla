@@ -24,10 +24,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::count` (src/lib.rs:1)
   changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed call: `v.len()` → `Vec::len(v)` (f1)
-      in: depot::count
-      lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::count=TEXT'; if it does not change, --same 'rewrite $a.len() => Vec::len($a)'
   transformations:
   item `depot::count`:
   ◆ f1 same code (Semilla; R90.2-1, equal MIR): changed call: `v.len()` → `Vec::len(v)` at `depot::count/tail` [semantics · code equal]

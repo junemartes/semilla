@@ -64,13 +64,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::both` (src/lib.rs:8): the full compare: `#[same(depot::both)] fn both_same() {}`; a difference: `#[change(depot::both)] fn both_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart, d_before: &before::depot::Cart, d_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::both)] fn both_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed expression `c.total` → `d.total()` (f1)
-      in: depot::both
-      lines: src/lib.rs:8, src/lib.rs:-8
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::both=TEXT'; if it does not change, --same 'rewrite c.total => d.total()'
   real edits:
   item `depot::both`:
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `c.total` → `d.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `c.total` → `d.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
+      not stated (src/lib.rs:8, src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::both=TEXT'; if it does not change, --same 'rewrite c.total => d.total()'
       affected bodies: depot::both
       control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: d.total() + 1`
       control flow: ~ check `overflow: c.total + 1` → `overflow: d.total() + 1` (src/lib.rs:-8, src/lib.rs:8)
@@ -85,5 +82,5 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `c.total` → `d.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `c.total` → `d.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:-8

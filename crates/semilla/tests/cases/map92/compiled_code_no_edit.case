@@ -1,0 +1,104 @@
+note: the body of a trait impl that a macro makes in a function body has no node and no changed line of its own: its entry is in the section of the compiled code that changes with no edit, and it is no real edit
+rule+: R92.4-1
+option: --reason
+option: <depot::f::Local as depot::Value>::get=the macro makes the impl
+must_match: compiled code that changes with no edit:
+must_match: ◆ f[0-9]+ replace \(Semilla; R92.4-1, no node and no changed line of its own\): code that Semilla does not see
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub trait Value {
+    fn get(&self) -> u32;
+}
+
+macro_rules! make {
+    ($n:ident) => {
+        struct $n;
+        impl crate::Value for $n {
+            fn get(&self) -> u32 {
+                7
+            }
+        }
+    };
+}
+
+pub fn f() -> u32 {
+    1
+}
+=== new src/lib.rs
+pub trait Value {
+    fn get(&self) -> u32;
+}
+
+macro_rules! make {
+    ($n:ident) => {
+        struct $n;
+        impl crate::Value for $n {
+            fn get(&self) -> u32 {
+                7
+            }
+        }
+    };
+}
+
+pub fn f() -> u32 {
+    use crate::Value;
+    make!(Local);
+    Local.get()
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `<depot::f::Local as depot::Value>::get` (src/lib.rs:9): no template: error[S0112]: the scope path `before::depot::f::Local::get` names no item of the version
+    MIR changes with no claim: `depot::f` (src/lib.rs:16): the full compare: `#[same(depot::f)] fn f_same() {}`; a difference: `#[change(depot::f)] fn f_change() -> bool { … }` or `#[different(depot::f)] fn f_different() -> bool { … }`
+  changed nodes: 4 in 5 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::f`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `1` at `depot::f/tail` [semantics · code different]
+      not stated (src/lib.rs:-17); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::f=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 4 places: f1, f2, f3, f4)
+      affected bodies: depot::f (with 1 other edit of this body)
+      equivalence: MIR changes
+  ◆ f4 add (Semilla; R90.2-3, 1 new MIR element): added statement `Local.get()` at `depot::f/tail` [semantics · code different]
+      not stated (src/lib.rs:19); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::f=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 4 places: f1, f2, f3, f4)
+      affected bodies: depot::f (with 1 other edit of this body)
+      control flow: + call `<Local as Value>::get` (src/lib.rs:19): return → return
+      control flow: + arrow entry (src/lib.rs:16) → call `<Local as Value>::get` (src/lib.rs:19)
+      equivalence: MIR changes
+  compiled code that changes with no edit:
+  item `<depot::f::Local as depot::Value>::get`:
+  ◆ f5 replace (Semilla; R92.4-1, no node and no changed line of its own): code that Semilla does not see: `<depot::f::Local as depot::Value>::get` (the body exists only after the step) [indirect · code different]
+      affected bodies: <depot::f::Local as depot::Value>::get
+      spotlight: a MIR body with no source item (generated code): give the cause as the reason; reason: "the macro makes the impl"
+  transformations:
+  item `depot::f`:
+  ◆ f2 same code (Semilla; R90.2-1, equal MIR): added item `use crate::Value;` at `depot::f/S0` [semantics · code equal]
+      equivalence: MIR changes
+  ◆ f3 same code (Semilla; R90.2-1, equal MIR): added macro statement `make!(Local);` at `depot::f/S1` [semantics · code equal]
+      control flow: + graph of `<depot::f::Local as depot::Value>::get`: 2 points, 1 arrow (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    <depot::f::Local as depot::Value>::get (src/lib.rs:9): graph added: 2 points, 1 arrow; no edit in the body
+    depot::f (src/lib.rs:16): graph changes: +1 call, +2 arrows, −1 arrow; MIR changes
+  expansions: 1 added
+    `make!(Local)` at `depot::f/S1` (src/lib.rs:18): expansion added: `macro_rules! make` (src/lib.rs:5): 4 line(s) of code; the step adds the call or its input
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `1` at `depot::f/tail` [semantics · code different]
+    lines: src/lib.rs:-17
+◆ f4 add (Semilla; R90.2-3, 1 new MIR element): added statement `Local.get()` at `depot::f/tail` [semantics · code different]
+    lines: src/lib.rs:19
+◆ f5 replace (Semilla; R92.4-1, no node and no changed line of its own): code that Semilla does not see: `<depot::f::Local as depot::Value>::get` (the body exists only after the step) [indirect · code different]
+    no position
+◆ f2 same code (Semilla; R90.2-1, equal MIR): added item `use crate::Value;` at `depot::f/S0` [semantics · code equal]
+    lines: src/lib.rs:17
+◆ f3 same code (Semilla; R90.2-1, equal MIR): added macro statement `make!(Local);` at `depot::f/S1` [semantics · code equal]
+    lines: src/lib.rs:18

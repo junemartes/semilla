@@ -50,16 +50,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::odd::value` (src/odd name.rs:1): the full compare: `#[same(depot::odd::value)] fn value_same() {}`; a difference: `#[change(depot::odd::value)] fn value_change() -> bool { … }` or `#[different(depot::odd::value)] fn value_different() -> bool { … }`
-  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `1` → `2` (f2)
-      in: depot::odd::value
-      lines: src/odd name.rs:3, src/odd name.rs:-3
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::odd::value=TEXT'; if it does not change, --same 'rewrite 1 => 2'
+  changed nodes: 1 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `docs/my notes.md`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): docs/my notes.md: changed [file · no code]
+      not stated (docs/my notes.md:2, docs/my notes.md:-2); to state it: --change 'docs/my notes.md=TEXT'
   item `depot::odd::value`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::odd::value/tail/rhs` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::odd::value/tail/rhs` [semantics · code different]
+      not stated (src/odd name.rs:3, src/odd name.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::odd::value=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: depot::odd::value
       equivalence: MIR changes
   cover: each of the 4 changed line(s) is in a fact
@@ -70,5 +68,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 === positions
 ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): docs/my notes.md: changed [file · no code]
     lines: docs/my notes.md:2, docs/my notes.md:-2
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::odd::value/tail/rhs` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::odd::value/tail/rhs` [semantics · code different]
     lines: src/odd name.rs:3, src/odd name.rs:-3

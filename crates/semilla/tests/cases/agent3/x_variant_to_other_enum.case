@@ -119,43 +119,35 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::mode_name` (src/lib.rs:24): a type of the signature changes (the type `Mode` changes: `depot::Mode`: `enum Mode { }` → `enum Mode { }`): `#[same(depot::mode_name)] fn mode_name(m_before: &before::depot::Mode, m_after: &after::depot::Mode) -> bool { !(same(m_bef… (147 characters more; `semilla expand --step 0` shows the full line) …e_change() -> bool { … }` or `#[different(depot::mode_name)] fn mode_name_different() -> bool { … }`
     MIR changes with no claim: `depot::start` (src/lib.rs:25): the signature changes (`fn start () -> Mode` → `fn start () -> Other`): `#[same(depot::start)] fn start() -> bool { let old = before::depot::start(); let new = after::depot::start(); true }`; a difference: `#[change(depot::start)] fn start_change() -> bool { … }` or `#[different(depot::start)] fn start_different() -> bool { … }`
-  changed nodes: 7 in 5 entries; 4 real edits (0 stated by the agent); 2 not mapped
-    n6 not mapped [R79.5-1]: added enum `depot::Other` (src/lib.rs:23): not mapped, syntax only in f5: `pub enum Other { Rest }`
-        template: #[new(depot::Other)] fn other_new(a: &after::depot::Other) -> bool { let _ = a; true }
-    n7 not mapped [R79.5-1]: added variant `depot::Other::Rest` (src/lib.rs:23): not mapped, syntax only in f5: `pub enum Other { Rest }`
-        template: #[new(depot::Other)] fn other_new(a: &after::depot::Other) -> bool { let _ = a; true }
-  ? 1 place: removed match arm `Mode::Idle => "idle"` (f3)
-      in: depot::mode_name
-      lines: src/lib.rs:24, src/lib.rs:-23
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::mode_name=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  ? 1 place: changed path `Mode::Idle` → `Other::Rest` (f4)
-      in: depot::start
-      lines: src/lib.rs:25, src/lib.rs:-24
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::start=TEXT'; if it does not change, --same 'rewrite Mode::Idle => Other::Rest'
+  changed nodes: 7 in 5 entries; 4 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::Mode::Idle`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): variant `depot::Mode::Idle` removed: `Idle` (the public API can change: a different crate can use the item) [removed · code different] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): variant `depot::Mode::Idle` removed: `Idle` (the public API can change: a different crate can use the item) [removed · code different]
+      not stated (src/lib.rs:22, src/lib.rs:-22); to state it: --change 'depot::Mode::Idle=TEXT'
       affected bodies: depot::mode_name
       through: `depot::Mode` (1 body), `depot::mode_name` (1 body)
       ! public API: the compare does not cover the code of a different crate
   item `depot::mode_name`:
-  ◆ f3 delete (Semilla; R90.2-3, 3 removed MIR elements): removed match arm `Mode::Idle => "idle"` at `depot::mode_name/S0/arm[0].pat` [semantics · code different] · not stated
+  ◆ f3 delete (Semilla; R90.2-3, 3 removed MIR elements): removed match arm `Mode::Idle => "idle"` at `depot::mode_name/S0/arm[0].pat` [semantics · code different]
+      not stated (src/lib.rs:24, src/lib.rs:-23); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::mode_name=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::mode_name
       control flow: − branch `m` (src/lib.rs:-23): depot::Mode::Idle → return, depot::Mode::Busy → return
       control flow: + arrow entry (src/lib.rs:24) → return (src/lib.rs:24)
       control flow: − arrow entry (src/lib.rs:-23) → branch `m` (src/lib.rs:-23)
       equivalence: MIR changes
   item `depot::start`:
-  ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics · code different] · not stated
+  ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics · code different]
+      not stated (src/lib.rs:25, src/lib.rs:-24); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::start=TEXT'; if it does not change, --same 'rewrite Mode::Idle => Other::Rest'
       affected bodies: depot::start (with 1 other edit of this body)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
-  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): return type of `depot::start` `-> Mode` → `-> Other` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
+  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): return type of `depot::start` `-> Mode` → `-> Other` (the public API can change: a different crate can use the item) [declaration · code different]
+      not stated (src/lib.rs:25, src/lib.rs:-24); to state it: --change 'depot::start=TEXT'
       affected bodies: depot::start (with 1 other edit of this body)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
       ! public API: the compare does not cover the code of a different crate
-  not mapped:
+  syntax only:
   item `depot::Other`:
-  ◆ f5 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1); 2 nodes): added `depot::Other` (the public API changes: a different crate can now use the item) [added · no code]
+  ◆ f5 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; reached from `depot::start` (the name record); 2 nodes): added `depot::Other` (the public API changes: a different crate can now use the item) [added · no code]
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 7 changed line(s) is in a fact
   control flow: 2 bodies
@@ -166,13 +158,13 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): variant `depot::Mode::Idle` removed: `Idle` (the public API can change: a different crate can use the item) [removed · code different] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): variant `depot::Mode::Idle` removed: `Idle` (the public API can change: a different crate can use the item) [removed · code different]
     lines: src/lib.rs:22, src/lib.rs:-22
-◆ f3 delete (Semilla; R90.2-3, 3 removed MIR elements): removed match arm `Mode::Idle => "idle"` at `depot::mode_name/S0/arm[0].pat` [semantics · code different] · not stated
+◆ f3 delete (Semilla; R90.2-3, 3 removed MIR elements): removed match arm `Mode::Idle => "idle"` at `depot::mode_name/S0/arm[0].pat` [semantics · code different]
     lines: src/lib.rs:24, src/lib.rs:-23
-◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics · code different] · not stated
+◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics · code different]
     lines: src/lib.rs:25, src/lib.rs:-24
-◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): return type of `depot::start` `-> Mode` → `-> Other` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
+◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): return type of `depot::start` `-> Mode` → `-> Other` (the public API can change: a different crate can use the item) [declaration · code different]
     lines: src/lib.rs:25, src/lib.rs:-24
-◆ f5 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1); 2 nodes): added `depot::Other` (the public API changes: a different crate can now use the item) [added · no code]
+◆ f5 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; reached from `depot::start` (the name record); 2 nodes): added `depot::Other` (the public API changes: a different crate can now use the item) [added · no code]
     lines: src/lib.rs:23

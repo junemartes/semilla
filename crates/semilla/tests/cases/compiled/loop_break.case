@@ -39,13 +39,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::find` (src/lib.rs:1): the full compare: `#[same(depot::find)] fn find_same() {}`; a difference: `#[change(depot::find)] fn find_change(v: &[u32]) -> bool { … }` or `#[different(depot::find)] fn find_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: added early exit `if v[i] == 9 { break; }` (f1)
-      in: depot::find
-      lines: src/lib.rs:7-9
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::find=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `depot::find`:
-  ◆ f1 add (Semilla; R90.2-3, 7 new MIR elements): added early exit `if v[i] == 9 { break; }` at `depot::find/S1/body/S1` [semantics · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, 7 new MIR elements): added early exit `if v[i] == 9 { break; }` at `depot::find/S1/body/S1` [semantics · code different]
+      not stated (src/lib.rs:7-9); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::find=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::find
       control flow: + check `bounds: v[i]` (src/lib.rs:7): ok → branch `v[i] == 9`, fail → panic `bounds`
       control flow: + branch `v[i] == 9` (src/lib.rs:7): false → check `overflow: i += 1`, true → return
@@ -58,5 +55,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, 7 new MIR elements): added early exit `if v[i] == 9 { break; }` at `depot::find/S1/body/S1` [semantics · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, 7 new MIR elements): added early exit `if v[i] == 9 { break; }` at `depot::find/S1/body/S1` [semantics · code different]
     lines: src/lib.rs:7-9

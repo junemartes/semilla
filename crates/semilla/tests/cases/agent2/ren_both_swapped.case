@@ -125,6 +125,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::mode_name` (src/lib.rs:23)
   changed nodes: 0 in 4 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  compiled code that changes with no edit:
+  item `depot::State::Rest`:
+  ◆ f4 rename (a1; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename · no code]
+  item `depot::State`:
+  ◆ f3 rename (a2; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename · no code]
   transformations:
   item `depot::Mode::Idle`:
   ◆ f2 rename (a1; R90.2-5, the pair check holds): renamed `depot::Mode::Idle` → `depot::State::Rest` [rename · code equal]
@@ -134,21 +139,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + arrow branch `m` (src/lib.rs:23) → return (src/lib.rs:23) (depot::State::Busy)
       control flow: − arrow branch `m` (src/lib.rs:-23) → return (src/lib.rs:-23) (depot::Mode::Idle)
       control flow: … 1 more (semilla expand --step 0)
-  item `depot::State::Rest`:
-  ◆ f4 rename (a1; R90.2-5, the pair check holds): public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename · no code]
-  item `depot::State`:
-  ◆ f3 rename (a2; R90.2-5, the pair check holds): public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename · no code]
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body
     depot::mode_name (src/lib.rs:23): graph changes: +2 arrows, −2 arrows; no edit in the body; equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
+◆ f4 rename (a1; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename · no code]
+    no position
+◆ f3 rename (a2; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename · no code]
+    no position
 ◆ f2 rename (a1; R90.2-5, the pair check holds): renamed `depot::Mode::Idle` → `depot::State::Rest` [rename · code equal]
     no position
 ◆ f1 rename (a2; R90.2-5, the pair check holds): renamed `depot::Mode` → `depot::State` [rename · code equal]
     lines: src/lib.rs:22-24, src/lib.rs:-22-24
-◆ f4 rename (a1; R90.2-5, the pair check holds): public API: `depot::Mode::Idle` is now `depot::State::Rest` (a different crate can no longer use the old path) [rename · no code]
-    no position
-◆ f3 rename (a2; R90.2-5, the pair check holds): public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename · no code]
-    no position

@@ -57,17 +57,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       not explained by its claims: `depot::add` (src/lib.rs:5): MIR changes
       not explained by its claims: `depot::pick` (src/lib.rs:1): MIR changes
   changed nodes: 2 in 2 entries; 2 real edits (2 stated by the agent); 0 not mapped
-  ? 1 place: changed method_call: `a + b` → `a.wrapping_add(b)` (f1)
-      in: depot::add
-      lines: src/lib.rs:6, src/lib.rs:-6
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::add=TEXT'; if it does not change, --same 'rewrite $a + $b => $a.wrapping_add($b)'
-  ? 1 place: change condition `3` → `4` (f2)
-      in: depot::pick
-      lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pick=TEXT'; if it does not change, --same 'rewrite 3 => 4'
   real edits:
   item `depot::add`:
   ◆ f1 replace (i2; R90.2-2, 2 changed MIR elements): changed method_call: `a + b` → `a.wrapping_add(b)` at `depot::add/tail` [semantics · code different]
+      not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::add=TEXT'; if it does not change, --same 'rewrite $a + $b => $a.wrapping_add($b)'
       affected bodies: depot::add
       control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:6): return → return
       control flow: − check `overflow: a + b` (src/lib.rs:-6): ok → return, fail → panic `overflow`
@@ -76,6 +69,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   item `depot::pick`:
   ◆ f2 replace (i1; R90.2-2, 1 changed MIR element): change condition `3` → `4` at `depot::pick/S0/cond/rhs` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pick=TEXT'; if it does not change, --same 'rewrite 3 => 4'
       affected bodies: depot::pick
       control flow: ~ branch `x > 3` → `x > 4` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: MIR changes

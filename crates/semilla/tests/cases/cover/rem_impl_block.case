@@ -34,12 +34,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::Tool::size`:
-  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::Tool::size` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
+  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::Tool::size` (the public API changes: a different crate can no longer use the item) [removed · code different]
+      not stated (src/lib.rs:-9); to state it: --change 'depot::Tool::size=TEXT'
       affected bodies: depot::Tool::size
       control flow: − graph of `depot::Tool::size`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   item `depot::impl Tool`:
-  ◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::impl Tool` with: `fn size` [removed · code different] · not stated
+  ◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::impl Tool` with: `fn size` [removed · code different]
+      not stated (src/lib.rs:-6-9); to state it: --change 'depot::impl Tool=TEXT'
       affected bodies: depot::Tool::size
       control flow: − graph of `depot::Tool::size`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 4 changed line(s) is in a fact
@@ -49,7 +51,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! spotlight: cfg attribute: depot::impl Tool
 
 === positions
-◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::Tool::size` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
+◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::Tool::size` (the public API changes: a different crate can no longer use the item) [removed · code different]
     lines: src/lib.rs:-9
-◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::impl Tool` with: `fn size` [removed · code different] · not stated
+◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::impl Tool` with: `fn size` [removed · code different]
     lines: src/lib.rs:-6-9

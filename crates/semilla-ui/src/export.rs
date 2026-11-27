@@ -1335,8 +1335,25 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
 /// The place of a fact in the order of design 54.5: below the fact of the agent that states
 /// it (`Ok`: the index in the step), or in a group of the facts that Semilla filled in (`Err`).
 fn fact_place(model: &Model, view: &crate::summary::FactView) -> Result<usize, usize> {
+    // [R92.8-1] An entry of the map of the diff is in its section of the one list (design 90,
+    // R90.5-1): the fact of the agent names it.
+    if let Some(section) = view.fact.section() {
+        return Err(section);
+    }
     let agent = model.report().steps.iter().find(|step| step.step == view.step).and_then(|step| step.agent_facts.iter().position(|agent| agent.facts.contains(&view.fact.id)));
     agent.ok_or(view.fact.filled_group())
+}
+
+/// [R92.8-1] True if the steps have entries of the map of the diff (design 90): the review
+/// shows the sections of the one list, as the step output does.
+fn sectioned(reports: &[&semilla_core::report::StepReport]) -> bool {
+    reports.iter().any(|step| step.facts.iter().any(|fact| fact.section().is_some()))
+}
+
+/// [R92.8-1] The groups of the list of the facts that Semilla gives: the sections of the one list
+/// (design 90, 92), or the groups of a record of an earlier version.
+fn fact_groups(reports: &[&semilla_core::report::StepReport]) -> (&'static [&'static str], &'static str) {
+    if sectioned(reports) { (semilla_core::report::ENTRY_SECTIONS, "Entries of the map of the diff") } else { (semilla_core::report::FILLED_GROUPS, "Derived facts") }
 }
 
 /// True if the step of the fact has a tag (design 55.3): the fact shows in the group of its tag.
@@ -1375,14 +1392,15 @@ fn fact_items_where(model: &Model, steps: Option<&[usize]>, full: bool, code: Op
             let origin = if fact.status.is_empty() { "derived" } else { fact.status.as_str() };
             // [R90.5-1] The head of an entry of the map of the diff (design 90).
             let origin = fact.entry_head().unwrap_or_else(|| origin.to_string());
-            let open = if fact.not_stated { " · not stated" } else { "" };
+            // [R92.5-1] The line "not stated" of an entry, with the statement that states it.
+            let open = model.report().steps.iter().find(|step| step.step == view.step).and_then(|step| step.not_stated_line(fact)).map(|line| format!(" · {line}")).unwrap_or_default();
             // Design 54.7: a long text and a text with more than one line are in a block
             // below the fact line.
             // R71.1-1: a text over the budget shows the changed part, the sizes, and the command.
             let command = semilla_core::budget::full_text_command(&fact.id, view.step);
             let budget = text::Budget { command: Some(&command), keep: fact.category == semilla_core::Category::Docs };
             let (line, blocks) = text::fact_layout_with(&fact.description, Some(budget));
-            let mut text = format!("step {}: {} {origin}: {line} [{}]{}{open}", view.step, fact.id, fact.label(), fact.mark());
+            let mut text = format!("step {}: {} {origin}: {line} [{}]{}", view.step, fact.id, fact.label(), fact.mark());
             for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
                 let anchors = group.sites.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ");
                 // A folded fact has the count and the text in its description: only the anchors
@@ -1457,6 +1475,8 @@ fn fact_items_where(model: &Model, steps: Option<&[usize]>, full: bool, code: Op
             if let Some((line, _)) = flow.and_then(|flow| flow.reaches.get(&fact.id)) {
                 text.push_str(&format!("; reaches: {line}"));
             }
+            // [R92.5-1] The line "not stated" is the last part of the item.
+            text.push_str(&open.replacen(" · ", "; ", 1));
             let diff = if full { fact.content.clone() } else { model.fact_diff(view).or_else(|| fact.content.clone().filter(|_| fact.build_code_change)) };
             // The blocks of the fact text have the full text of each side: no second diff.
             (view.step, fact.id.as_str(), text, if blocks.is_empty() { diff } else { Some(blocks.join("\n")) })
@@ -1500,6 +1520,12 @@ fn md_fact_list(out: &mut String, items: &[(String, Option<String>)]) {
     out.push('\n');
 }
 
+/// [R92.8-1] A name of a section with a capital first letter.
+fn capitalized(name: &str) -> String {
+    let mut chars = name.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
 /// The list items of [`md_fact_list`] at an indent.
 fn md_fact_items(out: &mut String, items: &[(String, Option<String>)], indent: &str) {
     for (text, content) in items {
@@ -1533,19 +1559,28 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
                     }
                     continue;
                 }
+                // [R92.8-1] The entries are in the sections of the one list: the fact names them.
+                if sectioned(&[*step]) {
+                    if !agent.facts.is_empty() {
+                        let _ = writeln!(out, "  - entries, in the list below: {}", agent.facts.join(", "));
+                    }
+                    continue;
+                }
                 let below = fact_items_where(model, Some(&[step.step]), full, Some(false), &|view| fact_place(model, view) == Ok(index));
                 md_fact_items(out, &below, "  ");
             }
         }
         out.push('\n');
     }
-    let gaps: usize = reports.iter().map(|step| step.gaps.len()).sum();
+    // [R92.5-1] The entries have the line "not stated": the separate list is only for a record
+    // of an earlier version.
+    let gaps: usize = reports.iter().filter(|step| !sectioned(&[**step])).map(|step| step.gaps.len()).sum();
     if gaps > 0 {
-        let items: usize = reports.iter().map(|step| step.gap_items().len()).sum();
-        let places: usize = reports.iter().flat_map(|step| &step.gaps).map(|gap| gap.places.len()).sum();
+        let items: usize = reports.iter().filter(|step| !sectioned(&[**step])).map(|step| step.gap_items().len()).sum();
+        let places: usize = reports.iter().filter(|step| !sectioned(&[**step])).flat_map(|step| &step.gaps).map(|gap| gap.places.len()).sum();
         let _ = writeln!(out, "#### Not stated ({items})\n");
         let _ = writeln!(out, "{}\n", md(&semilla_core::report::gap_count_line(items, places).unwrap_or_default()));
-        for step in &reports {
+        for step in reports.iter().filter(|step| !sectioned(&[**step])) {
             for gap in &step.gaps {
                 let tags = step.tags_of(&gap.facts).map(|tags| format!("; {}", md_with_code(&tags))).unwrap_or_default();
                 // The lines of the edits (design 55.2), if the list is short.
@@ -1555,6 +1590,9 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
             }
         }
         out.push('\n');
+    } else if let Some(line) = reports.iter().any(|step| sectioned(&[*step]) && !step.gaps.is_empty()).then(|| semilla_core::report::gap_count_line(reports.iter().map(|step| step.gap_items().len()).sum(), reports.iter().flat_map(|step| &step.gaps).map(|gap| gap.places.len()).sum())).flatten() {
+        // [R92.5-1] The count line stays; each line of the list is below its entries.
+        let _ = writeln!(out, "{}\n", md(&line));
     } else if count > 0 {
         // Design 54.14: a change set with a fact of the agent always has the count line.
         let _ = writeln!(out, "{}\n", md(semilla_core::report::NO_GAP_LINE));
@@ -1600,15 +1638,26 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
         let _ = writeln!(out, "{}\n", md_with_code(&line));
     }
     let total = fact_items_where(model, Some(steps), full, Some(false), &|view| fact_place(model, view).is_err() && !in_tagged_step(model, view)).len();
+    let (groups, title) = fact_groups(&reports);
     if total > 0 {
-        let _ = writeln!(out, "#### Derived facts ({total})\n");
+        let _ = writeln!(out, "#### {title} ({total})\n");
+        // [R92.8-1] The coverage line of the map of each step (R90.5-3).
+        for step in reports.iter().filter(|step| sectioned(&[**step]) && step.tags.is_empty()) {
+            if let Some(map) = &step.ast {
+                let _ = writeln!(out, "Step {}: {}\n", step.step, md(&semilla_core::report::map_coverage_line(map, &step.facts)));
+            }
+        }
     }
-    for (group, name) in semilla_core::report::FILLED_GROUPS.iter().enumerate() {
+    for (group, name) in groups.iter().enumerate() {
         let facts = fact_items_where(model, Some(steps), full, Some(false), &|view| fact_place(model, view) == Err(group) && !in_tagged_step(model, view));
         if facts.is_empty() {
             continue;
         }
-        let _ = writeln!(out, "Filled in by Semilla, {name} ({}):\n", facts.len());
+        if sectioned(&reports) {
+            let _ = writeln!(out, "{} ({}):\n", capitalized(name), facts.len());
+        } else {
+            let _ = writeln!(out, "Filled in by Semilla, {name} ({}):\n", facts.len());
+        }
         md_fact_list(out, &facts);
     }
     // Design 58.9: the comments of the changed items, each one with its first fact.
@@ -1647,6 +1696,14 @@ fn html_facts(out: &mut String, model: &Model, steps: &[usize]) {
                 for line in agent.lines() {
                     let _ = write!(out, "<br>{}", esc(&line));
                 }
+                // [R92.8-1] The entries are in the sections of the one list: the fact names them.
+                if sectioned(&[*step]) {
+                    if !agent.facts.is_empty() {
+                        let _ = write!(out, "<br>entries, in the list below: {}", esc(&agent.facts.join(", ")));
+                    }
+                    out.push_str("</li>\n");
+                    continue;
+                }
                 let below = fact_items_where(model, Some(&[step.step]), true, Some(false), &|view| fact_place(model, view) == Ok(index));
                 if !below.is_empty() {
                     html_fact_list(out, &below);
@@ -1656,17 +1713,20 @@ fn html_facts(out: &mut String, model: &Model, steps: &[usize]) {
         }
         out.push_str("</ul>\n");
     }
-    let gaps: usize = reports.iter().map(|step| step.gaps.len()).sum();
+    let gaps: usize = reports.iter().filter(|step| !sectioned(&[**step])).map(|step| step.gaps.len()).sum();
     if gaps > 0 {
-        let items: usize = reports.iter().map(|step| step.gap_items().len()).sum();
-        let places: usize = reports.iter().flat_map(|step| &step.gaps).map(|gap| gap.places.len()).sum();
+        let items: usize = reports.iter().filter(|step| !sectioned(&[**step])).map(|step| step.gap_items().len()).sum();
+        let places: usize = reports.iter().filter(|step| !sectioned(&[**step])).flat_map(|step| &step.gaps).map(|gap| gap.places.len()).sum();
         let _ = writeln!(out, "<h4>Not stated ({items})</h4>\n<p class=\"muted\">{}</p>\n<ul class=\"gaps\">", esc(&semilla_core::report::gap_count_line(items, places).unwrap_or_default()));
-        for step in &reports {
+        for step in reports.iter().filter(|step| !sectioned(&[**step])) {
             for gap in &step.gaps {
                 let _ = writeln!(out, "<li>step {}: {}; in: {}</li>", step.step, esc(&gap.line()), esc(&gap.items.join(", ")));
             }
         }
         out.push_str("</ul>\n");
+    } else if let Some(line) = reports.iter().any(|step| sectioned(&[*step]) && !step.gaps.is_empty()).then(|| semilla_core::report::gap_count_line(reports.iter().map(|step| step.gap_items().len()).sum(), reports.iter().flat_map(|step| &step.gaps).map(|gap| gap.places.len()).sum())).flatten() {
+        // [R92.5-1] The count line stays; each line of the list is below its entries.
+        let _ = writeln!(out, "<p class=\"muted\">{}</p>", esc(&line));
     } else if count > 0 {
         let _ = writeln!(out, "<p class=\"muted\">{}</p>", esc(semilla_core::report::NO_GAP_LINE));
     }
@@ -1687,15 +1747,20 @@ fn html_facts(out: &mut String, model: &Model, steps: &[usize]) {
         let _ = writeln!(out, "<p class=\"warn\">{}</p>", esc(&line));
     }
     let total = fact_items_where(model, Some(steps), true, Some(false), &|view| fact_place(model, view).is_err()).len();
+    let (groups, title) = fact_groups(&reports);
     if total > 0 {
-        let _ = writeln!(out, "<h4>Derived facts ({total})</h4>");
+        let _ = writeln!(out, "<h4>{title} ({total})</h4>");
     }
-    for (group, name) in semilla_core::report::FILLED_GROUPS.iter().enumerate() {
+    for (group, name) in groups.iter().enumerate() {
         let facts = fact_items_where(model, Some(steps), true, Some(false), &|view| fact_place(model, view) == Err(group));
         if facts.is_empty() {
             continue;
         }
-        let _ = writeln!(out, "<p class=\"muted\">Filled in by Semilla, {name} ({}):</p>", facts.len());
+        if sectioned(&reports) {
+            let _ = writeln!(out, "<p class=\"muted\">{} ({}):</p>", esc(&capitalized(name)), facts.len());
+        } else {
+            let _ = writeln!(out, "<p class=\"muted\">Filled in by Semilla, {name} ({}):</p>", facts.len());
+        }
         html_fact_list(out, &facts);
     }
     // Design 58.9: the comments of the changed items, each one with its first fact.
@@ -2220,6 +2285,22 @@ mod tests {
         // The HTML report: the same escapes, then the HTML escape.
         assert_eq!(esc("a\n<b>\u{1b}"), "a\\n&lt;b&gt;\\u{1b}");
         assert_eq!(esc_block("a\n<b>\u{1b}"), "a\n&lt;b&gt;\\u{1b}");
+    }
+
+    // rule+ R92.8-1
+    // rule- R92.8-1
+    #[test]
+    fn the_review_shows_the_sections_of_the_one_list() {
+        use semilla_core::report::{EntryKind, Fact, StepReport};
+        let entry = |id: &str, kind: Option<EntryKind>| Fact { id: id.into(), kind, nodes: vec![1], ..Default::default() };
+        let step = StepReport { facts: vec![entry("f1", Some(EntryKind::Replace))], ..Default::default() };
+        assert!(sectioned(&[&step]));
+        assert_eq!(fact_groups(&[&step]), (semilla_core::report::ENTRY_SECTIONS, "Entries of the map of the diff"));
+        assert_eq!(capitalized(semilla_core::report::NO_EDIT_SECTION), "Compiled code that changes with no edit");
+        // Negative: a record of an earlier version (no kind) keeps the groups of before.
+        let old = StepReport { facts: vec![entry("f1", None)], ..Default::default() };
+        assert!(!sectioned(&[&old]));
+        assert_eq!(fact_groups(&[&old]), (semilla_core::report::FILLED_GROUPS, "Derived facts"));
     }
 
     #[test]

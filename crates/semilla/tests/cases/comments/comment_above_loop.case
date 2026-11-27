@@ -41,13 +41,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::total` (src/lib.rs:2): the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(prices: &[u32]) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `10` → `5` (f1)
-      in: shop::total
-      lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, --same 'rewrite 10 => 5'
   real edits:
   item `shop::total`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::total/S1/body/S0/rhs/rhs/rhs` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::total/S1/body/S0/rhs/rhs/rhs` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, --same 'rewrite 10 => 5'
       affected bodies: shop::total
       control flow: ~ check `overflow: sum += price + price / 10` → `overflow: sum += price + price / 5` (src/lib.rs:-7, src/lib.rs:7)
       equivalence: MIR changes
@@ -62,5 +59,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 3 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::total/S1/body/S0/rhs/rhs/rhs` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::total/S1/body/S0/rhs/rhs/rhs` [semantics · code different]
     lines: src/lib.rs:7, src/lib.rs:-7

@@ -42,18 +42,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:1): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32, y: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: 2 different edits (f1, f2)
-      in: shop::price
-      lines: src/lib.rs:2-3, src/lib.rs:-2-3
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 10 => 5' --same 'rewrite add => mul'
   real edits:
   item `shop::price`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/S0/init/rhs` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/S0/init/rhs` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 10 => 5' --same 'rewrite add => mul' (one statement for 2 places: f1, f2)
       affected bodies: shop::price (with 1 other edit of this body)
       equivalence: MIR changes alone; the body: MIR changes
       comment at the end of line 2, no edit in this step (src/lib.rs:2): `// ten percent`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `add` → `mul` at `shop::price/S1/init/callee` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `add` → `mul` at `shop::price/S1/init/callee` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 10 => 5' --same 'rewrite add => mul' (one statement for 2 places: f1, f2)
       affected bodies: shop::price (with 1 other edit of this body)
       control flow: ~ call `add` → `mul` (src/lib.rs:-3, src/lib.rs:3)
       equivalence: MIR changes alone; the body: MIR changes
@@ -66,7 +64,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 3 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/S0/init/rhs` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/S0/init/rhs` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `add` → `mul` at `shop::price/S1/init/callee` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `add` → `mul` at `shop::price/S1/init/callee` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:-3

@@ -85,30 +85,30 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `<depot::Source as depot::Draw<depot::Small>>::sample` (src/lib.rs:10): the full compare: `#[same(<depot::Source as depot::Draw<depot::Small>>::sample)] fn sample_same() {}`; a difference: `#[change(<depot::Source as depot::Draw<depot::Small>>::sample)] fn sample_change() -> bool { … }` or `#[different(<depot::Source as depot::Draw<depot::Small>>::sample)] fn sample_different() -> bool { … }`
     MIR changes with no claim: `<depot::Source as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true) }` (src/lib.rs:11): the template of `<depot::Source as depot::Draw<depot::Small>>::sample` covers its item `depot::<Source as Draw>::sample`
   changed nodes: 4 in 4 entries; 4 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: 2 different edits (f2, f3)
-      in: depot::<Source as Draw>::sample
-      lines: src/lib.rs:11-12, src/lib.rs:-11
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::<Source as Draw>::sample=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `depot::<Source as Draw>::sample#1`:
-  ◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::<Source as Draw>::sample#1` (a twin of `depot::<Source as Draw>::sample`) with the body: [1] [added · code different] · not stated
+  ◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::<Source as Draw>::sample#1` (a twin of `depot::<Source as Draw>::sample`) with the body: [1] [added · code different]
         [1] { const { assert!(true) }; #[cfg(target_pointer_width = "32")] let value = seed as u32 as usize; #[cfg(target_pointer_width = "64")] let value = seed as u64 as usize; #[cfg(not(any( target_pointer_width = "32", target_pointer_width = "64" )))] compile_error!("no width"); Large::new(value) }
+      not stated (src/lib.rs:28-42); to state it: --change 'depot::<Source as Draw>::sample#1=TEXT'
       affected bodies: depot::<Source as Draw>::sample#1
       control flow: + graph of `<depot::Source as depot::Draw<depot::Large>>::sample`: 3 points, 2 arrows (semilla expand --step 0) (the same line for f1)
       control flow: + graph of `<depot::Source as depot::Draw<depot::Large>>::sample::{constant#0} { assert!(true) }`: 2 points, 1 arrow (semilla expand --step 0) (the same line for f1)
       ✗ spotlight: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:31; not on this target); no checked configuration compiles the changed code (`#[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]` at src/lib.rs:35; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::<Source as Draw>::sample#1=…'
   item `depot::<Source as Draw>::sample`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics · code different]
+      not stated (src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::<Source as Draw>::sample=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f3)
       affected bodies: depot::<Source as Draw>::sample (with 1 other edit of this body)
       control flow: − call `check` (src/lib.rs:-11): return → call `Small::new`
       control flow: − arrow entry (src/lib.rs:-10) → call `check` (src/lib.rs:-11)
       equivalence: MIR changes
-  ◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): added `const_block` `const { assert!(true) }` at `depot::<Source as Draw>::sample/S0` [semantics · code different] · not stated
+  ◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): added `const_block` `const { assert!(true) }` at `depot::<Source as Draw>::sample/S0` [semantics · code different]
+      not stated (src/lib.rs:11-12); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::<Source as Draw>::sample=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f3)
       affected bodies: depot::<Source as Draw>::sample (with 1 other edit of this body)
       control flow: + graph of `<depot::Source as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true) }`: 2 points, 1 arrow (semilla expand --step 0)
       equivalence: MIR changes
   item `depot::impl <Source as Draw>#1`:
-  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): trait impl `<Source as Draw<Large>>#1` added with: `fn sample` (the public API can change: a different crate can use the item) [added · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): trait impl `<Source as Draw<Large>>#1` added with: `fn sample` (the public API can change: a different crate can use the item) [added · code different]
+      not stated (src/lib.rs:26-43); to state it: --change 'depot::impl <Source as Draw>#1=TEXT'
       affected bodies: depot::<Source as Draw>::sample#1
       control flow: the same line as f4
       control flow: the same line as f4
@@ -128,11 +128,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::<Source as Draw>::sample#1=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::<Source as Draw>::sample#1=the reason of the test'
-◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::<Source as Draw>::sample#1` (a twin of `depot::<Source as Draw>::sample`) with the body: [1] [added · code different] · not stated
+◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::<Source as Draw>::sample#1` (a twin of `depot::<Source as Draw>::sample`) with the body: [1] [added · code different]
     lines: src/lib.rs:28-42
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics · code different]
     lines: src/lib.rs:-11
-◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): added `const_block` `const { assert!(true) }` at `depot::<Source as Draw>::sample/S0` [semantics · code different] · not stated
+◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): added `const_block` `const { assert!(true) }` at `depot::<Source as Draw>::sample/S0` [semantics · code different]
     lines: src/lib.rs:11-12
-◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): trait impl `<Source as Draw<Large>>#1` added with: `fn sample` (the public API can change: a different crate can use the item) [added · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): trait impl `<Source as Draw<Large>>#1` added with: `fn sample` (the public API can change: a different crate can use the item) [added · code different]
     lines: src/lib.rs:26-43

@@ -20,10 +20,11 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 0 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `notes.txt`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): notes.txt: changed [file · code different]
+      not stated (notes.txt:1, notes.txt:-1); to state it: --change 'notes.txt=TEXT'
       affected bodies: shop::notes
       expansion: `include_str!("../notes.txt")` at `shop::notes/tail` (src/lib.rs:2): expansion changed: only the context of the call changes: the file `notes.txt` (`include_str!("../notes.txt")`); changed code `nine` → `ten`
   cover: each of the 2 changed line(s) is in a fact

@@ -27,19 +27,15 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 2 not mapped
-    n1 not mapped [R79.3-6]: removed trait `depot::Shape` (src/lib.rs:-5): not mapped, syntax only in f1: `/// The new doc.\n/// One more line.\n#[cfg(all())]\npub trait Shape { fn area(&self) -> u32; }`
-        no template: the head of a container has no claim; a claim on each member that is not mapped maps it
-    n2 not mapped [R79.5-1]: removed fn `depot::Shape::area` (src/lib.rs:-8): not mapped, syntax only in f1: `pub trait Shape { fn area(&self) -> u32; }`
-        no template: `depot::Shape::area` is a function of a trait; a claim calls it with the types of an instance (`#[same(depot::Shape::area)]`, or `new`, `removed`, with a body that calls it in each version)
-  not mapped:
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
   item `depot::Shape`:
-  ◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.3-6); 2 nodes): removed `depot::Shape` (the public API changes: a different crate can no longer use the item) [removed · no code]
+  ◆ f1 delete, syntax only (Semilla; R92.3-1, no MIR element and no partner; the head of a container: its members reach it; 2 nodes): removed `depot::Shape` (the public API changes: a different crate can no longer use the item) [removed · no code]
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::Shape
 
 === positions
-◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.3-6); 2 nodes): removed `depot::Shape` (the public API changes: a different crate can no longer use the item) [removed · no code]
+◆ f1 delete, syntax only (Semilla; R92.3-1, no MIR element and no partner; the head of a container: its members reach it; 2 nodes): removed `depot::Shape` (the public API changes: a different crate can no longer use the item) [removed · no code]
     lines: src/lib.rs:-5-8

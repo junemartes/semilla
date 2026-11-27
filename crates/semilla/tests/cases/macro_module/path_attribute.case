@@ -31,13 +31,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::unix::open` (src/sys/unix_impl.rs:1): the full compare: `#[same(depot::unix::open)] fn open_same() {}`; a difference: `#[change(depot::unix::open)] fn open_change() -> bool { … }` or `#[different(depot::unix::open)] fn open_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `3` → `4` (f1)
-      in: depot::unix::open
-      lines: src/sys/unix_impl.rs:2, src/sys/unix_impl.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::unix::open=TEXT'; if it does not change, --same 'rewrite 3 => 4'
   real edits:
   item `depot::unix::open`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different]
+      not stated (src/sys/unix_impl.rs:2, src/sys/unix_impl.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::unix::open=TEXT'; if it does not change, --same 'rewrite 3 => 4'
       affected bodies: depot::unix::open
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
@@ -47,5 +44,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! spotlight: module of a macro input: `depot::unix` (`src/sys/unix_impl.rs`) has its line `#[path = "sys/unix_impl.rs"] mod unix;` in the input of the macro call `depot::pick!#0` (`src/lib.rs:7`); Semilla does not expand the macro, so it does not know if the build has this module
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different]
     lines: src/sys/unix_impl.rs:2, src/sys/unix_impl.rs:-2

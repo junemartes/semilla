@@ -68,22 +68,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::count` (src/lib.rs:18): no result of the equivalence check; the full compare: `#[same(shop::count)] fn count_same_2() {}`; a difference: `#[change(shop::count)] fn count_change_2() -> bool { … }` or `#[different(shop::count)] fn count_different_2() -> bool { … }`
     MIR changes with no claim: `shop::look` (src/lib.rs:6): the same MIR text; a constant that it names changes or has no value to compare: `shop::TABLE`; the full compare: `#[same(shop::look)] fn look_same() {}`; a difference: `#[change(shop::look)] fn look_change(i: usize) -> bool { … }` or `#[different(shop::look)] fn look_different() -> bool { … }`
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: value of `shop::COUNT` changed: AtomicU32::new(1) → AtomicU32::new(2) (f1)
-      in: shop::COUNT
-      lines: src/lib.rs:4, src/lib.rs:-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::COUNT=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  ? 1 place: value of, see f2 (f2)
-      in: shop::TABLE
-      lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::TABLE=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `shop::COUNT`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::COUNT` changed: AtomicU32::new(1) → AtomicU32::new(2) [semantics · code different] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::COUNT` changed: AtomicU32::new(1) → AtomicU32::new(2) [semantics · code different]
+      not stated (src/lib.rs:4, src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::COUNT=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::COUNT, shop::count
       through: `shop::COUNT` (1 body)
       equivalence: MIR changes
   item `shop::TABLE`:
-  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::TABLE` changed: [1, 2, 3, 4, 5, 6, 7, 8] → [1, 2, 9, 4, 5, 6, 7, 8] [semantics · code different] · not stated
+  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::TABLE` changed: [1, 2, 3, 4, 5, 6, 7, 8] → [1, 2, 9, 4, 5, 6, 7, 8] [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::TABLE=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::TABLE, shop::look
       through: `shop::TABLE` (1 body)
       equivalence: MIR changes
@@ -96,7 +90,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::COUNT` changed: AtomicU32::new(1) → AtomicU32::new(2) [semantics · code different] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::COUNT` changed: AtomicU32::new(1) → AtomicU32::new(2) [semantics · code different]
     lines: src/lib.rs:4, src/lib.rs:-4
-◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::TABLE` changed: [1, 2, 3, 4, 5, 6, 7, 8] → [1, 2, 9, 4, 5, 6, 7, 8] [semantics · code different] · not stated
+◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::TABLE` changed: [1, 2, 3, 4, 5, 6, 7, 8] → [1, 2, 9, 4, 5, 6, 7, 8] [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

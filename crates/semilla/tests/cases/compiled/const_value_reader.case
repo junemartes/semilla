@@ -47,14 +47,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::cap` (src/lib.rs:12): the full compare: `#[same(shop::cap)] fn cap_same() {}`; a difference: `#[change(shop::cap)] fn cap_change(n: u32) -> bool { … }` or `#[different(shop::cap)] fn cap_different() -> bool { … }`
     MIR changes with no claim: `shop::price` (src/lib.rs:4): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(n: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: value of, see f1 (f1)
-      in: shop::RATE
-      lines: src/lib.rs:1, src/lib.rs:-1
-      to state it: --change 'shop::RATE=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::RATE=TEXT'
   real edits:
   item `shop::RATE`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::RATE` changed: 7 → 6 (the public API can change: a different crate can use the item) [semantics · code different] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::RATE` changed: 7 → 6 (the public API can change: a different crate can use the item) [semantics · code different]
+      not stated (src/lib.rs:1, src/lib.rs:-1); to state it: --change 'shop::RATE=TEXT'
       affected bodies: shop::cap, shop::price
       through: `shop::RATE` (2 bodies)
       ! public API: the compare does not cover the code of a different crate
@@ -65,5 +62,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::RATE` changed: 7 → 6 (the public API can change: a different crate can use the item) [semantics · code different] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::RATE` changed: 7 → 6 (the public API can change: a different crate can use the item) [semantics · code different]
     lines: src/lib.rs:1, src/lib.rs:-1

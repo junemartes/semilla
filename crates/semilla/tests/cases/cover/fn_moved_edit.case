@@ -68,13 +68,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::beta` (src/lib.rs:19): the full compare: `#[same(depot::beta)] fn beta_same() {}`; a difference: `#[change(depot::beta)] fn beta_change(v: &[u32]) -> bool { … }` or `#[different(depot::beta)] fn beta_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed operator `*x > best` → `*x >= best` (f1)
-      in: depot::beta
-      lines: src/lib.rs:18-27, src/lib.rs:-9-18
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::beta=TEXT'; if it does not change, --same 'rewrite $a > $b => $a >= $b'
   real edits:
   item `depot::beta`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics · code different]
+      not stated (src/lib.rs:18-27, src/lib.rs:-9-18); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::beta=TEXT'; if it does not change, --same 'rewrite $a > $b => $a >= $b'
       affected bodies: depot::beta
       control flow: ~ branch `*x > best` → `*x >= best` (src/lib.rs:-12, src/lib.rs:22)
       equivalence: MIR changes
@@ -84,5 +81,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics · code different]
     lines: src/lib.rs:18-27, src/lib.rs:-9-18

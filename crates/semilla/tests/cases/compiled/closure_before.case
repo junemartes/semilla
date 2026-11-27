@@ -34,13 +34,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::total::{closure#0} |x| x.cost() > 0` (src/lib.rs:7): the template of `shop::total` covers its item `shop::total`
     MIR changes with no claim: `shop::total::{closure#1} |x| x.cost()` (src/lib.rs:7): the same MIR text; a changed callee: `shop::total::{closure#0}`, `shop::total::{closure#1}`; the template of `shop::total` covers its item `shop::total`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed expression `items.iter()` → `items.iter().filter(|x| x.cost() > 0)` (f1)
-      in: shop::total
-      lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, --same 'rewrite $a.iter() => $a.iter().filter(|x| x.cost() > 0)'
   real edits:
   item `shop::total`:
-  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `items.iter()` → `items.iter().filter(|x| x.cost() > 0)` at `shop::total/tail/recv/recv` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `items.iter()` → `items.iter().filter(|x| x.cost() > 0)` at `shop::total/tail/recv/recv` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, --same 'rewrite $a.iter() => $a.iter().filter(|x| x.cost() > 0)'
       affected bodies: shop::total
       control flow: + call `<Iter<'_, Item> as Iterator>::filter::<{closure#0}> (trait default)` (src/lib.rs:7): return → call `<Filter<Iter<'_, Item>, {closure#0}> as Iterator>::map::<u32, {closure#1}> (trait default)`
       control flow: ~ call `<Iter<'_, Item> as Iterator>::map::<u32, {closure#1}> (trait default)` → `<Filter<Iter<'_, Item>, {closure#0}> as Iterator>::map::<u32, {closure#1}> (trait default)` (src/lib.rs:-7, src/lib.rs:7)
@@ -56,5 +53,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `items.iter()` → `items.iter().filter(|x| x.cost() > 0)` at `shop::total/tail/recv/recv` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `items.iter()` → `items.iter().filter(|x| x.cost() > 0)` at `shop::total/tail/recv/recv` [semantics · code different]
     lines: src/lib.rs:7, src/lib.rs:-7

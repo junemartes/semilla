@@ -41,10 +41,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::pick` (src/lib.rs:5)
   changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed match, see f1 (f1)
-      in: depot::pick
-      lines: src/lib.rs:8
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pick=TEXT'; if it does not change, --same 'rewrite match n { 0 => 1, 1 => 2, _ => 3, } => match n { 0 => 1, #[cfg(all())] 1 => 2, _ => 3, }'
   transformations:
   item `depot::pick`:
   ◆ f1 same code (Semilla; R90.2-1, equal MIR): changed match: `match ▫ { ▫ => ▫, ▫ => ▫, ▫ => ▫, }` → `match ▫ { ▫ => ▫, #[cfg(all())] ▫ => ▫, ▫ => ▫, }` at `depot::pick/S0` [semantics · code equal]

@@ -1,0 +1,53 @@
+note: a changed variant of a tuple enum is one change: the constructor of the variant is a body of the entry of its field, with no entry of its own
+rule+: R92.6-1
+must_match: changed nodes: 1 in 1 entries
+must_not_match: indirect change, cause not known
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub enum Shape {
+    Dot(u8),
+    Line(u8, u8),
+}
+
+pub fn size(s: &Shape) -> u32 {
+    match s {
+        Shape::Dot(a) => *a as u32,
+        Shape::Line(a, b) => *a as u32 + *b as u32,
+    }
+}
+=== new src/lib.rs
+pub enum Shape {
+    Dot(u16),
+    Line(u8, u8),
+}
+
+pub fn size(s: &Shape) -> u32 {
+    match s {
+        Shape::Dot(a) => *a as u32,
+        Shape::Line(a, b) => *a as u32 + *b as u32,
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::Shape::Dot`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): the tuple fields of `depot::Shape::Dot` changed: `(u8)` → `(u16)` (the public API can change: a different crate can use the item) [declaration · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: --change 'depot::Shape::Dot=TEXT'
+      affected bodies: depot::Shape::Dot, depot::size
+      through: `depot::Shape` (1 body), `depot::Shape::Dot` (1 body), `depot::Shape::Dot.0` (1 body), and 1 more
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): the tuple fields of `depot::Shape::Dot` changed: `(u8)` → `(u16)` (the public API can change: a different crate can use the item) [declaration · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

@@ -35,19 +35,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::fetch` (src/lib.rs:1): the same MIR text; a changed callee: `depot::fetch::{closure#0}`; the full compare: `#[same(depot::fetch)] fn fetch_same() {}`; a difference: `#[change(depot::fetch)] fn fetch_change(n: u32) -> bool { … }` or `#[different(depot::fetch)] fn fetch_different() -> bool { … }`
     MIR changes with no claim: `depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 }` (src/lib.rs:1): the template of `depot::fetch` covers its item `depot::fetch`
   changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: added early exit `if n == 0 { return 0; }` (f1)
-      in: depot::fetch
-      lines: src/lib.rs:2-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::fetch=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `depot::fetch`:
-  ◆ f1 add (Semilla; R90.2-3, 5 new MIR elements): added early exit `if n == 0 { return 0; }` at `depot::fetch/S0` [semantics · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, 5 new MIR elements): added early exit `if n == 0 { return 0; }` at `depot::fetch/S0` [semantics · code different]
+      not stated (src/lib.rs:2-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::fetch=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::fetch
       control flow: + branch `n == 0` (src/lib.rs:2): false → check `overflow: n + 1`, true → return
       control flow: + arrow entry (src/lib.rs:1) → branch `n == 0` (src/lib.rs:2)
       equivalence: `depot::fetch`: MIR changes: the same MIR text; a changed callee: `depot::fetch::{closure#0}`
       equivalence: `depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 }`: MIR changes
-  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `depot::fetch` changes with no edit at its place: `{ n + 1 }` (before the step) [indirect · code different]
+  compiled code that changes with no edit:
+  item `depot::fetch`:
+  ◆ f2 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::fetch` changes with no edit at its place: `{ n + 1 }` (before the step) [indirect · code different]
       affected bodies: depot::fetch
       note: lines before the step 1; the cause: the edit of this body at src/lib.rs:2 (the step changes no other input of the body)
   cover: each of the 3 changed line(s) is in a fact
@@ -57,7 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, 5 new MIR elements): added early exit `if n == 0 { return 0; }` at `depot::fetch/S0` [semantics · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, 5 new MIR elements): added early exit `if n == 0 { return 0; }` at `depot::fetch/S0` [semantics · code different]
     lines: src/lib.rs:2-4
-◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `depot::fetch` changes with no edit at its place: `{ n + 1 }` (before the step) [indirect · code different]
+◆ f2 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::fetch` changes with no edit at its place: `{ n + 1 }` (before the step) [indirect · code different]
     no position

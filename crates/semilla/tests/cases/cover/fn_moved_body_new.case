@@ -56,54 +56,47 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::probe` (src/lib.rs:4): the full compare: `#[same(depot::probe)] fn probe_same() {}`; a difference: `#[change(depot::probe)] fn probe_change() -> bool { … }` or `#[different(depot::probe)] fn probe_different() -> bool { … }`
-  changed nodes: 8 in 10 entries; 7 real edits (0 stated by the agent); 0 not mapped
-  ? 7 places: 7 different edits (f3, f4, f5, f6, f7, f1, f8)
-      in: depot::probe
-      lines: src/lib.rs:6-9, src/lib.rs:11-13, src/lib.rs:-12-16, src/lib.rs:-18
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::probe=TEXT'; if it does not change, --same 'rewrite dir => d', and a `--same` fact (rename, move, or rewrite) that explains each other edit
+  changed nodes: 8 in 7 entries; 4 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::probe`:
-  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): moved statement `result.dirs.push(dir)` from `depot::probe/S1/body/S2` to `depot::probe/S2/body/S1/then/S0` (a pair by similarity (0.89)) [semantics · code different] · not stated
-      affected bodies: depot::probe (with 6 other edits of this body)
+  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements; 2 nodes; one change (R92.6-1)): moved statement `result.dirs.push(dir)` from `depot::probe/S1/body/S2` to `depot::probe/S2/body/S1/then/S0` (a pair by similarity (0.89)); changed path `dir` → `d` at `depot::probe/S2/body/S1/then/S0/args[0]` [semantics · code different]
+      not stated (src/lib.rs:12-13, src/lib.rs:-18); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::probe=TEXT'; if it does not change, --same 'rewrite dir => d', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 7 places: f3, f4, f5, f1)
+      affected bodies: depot::probe (with 5 other edits of this body)
       control flow: ~ branch `dir == *name` → `d > 1` (src/lib.rs:-14, src/lib.rs:12)
       control flow: + arrow branch `d > 1` (src/lib.rs:12) → for `dirs()` (src/lib.rs:10) (false)
       control flow: + arrow branch `d > 1` (src/lib.rs:12) → call `Vec::<u32>::push` (src/lib.rs:13) (true)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
       docs of `depot::probe`, no edit in this step (src/lib.rs:3): `/// Finds the things.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  ◆ f3 add (Semilla; R90.2-3, 7 new MIR elements): added `if` `if result.file.is_none() { result.file = Some(0); }` at `depot::probe/S1` [semantics · code different] · not stated
+  ◆ f3 add (Semilla; R90.2-3, 7 new MIR elements): added `if` `if result.file.is_none() { result.file = Some(0); }` at `depot::probe/S1` [semantics · code different]
+      not stated (src/lib.rs:6-9); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::probe=TEXT'; if it does not change, --same 'rewrite dir => d', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 7 places: f3, f4, f5, f1)
       affected bodies: depot::probe (with 6 other edits of this body)
       control flow: + call `Option::<u32>::is_none` (src/lib.rs:6): return → branch `result.file.is_none()`
       control flow: + branch `result.file.is_none()` (src/lib.rs:6): false → call `dirs`, true → call `dirs`
       control flow: + arrow call `Vec::<u32>::new` (src/lib.rs:5) → call `Option::<u32>::is_none` (src/lib.rs:6) (return)
       equivalence: no result alone (the body has 5 edits; an edit of the fact adds or removes a node); the body: MIR changes
-  ◆ f4 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let d = dir + 1;` at `depot::probe/S2/body/S0` [semantics · code different] · not stated
-      affected bodies: depot::probe (with 6 other edits of this body)
+  ◆ f4 add (Semilla; R90.2-3, 1 new MIR element; 2 nodes; one change (R92.6-1)): added `let` `let d = dir + 1;` at `depot::probe/S2/body/S0`; added `if` `if d > 1 { result.dirs.push(d); }` (each inner statement is a moved statement of the body) at `depot::probe/S2/body/S1` [semantics · code different]
+      not stated (src/lib.rs:11-13); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::probe=TEXT'; if it does not change, --same 'rewrite dir => d', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 7 places: f3, f4, f5, f1)
+      affected bodies: depot::probe (with 5 other edits of this body)
       control flow: + check `overflow: dir + 1` (src/lib.rs:11): ok → branch `d > 1`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:11)
       control flow: + arrow for `dirs()` (src/lib.rs:10) → check `overflow: dir + 1` (src/lib.rs:11) (next)
-      equivalence: no result alone (the body has 5 edits; the edit adds or removes a node); the body: MIR changes
-  ◆ f5 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `let names = [1, 2, 3];` at `depot::probe/S1/body/S0` [semantics · code different] · not stated
-      affected bodies: depot::probe (with 6 other edits of this body)
-      equivalence: no result alone (the body has 5 edits; the edit adds or removes a node); the body: MIR changes
-      comment above the removed code at old line 12, removed in this step: see f2
-  ◆ f6 add (Semilla; R90.2-3, 2 new MIR elements): added `if` `if d > 1 { result.dirs.push(d); }` (each inner statement is a moved statement of the body) at `depot::probe/S2/body/S1` [semantics · code different] · not stated
-      affected bodies: depot::probe (with 6 other edits of this body)
       control flow: ~ branch `dir == *name` → `d > 1` (src/lib.rs:-14, src/lib.rs:12)
       control flow: + arrow branch `d > 1` (src/lib.rs:12) → for `dirs()` (src/lib.rs:10) (false)
       control flow: + arrow branch `d > 1` (src/lib.rs:12) → call `Vec::<u32>::push` (src/lib.rs:13) (true)
       equivalence: no result alone (the body has 5 edits; the edit adds or removes a node); the body: MIR changes
-  ◆ f7 delete (Semilla; R90.2-3, 11 removed MIR elements): deleted statement `for name in names.iter() { if dir == *name { result.file = Some(dir); } }` at `depot::probe/S1/body/S1` [semantics · code different] · not stated
-      affected bodies: depot::probe (with 6 other edits of this body)
+  ◆ f5 delete (Semilla; R90.2-3, 2 removed MIR elements; 2 nodes; one change (R92.6-1)): deleted statement `let names = [1, 2, 3];` at `depot::probe/S1/body/S0`; deleted statement `for name in names.iter() { if dir == *name { result.file = Some(dir); } }` at `depot::probe/S1/body/S1` [semantics · code different]
+      not stated (src/lib.rs:-12-16); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::probe=TEXT'; if it does not change, --same 'rewrite dir => d', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 7 places: f3, f4, f5, f1)
+      affected bodies: depot::probe (with 5 other edits of this body)
       control flow: − call `slice::<impl [u32]>::iter` (src/lib.rs:-13): return → for `names.iter()`
       control flow: − for `names.iter()` (src/lib.rs:-13): done → call `Vec::<u32>::push`, next → branch `dir == *name`
       control flow: ~ branch `dir == *name` → `d > 1` (src/lib.rs:-14, src/lib.rs:12)
       control flow: … 3 more (semilla expand --step 0)
       equivalence: no result alone (the body has 5 edits; the edit adds or removes a node); the body: MIR changes
-  ◆ f8 replace (Semilla; R90.2-2, 5 changed MIR elements): changed path `dir` → `d` at `depot::probe/S2/body/S1/then/S0/args[0]` [semantics · code different] · not stated
-      affected bodies: depot::probe (with 6 other edits of this body)
-      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
-  ◆ f9 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `depot::probe` changes with no edit at its place: `dirs()` [indirect · code different]
+      comment above the removed code at old line 12, removed in this step: see f2
+  compiled code that changes with no edit:
+  item `depot::probe`:
+  ◆ f9 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::probe` changes with no edit at its place: `dirs()` [indirect · code different]
       affected bodies: depot::probe
       note: lines 10; the cause: the edits of this body at src/lib.rs:6, src/lib.rs:11, src/lib.rs:-12, src/lib.rs:12, src/lib.rs:-13, src/lib.rs:13 (the step changes no other input of the body)
   transformations:
@@ -119,21 +112,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): moved statement `result.dirs.push(dir)` from `depot::probe/S1/body/S2` to `depot::probe/S2/body/S1/then/S0` (a pair by similarity (0.89)) [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements; 2 nodes; one change (R92.6-1)): moved statement `result.dirs.push(dir)` from `depot::probe/S1/body/S2` to `depot::probe/S2/body/S1/then/S0` (a pair by similarity (0.89)); changed path `dir` → `d` at `depot::probe/S2/body/S1/then/S0/args[0]` [semantics · code different]
     lines: src/lib.rs:12-13, src/lib.rs:-18
-◆ f3 add (Semilla; R90.2-3, 7 new MIR elements): added `if` `if result.file.is_none() { result.file = Some(0); }` at `depot::probe/S1` [semantics · code different] · not stated
+◆ f3 add (Semilla; R90.2-3, 7 new MIR elements): added `if` `if result.file.is_none() { result.file = Some(0); }` at `depot::probe/S1` [semantics · code different]
     lines: src/lib.rs:6-9
-◆ f4 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let d = dir + 1;` at `depot::probe/S2/body/S0` [semantics · code different] · not stated
-    lines: src/lib.rs:11
-◆ f5 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `let names = [1, 2, 3];` at `depot::probe/S1/body/S0` [semantics · code different] · not stated
-    lines: src/lib.rs:-12
-◆ f6 add (Semilla; R90.2-3, 2 new MIR elements): added `if` `if d > 1 { result.dirs.push(d); }` (each inner statement is a moved statement of the body) at `depot::probe/S2/body/S1` [semantics · code different] · not stated
-    lines: src/lib.rs:12-13
-◆ f7 delete (Semilla; R90.2-3, 11 removed MIR elements): deleted statement `for name in names.iter() { if dir == *name { result.file = Some(dir); } }` at `depot::probe/S1/body/S1` [semantics · code different] · not stated
-    lines: src/lib.rs:-13-16
-◆ f8 replace (Semilla; R90.2-2, 5 changed MIR elements): changed path `dir` → `d` at `depot::probe/S2/body/S1/then/S0/args[0]` [semantics · code different] · not stated
-    lines: src/lib.rs:13, src/lib.rs:-18
-◆ f9 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `depot::probe` changes with no edit at its place: `dirs()` [indirect · code different]
+◆ f4 add (Semilla; R90.2-3, 1 new MIR element; 2 nodes; one change (R92.6-1)): added `let` `let d = dir + 1;` at `depot::probe/S2/body/S0`; added `if` `if d > 1 { result.dirs.push(d); }` (each inner statement is a moved statement of the body) at `depot::probe/S2/body/S1` [semantics · code different]
+    lines: src/lib.rs:11-13
+◆ f5 delete (Semilla; R90.2-3, 2 removed MIR elements; 2 nodes; one change (R92.6-1)): deleted statement `let names = [1, 2, 3];` at `depot::probe/S1/body/S0`; deleted statement `for name in names.iter() { if dir == *name { result.file = Some(dir); } }` at `depot::probe/S1/body/S1` [semantics · code different]
+    lines: src/lib.rs:-12-16
+◆ f9 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::probe` changes with no edit at its place: `dirs()` [indirect · code different]
     no position
 ◆ f10 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 5 changed lines with equal tokens; 4 changed lines of 2 items with equal tokens at a new place [layout · no code]
     lines: src/lib.rs:16, src/lib.rs:19-22, src/lib.rs:-3-6

@@ -66,20 +66,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::list::first` (src/list.rs:8): the full compare: `#[same(depot::list::first)] fn first_same() {}`; a difference: `#[change(depot::list::first)] fn first_change(v: &[u32]) -> bool { … }` or `#[different(depot::list::first)] fn first_different() -> bool { … }`
     MIR changes with no claim: `list::first` (tests/list.rs:4): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `0` → `1` (f2)
-      in: depot::list::first
-      lines: src/list.rs:8, src/list.rs:-8
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::first=TEXT'; if it does not change, --same 'rewrite 0 => 1'
   real edits:
   item `depot (test "list")::first`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `2` at `depot (test "list")::first/tail/index` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `2` at `depot (test "list")::first/tail/index` [semantics · code different]
+      not stated (tests/list.rs:4, tests/list.rs:-4); to state it: --change 'depot (test "list")::first=TEXT'
       affected bodies: depot (test "list")::first
       control flow: ~ check `bounds: v[0]` → `bounds: v[2]` (tests/list.rs:-4, tests/list.rs:4)
       equivalence: MIR changes
       docs of `depot (test "list")::first`, no edit in this step (tests/list.rs:3): `/// The first element.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   item `depot::list::first`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
+      not stated (src/list.rs:8, src/list.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::first=TEXT'; if it does not change, --same 'rewrite 0 => 1'
       affected bodies: depot::list::first
       control flow: ~ check `bounds: v[0]` → `bounds: v[1]` (src/list.rs:-8, src/list.rs:8)
       equivalence: MIR changes
@@ -92,7 +90,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 2 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `2` at `depot (test "list")::first/tail/index` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `2` at `depot (test "list")::first/tail/index` [semantics · code different]
     lines: tests/list.rs:4, tests/list.rs:-4
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
     lines: src/list.rs:8, src/list.rs:-8

@@ -34,14 +34,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 0 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 0 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `data/a.txt`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): data/a.txt: changed [file · code different]
+      not stated (data/a.txt:2); to state it: --change 'data/a.txt=TEXT'
       affected bodies: shop::size, shop::size::DATA
       expansion: `table!("a")` at `shop::size/tail` (src/lib.rs:9): expansion changed: only the context of the call changes: the file `data/a.txt` (`include_bytes!(concat!("../data/", $name, ".txt"))`); changed code `n` → `ntwo\n`
   file `data/b.txt`:
   ◆ f2 replace (Semilla; R90.3-2, a file edit (no tree)): data/b.txt: changed [file · no code]
+      not stated (data/b.txt:1, data/b.txt:-1); to state it: --change 'data/b.txt=TEXT'
   cover: each of the 3 changed line(s) is in a fact
   expansions: 1 changed
     `table!("a")` at `shop::size/tail` (src/lib.rs:9): expansion changed: `macro_rules! table` (src/lib.rs:1): only the context of the call changes: the file `data/a.txt` (`include_bytes!(concat!("../data/", $name, ".txt"))`); changed code `n` → `ntwo\n`; the code of the call reads `data/a.txt`, which the step changes

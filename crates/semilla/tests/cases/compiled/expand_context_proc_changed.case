@@ -62,31 +62,30 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   ! build code changed in this step; read this change first
   ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): depot/src/lib.rs: changed [build code · no code]
+      not stated; to state it: --change 'depot/src/lib.rs=TEXT'
       ✗ spotlight: build code: this file is a file of a host package (a proc macro crate, or a crate that a proc macro crate or a build script uses). The compiler runs this code during each build, and it can change the code and the result of the build; it needs a reason: --reason 'depot/src/lib.rs:=…'
       diff:
         @@ line 5 @@
         -     let line = Span::call_site().line() as u32;
         +     let line = Span::call_site().line() as u32 + 1;
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `Span::call_site().line() as u32` → `Span::call_site().line() as u32 + 1` at `depot::here/S0/init` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `Span::call_site().line() as u32` → `Span::call_site().line() as u32 + 1` at `depot::here/S0/init` [semantics · code different]
+      not stated (depot/src/lib.rs:5, depot/src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::here=TEXT'; if it does not change, --same 'rewrite $a as u32 => $a as u32 + 1'
       affected bodies: depot::here, shop::one
       control flow: + check `overflow: Span::call_site().line() as u32 + 1` (depot/src/lib.rs:5): ok → call `Punct::new`, fail → panic `overflow`
       control flow: + panic `overflow` (depot/src/lib.rs:5)
       control flow: + arrow call `Span::line` (depot/src/lib.rs:5) → check `overflow: Span::call_site().line() as u32 + 1` (depot/src/lib.rs:5) (return)
       equivalence: MIR changes
       expansion: `depot::here!(1)` at `shop::one/tail` (shop/src/lib.rs:4): expansion changed: changed literal `2u32` → `5u32` at `expansion/elems[1]` [semantics]
-  ◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `depot::here` changes with no edit at its place: `Literal::u32_suffixed(line)` [indirect · code different]
+  ◆ f3 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::here` changes with no edit at its place: `Literal::u32_suffixed(line)` [indirect · code different]
       affected bodies: depot::here
       note: lines 7; the cause: the edit of this body at depot/src/lib.rs:5 (the step changes no other input of the body) (with the build code of step 0)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::here` (depot/src/lib.rs:4): no template: the check of the intent files stops before the templates: the compile of the facade `before` failed (error[E0463]: can't find crate for `depot` which `shop` depends on)
-  changed nodes: 1 in 5 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed expression, see f1 (f1)
-      in: depot::here
-      lines: depot/src/lib.rs:5, depot/src/lib.rs:-5
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::here=TEXT'; if it does not change, --same 'rewrite $a as u32 => $a as u32 + 1'
+  changed nodes: 1 in 5 entries; 3 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `shop/src/lib.rs`:
   ◆ f5 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `shop/src/lib.rs`: added `// The line of the call is in its value.` [docs · no code]
+      not stated (shop/src/lib.rs:1); to state it: --change 'shop/src/lib.rs=TEXT'
   transformations:
   file `shop/src/lib.rs`:
   ◆ f4 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `shop/src/lib.rs`: 1 changed line with equal tokens [layout · no code]
@@ -101,9 +100,9 @@ run again: semilla step 'the change' --reason 'depot/src/lib.rs:=<why>'
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot/src/lib.rs:=the reason of the test'
 ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): depot/src/lib.rs: changed [build code · no code]
     no position
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `Span::call_site().line() as u32` → `Span::call_site().line() as u32 + 1` at `depot::here/S0/init` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `Span::call_site().line() as u32` → `Span::call_site().line() as u32 + 1` at `depot::here/S0/init` [semantics · code different]
     lines: depot/src/lib.rs:5, depot/src/lib.rs:-5
-◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `depot::here` changes with no edit at its place: `Literal::u32_suffixed(line)` [indirect · code different]
+◆ f3 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::here` changes with no edit at its place: `Literal::u32_suffixed(line)` [indirect · code different]
     no position
 ◆ f5 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `shop/src/lib.rs`: added `// The line of the call is in its value.` [docs · no code]
     lines: shop/src/lib.rs:1

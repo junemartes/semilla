@@ -45,12 +45,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::Cart::zero`:
-  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::Cart::zero` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::Cart::zero` (the public API changes: a different crate can now use the item) [added · code different]
+      not stated (src/lib.rs:3-5); to state it: --change 'depot::Cart::zero=TEXT'
       affected bodies: depot::Cart::zero
       control flow: + graph of `depot::Cart::zero`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   item `depot::impl Cart#0`:
-  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::impl Cart#0` with: `fn zero` [added · code different] · not stated
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::impl Cart#0` with: `fn zero` [added · code different]
+      not stated (src/lib.rs:2-6); to state it: --change 'depot::impl Cart#0=TEXT'
       affected bodies: depot::Cart::zero
       control flow: + graph of `depot::Cart::zero`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 5 changed line(s) is in a fact
@@ -59,7 +61,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::Cart::zero` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::Cart::zero` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:3-5
-◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::impl Cart#0` with: `fn zero` [added · code different] · not stated
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::impl Cart#0` with: `fn zero` [added · code different]
     lines: src/lib.rs:2-6

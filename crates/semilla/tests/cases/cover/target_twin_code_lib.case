@@ -56,13 +56,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::first` (src/list.rs:8): the full compare: `#[same(depot::list::first)] fn first_same() {}`; a difference: `#[change(depot::list::first)] fn first_change(v: &[u32]) -> bool { … }` or `#[different(depot::list::first)] fn first_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `0` → `1` (f1)
-      in: depot::list::first
-      lines: src/list.rs:8, src/list.rs:-8
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::first=TEXT'; if it does not change, --same 'rewrite 0 => 1'
   real edits:
   item `depot::list::first`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
+      not stated (src/list.rs:8, src/list.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::first=TEXT'; if it does not change, --same 'rewrite 0 => 1'
       affected bodies: depot::list::first
       control flow: ~ check `bounds: v[0]` → `bounds: v[1]` (src/list.rs:-8, src/list.rs:8)
       equivalence: MIR changes
@@ -75,5 +72,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
     lines: src/list.rs:8, src/list.rs:-8

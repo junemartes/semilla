@@ -14,25 +14,21 @@ pub struct T(
     pub u8,
 );
 === expected
-exit: 1
-rejected: step 0 "the change" is not stored
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-
-  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::T`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): the tuple fields of `depot::T` changed: `(u8, u32)` → `(u32, u8)` (the public API can change: a different crate can use the item) [declaration · code equal] · not stated
-      ! public API: the compare does not cover the code of a different crate
-  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): indirect change, cause not known: `depot::T` (the MIR changed, but the text did not) [indirect · code different]
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): the tuple fields of `depot::T` changed: `(u8, u32)` → `(u32, u8)` (the public API can change: a different crate can use the item) [declaration · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-2); to state it: --change 'depot::T=TEXT'
       affected bodies: depot::T
-      ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'depot::T=…'
+      ! public API: the compare does not cover the code of a different crate
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'depot::T=<why>'
+
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::T=the reason of the test'
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): the tuple fields of `depot::T` changed: `(u8, u32)` → `(u32, u8)` (the public API can change: a different crate can use the item) [declaration · code equal] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): the tuple fields of `depot::T` changed: `(u8, u32)` → `(u32, u8)` (the public API can change: a different crate can use the item) [declaration · code different]
     lines: src/lib.rs:3, src/lib.rs:-2
-◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): indirect change, cause not known: `depot::T` (the MIR changed, but the text did not) [indirect · code different]
-    no position

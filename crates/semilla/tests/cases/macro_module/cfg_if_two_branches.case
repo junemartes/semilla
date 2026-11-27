@@ -47,28 +47,23 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::unix::open` (src/unix.rs:1): the full compare: `#[same(depot::unix::open)] fn open_same() {}`; a difference: `#[change(depot::unix::open)] fn open_change() -> bool { … }` or `#[different(depot::unix::open)] fn open_different() -> bool { … }`
-  changed nodes: 2 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `5` → `6` (f1)
-      in: depot::other::open
-      lines: src/other.rs:2, src/other.rs:-2
-      to state it: --change 'depot::other::open=TEXT'
-  ? 1 place: changed literal `3` → `4` (f2)
-      in: depot::unix::open
-      lines: src/unix.rs:2, src/unix.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::unix::open=TEXT'; if it does not change, --same 'rewrite 3 => 4'
+  changed nodes: 2 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
   to state them, add these options to the command of the step: --change 'depot::other::open=TEXT'
   real edits:
   file `src/other.rs`:
   ◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): src/other.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
+      not stated; to state it: --change 'src/other.rs=TEXT'
       note: no compare: no checked configuration compiles `src/other.rs`
       ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `src/other.rs`; Semilla finds no option that checks it), so Semilla did not compare the edit; it needs a reason: --reason 'src/other.rs=…'
   item `depot::unix::open`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different]
+      not stated (src/unix.rs:2, src/unix.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::unix::open=TEXT'; if it does not change, --same 'rewrite 3 => 4'
       affected bodies: depot::unix::open
       equivalence: MIR changes
   syntax only:
   item `depot::other::open`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed literal `5` → `6` at `depot::other::open/tail` [semantics · no compare]
+      not stated (src/other.rs:2, src/other.rs:-2); to state it: --change 'depot::other::open=TEXT'
       note: no compare: no checked configuration compiles `depot::other::open`
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
@@ -82,7 +77,7 @@ run again: semilla step 'the change' --reason 'src/other.rs=<why>'
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/other.rs=the reason of the test' --change 'depot::other::open=the text of the test'
 ◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): src/other.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
     no position
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different]
     lines: src/unix.rs:2, src/unix.rs:-2
 ◆ f1 replace, syntax only (a1; R90.2-6, no MIR element; the matcher): changed literal `5` → `6` at `depot::other::open/tail` [semantics · no compare]
     lines: src/other.rs:2, src/other.rs:-2

@@ -121,10 +121,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::a` (src/lib.rs:30): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed path `wrap` → `wrap2` (f1)
-      in: depot::a
-      lines: src/lib.rs:30, src/lib.rs:-30
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::a=TEXT'; if it does not change, --same 'rewrite wrap => wrap2'
   transformations:
   item `depot::a`:
   ◆ f1 same code (Semilla; R90.2-1, equal MIR): changed path `wrap` → `wrap2` at `depot::a/tail/callee` [semantics · code equal]

@@ -52,13 +52,14 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed nodes: 0 in 3 entries; 0 real edits (0 stated by the agent); 0 not mapped
-  transformations:
+  compiled code that changes with no edit:
   item `depot::items`:
-  ◆ f2 rename (Semilla; R90.2-5, the pair check holds): public API: `depot::list` is now `depot::items` (a different crate can no longer use the old path) [rename · no code]
+  ◆ f2 rename (Semilla; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::list` is now `depot::items` (a different crate can no longer use the old path) [rename · no code]
       docs of `depot::items`, no edit in this step (src/items.rs:1-2):
           | //! Tools for lists.
           | //! A second line.
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  transformations:
   item `depot::list`:
   ◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `depot::list` → `depot::items` [rename · code equal]
   ◆ f3 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list` (now `depot::items`): file `src/list.rs` → file `src/items.rs`; 2 of 2 items and 14 lines keep their tokens [move · no code]
@@ -67,7 +68,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f2 rename (Semilla; R90.2-5, the pair check holds): public API: `depot::list` is now `depot::items` (a different crate can no longer use the old path) [rename · no code]
+◆ f2 rename (Semilla; R92.4-1, a line of the public API of a pair; the pair check holds (R90.2-5)): public API: `depot::list` is now `depot::items` (a different crate can no longer use the old path) [rename · no code]
     no position
 ◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `depot::list` → `depot::items` [rename · code equal]
     lines: src/lib.rs:3, src/lib.rs:-3

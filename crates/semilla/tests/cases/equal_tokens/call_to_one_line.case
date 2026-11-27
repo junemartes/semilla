@@ -24,28 +24,23 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::pad` (src/lib.rs:1): the full compare: `#[same(depot::pad)] fn pad_same() {}`; a difference: `#[change(depot::pad)] fn pad_change(mut f_before: Vec<u32>, mut f_after: Vec<u32>, a: u32, b: u32) -> bool { … }` or `#[different(depot::pad)] fn pad_different() -> bool { … }`
-  changed nodes: 4 in 4 entries; 4 real edits (0 stated by the agent); 0 not mapped
-  ? 4 places: 4 different edits (f1, f2, f3, f4)
-      in: depot::pad
-      lines: src/lib.rs:2-3, src/lib.rs:-2-5
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pad=TEXT'; if it does not change, --same 'rewrite 0 => 1' --same 'rewrite 1 => 2' --same 'rewrite a => c', and a `--same` fact (rename, move, or rewrite) that explains each other edit
+  changed nodes: 4 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::pad`:
-  ◆ f1 add (Semilla; R90.2-3, 2 new MIR elements): added `let` `let c = a + b;` at `depot::pad/S0` [semantics · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, 2 new MIR elements): added `let` `let c = a + b;` at `depot::pad/S0` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pad=TEXT'; if it does not change, --same 'rewrite 0 => 1' --same 'rewrite 1 => 2' --same 'rewrite a => c', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 4 places: f1, f2, f4)
       affected bodies: depot::pad (with 3 other edits of this body)
       control flow: + check `overflow: a + b` (src/lib.rs:2): ok → call `Vec::<u32>::splice::<Range<usize>, [u32; 2]>`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:2)
       control flow: + arrow entry (src/lib.rs:1) → check `overflow: a + b` (src/lib.rs:2)
       equivalence: no result alone (the body has 4 edits; an edit of the fact adds or removes a node); the body: MIR changes
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::pad/S0/args[0]/start` [semantics · code different] · not stated
-      affected bodies: depot::pad (with 3 other edits of this body)
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes; one change (R92.6-1)): changed literal `0` → `1` at `depot::pad/S0/args[0]/start`; changed literal `1` → `2` at `depot::pad/S0/args[0]/end` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-2-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pad=TEXT'; if it does not change, --same 'rewrite 0 => 1' --same 'rewrite 1 => 2' --same 'rewrite a => c', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 4 places: f1, f2, f4)
+      affected bodies: depot::pad (with 2 other edits of this body)
       control flow: − arrow entry (src/lib.rs:-1) → call `Vec::<u32>::splice::<Range<usize>, [u32; 2]>` (src/lib.rs:-2)
       equivalence: MIR changes alone; the body: MIR changes
-  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::pad/S0/args[0]/end` [semantics · code different] · not stated
-      affected bodies: depot::pad (with 3 other edits of this body)
-      control flow: − arrow entry (src/lib.rs:-1) → call `Vec::<u32>::splice::<Range<usize>, [u32; 2]>` (src/lib.rs:-2)
-      equivalence: MIR changes alone; the body: MIR changes
-  ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `a` → `c` at `depot::pad/S0/args[1]/elems[0]` [semantics · code different] · not stated
+  ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `a` → `c` at `depot::pad/S0/args[1]/elems[0]` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-4-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pad=TEXT'; if it does not change, --same 'rewrite 0 => 1' --same 'rewrite 1 => 2' --same 'rewrite a => c', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 4 places: f1, f2, f4)
       affected bodies: depot::pad (with 3 other edits of this body)
       control flow: − arrow entry (src/lib.rs:-1) → call `Vec::<u32>::splice::<Range<usize>, [u32; 2]>` (src/lib.rs:-2)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
@@ -55,11 +50,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, 2 new MIR elements): added `let` `let c = a + b;` at `depot::pad/S0` [semantics · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, 2 new MIR elements): added `let` `let c = a + b;` at `depot::pad/S0` [semantics · code different]
     lines: src/lib.rs:2
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::pad/S0/args[0]/start` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes; one change (R92.6-1)): changed literal `0` → `1` at `depot::pad/S0/args[0]/start`; changed literal `1` → `2` at `depot::pad/S0/args[0]/end` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:-2-3
-◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::pad/S0/args[0]/end` [semantics · code different] · not stated
-    lines: src/lib.rs:3, src/lib.rs:-3
-◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `a` → `c` at `depot::pad/S0/args[1]/elems[0]` [semantics · code different] · not stated
+◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `a` → `c` at `depot::pad/S0/args[1]/elems[0]` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:-4-5

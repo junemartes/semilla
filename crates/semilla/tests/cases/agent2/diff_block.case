@@ -117,13 +117,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     equal MIR: `depot::guard` (src/lib.rs:32)
     equal MIR: `depot::guard::G struct G<'a>` (src/lib.rs:33)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed item, see f1 (f1)
-      in: depot::guard
-      lines: src/lib.rs:41, src/lib.rs:-41
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::guard=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `depot::guard`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed item: [1] (line diff: `-` old, `+` new) at `depot::guard/S1` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed item: [1] (line diff: `-` old, `+` new) at `depot::guard/S1` [semantics · code different]
         [1]   impl Drop for G<'_> {
                   fn drop(&mut self) {
                       let mut index = 0;
@@ -137,6 +133,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
                       }
                   }
               }
+      not stated (src/lib.rs:41, src/lib.rs:-41); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::guard=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::guard
       equivalence: `<depot::guard::G<'_> as std::ops::Drop>::drop`: MIR changes
       equivalence: `depot::guard`: equivalent (proved by equal MIR)
@@ -149,5 +146,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed item: [1] (line diff: `-` old, `+` new) at `depot::guard/S1` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed item: [1] (line diff: `-` old, `+` new) at `depot::guard/S1` [semantics · code different]
     lines: src/lib.rs:41, src/lib.rs:-41

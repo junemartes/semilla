@@ -33,7 +33,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::NAME`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): type of `depot::NAME`: `static NAME: &str = "depot";` → `#[cfg(all())] static NAME: &str = "depot";` (the public API can change: a different crate can use the item) [declaration · code equal] · not stated
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): type of `depot::NAME`: `static NAME: &str = "depot";` → `#[cfg(all())] static NAME: &str = "depot";` (the public API can change: a different crate can use the item) [declaration · code equal]
+      not stated (src/lib.rs:6); to state it: --change 'depot::NAME=TEXT'
       equivalence: no result alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
       ! public API: the compare does not cover the code of a different crate
       docs of `depot::NAME`, no edit in this step (src/lib.rs:5): `/// The old doc.`
@@ -52,7 +53,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::NAME=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::NAME=the reason of the test'
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): type of `depot::NAME`: `static NAME: &str = "depot";` → `#[cfg(all())] static NAME: &str = "depot";` (the public API can change: a different crate can use the item) [declaration · code equal] · not stated
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): type of `depot::NAME`: `static NAME: &str = "depot";` → `#[cfg(all())] static NAME: &str = "depot";` (the public API can change: a different crate can use the item) [declaration · code equal]
     lines: src/lib.rs:6
 ◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::NAME`: added `#[cfg(all())]` [attribute · code equal]
     lines: src/lib.rs:6

@@ -29,18 +29,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::sum_to` (src/lib.rs:1): the full compare: `#[same(shop::sum_to)] fn sum_to_same() {}`; a difference: `#[change(shop::sum_to)] fn sum_to_change(n: u32) -> bool { … }` or `#[different(shop::sum_to)] fn sum_to_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: 2 different edits (f1, f2)
-      in: shop::sum_to
-      lines: src/lib.rs:4, src/lib.rs:-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::sum_to=TEXT'; if it does not change, --same 'rewrite sum => i' --same 'rewrite i => sum'
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop::sum_to`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `sum` → `i` at `shop::sum_to/S1/body/S0/rhs/recv` [semantics · code different] · not stated
-      affected bodies: shop::sum_to (with 1 other edit of this body)
-      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `i` → `sum` at `shop::sum_to/S1/body/S0/rhs/args[0]` [semantics · code different] · not stated
-      affected bodies: shop::sum_to (with 1 other edit of this body)
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes; one change (R92.6-1)): changed path `sum` → `i` at `shop::sum_to/S1/body/S0/rhs/recv`; changed path `i` → `sum` at `shop::sum_to/S1/body/S0/rhs/args[0]` [semantics · code different]
+      not stated (src/lib.rs:4, src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::sum_to=TEXT'; if it does not change, --same 'rewrite sum => i' --same 'rewrite i => sum' (one statement for 2 places: f1)
+      affected bodies: shop::sum_to
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
@@ -48,7 +42,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `sum` → `i` at `shop::sum_to/S1/body/S0/rhs/recv` [semantics · code different] · not stated
-    lines: src/lib.rs:4, src/lib.rs:-4
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `i` → `sum` at `shop::sum_to/S1/body/S0/rhs/args[0]` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes; one change (R92.6-1)): changed path `sum` → `i` at `shop::sum_to/S1/body/S0/rhs/recv`; changed path `i` → `sum` at `shop::sum_to/S1/body/S0/rhs/args[0]` [semantics · code different]
     lines: src/lib.rs:4, src/lib.rs:-4

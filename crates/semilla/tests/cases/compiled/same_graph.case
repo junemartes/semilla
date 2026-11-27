@@ -22,13 +22,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::mask` (src/lib.rs:1): the full compare: `#[same(depot::mask)] fn mask_same() {}`; a difference: `#[change(depot::mask)] fn mask_change(v: u32) -> bool { … }` or `#[different(depot::mask)] fn mask_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `1` → `2` (f1)
-      in: depot::mask
-      lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::mask=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   real edits:
   item `depot::mask`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::mask/tail/rhs` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::mask/tail/rhs` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::mask=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: depot::mask
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
@@ -37,5 +34,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::mask/tail/rhs` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::mask/tail/rhs` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

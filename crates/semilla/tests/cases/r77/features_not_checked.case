@@ -34,13 +34,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::base` (src/lib.rs:5): the full compare: `#[same(shop::base)] fn base_same() {}`; a difference: `#[change(shop::base)] fn base_change() -> bool { … }` or `#[different(shop::base)] fn base_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `3` → `30` (f1)
-      in: shop::base
-      lines: src/lib.rs:5, src/lib.rs:-5
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::base=TEXT'; if it does not change, --same 'rewrite 3 => 30'
   real edits:
   item `shop::base`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `30` at `shop::base/tail` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `30` at `shop::base/tail` [semantics · code different]
+      not stated (src/lib.rs:5, src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::base=TEXT'; if it does not change, --same 'rewrite 3 => 30'
       affected bodies: shop::base
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
@@ -49,5 +46,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `30` at `shop::base/tail` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `30` at `shop::base/tail` [semantics · code different]
     lines: src/lib.rs:5, src/lib.rs:-5

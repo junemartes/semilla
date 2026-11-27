@@ -82,7 +82,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop (test "probe")::hash`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): change condition `10` → `12` at `shop (test "probe")::hash/S0/cond/rhs` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): change condition `10` → `12` at `shop (test "probe")::hash/S0/cond/rhs` [semantics · code different]
+      not stated (tests/probe.rs:2, tests/probe.rs:-2); to state it: --change 'shop (test "probe")::hash=TEXT'
       affected bodies: shop (test "probe")::hash
       control flow: ~ branch `x > 10` → `x > 12` (tests/probe.rs:-2, tests/probe.rs:2)
       equivalence: MIR changes
@@ -92,5 +93,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): change condition `10` → `12` at `shop (test "probe")::hash/S0/cond/rhs` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): change condition `10` → `12` at `shop (test "probe")::hash/S0/cond/rhs` [semantics · code different]
     lines: tests/probe.rs:2, tests/probe.rs:-2

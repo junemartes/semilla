@@ -67,7 +67,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 3 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop (bench "extra")::x`:
-  ◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `shop (bench "extra")::x` [added · code different] · not stated
+  ◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `shop (bench "extra")::x` [added · code different]
+      not stated (benches/extra.rs:3-6); to state it: --change 'shop (bench "extra")::x=TEXT'
       affected bodies: shop (bench "extra")::x
       control flow: + graph of `extra::x`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: + graph of `extra::x::{closure#0} #[test]`: 4 points, 3 arrows (semilla expand --step 0)
@@ -91,7 +92,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `shop (bench "extra")::x` [added · code different] · not stated
+◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `shop (bench "extra")::x` [added · code different]
     lines: benches/extra.rs:3-6
 ◆ f2 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added macro `ck` [added · no code]
     lines: benches/extra.rs:1-2

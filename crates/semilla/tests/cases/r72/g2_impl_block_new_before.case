@@ -38,22 +38,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::W::<u32>::get` (src/lib.rs:3): an added body: `#[new(shop::W::get)] fn get_new() -> bool { … }`
     MIR changes with no claim: `shop::W::<u8>::get` (src/lib.rs:6): the full compare: `#[same(shop::W::get)] fn get_same() {}`; a difference: `#[change(shop::W::get)] fn get_change() -> bool { … }` or `#[different(shop::W::get)] fn get_different() -> bool { … }`
   changed nodes: 4 in 4 entries; 4 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed expression `self.0` → `self.0 + 1` (f1)
-      in: shop::W::get#1
-      lines: src/lib.rs:6, src/lib.rs:-3
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::W::get#1=TEXT'; if it does not change, --same 'rewrite $a.0 => $a.0 + 1'
-  ? 1 place: changed expression `self.0` → `self.0 + 2` (f2)
-      in: shop::W::get#2
-      lines: src/lib.rs:9, src/lib.rs:-6
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::W::get#2=TEXT'; if it does not change, --same 'rewrite $a.0 => $a.0 + 2'
   real edits:
   item `shop::W::get#0`:
-  ◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::W::get#0` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+  ◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::W::get#0` (the public API changes: a different crate can now use the item) [added · code different]
+      not stated (src/lib.rs:3); to state it: --change 'shop::W::get#0=TEXT'
       affected bodies: shop::W::get#0
       control flow: + graph of `shop::W::<u32>::get`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   item `shop::W::get#1`:
-  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 1` at `shop::W::get#1/tail` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 1` at `shop::W::get#1/tail` [semantics · code different]
+      not stated (src/lib.rs:6, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::W::get#1=TEXT'; if it does not change, --same 'rewrite $a.0 => $a.0 + 1'
       affected bodies: shop::W::get#1
       control flow: + check `overflow: self.0 + 1` (src/lib.rs:6): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:6)
@@ -61,7 +55,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
   item `shop::W::get#2`:
-  ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 2` at `shop::W::get#2/tail` [semantics · code different] · not stated
+  ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 2` at `shop::W::get#2/tail` [semantics · code different]
+      not stated (src/lib.rs:9, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::W::get#2=TEXT'; if it does not change, --same 'rewrite $a.0 => $a.0 + 2'
       affected bodies: shop::W::get#2
       control flow: + check `overflow: self.0 + 2` (src/lib.rs:9): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:9)
@@ -69,7 +64,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
   item `shop::impl W#0`:
-  ◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::impl W#0` with: `fn get` [added · code different] · not stated
+  ◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::impl W#0` with: `fn get` [added · code different]
+      not stated (src/lib.rs:2-4); to state it: --change 'shop::impl W#0=TEXT'
       affected bodies: shop::W::get#0
       control flow: + graph of `shop::W::<u32>::get`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 7 changed line(s) is in a fact
@@ -82,11 +78,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   note: twins: `shop::W::get#1` of the old tree and `shop::W::get#2` of the new tree are one pair (a pair by its identity); the facts name the pair `shop::W::get#2`
 
 === positions
-◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::W::get#0` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::W::get#0` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:3
-◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 1` at `shop::W::get#1/tail` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 1` at `shop::W::get#1/tail` [semantics · code different]
     lines: src/lib.rs:6, src/lib.rs:-3
-◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 2` at `shop::W::get#2/tail` [semantics · code different] · not stated
+◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 2` at `shop::W::get#2/tail` [semantics · code different]
     lines: src/lib.rs:9, src/lib.rs:-6
-◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::impl W#0` with: `fn get` [added · code different] · not stated
+◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::impl W#0` with: `fn get` [added · code different]
     lines: src/lib.rs:2-4

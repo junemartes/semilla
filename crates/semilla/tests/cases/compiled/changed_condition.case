@@ -24,13 +24,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::tax` (src/lib.rs:1): the full compare: `#[same(depot::tax)] fn tax_same() {}`; a difference: `#[change(depot::tax)] fn tax_change(v: u32) -> bool { … }` or `#[different(depot::tax)] fn tax_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed operator `v > 3` → `v >= 3` (f1)
-      in: depot::tax
-      lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::tax=TEXT'; if it does not change, --same 'rewrite $a > 3 => $a >= 3'
   real edits:
   item `depot::tax`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `v > 3` → `v >= 3` at `depot::tax/S0/cond` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `v > 3` → `v >= 3` at `depot::tax/S0/cond` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::tax=TEXT'; if it does not change, --same 'rewrite $a > 3 => $a >= 3'
       affected bodies: depot::tax
       control flow: ~ branch `v > 3` → `v >= 3` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: MIR changes
@@ -40,5 +37,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `v > 3` → `v >= 3` at `depot::tax/S0/cond` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `v > 3` → `v >= 3` at `depot::tax/S0/cond` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

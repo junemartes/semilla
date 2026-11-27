@@ -37,17 +37,12 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 1 not mapped
-    n1 not mapped [R79.5-1]: added const `depot::<Sq as Sides>::SIDES` (src/lib.rs:8): not mapped, syntax only in f1: `    /// The new doc.\n    /// One more line.\n    #[cfg(all())]\n    const SIDES: u32 = 4;`
-        no template: an item of a trait impl has no plain path; name it by its qualified path in the scope (`#[same(<depot::Sq as depot::Sides>::SIDES)]`, or `new`, `removed`), with a body that calls it with the types of an instance
-  ? 1 place: edit, see f1 (f1)
-      in: depot::<Sq as Sides>::SIDES
-      lines: src/lib.rs:8-11
-      to state it: --change 'depot::<Sq as Sides>::SIDES=TEXT'
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
   to state them, add these options to the command of the step: --change 'depot::<Sq as Sides>::SIDES=TEXT'
-  not mapped:
+  syntax only:
   item `depot::<Sq as Sides>::SIDES`:
-  ◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): `depot::<Sq as Sides>::SIDES` now overrides the default body of `depot::Sides::SIDES`: `pub trait Sides { const SIDES: u32 = 0; fn n(&self) -> u32; }` → `/// The new doc. /// One more line. #[cfg(all())] const SIDES: u32 = 4;` [semantics · code equal]
+  ◆ f1 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; a use of its trait reaches it): `depot::<Sq as Sides>::SIDES` now overrides the default body of `depot::Sides::SIDES`: `pub trait Sides { const SIDES: u32 = 0; fn n(&self) -> u32; }` → `/// The new doc. /// One more line. #[cfg(all())] const SIDES: u32 = 4;` [semantics · code equal]
+      not stated (src/lib.rs:8-11); to state it: --change 'depot::<Sq as Sides>::SIDES=TEXT'
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::<Sq as Sides>::SIDES`; it needs a reason: --reason 'depot::<Sq as Sides>::SIDES=…'
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
@@ -55,5 +50,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::<Sq as Sides>::SIDES=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::<Sq as Sides>::SIDES=the reason of the test' --change 'depot::<Sq as Sides>::SIDES=the text of the test'
-◆ f1 not mapped (a1; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): `depot::<Sq as Sides>::SIDES` now overrides the default body of `depot::Sides::SIDES`: `pub trait Sides { const SIDES: u32 = 0; fn n(&self) -> u32; }` → `/// The new doc. /// One more line. #[cfg(all())] const SIDES: u32 = 4;` [semantics · code equal]
+◆ f1 add, syntax only (a1; R92.3-1, no MIR element and no partner; a use of its trait reaches it): `depot::<Sq as Sides>::SIDES` now overrides the default body of `depot::Sides::SIDES`: `pub trait Sides { const SIDES: u32 = 0; fn n(&self) -> u32; }` → `/// The new doc. /// One more line. #[cfg(all())] const SIDES: u32 = 4;` [semantics · code equal]
     lines: src/lib.rs:8-11

@@ -54,13 +54,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     changed bodies: 0 equal MIR, 0 explained by claims, 0 MIR changes with no claim, 1 MIR changes that the claims on the item do not explain
       not explained by its claims: `depot::walk` (src/lib.rs:9): MIR changes
   changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
-  ? 1 place: changed operator `x / 2` → `x >> 2` (f1)
-      in: depot::walk
-      lines: src/lib.rs:10, src/lib.rs:-10
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::walk=TEXT'; if it does not change, --same 'rewrite $a / 2 => $a >> 2'
   real edits:
   item `depot::walk`:
   ◆ f1 replace (i1; R90.2-2, 2 changed MIR elements): changed operator `x / 2` → `x >> 2` at `depot::walk/tail/args[0]` [semantics · code different]
+      not stated (src/lib.rs:10, src/lib.rs:-10); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::walk=TEXT'; if it does not change, --same 'rewrite $a / 2 => $a >> 2'
       affected bodies: depot::walk
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact

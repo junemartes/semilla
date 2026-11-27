@@ -57,12 +57,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 5 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop::<Dog as Speak>::id`:
-  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::<Dog as Speak>::id` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::<Dog as Speak>::id` (the public API changes: a different crate can now use the item) [added · code different]
+      not stated (src/lib.rs:11-15, src/lib.rs:-10); to state it: --change 'shop::<Dog as Speak>::id=TEXT'
       affected bodies: shop::<Dog as Speak>::id
       control flow: + graph of `<shop::Dog as shop::Speak>::id`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   item `shop::impl <Cat as Speak>`:
-  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 3 nodes): trait impl `<Cat as Speak>` added with: `fn name`, `fn id` (the public API can change: a different crate can use the item) [added · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 3 nodes): trait impl `<Cat as Speak>` added with: `fn name`, `fn id` (the public API can change: a different crate can use the item) [added · code different]
+      not stated (src/lib.rs:16-24); to state it: --change 'shop::impl <Cat as Speak>=TEXT'
       affected bodies: shop::<Cat as Speak>::id, shop::<Cat as Speak>::name
       control flow: + graph of `<shop::Cat as shop::Speak>::id`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: + graph of `<shop::Cat as shop::Speak>::name`: 2 points, 1 arrow (semilla expand --step 0)
@@ -79,9 +81,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::<Dog as Speak>::id` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::<Dog as Speak>::id` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:11-15, src/lib.rs:-10
-◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 3 nodes): trait impl `<Cat as Speak>` added with: `fn name`, `fn id` (the public API can change: a different crate can use the item) [added · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 3 nodes): trait impl `<Cat as Speak>` added with: `fn name`, `fn id` (the public API can change: a different crate can use the item) [added · code different]
     lines: src/lib.rs:16-24
 ◆ f3 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `shop::Speak::id` (the public API changes: a different crate can now use the item) [added · no code]
     lines: src/lib.rs:5

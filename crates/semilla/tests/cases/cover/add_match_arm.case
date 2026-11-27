@@ -40,13 +40,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::pick` (src/lib.rs:5): the full compare: `#[same(depot::pick)] fn pick_same() {}`; a difference: `#[change(depot::pick)] fn pick_change(n: u32) -> bool { … }` or `#[different(depot::pick)] fn pick_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: added match arm `#[cfg(all())] 1 => 2` (f1)
-      in: depot::pick
-      lines: src/lib.rs:8-9
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `depot::pick`:
-  ◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added match arm `#[cfg(all())] 1 => 2` at `depot::pick/S0/arm[1].pat` [semantics · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added match arm `#[cfg(all())] 1 => 2` at `depot::pick/S0/arm[1].pat` [semantics · code different]
+      not stated (src/lib.rs:8-9); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::pick
       equivalence: MIR changes
       note: this body uses `#[cfg(all())]`, which Semilla did not check (`depot::pick`)
@@ -56,5 +53,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added match arm `#[cfg(all())] 1 => 2` at `depot::pick/S0/arm[1].pat` [semantics · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added match arm `#[cfg(all())] 1 => 2` at `depot::pick/S0/arm[1].pat` [semantics · code different]
     lines: src/lib.rs:8-9

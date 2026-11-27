@@ -34,19 +34,19 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::build` (src/lib.rs:1): the full compare: `#[same(shop::build)] fn build_same() {}`; a difference: `#[change(shop::build)] fn build_change(mut out_before: Vec<(u32, &str)>, mut out_after: Vec<(u32, &str)>) -> bool { … }` or `#[different(shop::build)] fn build_different() -> bool { … }`
   changed nodes: 2 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: 2 different edits (f1, f2)
-      in: shop::build
-      lines: src/lib.rs:6, src/lib.rs:-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::build=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `shop::build`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `out.push((3, "three"))` at `shop::build/S2` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `out.push((3, "three"))` at `shop::build/S2` [semantics · code different]
+      not stated (src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::build=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: shop::build (with 1 other edit of this body)
       equivalence: MIR changes
-  ◆ f2 add (Semilla; R90.2-3, 3 new MIR elements): added statement `out.push((6, "six"))` at `shop::build/S4` [semantics · code different] · not stated
+  ◆ f2 add (Semilla; R90.2-3, 3 new MIR elements): added statement `out.push((6, "six"))` at `shop::build/S4` [semantics · code different]
+      not stated (src/lib.rs:6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::build=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: shop::build (with 1 other edit of this body)
       equivalence: MIR changes
-  ◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::build` changes with no edit at its place: `(4, "four")`, `out.push((4, "four"))` (before the step) [indirect · code different]
+  compiled code that changes with no edit:
+  item `shop::build`:
+  ◆ f3 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::build` changes with no edit at its place: `(4, "four")`, `out.push((4, "four"))` (before the step) [indirect · code different]
       affected bodies: shop::build
       note: lines 4; lines before the step 5; the cause: the edits of this body at src/lib.rs:-4, src/lib.rs:6 (the step changes no other input of the body)
   cover: each of the 2 changed line(s) is in a fact
@@ -55,9 +55,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `out.push((3, "three"))` at `shop::build/S2` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `out.push((3, "three"))` at `shop::build/S2` [semantics · code different]
     lines: src/lib.rs:-4
-◆ f2 add (Semilla; R90.2-3, 3 new MIR elements): added statement `out.push((6, "six"))` at `shop::build/S4` [semantics · code different] · not stated
+◆ f2 add (Semilla; R90.2-3, 3 new MIR elements): added statement `out.push((6, "six"))` at `shop::build/S4` [semantics · code different]
     lines: src/lib.rs:6
-◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::build` changes with no edit at its place: `(4, "four")`, `out.push((4, "four"))` (before the step) [indirect · code different]
+◆ f3 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::build` changes with no edit at its place: `(4, "four")`, `out.push((4, "four"))` (before the step) [indirect · code different]
     no position

@@ -26,9 +26,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   changed nodes: 1 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
-  real edits:
+  compiled code that changes with no edit:
   item `depot::f`:
-  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `depot::f` changes with no edit at its place: `here!()` [indirect · code different]
+  ◆ f2 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::f` changes with no edit at its place: `here!()` [indirect · code different]
       affected bodies: depot::f
       note: lines 6
       ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'depot::f=…'
@@ -40,7 +40,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::f=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::f=the reason of the test'
-◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `depot::f` changes with no edit at its place: `here!()` [indirect · code different]
+◆ f2 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::f` changes with no edit at its place: `here!()` [indirect · code different]
     no position
 ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added docs `/// Doc.` [docs · no code]
     lines: src/lib.rs:5

@@ -25,20 +25,19 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 0 in 3 entries; 0 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: moved, see f2 (f2)
-      in: depot::a
-      lines: src/lib.rs:5, src/lib.rs:-3
-      to state it: --change 'depot::a=TEXT'
+  changed nodes: 0 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
   to state them, add these options to the command of the step: --change 'depot::a=TEXT'
   real edits:
   item `depot::a`:
-  ◆ f1 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `depot::a` changes with no edit at its place: `two!()` [indirect · code different]
+  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): moved `depot::a` past 1 item that can give a macro: `depot::two!#1`; a macro has a textual scope: a macro call in `depot::a` can have a new meaning [macro · no code]
+      not stated (src/lib.rs:5, src/lib.rs:-3); to state it: --change 'depot::a=TEXT'
+      expansion: `two!()` at `depot::a/tail` (src/lib.rs:5): expansion changed: changed literal `2` → `3` at `expansion` [semantics]
+  compiled code that changes with no edit:
+  item `depot::a`:
+  ◆ f1 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::a` changes with no edit at its place: `two!()` [indirect · code different]
       affected bodies: depot::a
       note: lines 5
       ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'depot::a=…'
-  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): moved `depot::a` past 1 item that can give a macro: `depot::two!#1`; a macro has a textual scope: a macro call in `depot::a` can have a new meaning [macro · no code]
-      expansion: `two!()` at `depot::a/tail` (src/lib.rs:5): expansion changed: changed literal `2` → `3` at `expansion` [semantics]
   transformations:
   file `src/lib.rs`:
   ◆ f3 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 2 changed lines with equal tokens [layout · no code]
@@ -49,9 +48,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::a=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::a=the reason of the test' --change 'depot::a=the text of the test'
-◆ f1 replace (a1; R90.3-2, no changed node (the fact of today)): the compiled code of `depot::a` changes with no edit at its place: `two!()` [indirect · code different]
-    no position
 ◆ f2 replace (a1; R90.3-2, no changed node (the fact of today)): moved `depot::a` past 1 item that can give a macro: `depot::two!#1`; a macro has a textual scope: a macro call in `depot::a` can have a new meaning [macro · no code]
     lines: src/lib.rs:5, src/lib.rs:-3
+◆ f1 replace (a1; R92.4-1, no node and no changed line of its own): the compiled code of `depot::a` changes with no edit at its place: `two!()` [indirect · code different]
+    no position
 ◆ f3 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 2 changed lines with equal tokens [layout · no code]
     lines: src/lib.rs:6, src/lib.rs:-4

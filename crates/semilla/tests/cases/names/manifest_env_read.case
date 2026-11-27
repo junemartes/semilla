@@ -1,5 +1,5 @@
 note: batch 10n, part C (manifest keys): the step changes `package.description`, and the code reads it with `env!("CARGO_PKG_DESCRIPTION")`; the key is a build input, not a descriptive key with no code (the old list of descriptive keys called it "no code")
-must_match: package.description "a shop" → "a small shop" \[manifest · code different\]\n      affected bodies: shop::about
+must_match: package.description "a shop" → "a small shop" \[manifest · code different\]\n      not stated \([^\n]*\n      affected bodies: shop::about
 note: design 83: the MIR shows the read of the key, so the body that reads it is an affected body (the text rule R65.3-5 of the default mode is gone)
 === old Cargo.toml
 [package]
@@ -23,10 +23,11 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 0 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   file `Cargo.toml`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): Cargo.toml: package.description "a shop" → "a small shop" [manifest · code different]
+      not stated (Cargo.toml:5, Cargo.toml:-5); to state it: --change 'Cargo.toml=TEXT'
       affected bodies: shop::about
       note: this body uses `env!("CARGO_PKG_DESCRIPTION")`, which Semilla did not check (`shop::about`)
       ✗ spotlight: a build input: the MIR of 1 body changed with no edit of its text, and this change can reach its crate; it needs a reason: --reason 'Cargo.toml:package.description=…'

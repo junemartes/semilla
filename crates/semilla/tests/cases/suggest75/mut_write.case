@@ -51,13 +51,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     changed bodies: 0 equal MIR, 0 explained by claims, 0 MIR changes with no claim, 1 MIR changes that the claims on the item do not explain
       not explained by its claims: `depot::bump` (src/lib.rs:7): MIR changes
   changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `1` → `2` (f1)
-      in: depot::bump
-      lines: src/lib.rs:8, src/lib.rs:-8
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::bump=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   real edits:
   item `depot::bump`:
   ◆ f1 replace (i1; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::bump/S0/rhs` [semantics · code different]
+      not stated (src/lib.rs:8, src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::bump=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: depot::bump
       control flow: ~ check `overflow: p.x += 1` → `overflow: p.x += 2` (src/lib.rs:-8, src/lib.rs:8)
       equivalence: MIR changes

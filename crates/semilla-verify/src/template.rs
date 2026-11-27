@@ -337,6 +337,18 @@ pub struct Pending {
     pub(crate) asks: BTreeMap<String, Ask>,
     /// The offer of each line of the coverage, by the index of the line.
     pub(crate) offers: Vec<(usize, Offer)>,
+    /// [R92.1-1] The templates of the notes of the pairs (a tie, a pair that does not pass):
+    /// each note has the mark of [`note_template`] until the gate writes its verdict.
+    pub(crate) notes: Vec<String>,
+}
+
+/// The mark of a template in a note that waits for the gate.
+const NOTE_MARK: &str = "\u{2063}template\u{2063}";
+
+/// [R92.1-1] The text of a template in a note before the gate: the gate writes `template: `…``
+/// or `no template: CAUSE` in its place.
+pub(crate) fn note_template(template: &str) -> String {
+    format!("{NOTE_MARK}{template}")
 }
 
 impl Pending {
@@ -354,6 +366,11 @@ impl Pending {
             }
         }
         self.offers = other.offers;
+        for note in other.notes {
+            if !self.notes.contains(&note) {
+                self.notes.push(note);
+            }
+        }
     }
 
     /// Notes a template with its forms (the first form is the text of the line).
@@ -406,6 +423,7 @@ pub(crate) fn gate(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut Ste
             order.extend(group.templates.iter().cloned());
         }
     }
+    order.extend(pending.notes.iter().cloned());
     if order.is_empty() {
         apply(outcome, &pending, &BTreeMap::new());
         return;
@@ -478,6 +496,17 @@ fn apply(outcome: &mut StepOutcome, pending: &Pending, result: &BTreeMap<String,
                 }
             }
         }
+    }
+    // [R92.1-1] The template of each note of a pair.
+    for note in outcome.report.notes.iter_mut() {
+        let Some(at) = note.find(NOTE_MARK) else { continue };
+        let template = note[at + NOTE_MARK.len()..].to_string();
+        let text = match result.get(&template) {
+            Some((text, None)) => format!("template: `{text}`"),
+            Some((_, Some(cause))) => format!("no template: {cause}"),
+            None => "no template: the step has no compiled trees for the check of the intent files".to_string(),
+        };
+        note.replace_range(at.., &text);
     }
     let verdict = |template: &str| result.get(template).cloned();
     for (at, offer) in &pending.offers {

@@ -31,12 +31,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::three` (src/lib.rs:5): no template: `depot::three` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 1 not mapped
-    n1 not mapped [R79.5-1]: added macro `depot::make!#0` (src/lib.rs:6): not mapped, syntax only in f1: `/// The new doc.\n/// One more line.\n#[cfg(all())]\nmake!(three);`
-        no template: `depot::make!#0` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library); a claim on the items that it changes maps it
-  not mapped:
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
   item `depot::make!#0`:
-  ◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added macro call `make!(three)` (makes: `pub fn three`) [added · code different]
+  ◆ f1 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; no item of the other tree names it (the name record)): added macro call `make!(three)` (makes: `pub fn three`) [added · code different]
       affected bodies: depot::three
       control flow: + graph of `depot::three`: 2 points, 1 arrow (semilla expand --step 0)
       expansion: `make!(three)` at `depot::make!#0` (src/lib.rs:9): expansion added: makes `depot::three`
@@ -51,5 +49,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::make!#0=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::make!#0=the reason of the test'
-◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added macro call `make!(three)` (makes: `pub fn three`) [added · code different]
+◆ f1 add, syntax only (Semilla; R92.3-1, no MIR element and no partner; no item of the other tree names it (the name record)): added macro call `make!(three)` (makes: `pub fn three`) [added · code different]
     lines: src/lib.rs:6-9

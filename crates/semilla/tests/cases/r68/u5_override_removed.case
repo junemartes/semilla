@@ -41,14 +41,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `<shop::Dog as shop::Speak>::name` (src/lib.rs:10): a removed body: `#[removed(<shop::Dog as shop::Speak>::name)] fn name_removed() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: edit, see f1 (f1)
-      in: shop::<Dog as Speak>::name
-      lines: src/lib.rs:9, src/lib.rs:-9-13
-      to state it: --change 'shop::<Dog as Speak>::name=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::<Dog as Speak>::name=TEXT'
   real edits:
   item `shop::<Dog as Speak>::name`:
-  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 1 }` [semantics · code different] · not stated
+  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 1 }` [semantics · code different]
+      not stated (src/lib.rs:9, src/lib.rs:-9-13); to state it: --change 'shop::<Dog as Speak>::name=TEXT'
       affected bodies: shop::<Dog as Speak>::name
       control flow: − graph of `<shop::Dog as shop::Speak>::name`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 6 changed line(s) is in a fact
@@ -57,5 +54,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 1 }` [semantics · code different] · not stated
+◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 1 }` [semantics · code different]
     lines: src/lib.rs:9, src/lib.rs:-9-13

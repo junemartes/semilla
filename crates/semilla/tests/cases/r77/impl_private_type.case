@@ -34,11 +34,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 4 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop::impl <Inner as std::fmt::Display>`:
-  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added · code different]
+      not stated (src/lib.rs:4-6); to state it: --change 'shop::impl <Inner as std::fmt::Display>=TEXT'
       affected bodies: shop::<Inner as std::fmt::Display>::fmt
       control flow: + graph of `<shop::Inner as std::fmt::Display>::fmt`: 4 points, 3 arrows (semilla expand --step 0)
   item `shop::impl <Outer as std::fmt::Display>`:
-  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added · code different] · not stated
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added · code different]
+      not stated (src/lib.rs:7-9); to state it: --change 'shop::impl <Outer as std::fmt::Display>=TEXT'
       affected bodies: shop::<Outer as std::fmt::Display>::fmt
       control flow: + graph of `<shop::Outer as std::fmt::Display>::fmt`: 4 points, 3 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
@@ -51,7 +53,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added · code different]
     lines: src/lib.rs:4-6
-◆ f2 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added · code different] · not stated
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added · code different]
     lines: src/lib.rs:7-9

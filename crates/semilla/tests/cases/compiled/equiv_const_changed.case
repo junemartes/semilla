@@ -24,13 +24,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::ms` (src/lib.rs:1): the full compare: `#[same(shop::ms)] fn ms_same() {}`; a difference: `#[change(shop::ms)] fn ms_change(n: u64) -> bool { … }` or `#[different(shop::ms)] fn ms_different() -> bool { … }`
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  ? 1 place: changed literal `1000` → `100` (f1)
-      in: shop::ms
-      lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::ms=TEXT'; if it does not change, --same 'rewrite 1000 => 100'
   real edits:
   item `shop::ms`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1000` → `100` at `shop::ms/tail/rhs/rhs` [semantics · code different] · not stated
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1000` → `100` at `shop::ms/tail/rhs/rhs` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::ms=TEXT'; if it does not change, --same 'rewrite 1000 => 100'
       affected bodies: shop::ms
       control flow: ~ check `overflow: n * (60 * 1000)` → `overflow: n * (60 * 100)` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: MIR changes
@@ -40,5 +37,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1000` → `100` at `shop::ms/tail/rhs/rhs` [semantics · code different] · not stated
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1000` → `100` at `shop::ms/tail/rhs/rhs` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

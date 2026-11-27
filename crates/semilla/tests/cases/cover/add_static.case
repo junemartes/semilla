@@ -32,7 +32,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::NAME`:
-  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::NAME` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::NAME` (the public API changes: a different crate can now use the item) [added · code different]
+      not stated (src/lib.rs:5-8); to state it: --change 'depot::NAME=TEXT'
       affected bodies: depot::NAME
       control flow: + graph of `depot::NAME`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
@@ -45,5 +46,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::NAME=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::NAME=the reason of the test'
-◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::NAME` (the public API changes: a different crate can now use the item) [added · code different] · not stated
+◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::NAME` (the public API changes: a different crate can now use the item) [added · code different]
     lines: src/lib.rs:5-8

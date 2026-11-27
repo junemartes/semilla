@@ -41,24 +41,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::count` (src/lib.rs:1): the full compare: `#[same(shop::count)] fn count_same() {}`; a difference: `#[change(shop::count)] fn count_change(n: u32) -> bool { … }` or `#[different(shop::count)] fn count_different() -> bool { … }`
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
-  ? 2 places: 2 different edits (f1, f2)
-      in: shop::count
-      lines: src/lib.rs:4-7, src/lib.rs:-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::count=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   real edits:
   item `shop::count`:
-  ◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement [1] at `shop::count/S2` [semantics · code different] · not stated
+  ◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement [1] at `shop::count/S2` [semantics · code different]
         [1] while i < n {
                 if i % 3 == 0 {
                     hits = hits.wrapping_add(1);
                 }
                 i = i.wrapping_add(1);
             }
+      not stated (src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::count=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: shop::count (with 1 other edit of this body)
       control flow: ~ loop `while` → `loop` (src/lib.rs:-4, src/lib.rs:4)
       control flow: ~ branch `i < n` → `i >= n` (src/lib.rs:-4, src/lib.rs:5)
       equivalence: MIR changes
-  ◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added loop [1] at `shop::count/S2` [semantics · code different] · not stated
+  ◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added loop [1] at `shop::count/S2` [semantics · code different]
         [1] loop {
                 if i >= n {
                     break;
@@ -68,6 +65,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
                 }
                 i = i.wrapping_add(1);
             }
+      not stated (src/lib.rs:4-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::count=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: shop::count (with 1 other edit of this body)
       control flow: ~ loop `while` → `loop` (src/lib.rs:-4, src/lib.rs:4)
       control flow: ~ branch `i < n` → `i >= n` (src/lib.rs:-4, src/lib.rs:5)
@@ -78,7 +76,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement [1] at `shop::count/S2` [semantics · code different] · not stated
+◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement [1] at `shop::count/S2` [semantics · code different]
     lines: src/lib.rs:-4
-◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added loop [1] at `shop::count/S2` [semantics · code different] · not stated
+◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added loop [1] at `shop::count/S2` [semantics · code different]
     lines: src/lib.rs:4-7
