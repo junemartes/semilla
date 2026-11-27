@@ -83,6 +83,7 @@ pub const CODES: &[Code] = &[
     Code { code: "S0109", title: "a `cfg` predicate that does not parse", long: "A `cfg` option has the form of the Rust `cfg` attribute: a name, `key = \"value\"`, `all(…)`, `any(…)`, `not(…)`.\n\nRight:\n\n    #[same(shop::parse, cfg = \"all(unix, not(debug_assertions))\")]" },
     Code { code: "S0110", title: "a claim kind that the model cannot check yet", long: "The kind is in the language, but this version of Semilla cannot check it: the step shows the claim as \"claimed\" with the batch that checks it. It is not an error: the file is clean. Write the claim now; a later version checks it." },
     Code { code: "S0112", title: "a scope path with no definition", long: "Rustc resolves each path of a scope (also a method `shop::Bag::new` through its type, and an item of a re-export), and the path names no item of the version. The candidates are the names next to the last part that resolves.\n\nWrong:\n\n    #[same(shop::Bag::nw)]\n\nRight:\n\n    #[same(shop::Bag::new)]" },
+    Code { code: "S0120", title: "an anchor of a claim that does not fit the syntax tree", long: "The step checks the anchors of each claim against the syntax trees of the two versions (the AST pass, design 79): the item that rustc resolves for the scope must have a node in the tree of its version, and its kind must fit the claim. `#[new(ITEM)]` needs an item that the step adds; `#[removed(ITEM)]` an item that the step removes; `#[same]`, `#[change]`, and `#[different]` one kind of item in the two versions; `#[relation(before::T, after::T)]` two types. The step shows the error at the place of the scope path, with the expected kind, and the claim is an error.\n\nWrong (the step does not add `shop::parse`):\n\n    #[new(shop::parse)]\n    fn parse_new(x: u32) -> bool { after::shop::parse(x) }\n\nRight:\n\n    #[change(shop::parse)]\n    fn parse_new(x: u32) -> bool { after::shop::parse(x) || !before::shop::parse(x) }" },
     Code { code: "S0111", title: "a hint with a body", long: "`rename`, `moved`, and `rewrite` are hints for the pairing of the old and the new code: the function has an empty body.\n\nRight:\n\n    #[rename(shop::total, shop::sum)]\n    fn renamed() {}" },
 ];
 
@@ -387,11 +388,13 @@ pub fn scope_links(kind: &str, index: usize, scope: &str) -> Vec<String> {
     let path = if let Some(rest) = text.strip_prefix("impl") {
         // `impl TRAIT for TYPE`: the type; `impl TYPE`: the type.
         rest.rsplit_once("for").map(|(_, ty)| ty.to_string()).unwrap_or_else(|| rest.to_string())
-    } else if let Some(inner) = text.strip_prefix('<') {
-        match inner.split_once(">::") {
-            Some((ty, item)) => format!("{}::{item}", ty.split("as").next().unwrap_or(ty)),
-            None => return Vec::new(),
-        }
+    } else if text.starts_with('<') {
+        // [R79.2-1] The type of `<T as Trait>::item` ends at the word `as` (a token of the scope, as
+        // in the crate of the attributes), not at the letters `as` of a name (`hashbrown`).
+        let spaced = scope.trim().trim_start_matches('<');
+        let Some((ty, item)) = spaced.split_once(">::") else { return Vec::new() };
+        let ty = ty.split_whitespace().take_while(|word| *word != "as").collect::<String>();
+        format!("{}::{}", ty.split('<').next().unwrap_or(""), item.split_whitespace().collect::<String>())
     } else {
         text.strip_suffix("::*").unwrap_or(&text).to_string()
     };
@@ -479,6 +482,15 @@ pub fn as_file(path: &str, text: &str) -> crate::File {
 #[cfg(test)]
 mod file_tests {
     use super::*;
+
+    // rule+ R79.2-1
+    #[test]
+    fn the_link_of_a_qualified_scope_path_ends_at_the_word_as() {
+        let links = scope_links("same", 0, "<hashbrown::raw::RawTable as core::clone::Clone>::clone");
+        assert_eq!(links, ["before::hashbrown::raw::RawTable::clone", "after::hashbrown::raw::RawTable::clone"]);
+        assert_eq!(scope_links("new", 0, "<shop::W<u8> as shop::Named>::name"), ["after::shop::W::name"]);
+        assert_eq!(scope_links("same", 0, "<shop::Counter>::get"), ["before::shop::Counter::get", "after::shop::Counter::get"]);
+    }
 
     // rule+ R78.3-5
     #[test]

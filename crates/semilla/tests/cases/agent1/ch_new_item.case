@@ -57,6 +57,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 change: `fresh` "a new function" (holds: no reject)
       note: Semilla shows `depot::fresh` as added: the fact covers no existing code
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   new and removed items, filled in by Semilla:
   ◆ f1 derived: added `depot::fresh` (the public API changes: a different crate can now use the item) [added]

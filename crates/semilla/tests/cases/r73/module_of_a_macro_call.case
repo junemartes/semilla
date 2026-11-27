@@ -33,6 +33,7 @@ rejected: step 0 "the change" is not stored
 build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
+  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
   ◆ f1 derived: src/float.rs: changed [file]
       expansion: `load!()` at `shop::load!#0` (src/lib.rs:4): expansion changed: changed literal `2u32` → `6u32` at `shop::float::at/tail/lhs` [semantics]; added `shop::float::first` (the public API changes: a different crate can now use the item) [added]

@@ -36,6 +36,7 @@ rejected: step 0 "the change" is not stored
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
+  AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
   ◆ f1 derived: added macro call `table!( #[cfg(unix)] B = 2, )` (makes items that Semilla cannot list) [added]
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::table!#1`; the macro call `table!( #[cfg(unix)] B = 2, )` makes items that Semilla cannot list; it needs a reason: --reason 'depot::table!#1=…'

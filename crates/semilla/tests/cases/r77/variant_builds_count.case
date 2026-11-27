@@ -28,6 +28,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 5 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 5 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 5 places: 5 different edits (f1, f2, f3, f4, f5)
       in: shop::f

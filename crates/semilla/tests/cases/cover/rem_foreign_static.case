@@ -34,6 +34,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
   ◆ f1 derived: removed `depot::extern C::DEPOT_S` [removed]
   cover: each of the 4 changed line(s) is in a fact

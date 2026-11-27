@@ -58,6 +58,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✓ a1 same: rewrite `wrap($a)` => `wrap2($a)` (the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
       places: depot::both/tail/lhs/callee
     ◆ f1 stated: changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics]
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 2 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records

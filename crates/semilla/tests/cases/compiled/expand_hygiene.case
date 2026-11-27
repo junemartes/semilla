@@ -19,6 +19,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f1 derived: changed macro `less`: `macro_rules! less { ($e:expr) => {{ let x = 1; $e - x }} }` → `macro_rules! less { ($e:expr) => {{ let x = 1; x - $e }} }` [declaration · code different]
       affected bodies: shop::f

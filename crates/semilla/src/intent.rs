@@ -91,6 +91,19 @@ struct One {
 }
 
 impl NormalOracle {
+    /// [R79.2-1] The compile of the intent crate of a step, one time for each set of intent files:
+    /// the AST pass (the anchors) and the check of the claims read the same compile.
+    pub(crate) fn intent_compile(&self, step: &Step, sources: &[semilla_normal::intent::Source]) -> Arc<std::result::Result<crate::intentcrate::Check, String>> {
+        let texts: String = sources.iter().map(|source| format!("{}\n{}\n", source.path, source.text)).collect();
+        let key = (step.tree_before.clone(), step.tree_after.clone(), semilla_normal::intent::fnv(texts.as_bytes()));
+        if let Some(found) = self.added.lock().unwrap_or_else(|error| error.into_inner()).intent_checks.get(&key) {
+            return found.clone();
+        }
+        let found = Arc::new(crate::intentcrate::check(self, &step.tree_before, &step.tree_after, sources).map_err(|error| format!("the intent crate does not compile: {error:#}")));
+        self.added.lock().unwrap_or_else(|error| error.into_inner()).intent_checks.insert(key, found.clone());
+        found
+    }
+
     /// The check of the claims of a step (design 67).
     pub(crate) fn intent_claims(&self, step: &Step, renames: &BTreeMap<String, String>, queries: &[Query]) -> Option<Vec<Answer>> {
         let checked = self.checked(step).ok()?;
@@ -107,16 +120,11 @@ impl NormalOracle {
         // trees. An error of rustc or of Semilla is an error of each claim of its file, so such a
         // claim is never checked.
         let sources: Vec<semilla_normal::intent::Source> = step.agent.intent.iter().map(|file| semilla_normal::intent::Source { path: file.path.clone(), text: file.text.clone() }).collect();
-        let mir = if dry || sources.is_empty() {
-            None
-        } else {
-            match crate::intentcrate::check(self, &step.tree_before, &step.tree_after, &sources) {
-                Ok(check) => Some(check),
-                Err(error) => {
-                    let text = format!("the intent crate does not compile: {error:#}");
-                    return Some(queries.iter().map(|_| Answer { result: Some(IntentResult::Error), errors: vec![text.clone()], ..Default::default() }).collect());
-                }
-            }
+        let compiled = (!dry && !sources.is_empty()).then(|| self.intent_compile(step, &sources));
+        let mir = match compiled.as_deref() {
+            None => None,
+            Some(Ok(check)) => Some(check),
+            Some(Err(text)) => return Some(queries.iter().map(|_| Answer { result: Some(IntentResult::Error), errors: vec![text.clone()], ..Default::default() }).collect()),
         };
         if let Some(check) = &mir {
             let mut errors: Vec<(Option<String>, String)> = check.compiled.diagnostics.iter().filter(|d| d.level == "error").map(|d| (d.file.clone(), format!("{}:{}:{}: {}{}", d.file.as_deref().unwrap_or("the intent crate"), d.line, d.column, d.code.as_ref().map(|code| format!("[{code}] ")).unwrap_or_default(), d.message))).collect();
@@ -742,4 +750,187 @@ fn join(results: Vec<(String, One)>, skipped: Vec<String>, query: &Query) -> Ans
         }
     }
     Answer { result: Some(result), detail, configs, reads, errors, depends, items, tests, scope }
+}
+
+/// [R79.2-1] The compiled claims of the intent files for the AST pass (design 79): the definition
+/// of each scope path (the links of rustc), and for each function of the intent crate the
+/// definitions of each version that it calls or names and the fields that it reads, also
+/// through its closures and the functions of the intent crate that it calls. An error of rustc
+/// or of Semilla gives no data: the claims are errors.
+pub(crate) fn compiled_claims(check: &crate::intentcrate::Check, sources: &[semilla_normal::intent::Source]) -> std::result::Result<semilla_verify::astmap::CompiledClaims, String> {
+    let (rustc, semilla) = check.errors();
+    if rustc > 0 || semilla > 0 {
+        return Err(format!("the intent crate has {rustc} error(s) of rustc and {semilla} error(s) of Semilla (`semilla intent check` shows them)"));
+    }
+    let compiled = &check.compiled;
+    let mut out = semilla_verify::astmap::CompiledClaims { links: compiled.links.iter().map(|link| (link.path.clone(), link.resolved.clone())).collect(), functions: BTreeMap::new() };
+    let forms: BTreeMap<&str, Arc<semilla_smt::mir::Ir>> = compiled.records.iter().filter_map(|record| record_form(record).map(|form| (record.name.as_str(), form))).collect();
+    let prefix = format!("{}::", semilla_normal::intent::CLAIMS_CRATE);
+    for (source, module) in sources.iter().zip(&compiled.modules) {
+        let start = format!("{prefix}{module}::");
+        for record in compiled.records.iter().filter(|record| record.name.starts_with(&start)) {
+            let name = &record.name[start.len()..];
+            if name.contains("::") || name.starts_with("__semilla_scope_") {
+                continue;
+            }
+            // The bodies of the function: its form, its closures, and each function of the
+            // intent crate that it calls (with their closures).
+            let mut todo: Vec<String> = vec![record.name.clone()];
+            let mut seen: BTreeSet<String> = BTreeSet::new();
+            let mut calls = semilla_verify::astmap::ClaimCalls::default();
+            while let Some(body) = todo.pop() {
+                if !seen.insert(body.clone()) {
+                    continue;
+                }
+                let closures = format!("{body}::{{");
+                todo.extend(compiled.records.iter().map(|known| known.name.as_str()).filter(|known| known.starts_with(&closures)).map(str::to_string));
+                // The callees of the form, and of the MIR text (a body with no form, for example
+                // a generic claim function: its text names each callee `{after::…}`).
+                let text = compiled.records.iter().find(|known| known.name == body).map(|known| known.text.as_str()).unwrap_or("");
+                let mut called_all = text_calls(text);
+                if let Some(form) = forms.get(body.as_str()) {
+                    called_all.extend(ir_calls(form));
+                }
+                for called in called_all {
+                    if let Some(rest) = called.strip_prefix("before::") {
+                        calls.calls[0].insert(rest.to_string());
+                    } else if let Some(rest) = called.strip_prefix("after::") {
+                        calls.calls[1].insert(rest.to_string());
+                    } else if called.starts_with(&prefix) {
+                        todo.push(called);
+                    }
+                }
+                if let Some(form) = forms.get(body.as_str()) {
+                    ir_fields(form, &mut calls.fields);
+                }
+            }
+            out.functions.insert((source.path.clone(), name.to_string()), calls);
+        }
+    }
+    Ok(out)
+}
+
+/// The names in braces of a canonical MIR text that start with a facade or with the intent crate:
+/// `const fn(u32) -> u32 {after::shop::f}` gives `after::shop::f`.
+fn text_calls(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (at, _) in text.match_indices('{') {
+        let rest = &text[at + 1..];
+        if !(rest.starts_with("before::") || rest.starts_with("after::") || rest.starts_with(&format!("{}::", semilla_normal::intent::CLAIMS_CRATE)) || rest.starts_with("<before::") || rest.starts_with("<after::")) {
+            continue;
+        }
+        // The name ends at the brace that closes the one at `at` (a name can have `<…>` with
+        // no brace).
+        let Some(end) = rest.find('}') else { continue };
+        let name = &rest[..end];
+        // A qualified name of the text (`<after::shop::W as after::shop::T>::m`): the facade of
+        // the self type gives the version, as in the name of a callee (R78.4-1).
+        let name = match name.strip_prefix('<') {
+            Some(inner) if inner.starts_with("before::") => format!("before::<{}", inner.replacen("before::", "", 1)),
+            Some(inner) if inner.starts_with("after::") => format!("after::<{}", inner.replacen("after::", "", 1)),
+            _ => name.to_string(),
+        };
+        out.push(name);
+    }
+    out
+}
+
+/// The names of the callees of a form and of the functions that it names as a value.
+fn ir_calls(form: &semilla_smt::mir::Ir) -> Vec<String> {
+    use semilla_smt::mir::{IrConst, IrOp, IrRvalue, IrStmtKind, IrTermKind};
+    let mut out = Vec::new();
+    let op = |operand: &IrOp, out: &mut Vec<String>| {
+        if let IrOp::K(IrConst::Fn(name) | IrConst::G(name, ..)) = operand {
+            out.push(name.clone());
+        }
+    };
+    for block in &form.b {
+        for statement in &block.s {
+            if let IrStmtKind::Set(_, value) = &statement.k {
+                match value {
+                    IrRvalue::Use(a) | IrRvalue::Un(_, a) | IrRvalue::Cast(a, _) => op(a, &mut out),
+                    IrRvalue::Bin(_, a, b) | IrRvalue::Chk(_, a, b) => {
+                        op(a, &mut out);
+                        op(b, &mut out);
+                    }
+                    IrRvalue::Agg(_, list) => list.iter().for_each(|a| op(a, &mut out)),
+                    _ => {}
+                }
+            }
+        }
+        if let IrTermKind::Call(callee, args, ..) = &block.t.k {
+            if let Some(name) = &callee.w {
+                out.push(name.clone());
+            }
+            args.iter().for_each(|a| op(a, &mut out));
+        }
+    }
+    out
+}
+
+/// [R79.2-4] The fields that a form reads: each projection of a field of an ADT, with the type as
+/// rustc prints it (no facade, no generic arguments), the variant of a downcast, and the field.
+fn ir_fields(form: &semilla_smt::mir::Ir, out: &mut [BTreeSet<(String, String, String)>; 2]) {
+    use semilla_smt::mir::{IrOp, IrPlace, IrProj, IrRvalue, IrStmtKind, IrTermKind, IrTy};
+    let plain = |name: &str| -> Option<(usize, String)> {
+        let (side, rest) = if let Some(rest) = name.strip_prefix("before::") { (0, rest) } else { (1, name.strip_prefix("after::")?) };
+        Some((side, rest.split('<').next().unwrap_or(rest).to_string()))
+    };
+    let place = |at: &IrPlace, out: &mut [BTreeSet<(String, String, String)>; 2]| {
+        let Some(mut ty) = form.l.get(at.l).and_then(|index| form.t.get(*index as usize)) else { return };
+        let mut variant: Option<usize> = None;
+        for step in &at.p {
+            match (step, ty) {
+                (IrProj::D, IrTy::Ref(_, inner)) => match form.t.get(*inner as usize) {
+                    Some(next) => ty = next,
+                    None => return,
+                },
+                (IrProj::V(index), IrTy::Adt { n, vn, .. }) => {
+                    if let (Some((side, name)), Some(word)) = (plain(n), vn.get(*index)) {
+                        out[side].insert((name, word.clone(), String::new()));
+                    }
+                    variant = Some(*index);
+                }
+                (IrProj::F(index), IrTy::Adt { n, v, vn, fs, .. }) => {
+                    let at_variant = variant.unwrap_or(0);
+                    if let (Some((side, name)), Some(field)) = (plain(n), fs.get(at_variant).and_then(|fields| fields.get(*index))) {
+                        let word = if variant.is_some() { vn.get(at_variant).cloned().unwrap_or_default() } else { String::new() };
+                        out[side].insert((name, word, field.clone()));
+                    }
+                    match v.get(at_variant).and_then(|types| types.get(*index)).and_then(|next| form.t.get(*next as usize)) {
+                        Some(next) => ty = next,
+                        None => return,
+                    }
+                    variant = None;
+                }
+                _ => return,
+            }
+        }
+    };
+    let op = |operand: &IrOp, out: &mut [BTreeSet<(String, String, String)>; 2]| {
+        if let IrOp::C(at) | IrOp::M(at) = operand {
+            place(at, out);
+        }
+    };
+    for block in &form.b {
+        for statement in &block.s {
+            if let IrStmtKind::Set(_, value) = &statement.k {
+                match value {
+                    IrRvalue::Use(a) | IrRvalue::Un(_, a) | IrRvalue::Cast(a, _) => op(a, out),
+                    IrRvalue::Bin(_, a, b) | IrRvalue::Chk(_, a, b) => {
+                        op(a, out);
+                        op(b, out);
+                    }
+                    IrRvalue::Agg(_, list) => list.iter().for_each(|a| op(a, out)),
+                    IrRvalue::Ref(_, at) | IrRvalue::Disc(at) => op(&IrOp::C(at.clone()), out),
+                    _ => {}
+                }
+            }
+        }
+        match &block.t.k {
+            IrTermKind::Call(_, args, ..) => args.iter().for_each(|a| op(a, out)),
+            IrTermKind::Sw(a, ..) | IrTermKind::Assert(a, ..) => op(a, out),
+            _ => {}
+        }
+    }
 }

@@ -92,6 +92,7 @@ rejected: step 0 "the change" is not stored
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f1 derived: changed macro call `table!( … 68, 75, 82, 89, 96 …` → `table!( … 68, 75, 77777, 89, 96 …` (a large text: 2.9 kB → 2.9 kB; 1 changed part; the full text: semilla expand f1 --step 0) (makes items that Semilla cannot list) [declaration]
       ✗ spotlight: the macro call `table!( 0, 7, 14, 21, 28, 35, 42, 49, 56, 63, 70, 77, 84, 91, 98, 105, 112, 119, …` (a large text: 2.9 kB; the first characters; the full text: semilla expand f1 --step 0) makes items that Semilla cannot list; it needs a reason: --reason 'shop::table!#0=…'

@@ -51,6 +51,7 @@ rejected: step 0 "the change" is not stored
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `0` → `1` (f2)
       in: depot::list::first

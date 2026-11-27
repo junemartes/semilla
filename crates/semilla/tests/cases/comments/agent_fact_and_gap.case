@@ -42,6 +42,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     ◆ f2 stated: changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics]
         docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price with a tax of 10 percent.`
         note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `1` → `2` (f1)
       in: shop::count

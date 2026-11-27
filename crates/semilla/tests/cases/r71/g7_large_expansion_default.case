@@ -153,6 +153,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f1 derived: changed macro `x12`: `macro_rules! x12 { ($e:expr) => { x11!($e) ^ x11!($e) }; }` → `macro_rules! x12 { ($e:expr) => { x11!($e) | x11!($e) }; }` [declaration]
       expansion: `x12!(v)` at `shop::mix/tail` (src/lib.rs:68): expansion changed: the text is too large for the fact rules (over 50 kB): `^ (v.wrapping_add·2048(1) ^ v.wrapping_add·2049(1) ^` → `| v.wrapping_add·2048(1) ^ v.wrapping_add·2049(1) ^` (line 1026), `(v.wrapping_add·4094(1) ^ v.wrapping_add·4095(1))))))))))))` → `(v.wrapping_add·4094(1) ^ v.wrapping_add·4095(1)))))))))))` (line 2051) (a large text: 2052 → 2051 lines, 191.5 kB → 191.4 kB; 2 changed parts; the full text: semilla expand src/lib.rs:68 --step 0)

@@ -32,6 +32,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
         control flow: + arrow check `overflow: a + b` (src/lib.rs:2) → check `overflow: a + b` (src/lib.rs:2) (ok)
         control flow: … 4 more (semilla expand --step 0)
         equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`, `std::cmp::min::<u32>`)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

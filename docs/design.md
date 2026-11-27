@@ -9114,6 +9114,172 @@ Rule index: no rule: the subsection has the limits and the open questions.
 
 - Should a file with no `use semilla_intent::prelude::*;` get the line from Semilla? Decided by Claude first: no. Changed in the rebase on 13a: yes (R78.1-4), because the help templates of 13a (R77.3-4) must pass `semilla intent check` and have no `use` line. The user can choose the other way: then each template and each claim of the guide gets the line.
 
+## 79. Batch L1: the AST pass: each changed node is mapped before the proof
+
+The decisions of the user (2026-11-26):
+
+> "The intent language should be parsed in three layers: first layer is the AST transformation which maps one statement to another. We build an AST tree diff between both versions of the change. Semilla fills the gaps that the hints didn't cover and ensure all the AST diffs are mapped."
+
+> "The language shouldn't have to change, the layered approach is done in semilla's compiler. We should combine claims with the language so that both convey the same information."
+
+> "ensure that all the statements and control flow are mapped (including pure additions/removals) before moving on to the last layer with the proofs. Building the mapping is NP complete but checking hints is poly time so if we can't prove everything we ask the agent to complete their intent file."
+
+> 2026-11-24: "In general we should ensure we don't special case to a specific set of crates or symbols if not necessary".
+
+**The general rule.** Semilla compiles the claims in three passes: the AST pass (this batch), the control-flow pass (batch L2), and the proof pass (the claims and the equivalence check). The AST pass gives each changed node of the syntax diff exactly one map entry: from an anchor of a claim, from the matcher of G2 or a rule of Semilla, or "not mapped". The anchors come from the claims that rustc compiles (design 78), never from the text of a path. The pass is polynomial and never searches for a map. Each node that is not mapped is a request to the agent with a claim template. The map is a review aid: it never changes a proof result (R79.7-1). The language does not change: each claim gives its anchors (draft 3 of the language, the table "What each claim gives each pass"). Code: `semilla-verify/src/astmap.rs`; the compiled claims: `semilla/src/intent.rs` (`compiled_claims`); the report: `semilla-core/src/report.rs` (`AstMap`, `AstEntry`).
+
+### 79.1 The changed nodes
+
+Rule index: the identities are below.
+
+1. [R79.1-1] **Each changed node of the AST diff has exactly one map entry.** A changed node is each edit of the syntax diff of the step (`semilla_syntax::diff`, the edits of the facts) with a node of a tree: a changed, added, removed, or moved item, statement, expression, field, variant, match arm, attribute, docs, comment, visibility, signature, member list, and `use` line. A file edit (a file that the loader does not parse: a file that is not Rust, a binary file, a build script, a new mode) has no node of a tree: it keeps its fact and is not a part of the AST diff. The map has the count of the changed nodes (`nodes`, counted apart from the loop of the entries) and one entry for each node in the order of the diff (the node `nI` is the entry `I`). The three counts of the coverage line add up to the count of the nodes. **Property 15 of the case runner** (each case): the full text (`semilla expand --step 0`) gives the count T and one line for each entry with its node number; each number from 1 to T is in exactly one line, the counts add up to T and are the counts of the states of the lines, and the step output has the same counts (a full text with no printed record of the step is the syntax tree computed again with no data of the compiler, R76.1-1: its counts can differ, and it says so). Tests: `each_changed_node_has_exactly_one_entry_and_the_counts_add_up` (positive), `a_file_edit_is_not_a_node_of_the_ast_diff` (negative), property 15 of `tests/cases.rs`.
+
+### 79.2 The anchors of the claims
+
+Rule index: the identities are below.
+
+1. [R79.2-1] **The anchors come from the compiled claims.** The step reads the intent crate of rustc (design 78): the definition of each scope path (the doc links that rustc resolves, R78.1-3), and for each function of the intent crate the definitions of each version that it calls or names and the fields that it reads, also through its closures and the functions of the intent crate that it calls (`compiled_claims`). A `same`, `change`, or `different` claim anchors the item of each version of its scope that its body calls (an empty `same` claim is the full compare of its scope, so it anchors its scope); a scope of one version on each side (`#[same(before::shop::f, after::shop::g)]`) anchors the pair across a rename or a move; `new` anchors the new item and `removed` the old item when the body calls it. A case split (`if`, `match`), a lemma, an invariant, a contract, a loop relation, an assumption, and a hint give no anchor of the AST pass. A compiled step reads the compile of the step (one compile for the AST pass and the proof pass, `intent_compile`); the default mode reads the warm check of `semilla intent check` of the same two trees (R78.3-6, no build), else the claims give no anchor and the line says why. The calls come from the form of each body and from its canonical MIR text (`{after::shop::f}`; a generic claim function has no form), and a call matches a definition also with no generic arguments (`IterNamed::<u8>::new` and `IterNamed::<B>::new`). The definition joins its item of the syntax tree through the name record (R70.1-1), else through an item with the path of the definition (also with no generic arguments). Tests: `a_compiled_claim_anchors_its_item_and_maps_each_node_inside_it`, `the_compiled_claims_anchor_an_item_through_a_relation_function_and_the_fields_of_a_relation`, `a_call_of_a_generic_claim_anchors_the_definition_with_its_parameters`, `the_link_of_a_qualified_scope_path_ends_at_the_word_as` (positive); `the_anchor_comes_from_the_definition_that_rustc_resolved_never_from_the_text`, `the_default_mode_takes_the_anchors_from_the_warm_check_of_the_two_trees_only` (negative).
+2. [R79.2-2] **The check of the anchors.** Each anchor is checked in polynomial time against the two trees: the anchored definition has a node in the tree of its version, and its kind fits the claim: `new` needs an item that the step adds, `removed` an item that the step removes, `same`, `change`, and `different` one kind of item in the two versions, `relation` two types; a field that a relation reads has a node. An anchor that does not fit is the error S0120 of its claim, with the place of the scope path and the expected kind (`i4 .semilla/intent/pr.rs:15:7: [S0120] `#[new(shop::added)]` expects an item that the step adds, and `shop::added` has a node in the two trees (its partner in the old tree: `shop::used_gone`); write …`). The claim is an error, so the step is rejected (R67.5-2). Tests: `an_anchor_whose_node_and_kind_fit_is_no_error` (positive), `an_anchor_that_does_not_fit_is_an_error_of_its_claim_with_the_place_and_the_expected_kind` (negative).
+3. [R79.2-3] **An anchor maps each node of its items.** An anchor of an item maps each changed node of the old item and of the new item, and each node inside them: a statement, an expression, a docs or attribute edit, a field or a variant of a type, an item in the body of a function, a constant, or a static. The entry is `mapped by claim iN`. Tests: `a_compiled_claim_anchors_its_item_and_maps_each_node_inside_it` (positive), `an_anchor_does_not_map_a_node_of_another_item` (negative).
+4. [R79.2-4] **A relation maps the two types and each part that it reads.** `#[relation(before::T, after::U)]` maps the nodes of the two types (their own edits) and each field and variant that its body (or a function that it calls) reads: a projection of a field of an ADT in the MIR of rustc whose type is a type of the relation. A field that the relation does not read stays with its own rule. Tests: `a_relation_maps_the_two_types_and_each_field_that_it_reads` (positive), `a_relation_does_not_map_a_field_that_it_does_not_read` (negative).
+
+### 79.3 The map of Semilla
+
+Rule index: the identities are below.
+
+1. [R79.3-1] **The matcher of G2 maps each node with a partner.** A node whose pair the matcher gives (design 72: the identity of an item, equal tokens of a moved node, a similarity, one place; the statement mapper of design 41: a part of an extracted or an inlined variable) is `mapped by Semilla (KEY)`. A node with no partner is a pure addition or removal (R79.3-2 to R79.3-5). Tests: `the_matcher_maps_a_node_with_a_partner` (positive), `a_node_with_no_partner_is_not_mapped_by_the_matcher` (negative).
+2. [R79.3-2] **A node with no code of the build.** A doc text and a comment, and a node of test, bench, or example code (an item with `#[test]` or in a `cfg(test)` module, an item of a test, bench, or example target): Semilla maps it. The intent crate links the libraries (design 78), so no claim names such an item. Tests: `a_doc_a_comment_and_test_code_are_mapped_by_semilla` (positive), `a_statement_of_code_that_is_not_a_test_is_not_mapped_by_the_rule_of_no_code` (negative).
+3. [R79.3-3] **A removed item with no reader.** A removed item that no other code of the old tree reads and that no other crate can use: the name record gives the names that resolve to its definition (or to an item of it) and its effective visibility (R70.2-1); a name in a macro definition is a reader (the record has no name of an expansion); with no record, each word with the name of the item is a reader, and a `pub` item of a library can be used. A field of a type with an attribute is always read (a derive reads each field), and an impl of a trait and its items are always read (a use of the trait reads them, and no name shows it). A group of removed items that read only each other has no reader (a greatest fixed point). A removed container (an impl block, a module, a trait) with a read member is read. Tests: `a_removed_item_with_no_reader_is_mapped_by_semilla` (positive), `a_removed_item_with_a_reader_or_a_public_item_is_not_mapped` (negative).
+4. [R79.3-4] **An added item that no old code reaches.** An added item that no item of the new tree that the step does not add names, also through other added items (a least fixed point from the old code), with the same readers as R79.3-3. An impl of a trait and its items, and a macro call of an item list, are always reached. Tests: `an_added_item_that_no_old_code_reaches_is_mapped_by_semilla` (positive), `an_added_item_that_a_changed_body_reaches_is_not_mapped_also_through_another_added_item` (negative).
+5. [R79.3-5] **An added or a removed `use` line.** With the name record of its tree: the definitions of the last name of each path of the line. A name that a `use` line of the same module of the other tree gives too (with the same visibility) stays imported: only the names that the step adds or removes count, and a line with no such name is `a new form of the \`use\` lines` (a group that the step splits or joins). A line with a visibility (a re-export) gives its names to other modules or crates: the claims that anchor each item that it names map it, else it is not mapped with the items. A private line: the names of the files of its module and of each module below it (outside the `use` lines) that resolve to them or to an item of them. No such name: `an unused \`use\` line (the name record)`. Each item that reads such a name has an anchor of a claim: `mapped by claim`; each one has an edit or an anchor: `a part of the changes of its readers`. A reader with no edit and no anchor (the line changes the meaning of a name of an unchanged item), a glob line, and a tree with no name record: not mapped, with the readers or the cause. Tests: `an_unused_use_line_and_a_use_line_of_changed_readers_are_mapped_by_semilla` (positive), `a_use_line_with_an_unchanged_reader_or_with_no_name_record_is_not_mapped` (negative).
+
+6. [R79.3-6] **A container takes the state of its members.** An added or a removed impl block, trait, or module, and a member with no body of an added or a removed impl block or trait (an associated type), take the state of the member nodes of the container that have a body (not a `use` line, not a nested container; a member of a block is in its range, a member of a module is an item below its path, also in a module file): each one mapped by a claim gives `mapped by claim` with their ids; each one mapped gives `mapped by Semilla (a container: each member is mapped)`; one member that is not mapped gives `not mapped`. The head of a container (the trait and the self type of an impl block, the name of a module) has no behavior of its own: its members have it, and no claim names a block. A container with no such member keeps its own rule. Tests: `an_added_impl_block_and_its_associated_type_take_the_state_of_its_members` (positive), `an_added_impl_block_with_a_member_that_is_not_mapped_is_not_mapped` (negative).
+
+### 79.4 No search
+
+Rule index: the identities are below.
+
+1. [R79.4-1] **The pass is polynomial.** It runs the check of the anchors (a join of the definitions to the items and a check of each kind) and reads the pairs of the matcher (a minimum-cost assignment, design 72). The rules of Semilla are fixed points over the names of the record (each step removes or adds one item). The pass never searches for an optimal map: two nodes that no rung of the matcher pairs stay two entries. Tests: `the_pass_is_polynomial_on_a_large_step` (positive: 600 items), `the_pass_does_not_search_for_a_pair_that_the_matcher_does_not_give` (negative).
+
+### 79.5 The request to the agent
+
+Rule index: the identities are below.
+
+1. [R79.5-1] **Each node that is not mapped gives a line and a template.** The line has the node number, the change and the kind of the node, its anchor, its place (`FILE:-LINE` for a line of the old tree), and its old and new text, with the size rule of 71 (R71.1-1, the command `semilla expand --step N`). The template follows the rule of 13a (R77.3-4, R78.1-5): each template passes `semilla intent check` as it is. A node of a function of the two versions: the `same` template of 13a; an added (removed) function: `#[new(…)]` (`#[removed(…)]`) with its parameters and `let new = after::…(…); true`; an added constant: `#[new(…)]`; a field or a variant: a `#[relation]` of its type that reads the field; a type: a `relation`, `new`, or `removed` claim with its generic parameters. A node with no form for a claim gives `no template: CAUSE` (an item of a trait impl, a twin, a macro call, an item of a binary target, a parameter type of 13a's list). A `use` line gives its readers. Tests: `a_node_that_is_not_mapped_gives_its_texts_and_a_template`, `each_template_of_a_node_that_is_not_mapped_passes_the_check_of_the_intent_files` (positive); `a_node_with_no_claim_form_gives_the_cause_and_no_template` (negative).
+
+### 79.6 The coverage line
+
+Rule index: the identities are below.
+
+1. [R79.6-1] **The coverage line of the AST pass.** In the section "semantic changes", before the line of the changed bodies of 13a: "AST changes: N mapped by claims, M mapped by Semilla, K not mapped", the errors of the anchors, the cause of a step with no anchors, and the lines of the nodes that are not mapped (the step output: the first lines and a count; the full text: each entry with its rule, and each anchor). The JSON (`ast`), `semilla status --verbose`, and the MCP tool `results` give the same data. The step passes with K > 0. Tests: `the_ast_line_is_in_the_section_semantic_changes_before_the_line_of_the_bodies`, `the_json_and_the_full_text_give_the_same_map` (positive), `a_report_with_no_map_has_no_ast_line` (negative).
+2. [R79.6-2] **A step with no intent file.** The AST pass runs (the map of Semilla), and the step output has one line: "AST changes: 0 mapped by claims, M mapped by Semilla, K not mapped (no intent file; the full text of the step lists each node)". The line names no command (R76.1-1: a short output names a full-text command only for a cut text). Each other line of the output stays the same; the full text (`semilla expand --step N`, `semilla status --verbose`) has the section with each node. Tests: `a_step_with_no_intent_file_has_the_ast_line_only` (positive), `a_step_with_no_intent_file_shows_no_claim_section_and_no_node_line_in_the_short_output` (negative), the case set (each expected text changes only by this line, 79.8).
+
+### 79.7 The map and the proof results
+
+Rule index: the identities are below.
+
+1. [R79.7-1] **The map never changes a proof result** (Decided by Claude, from the decision of the user on 2026-11-27: the AST pass and the control-flow pass stand alone, before more proof work). The map is a review aid, not a gate of the proof. A changed body (the coverage of 13a, R77.1-2) keeps the state that its proof gives (`explained by claim iN`, `equivalent (Semilla)`, `not explained`), also when a node of its item is not mapped; the count line of the bodies is the line of 13a. A claim result (proved, false, claimed) does not depend on the map. The output shows the two facts side by side: the body line ends with `[the AST map: 2 node(s) of its item not mapped (complete the intent file)]`, and each node keeps its request line (R79.5-1). (An anchor that does not fit is still an error of its claim: that is the check of the claim, R79.2-2, not a result of the map.) Tests: `a_body_that_semilla_proves_equivalent_stays_equivalent_with_a_node_that_is_not_mapped` (positive), `a_proof_does_not_remove_the_request_of_a_node_that_is_not_mapped` (negative).
+
+**Decided by Claude.**
+
+- The changed nodes are the edits of the syntax diff, which the facts use: no second tree diff. A file edit is not a node (no tree): a change of a file that is not Rust keeps its fact and its spotlight.
+- A pair of the matcher by one place (`Modified`, `Replaced`) is mapped by Semilla: the rule of the brief names the order as a rung of the matcher. The proof pass decides its meaning.
+- An anchor of an item maps each node inside the item, also a pure addition (an added statement is a case of the claim of its function).
+- Test, bench, and example code is mapped by Semilla: the intent crate links the libraries, so no claim can name it, and a node that no claim can map would stop the loop of the agent. An item of a binary target stays not mapped, with the cause in place of a template.
+- The readers of R79.3-3 and R79.3-4 come from the name record, and with no record from the words of the text (the safe side: more readers, more nodes not mapped). An impl of a trait is never "with no reader" and never "not reached".
+- The default mode reads only the warm check of `semilla intent check`: the default mode starts no build for the claims. The anchors are an input of the step memo.
+- A scope item that is not a function (a type, a constant, a static) has no call: the scope path that rustc resolves is its anchor. Else the template of 79.5 for an added constant or type could never map its node.
+- A container takes the state of its members (R79.3-6), and a `pub use` line the state of the claims on the items that it names (R79.3-5): no claim names a block, a module, or a `use` line, and with no such rule the loop of the agent could never reach K = 0 for an added trait impl or a re-export (found on itertools #1086).
+- The line of a step with no intent file names no command (R76.1-1); property 15 runs `semilla expand --step 0` itself.
+- `heads::scope_links` (13a2) split `<T as Trait>::item` at the letters `as` after it removed the spaces: a type with `as` in a name (`hashbrown`) gave the link `before::h::clone`, so the claim gave no anchor and no S0112 (found on hashbrown #693). It now splits at the word `as`, as the crate of the attributes does.
+- The driver did not compile a claim that calls a function of the intent crate (`used_crate_source(LocalCrate)` in the query of the open folders, design 78): the local crate is never open and never the prelude (`semilla-mir/src/open.rs`).
+
+### 79.8 The results, the tests, and the mutation check
+
+Rule index: no rule: the subsection has the results, the tests, and the mutation check.
+
+**The case set** (675 cases; `SEMILLA_CASES_WRITE=1`, then a diff with the case files of `22cb627`): 668 expected texts change, each one only by one added line "AST changes: …" (668 added lines, no removed or other line); the other 7 cases have no stored step. Property 15 holds in each case. Over the 668 lines: 0 nodes mapped by claims, 730 mapped by Semilla, 214 not mapped; 550 cases have K = 0 (most cases run with `SEMILLA_NO_CHECK`, so with no name record: the rules R79.3-3 to R79.3-5 take the text form). A run of the case set at the start of the full test suite (a load of 20 to 60) gave 29 problems in 13 cases of `compiled/`, each one a compiled result `pending` in place of `code different` or `code equal` (no AST line differs); the run of the same binary inside the full test suite passed each case.
+
+**The training set** (7 pull requests; a copy at `old` with the diff of `new`; `semilla step "the change"` in the default mode with the build check, and with `--compiled`; an empty cache for each run; the release binaries of `22cb627` and of this batch; a load of 30 to 100 on 12 cores). With no intent file, the step output of this batch is the output of `22cb627` and one line "AST changes: …" (each PR, each mode), except two definition hashes of a line of indexmap with `--compiled` (the hash has the folder of the build; the same result). The full text (`semilla expand --step 0`) gives each node with its rule (`bL1/runs/*/full.txt`).
+
+The AST lines (N mapped by claims, M mapped by Semilla, K not mapped), and the rules of the entries (from the full text):
+
+| PR | Default mode, no intent file | `--compiled`, no intent file | The rules of the entries (no intent file) | With the intent file (`--compiled`; the default mode after `semilla intent check` gives the same line) |
+|---|---|---|---|---|
+| bitflags #465 | 0, 3, 9 | 0, 3, 9 | R79.3-2: 2, R79.3-6: 4, R79.5-1: 6 | 5, 3, 4 (4 claims) |
+| hashbrown #693 | 0, 16, 13 | 0, 16, 13 | R79.3-1: 5, R79.3-2: 9, R79.3-5: 2, R79.5-1: 13 | 25, 4, 0 (8 claims) |
+| indexmap #424 | 0, 85, 132 | 0, 85, 132 | R79.3-1: 69, R79.3-2: 10, R79.3-3: 3, R79.3-5: 3, R79.3-6: 2, R79.5-1: 130 | — |
+| itertools #1086 | 0, 9, 28 | 0, 9, 28 | R79.3-1: 1, R79.3-2: 6, R79.3-5: 2, R79.3-6: 6, R79.5-1: 22 | 19, 7, 11 (8 claims) |
+| num-traits #334 | 0, 69, 48 | 0, 69, 48 | R79.3-1: 11, R79.3-2: 50, R79.3-4: 6, R79.3-5: 2, R79.5-1: 48 | — |
+| uuid #932 | 0, 98, 26 | 0, 98, 26 | R79.3-1: 90, R79.3-2: 8, R79.5-1: 26 | — |
+| winnow #891 | 0, 142, 147 | 0, 143, 146 (one `use` line more with the record of `--compiled`) | R79.3-1: 67, R79.3-2: 65, R79.3-5: 7, R79.3-6: 56, R79.5-1: 91 | — |
+
+**The intent files** (as the author of each PR, `bL1/intent/`): hashbrown: 8 empty `#[same]` claims of the changed functions (two trait methods by their qualified paths): each node is mapped (25 by the claims, 4 by Semilla: two doc edits, a comment, and the `use` lines of R79.3-5); each claim stays "claimed" (a raw pointer, a cleanup path), as in 13a2. itertools: 8 `#[new]` claims (the two functions, the two methods of `Itertools`, the two types, the two `next` methods by their qualified paths): 11 not mapped, the two private `Inner` types with their fields and methods (the file has no claim on them) and their containers. bitflags: 4 `#[new]` claims, two of them generic functions (`fn …<B: Flags>()`): the type and the constructor `IterNamed::<B>::new` are anchored; the call `<B as Flags>::iter_named()` and the method `next` through the trait (`core::iter::Iterator`) give no anchor (79.9), so 4 nodes stay not mapped. Each template of a node that is not mapped in these runs that has a template passes `semilla intent check` (the test of R79.5-1); a not-mapped node of an item of a trait impl gives its qualified path from the name record.
+
+**The change of rule 7** (the coordinator, 2026-11-27, from the decision of the user that the AST pass and the control-flow pass stand alone): the first form of R79.7-1 put a body with a node that is not mapped in a state `not mapped` (never `equivalent`, never `explained`). The new form changes no proof result: `coverage` keeps the state of the proof and adds the fact of the map (`BodyCover::map`); the state `NotMapped` and the tail of the count line are removed. The AST lines of the training set do not change; only the body lines of a step with an intent file get the fact of the map.
+
+**The three numbers.** Rules with an identity: +16 (R79.1-1, R79.2-1 to R79.2-4, R79.3-1 to R79.3-6, R79.4-1, R79.5-1, R79.6-1, R79.6-2, R79.7-1; 545 → 561; none removed). Rows of `docs/name-lists.md`: 0 (102 lines of tables before and after; `tests/names.rs` passes). Code paths that decide by a name of a crate or a symbol of the user: 0. The pass reads the kinds of the syntax nodes and of the items, the facade prefixes `before::` and `after::` of the intent crate (design 78), the names of the attributes of the language, and the target kind of the path form of 56.1 (`(test "…")`, `(bench "…")`, `(example "…")`, `(bin "…")`, a fact of cargo): 2 new decisions by a word of the tool (test, bench, or example code; a binary target).
+
+**The tests.** `cargo build`, then `cargo test --workspace --no-fail-fast` (no `SEMILLA_MIR_DRIVER`), at the end: 1231 tests, 1228 passed (40 new: 33 in `semilla-verify/src/tests79.rs`, 6 in `tests/astmap_cli.rs`, 1 in `semilla-intent/src/heads.rs`; property 15 of the case runner). The 3 failures are the needle tests of `tests/large.rs` on their time limit of 240 s (the last full run: 531 to 556 s; the run before: 379 to 476 s; the three run at one time, at a load of 40 to 120). One at a time: part 1 335 s (a load of 120 at the start, 8 at the end), part 2 297 s (8 to 44), part 3 344 s (44); part 2 again, after the speed changes of the pass (one template for each item, the holders of each place computed one time, one table of line starts for each file): 402 s (21 to 31). The pass itself, in a debug build (a time probe, removed): 0.11 to 0.26 s for each step with no name record (indexmap, winnow, hashbrown), 2.0 s for winnow with the record of the build check; with the release binary the default-mode steps of the training set took 9 to 114 s against 17 to 54 s for `22cb627` (one run each, other loads). The time of the needle tests follows the load of the machine (13a: 249 s for part 2 at a load of 10 to 30).
+
+**The mutation check** (`bL1/scripts/mutate.py`; each change undone):
+
+| Change | Failed test |
+|---|---|
+| M1 R79.1-1: a docs node in two entries | `each_changed_node_has_exactly_one_entry_and_the_counts_add_up` and 2 more; property 15 of the case runner (the group `layout`: "in two entries", "the counts do not add up") |
+| M2 R79.2-1: the anchor from the text of the scope path, not from the definition of rustc | `the_anchor_comes_from_the_definition_that_rustc_resolved_never_from_the_text`, `an_added_impl_block_and_its_associated_type_take_the_state_of_its_members` |
+| M3 R79.2-2: no check of the kind of a `new` anchor | `an_anchor_that_does_not_fit_is_an_error_of_its_claim_with_the_place_and_the_expected_kind` |
+| M4 R79.2-3: an anchor maps only the node of its item | `an_anchor_of_a_type_maps_the_nodes_inside_it` (the first run of M4 passed each test; the test was added for it) |
+| M5 R79.2-4: a relation maps each field of its types | `a_relation_does_not_map_a_field_that_it_does_not_read` |
+| M6 R79.3-1: a moved node is not mapped by the matcher | `the_matcher_maps_a_node_with_a_partner` |
+| M7 R79.3-2: test code is not mapped by Semilla | `a_doc_a_comment_and_test_code_are_mapped_by_semilla` |
+| M8 R79.3-3: a removed public item has no reader | `a_removed_item_with_a_reader_or_a_public_item_is_not_mapped` |
+| M9 R79.3-4: a pure addition is mapped with no anchor (no reach check) | `an_added_item_that_a_changed_body_reaches_is_not_mapped_also_through_another_added_item`, `an_added_impl_block_with_a_member_that_is_not_mapped_is_not_mapped` |
+| M10 R79.3-5: a `use` line with an unchanged reader is mapped | `a_use_line_with_an_unchanged_reader_or_with_no_name_record_is_not_mapped` |
+| M11 R79.3-6: a container ignores a member that is not mapped | `an_added_impl_block_with_a_member_that_is_not_mapped_is_not_mapped` |
+| M12 R79.4-1: a search pairs a deleted and an inserted node at one place | `the_pass_does_not_search_for_a_pair_that_the_matcher_does_not_give` |
+| M13 R79.5-1: no template | `a_node_that_is_not_mapped_gives_its_texts_and_a_template` and 3 more |
+| M14 R79.6-1: the AST line after the line of the bodies | `the_ast_line_is_in_the_section_semantic_changes_before_the_line_of_the_bodies` |
+| M15 R79.6-2: the nodes in the short output of a step with no intent file | `a_step_with_no_intent_file_has_the_ast_line_only`, `a_step_with_no_intent_file_shows_no_claim_section_and_no_node_line_in_the_short_output` |
+| M16 R79.7-1: the old gate (a body with a node that is not mapped is not equivalent) | `a_body_that_semilla_proves_equivalent_stays_equivalent_with_a_node_that_is_not_mapped`, `a_proof_does_not_remove_the_request_of_a_node_that_is_not_mapped` |
+| M16b R79.7-1: the fact of the map is not next to the proof result | `a_body_that_semilla_proves_equivalent_stays_equivalent_with_a_node_that_is_not_mapped` |
+
+### 79.9 Limits and open questions
+
+Rule index: no rule: the subsection has the limits and the open questions.
+
+**Limits.**
+
+- The default mode reads the anchors only from the warm check of `semilla intent check` for the same two trees. `semilla intent check` with no `--step` checks `HEAD` against the working tree, so a later step of a change set in the default mode has no anchors (the line says why); `--compiled` has them.
+- A changed node with a partner (a pair of the matcher, also a pair at one place) is mapped by Semilla: the map says which nodes correspond, not that they are equivalent. The proof pass decides.
+- A relation reads a field through a projection of the MIR of the claim: a field that the claim reads through a method (a getter), and a variant that a `match` reads only through its discriminant, are not anchors.
+- The rules of the readers (R79.3-3, R79.3-4, R79.3-5) need the name record for their exact form; with no record (`SEMILLA_NO_CHECK` in the default mode) a word with the name of the item is a reader (the safe side: more nodes are not mapped), and a `use` line is not mapped.
+- The full text of a step with no printed record on this machine (`semilla expand --step N`, R76.1-1) computes the syntax tree again with no data of the compiler: with no name record, its map can differ from the map of the step (num-traits #334 with `--compiled`: 67 and 50 against 69 and 48, two `use` lines).
+- A file edit is not a node: a change of a file that the loader does not parse (a build script, a file that is not Rust) has its fact and its spotlight, and no entry.
+- An item of a binary target has no claim (the intent crate links the libraries): it stays not mapped, with the cause.
+- A generic claim function anchors a call of an inherent function of an instance (`IterNamed::<B>::new`), not a call through a trait for a type parameter (`<B as Flags>::iter_named()`: the callee is not resolved) or a call whose text names the trait by its visible path (`core::iter::Iterator` against the definition `core::iter::traits::iterator::Iterator`): bitflags #465 keeps 2 such claims with no anchor (the line "the claim does not call …").
+- An item that a macro makes has no node of the source: a claim on it is the error S0120 (R79.2-2), and an added or a removed macro call of an item list (num-traits #334: `bounded_impl_nonzero!#0`) has no template. The expansion records (design 63, 65) name the items of each call; a rule that maps a call through the claims on the items that it makes is open.
+- `#[loop_relation(at = PLACE)]` gives no anchor yet (its place form comes with batch 13d); a scope of batch 13b (`impl`, a glob, `callers`, a module) gives no anchor.
+- The resolver of a scope path `<T as Trait>::m` (R78.1-3) takes the first impl of `T` with an item `m`: with two traits that both have `m`, the anchor can be the item of the other trait.
+
+**Open questions for the user.**
+
+- Test, bench, and example code is mapped by Semilla because no claim can name it. Should the intent crate link the test builds, so that a claim can state the behavior of a test?
+- Should a pair at one place (a node that changes to a different node) need a claim (a stricter map), or is the pair of the matcher enough for the AST pass?
+- Should a claim on an item that a macro makes map the macro call that makes it (through the expansion records), in place of the error S0120?
+- Should the default mode compile the intent crate itself (one N0 build of each tree when the cache has none), so that its anchors never depend on an earlier `semilla intent check`?
+
+### 79.10 Rebase on 12a and 13b
+
+Rule index: no rule: the subsection has the merge with the batches 12a and 13b and the results after it.
+
+The coordinator rebased this batch onto `2ac32e9` (batch 13b, design 80; with batch 12a, design 75).
+
+- The four cases `run74/confirmed`, `run74/mut_write`, `run74/own_debug`, and `run74/private_caller`: batch 12a removed them (no run of the code of the user). The removal stays. Their replacements `suggest75/…` get the one added line "AST changes: …" (R79.6-2); no other line of the four cases changes.
+- `docs/design.md`: this section is before section 80. `INDEXED` is `48..=80`.
+- A scope of batch 13b (`impl`, a glob, `callers`, a module) gives no anchor (79.9): its items are mapped by Semilla or not mapped. A `#[relation]` maps the two types and the fields that it reads (R79.2-4).
+- The full suite after the rebase (`cargo test --workspace --no-fail-fast`, no `SEMILLA_MIR_DRIVER`): 1247 tests, 1247 passed.
+
 ## 80. Batch 13b: relations of changed types, congruence, and scopes across the codebase (the proof layer)
 
 The decisions of the user (2026-11-26, draft 3 of the intent language):

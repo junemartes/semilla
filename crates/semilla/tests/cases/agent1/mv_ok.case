@@ -59,6 +59,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       places: depot::idle, depot::conf::idle
     ◆ f1 stated: moved `depot::idle` → `depot::conf::idle` [move]
     ◆ f3 stated: public API: `depot::idle` is now `depot::conf::idle` (a `pub use` line can keep the old path) [move]
+  AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   other facts, filled in by Semilla:
   ◆ f2 derived: added `use` line: `pub use conf::idle;` in `depot`: added the public name `depot::idle` (`depot::conf::idle`) [import]

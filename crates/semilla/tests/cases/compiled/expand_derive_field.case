@@ -24,6 +24,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
   ◆ f1 derived: field `shop::Point.z` added: `i32` (the public API can change: a different crate can use the item) [added · code different]
       affected bodies: <shop::Point as std::cmp::PartialEq>::eq, <shop::Point as std::fmt::Debug>::fmt

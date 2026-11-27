@@ -44,6 +44,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f1 derived: where clause of `depot::list::larger` added: `where u32: Copy,` (the public API can change: a different crate can use the item) [declaration]
       docs of `depot::list::larger`, no edit in this step (src/list/mod.rs:10): `/// The larger one.`

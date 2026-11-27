@@ -38,6 +38,7 @@ rejected: step 0 "the change" is not stored
 build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
+  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   other facts, filled in by Semilla:
   ◆ f1 derived: moved `shop (bin "tool")::main` → `shop (bin "toolbox")::main` [move]
   ◆ f2 derived: Cargo.toml: bin [{ name = "tool", path = "src/main.rs" }] → [{ name = "toolbox", path = "src/main.rs" }] [manifest]

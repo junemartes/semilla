@@ -35,6 +35,7 @@ rejected: step 0 "the change" is not stored
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   new and removed items, filled in by Semilla:
   ◆ f1 derived: added `depot::extern C::DEPOT_S` [added]
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::extern C::DEPOT_S`; it needs a reason: --reason 'depot::extern C::DEPOT_S=…'

@@ -77,6 +77,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f3 derived: the compiled code of `depot::here` changes with no edit at its place: `Literal::u32_suffixed(line)` [indirect · code different]
       affected bodies: depot::here
       note: lines 7; the cause: the edit of this body at depot/src/lib.rs:5 (the step changes no other input of the body) (with the build code of step 0)
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression, see f1 (f1)
       in: depot::here

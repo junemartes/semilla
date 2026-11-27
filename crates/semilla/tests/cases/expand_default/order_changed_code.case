@@ -67,6 +67,7 @@ rejected: step 0 "the change" is not stored
 build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
 
+  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
       expansion: derived `Debug` of `shop::Item`: expansion changed: changed literal `"a"` → `"b"` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[2]` [semantics]; changed expression `self.a` → `self.b` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[3]/operand` [semantics]; changed lite… (113 characters more; `semilla expand f1 --step 0` shows the full line) ….b` → `self.a` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[5]/operand/operand` [semantics]

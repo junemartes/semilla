@@ -30,6 +30,7 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error[E0635]: unknown feature `no_such_feature_of_semilla`
 
+  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `2` → `1` (f3)
       in: shop::price

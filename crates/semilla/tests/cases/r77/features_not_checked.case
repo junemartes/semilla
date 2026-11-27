@@ -30,6 +30,7 @@ build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error: a and b
   ! features that no checked configuration enables: `shop/a`, `shop/b`; no result covers the code or the dependencies that they enable
+  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed literal `3` → `30` (f1)
       in: shop::base

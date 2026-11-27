@@ -56,6 +56,7 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
+  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   declarations, filled in by Semilla:
   ◆ f1 derived: type `u8` → `u16` in 2 places: `shop::a::Block.x`, return type of `shop::make` (the public API can change: a different crate can use the item) [declaration]
   cover: each of the 4 changed line(s) is in a fact

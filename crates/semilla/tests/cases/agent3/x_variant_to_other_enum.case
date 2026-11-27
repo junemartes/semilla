@@ -116,6 +116,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       the stated pair is no fact: a rename keeps the owner, and no rename or move gives the owner `depot::Mode` the new path `depot::Other`
       Semilla sees: f1 variant `depot::Mode::Idle` removed: `Idle` (the public API can change: a different crate can use the item) [removed]
       Semilla sees: f4 changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics]
+  AST changes: 0 mapped by claims, 3 mapped by Semilla, 4 not mapped (no intent file; the full text of the step lists each node)
   not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: removed match arm `Mode::Idle => "idle"` (f3)
       in: depot::mode_name

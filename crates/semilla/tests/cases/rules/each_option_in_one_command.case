@@ -84,6 +84,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✓ a4 change: `wrap` "the value is one more" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
       places: depot::wrap/tail
     ◆ f4 stated: changed expression `x` → `x + 1` at `depot::wrap/tail` [semantics]
+  AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 0 item(s)
   cover: each of the 18 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records

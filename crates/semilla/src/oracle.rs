@@ -15,6 +15,7 @@ pub(crate) mod reach;
 
 #[path = "intent.rs"]
 mod intent;
+pub(crate) use intent::compiled_claims;
 
 #[path = "suggest.rs"]
 pub(crate) mod suggest;
@@ -97,6 +98,9 @@ pub struct Added {
     /// The walk of the reverse call graph of each configuration of a step (design 61.10, part
     /// A), by the two trees of the step.
     reached: BTreeMap<(String, String), std::sync::Arc<Vec<(String, reach::ConfigReach)>>>,
+    /// [R79.2-1] The compile of the intent crate of a step, by the two trees and the texts of the
+    /// intent files: the AST pass and the check of the claims read one compile.
+    intent_checks: BTreeMap<(String, String, u64), std::sync::Arc<std::result::Result<crate::intentcrate::Check, String>>>,
 }
 
 /// The key of a record set: the two trees of a step, and the configuration.
@@ -1662,6 +1666,18 @@ impl NormalOracle {
 impl BodyOracle for NormalOracle {
     fn intent(&self, step: &Step, renames: &BTreeMap<String, String>, queries: &[semilla_verify::intent::Query]) -> Option<Vec<semilla_verify::intent::Answer>> {
         self.intent_claims(step, renames, queries)
+    }
+
+    fn intent_anchors(&self, step: &Step) -> Option<std::result::Result<semilla_verify::astmap::CompiledClaims, String>> {
+        if step.agent.intent.is_empty() {
+            return None;
+        }
+        let sources: Vec<semilla_normal::intent::Source> = step.agent.intent.iter().map(|file| semilla_normal::intent::Source { path: file.path.clone(), text: file.text.clone() }).collect();
+        let check = self.intent_compile(step, &sources);
+        Some(match check.as_ref() {
+            Ok(check) => intent::compiled_claims(check, &sources),
+            Err(cause) => Err(cause.clone()),
+        })
     }
 
     fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> Result<Vec<BodyComparison>> {

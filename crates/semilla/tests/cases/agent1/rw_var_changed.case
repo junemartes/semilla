@@ -58,6 +58,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✗ a1 same: rewrite `wrap($a)` => `wrap2($a)` (false: no changed place has the old form `wrap($a)` and the new form `wrap2($a)`)
       no edit of the step has the old form or the new form; the old tree has the form `wrap($a)` at 1 place(s)
+  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 2 places: 2 different edits (f1, f2)
       in: depot::both

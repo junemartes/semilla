@@ -85,7 +85,8 @@ fn defaults() -> &'static Defaults {
 
 /// True if the metadata file of the crate is in an open folder.
 pub fn is_open(tcx: TyCtxt<'_>, krate: CrateNum) -> bool {
-    if FOLDERS.get().is_none() {
+    // [R79.2-1] The local crate (the intent crate) has no metadata file: it is never open.
+    if FOLDERS.get().is_none() || krate == rustc_span::def_id::LOCAL_CRATE {
         return false;
     }
     if let Some(known) = OPEN.lock().unwrap_or_else(|error| error.into_inner()).as_ref().and_then(|map| map.get(&krate)) {
@@ -147,6 +148,11 @@ pub const PRELUDE_VARIABLE: &str = "SEMILLA_INTENT_PRELUDE";
 /// The index of the open folder of the crate (0: the old tree, 1: the new tree).
 fn side_of(tcx: TyCtxt<'_>, krate: CrateNum) -> Option<usize> {
     let folders = FOLDERS.get()?;
+    // [R79.2-1] A call of a function of the intent crate (a relation that a claim calls): the
+    // local crate has no metadata file and no tree.
+    if krate == rustc_span::def_id::LOCAL_CRATE {
+        return None;
+    }
     let source = tcx.used_crate_source(krate);
     [&source.rmeta, &source.rlib, &source.dylib].into_iter().flatten().find_map(|file| {
         let file = canonical(file.clone());
@@ -168,8 +174,8 @@ pub fn callee_name(tcx: TyCtxt<'_>, def_id: DefId) -> Option<String> {
 /// [R78.4-2] True for a definition of the prelude crate of the intent language (its metadata
 /// file is in the folder of the variable `SEMILLA_INTENT_PRELUDE`): Semilla gives it its meaning.
 pub fn is_prelude(tcx: TyCtxt<'_>, krate: CrateNum) -> bool {
-    // Only the intent compile has the open folders.
-    if FOLDERS.get().is_none() {
+    // Only the intent compile has the open folders. [R79.2-1] The local crate is not the prelude.
+    if FOLDERS.get().is_none() || krate == rustc_span::def_id::LOCAL_CRATE {
         return false;
     }
     let Some(folder) = std::env::var_os(PRELUDE_VARIABLE).map(|folder| canonical(PathBuf::from(folder))) else { return false };

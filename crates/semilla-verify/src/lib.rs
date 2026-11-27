@@ -12,6 +12,7 @@
 //! The change set check adds the group and subgroup rules, and the score.
 
 pub mod agent;
+pub mod astmap;
 pub mod cfgcond;
 mod comments;
 pub mod checks;
@@ -451,6 +452,13 @@ pub trait BodyOracle {
         None
     }
 
+    /// [R79.2-1] The compiled claims of the intent files of a step for the AST pass (design 79):
+    /// the definition of each scope path and what each function of the intent crate calls and
+    /// reads. `None`: the oracle has no compiled claims; `Err`: the cause.
+    fn intent_anchors(&self, _step: &Step) -> Option<Result<astmap::CompiledClaims, String>> {
+        None
+    }
+
     fn equivalence(&self, _step: &Step, _renames: &BTreeMap<String, String>, queries: &[equiv::Query]) -> Vec<Option<equiv::Answer>> {
         vec![None; queries.len()]
     }
@@ -646,6 +654,9 @@ pub struct StepOutcome {
     pub intent_answers: Option<(Vec<intent::Query>, Option<Vec<intent::Answer>>)>,
     /// [R77.1-3] The items whose changed bodies proved claims explain: no line of the gap list.
     pub explained: BTreeSet<String>,
+    /// [R79.7-1] The items (in the names of the two trees) with a node of the AST diff that is
+    /// not mapped: the coverage shows the fact next to the proof result (it changes no result).
+    pub not_mapped: BTreeSet<String>,
 }
 
 /// Checks one step with the old protocol: an edit with no claim and no type-level fact is
@@ -742,6 +753,7 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
         expand::apply(input, bodies, exprs, &mut plain);
         macro_module_spotlight(input, &mut plain.report);
         twin_notes(twin_moves, &mut plain.report);
+        astmap::apply(input, bodies, &mut plain);
         intent::check(input, bodies, &mut plain);
         agent::apply(input, &mut plain);
         intent::apply(input, bodies, &mut plain);
@@ -762,6 +774,7 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
     expand::apply(input, bodies, exprs, &mut outcome);
     macro_module_spotlight(input, &mut outcome.report);
     twin_notes(twin_moves, &mut outcome.report);
+    astmap::apply(input, bodies, &mut outcome);
     intent::check(input, bodies, &mut outcome);
     agent::apply(input, &mut outcome);
     intent::apply(input, bodies, &mut outcome);
@@ -1909,7 +1922,7 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     // to `facts`. The report shows each distinct error one time, complete.
     let mut seen = std::collections::BTreeSet::new();
     report.errors.retain(|error| seen.insert(error.clone()));
-    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections, node_pairs: body_maps.pairs, verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new() }
+    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections, node_pairs: body_maps.pairs, verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new() }
 }
 
 /// Sets the compare result of each fact (design 35, "Decided by Claude").
@@ -3469,7 +3482,7 @@ pub fn verify_changeset_cached(
             }
             Err(error) => {
                 let step_report = StepReport { step: step.index, intent: step.intent.clone(), errors: vec![format!("{error:#}")], ..Default::default() };
-                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new(), node_pairs: BTreeMap::new(), verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new() });
+                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new(), node_pairs: BTreeMap::new(), verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new() });
             }
         }
     }
@@ -3552,3 +3565,5 @@ mod tests68;
 mod tests70;
 #[cfg(test)]
 mod tests71;
+#[cfg(test)]
+mod tests79;

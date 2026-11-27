@@ -5,7 +5,8 @@
 //! expected text of the step. The runner makes the two trees, runs the step with
 //! `SEMILLA_NO_CHECK`, and compares the full result with the expected text. Then it checks the
 //! properties that hold for each change: the cover, no empty change, the same result each
-//! time, the tags, the facts of the agent, the reader, and the comments with no edit.
+//! time, the tags, the facts of the agent, the reader, the comments with no edit, and the map
+//! of the AST pass (each changed node in exactly one entry, R79.1-1).
 //!
 //! `SEMILLA_CASES_WRITE=1` writes the expected texts again. `SEMILLA_CASES=TEXT` runs only the
 //! cases whose name `GROUP/NAME` has the text.
@@ -17,7 +18,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The names of the checks. A line `known_failure: NAME: CAUSE` of a case names one of them.
-const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit", "default_mode", "full_text"];
+const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit", "default_mode", "full_text", "ast_map"];
 
 /// A spotlight line of `semilla step` with no reason, in the form of a tag after the commit
 /// (design 62): `✗ spotlight…: TEXT; it needs a reason: --reason '…'` gives
@@ -990,6 +991,67 @@ fn full_text_problems(work: &mut Work, folder: &Path, output: &str, state: &str)
     Ok(problems)
 }
 
+/// The counts of a line `AST changes: N mapped by claims, M mapped by Semilla, K not mapped`.
+fn ast_counts(line: &str) -> Option<[usize; 3]> {
+    let rest = line.trim_start().strip_prefix("AST changes: ")?;
+    let mut out = [0; 3];
+    for (at, (part, word)) in rest.split(", ").zip(["mapped by claims", "mapped by Semilla", "not mapped"]).enumerate() {
+        out[at] = part.strip_suffix(word).or_else(|| part.split_once(&format!(" {word}")).map(|(number, _)| number))?.trim().parse().ok()?;
+    }
+    Some(out)
+}
+
+/// Property 15 (R79.1-1): the map of the AST pass never hides an edit. The full text of the step
+/// (`semilla expand --step 0`) gives the count T of the changed nodes of the syntax diff (counted
+/// apart from the entries) and one line for each entry with its node number `nI`: each number
+/// from 1 to T is in exactly one line, the three counts add up to T and are the counts of the
+/// states of the lines, and the step output has the same counts (unless the full text is the
+/// syntax tree computed again, with no data of the compiler, R76.1-1).
+fn ast_problems(work: &mut Work, folder: &Path, output: &str, state: &str) -> Result<Vec<String>, String> {
+    let mut problems = Vec::new();
+    let Some(short) = output.lines().find_map(ast_counts) else {
+        problems.push(format!("{state}: the step output has no line `AST changes: …`"));
+        return Ok(problems);
+    };
+    let run = work.semilla(folder, &["expand".to_string(), "--step".to_string(), "0".to_string()])?;
+    let Some((full, total)) = run.stdout.lines().find_map(|line| {
+        let counts = ast_counts(line)?;
+        let total = line.split_once("(of ")?.1.split(' ').next()?.parse::<usize>().ok()?;
+        Some((counts, total))
+    }) else {
+        problems.push(format!("{state}: the full text has no line `AST changes: … (of T changed nodes)`"));
+        return Ok(problems);
+    };
+    // The full text of a step with no printed record on this machine is the syntax tree computed
+    // again with no data of the compiler (R76.1-1): its map can differ, and it says so.
+    if full != short && !run.stdout.contains("this machine has no record of the output of step") {
+        problems.push(format!("{state}: the counts of the step output {short:?} are not the counts of the full text {full:?}"));
+    }
+    if full.iter().sum::<usize>() != total {
+        problems.push(format!("{state}: the counts {full:?} do not add up to the {total} changed nodes"));
+    }
+    let mut seen: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut states = [0usize; 3];
+    for line in run.stdout.lines() {
+        let Some(rest) = line.strip_prefix("      n") else { continue };
+        let Some((number, tail)) = rest.split_once(' ') else { continue };
+        let Ok(number) = number.parse::<usize>() else { continue };
+        let at = if tail.starts_with("mapped by claim ") { 0 } else if tail.starts_with("mapped by Semilla ") { 1 } else if tail.starts_with("not mapped ") { 2 } else { continue };
+        states[at] += 1;
+        *seen.entry(number).or_default() += 1;
+    }
+    if states != full {
+        problems.push(format!("{state}: the lines of the entries have the states {states:?}, and the count line {full:?}"));
+    }
+    let twice: Vec<usize> = seen.iter().filter(|(_, count)| **count > 1).map(|(number, _)| *number).collect();
+    let missing: Vec<usize> = (1..=total).filter(|number| !seen.contains_key(number)).collect();
+    let extra: Vec<usize> = seen.keys().filter(|number| **number == 0 || **number > total).copied().collect();
+    if !twice.is_empty() || !missing.is_empty() || !extra.is_empty() {
+        problems.push(format!("{state}: each changed node must be in exactly one entry: in two entries {twice:?}, in no entry {missing:?}, not a node {extra:?}"));
+    }
+    Ok(problems)
+}
+
 /// The problems of the control flow section of `status --verbose` (design 60, R60.4-6): the
 /// count of the bodies, and for each result of a body, the counts of its summary and the lines
 /// of its points and arrows (`+ KIND …`, `− KIND …`, `~ KIND …`, `+ arrow …`, `− arrow …`).
@@ -1295,6 +1357,10 @@ fn check(case: &Case) -> Result<Outcome, String> {
         let state = if step.code == 0 { "after the stored step" } else { "after the rejected step" };
         for problem in full_text_problems(&mut work, &first, &output, state)? {
             work.fail("full_text", problem);
+        }
+        // Property 15 (R79.1-1): each changed node is in exactly one entry of the AST map.
+        for problem in ast_problems(&mut work, &first, &output, state)? {
+            work.fail("ast_map", problem);
         }
     }
 
