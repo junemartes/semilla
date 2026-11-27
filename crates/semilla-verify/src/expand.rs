@@ -87,7 +87,7 @@ pub struct Expansion {
 }
 
 /// The expansions of one compiled target in one checked configuration.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExpansionUnit {
     /// The name of the configuration (`dev`, `release`).
     pub config: String,
@@ -220,11 +220,11 @@ struct Site<'a> {
 }
 
 /// The place of a call site in its tree: the anchor of the smallest node at the start.
-fn anchor(ws: &Workspace, expansion: &Expansion) -> Option<semilla_core::Anchor> {
+fn anchor(index: &semilla_syntax::ItemIndex, expansion: &Expansion) -> Option<semilla_core::Anchor> {
     if expansion.file.is_empty() {
         return None;
     }
-    semilla_syntax::anchor_at(ws, &expansion.file, expansion.line, Some(expansion.col)).or_else(|| semilla_syntax::anchor_at(ws, &expansion.file, expansion.line, None))
+    index.anchor_at(&expansion.file, expansion.line, Some(expansion.col)).or_else(|| index.anchor_at(&expansion.file, expansion.line, None))
 }
 
 /// A folder that the pass removes at its end.
@@ -531,12 +531,12 @@ struct Call<'a> {
 /// The calls of a unit for the pair (R72.1-1, part e): each outer call, and each call in an
 /// expansion whose tokens have a place in a file (an attribute macro can give an item with a
 /// derive to the compiler: the derive is then a call in the expansion). In source order.
-fn calls<'a>(list: &'a [Expansion], ws: &Workspace, map: &dyn Fn(&str) -> String) -> Vec<Call<'a>> {
+fn calls<'a>(list: &'a [Expansion], index: &semilla_syntax::ItemIndex, map: &dyn Fn(&str) -> String) -> Vec<Call<'a>> {
     let mut found: Vec<Call<'a>> = list
         .iter()
         .filter(|expansion| expansion.outer.is_none() || !expansion.file.is_empty())
         .map(|expansion| {
-            let at = anchor(ws, expansion);
+            let at = anchor(index, expansion);
             let owner = at.as_ref().map(|at| map(&at.item)).unwrap_or_else(|| format!("{}:{}", expansion.file, expansion.module));
             Call { expansion, at, owner, nested: expansion.outer.is_some() }
         })
@@ -577,10 +577,12 @@ fn pair_sites<'a>(units: [&'a [ExpansionUnit]; 2], trees: [&Workspace; 2], map: 
     };
     // The files with the same text in the two trees.
     let unchanged: BTreeSet<&str> = trees[0].rust_files.iter().filter(|(path, text)| trees[1].rust_files.get(*path) == Some(*text)).map(|(path, _)| path.as_str()).collect();
+    // R86.1-5: one index of the items of each tree for each anchor of the calls.
+    let index = [semilla_syntax::ItemIndex::new(trees[0]), semilla_syntax::ItemIndex::new(trees[1])];
     for (a, b) in unit_pairs(old_units, new_units) {
         let unit = b.map(|b| &new_units[b]).or(a.map(|a| &old_units[a])).expect("a pair has a unit");
-        let old_calls = a.map(|a| calls(&old_units[a].list, trees[0], map)).unwrap_or_default();
-        let new_calls = b.map(|b| calls(&new_units[b].list, trees[1], &same)).unwrap_or_default();
+        let old_calls = a.map(|a| calls(&old_units[a].list, &index[0], map)).unwrap_or_default();
+        let new_calls = b.map(|b| calls(&new_units[b].list, &index[1], &same)).unwrap_or_default();
         let thing = |call: &Call| {
             let e = call.expansion;
             let identity = if !e.file.is_empty() && unchanged.contains(e.file.as_str()) { format!("place\u{0}{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}", e.file, e.line, e.col, e.name, e.kind) } else { format!("item\u{0}{}\u{0}{}\u{0}{}", call.owner, macro_identity(e), e.kind) };
@@ -647,7 +649,8 @@ pub struct Link {
 /// The changed expansions of a step (R63.9-5), for the owner pass: only a pair of two calls
 /// with two different texts. An added or a removed call is an edit of the call or of its item.
 pub fn links(step: &Step, trees: [&Workspace; 2], bodies: &dyn crate::BodyOracle, renames: &BTreeMap<String, String>) -> Vec<Link> {
-    let Some([old_units, new_units]) = bodies.expansions(step) else { return Vec::new() };
+    let Some(units) = bodies.expansions(step) else { return Vec::new() };
+    let [old_units, new_units] = &*units;
     let map = |path: &str| renames.get(path).cloned().unwrap_or_else(|| path.to_string());
     let (sites, _) = pair_sites([&old_units, &new_units], trees, &map, false);
     let mut out = Vec::new();
@@ -683,13 +686,14 @@ pub fn links(step: &Step, trees: [&Workspace; 2], bodies: &dyn crate::BodyOracle
 
 /// Adds the facts of the expanded code to a step (R63.2-1 to R63.3-5).
 pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &dyn ExprOracle, outcome: &mut StepOutcome) {
-    let Some([old_units, new_units]) = bodies.expansions(input.step) else {
+    let Some(units) = bodies.expansions(input.step) else {
         return;
     };
+    let [old_units, new_units] = &*units;
     let map = |path: &str| outcome.renames.items.get(path).cloned().unwrap_or_else(|| path.to_string());
     let (sites, equal) = pair_sites([&old_units, &new_units], [input.before, input.after], &map, false);
     order_spotlights(input, outcome, &sites, &equal);
-    let all_configs: BTreeSet<&str> = new_units.iter().chain(&old_units).map(|unit| unit.config.as_str()).collect();
+    let all_configs: BTreeSet<&str> = new_units.iter().chain(old_units).map(|unit| unit.config.as_str()).collect();
     let mut flow = outcome.report.flow.take().unwrap_or_default();
     // R65.10-1: the identity of each package of a registry or of git in `Cargo.lock`.
     let locks = [lock_identities(input.before), lock_identities(input.after)];
@@ -1562,8 +1566,8 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn expansions(&self, _: &Step) -> Option<[Vec<ExpansionUnit>; 2]> {
-            Some(self.0.clone())
+        fn expansions(&self, _: &Step) -> Option<std::sync::Arc<[Vec<ExpansionUnit>; 2]>> {
+            Some(std::sync::Arc::new(self.0.clone()))
         }
     }
 

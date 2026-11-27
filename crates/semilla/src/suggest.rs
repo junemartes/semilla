@@ -46,9 +46,7 @@ impl NormalOracle {
         checked
             .iter()
             .filter_map(|config| self.units(tree, config))
-            .flatten()
-            .find(|unit| unit.target == target)
-            .map(|unit| unit.package)
+            .find_map(|units| units.iter().find(|unit| unit.target == target).map(|unit| unit.package.clone()))
             .filter(|package| !package.is_empty())
             .unwrap_or_else(|| target.split('.').next().unwrap_or("PACKAGE").replace('_', "-"))
     }

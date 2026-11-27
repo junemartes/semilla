@@ -388,7 +388,7 @@ fn each_effect_keeps_the_order_of_a_call_and_a_call_with_no_effect_is_a_value() 
     assert!(problems.is_empty(), "{}", problems.join("\n"));
     // R64.2-2: a `&mut` reference inside a value of an argument (a capture by `&mut`) gives the
     // world; a `&mut` argument at the top does not.
-    let form_text = |name: &str| old.iter().find(|record| record.name == name).and_then(|record| record.q.clone()).unwrap_or_default();
+    let form_text = |name: &str| old.iter().find(|record| record.name == name).and_then(|record| record.q.cloned()).unwrap_or_default();
     assert!(form_text("shop::bump_with").contains("an argument with a `&mut` reference inside a value"), "{}", form_text("shop::bump_with"));
     assert!(!form_text("shop::two_muts").contains("an argument with a `&mut` reference inside a value"));
     // R65.3-8: `catch_unwind` runs its closure, and `take_hook` writes the global hook: each one

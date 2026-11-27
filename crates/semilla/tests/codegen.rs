@@ -151,12 +151,12 @@ fn an_inlined_overflow_check_is_active_only_with_the_overflow_checks_of_the_sess
     let dev = verdict(&builds.dev.0, &builds.dev.1, "probe::magnitude");
     assert!(matches!(dev, Verdict::Equivalent { .. }), "{dev:?}");
     // The form of the release record has no optional overflow check; the form of `dev` has it.
-    let qx = |records: &[semilla_normal::BodyRecord]| record(records, "probe::magnitude").qx.clone().unwrap_or_default();
+    let qx = |records: &[semilla_normal::BodyRecord]| record(records, "probe::magnitude").qx.cloned().unwrap_or_default();
     assert!(qx(&builds.dev.1).contains("overflow neg") && !qx(&builds.release.1).contains("overflow neg"), "{}", qx(&builds.release.1));
     // A runtime check operand (`ub_checks()` of a precondition of `core`) has the value of the
     // session in the form, never an unknown flag.
     for records in [&builds.dev.0, &builds.release.0] {
-        let text = record(records, "probe::unchecked").qx.clone().unwrap_or_default();
+        let text = record(records, "probe::unchecked").qx.cloned().unwrap_or_default();
         assert!(!text.contains("{\"R\":"), "{text}");
     }
 }

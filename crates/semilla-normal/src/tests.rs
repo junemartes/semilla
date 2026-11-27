@@ -32,8 +32,8 @@ fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
         names: Vec::new(),
         elements: None,
         graph: None,
-        q: None,
-        qx: None,
+        q: Default::default(),
+        qx: Default::default(),
         cv: Vec::new(),
         sv: Vec::new(),
         inst: Vec::new(),
@@ -704,7 +704,7 @@ fn a_rename_key_matches_a_body_name_with_generic_arguments() {
 
     // The new name with generic arguments is there before the step: the rename is not usable.
     let mut taken = before.clone();
-    taken.get_mut("n0").unwrap().push(record("k::Map::<V>::allocate_x", "n0", "return;", &[]));
+    taken.get_mut("n0").unwrap().make_mut().push(record("k::Map::<V>::allocate_x", "n0", "return;", &[]));
     let results = compare(&taken, &after, &renames, &[]);
     assert_eq!(status_of(&results, "k::Map::<V>::allocate"), &BodyStatus::BeforeOnly, "{results:?}");
 
@@ -854,4 +854,94 @@ fn the_graph_pairs_of_a_body_do_not_depend_on_the_hash_of_a_target() {
     let results = compare_with(&side([(h1, "a"), (h2, "b")]), &levels(Vec::new()), &no_renames(), &[], &Marks::default(), &Marks::default());
     assert_eq!(results[0].graphs.len(), 2, "{results:?}");
     assert!(results[0].graphs.iter().all(|pair| !pair.not_compared && pair.old_key.is_some() && !pair.new_body), "{results:?}");
+}
+
+// [R86.2-1] A form of the equivalence check loads on its first read, with the text of the file.
+// rule+ R86.2-1
+#[test]
+fn a_form_of_a_record_loads_on_its_first_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let line = |q: &str| format!("{{\"unit\":{{\"target\":\"k.lib.1\",\"cfg\":[\"unix\"],\"files\":[]}}}}\n{{\"name\":\"k::f\",\"level\":\"n0\",\"text\":\"a \\\"q\\\": {{\",\"q\":\"{q}\",\"qx\":null,\"callees\":[\"k::g\"]}}\n");
+    std::fs::write(dir.path().join("k.lib.1.jsonl"), line("form-a")).unwrap();
+    let records = read_records(dir.path()).unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].q.is_loaded());
+    assert!(records[0].q.is_some() && records[0].qx.is_none());
+    assert_eq!(records[0].text, "a \"q\": {");
+    assert_eq!(records[0].callees, ["k::g"]);
+    assert_eq!(records[0].unit, "unix");
+    assert_eq!(records[0].q.as_deref(), Some("form-a"));
+    assert!(records[0].q.is_loaded());
+    // The same records as the full parse of the lines.
+    let text = std::fs::read_to_string(dir.path().join("k.lib.1.jsonl")).unwrap();
+    let mut full = parse_records(&text).unwrap();
+    full[0].unit = "unix".to_string();
+    assert_eq!(records, full);
+}
+
+// rule- R86.2-1
+#[test]
+fn a_changed_form_of_the_same_size_gives_its_new_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |q: &str| std::fs::write(dir.path().join("k.lib.1.jsonl"), format!("{{\"name\":\"k::f\",\"level\":\"n0\",\"text\":\"t\",\"q\":\"{q}\"}}\n")).unwrap();
+    write("form-a");
+    let first = read_records(dir.path()).unwrap();
+    assert_eq!(first[0].q.as_deref(), Some("form-a"));
+    // A new file with the same size: a new read gives the new text, and the record of the first
+    // read keeps its text (it was read before the change).
+    write("form-b");
+    let second = read_records(dir.path()).unwrap();
+    assert_eq!(second[0].q.as_deref(), Some("form-b"));
+    assert_eq!(first[0].q.as_deref(), Some("form-a"));
+    // A line that is not of the plain form takes the full parse, with its error.
+    std::fs::write(dir.path().join("k.lib.1.jsonl"), "{\"name\":\"k::f\",\"level\":\"n0\",\"text\":\"t\",\"q\":1}\n").unwrap();
+    assert!(read_records(dir.path()).is_err());
+}
+
+// rule+ R86.1-4
+#[test]
+fn the_compare_in_threads_is_the_compare_in_one_thread() {
+    let side = |texts: &[(&str, &str)]| levels(texts.iter().map(|(name, text)| record(name, "n0", text, &[])).collect());
+    let pairs: Vec<(Levels, Levels)> = (0..6).map(|index| (side(&[("k::f", "a"), ("k::g", "b")]), side(&[("k::f", if index % 2 == 0 { "a" } else { "c" }), ("k::g", "b")]))).collect();
+    let renames = BTreeMap::from([("k::g".to_string(), "k::g".to_string())]);
+    let one: Vec<Vec<BodyComparison>> = pairs.iter().map(|(old, new)| compare_with(old, new, &renames, &[], &Marks::default(), &Marks::default())).collect();
+    let many: Vec<Vec<BodyComparison>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = pairs.iter().map(|(old, new)| scope.spawn(|| compare_with(old, new, &renames, &[], &Marks::default(), &Marks::default()))).collect();
+        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+    });
+    assert_eq!(format!("{one:?}"), format!("{many:?}"));
+}
+
+// rule- R86.1-4
+#[test]
+fn a_configuration_with_other_records_has_its_own_compare_in_a_thread() {
+    let side = |text: &str| levels(vec![record("k::f", "n0", text, &[])]);
+    let (old, same, other) = (side("a"), side("a"), side("b"));
+    let results: Vec<Vec<BodyComparison>> = std::thread::scope(|scope| {
+        let handles = [scope.spawn(|| compare_with(&old, &same, &no_renames(), &[], &Marks::default(), &Marks::default())), scope.spawn(|| compare_with(&old, &other, &no_renames(), &[], &Marks::default(), &Marks::default()))];
+        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+    });
+    assert!(matches!(results[0][0].status, BodyStatus::Equal { .. }));
+    assert!(matches!(results[1][0].status, BodyStatus::Different { .. }));
+}
+
+// rule+ R86.3-2
+#[test]
+fn a_shared_record_list_is_one_list_in_memory() {
+    let records = Records::from(vec![record("k::f", "n0", "a", &[])]);
+    let reader = records.clone();
+    assert!(reader.same_list(&records));
+    let levels = Levels::from([("n0".to_string(), records.clone())]);
+    assert!(levels["n0"].same_list(&records));
+}
+
+// rule- R86.3-2
+#[test]
+fn a_change_of_a_shared_list_copies_it_and_leaves_the_other_reader() {
+    let records = Records::from(vec![record("k::f", "n0", "a", &[])]);
+    let mut changed = records.clone();
+    changed.make_mut()[0].text = "b".to_string();
+    assert!(!changed.same_list(&records));
+    assert_eq!(records[0].text, "a");
+    assert_eq!(changed[0].text, "b");
 }

@@ -484,7 +484,8 @@ pub trait BodyOracle {
 
     /// The expansion of each macro call in each compiled target of each checked configuration
     /// of the tree before the step and of the tree after it (design 63). `None`: no data.
-    fn expansions(&self, _step: &Step) -> Option<[Vec<expand::ExpansionUnit>; 2]> {
+    /// The value is shared (R86.3-2): each caller reads one list.
+    fn expansions(&self, _step: &Step) -> Option<std::sync::Arc<[Vec<expand::ExpansionUnit>; 2]>> {
         None
     }
 
@@ -493,14 +494,15 @@ pub trait BodyOracle {
     /// cause (R70.1-1); an oracle with no data (a virtual crate of an expansion compare, a
     /// configuration that does not build) gives neither.
     fn names(&self, step: &Step) -> NameState {
-        let Some([old, new]) = self.expansions(step) else {
+        let Some(units) = self.expansions(step) else {
             return NameState::None;
         };
-        if !old.iter().chain(&new).any(|unit| unit.names.is_some()) {
+        let [old, new] = &*units;
+        if !old.iter().chain(new).any(|unit| unit.names.is_some()) {
             return NameState::Gap("the records of the compiler have no name record (a record of an earlier driver)".to_string());
         }
         let index = |units: &[expand::ExpansionUnit]| std::sync::Arc::new(semilla_core::namerec::NameIndex::new(units.iter().filter_map(|unit| unit.names.as_deref().map(|record| (unit.target.as_str(), record)))));
-        NameState::Records([index(&old), index(&new)])
+        NameState::Records([index(old), index(new)])
     }
 }
 
@@ -682,13 +684,13 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
 /// [`verify_step_with`] after the name records are in the two workspaces.
 fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool) -> StepOutcome {
     // Design 38.3: an item that gets a twin keeps its key for the twin with its text.
-    let twins = identity::twin_keys(input.before, input.after);
+    let twins = semilla_core::timing::phase("the identity pairs of the trees", || identity::twin_keys(input.before, input.after));
     let input = match &twins {
         Some((before, after, _)) => &StepInput { step: input.step, before, after },
         None => input,
     };
     // Design 59, part C, and R72.1-1 (part a): the twins of one path pair by the one matcher.
-    let (twin_trees, mut twin_moves) = identity::twin_pairs(input.before, input.after);
+    let (twin_trees, mut twin_moves) = semilla_core::timing::phase("the identity pairs of the trees", || identity::twin_pairs(input.before, input.after));
     if let Some((_, _, listed)) = &twins {
         twin_moves.extend(listed.iter().cloned());
     }
@@ -699,7 +701,7 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
     };
     // R70.2-1 (d): an impl keeps its key when the text of its trait path changes and the compiler
     // gives the same trait and self type.
-    let trait_pairs = identity::trait_path_pairs(input.before, input.after);
+    let trait_pairs = semilla_core::timing::phase("the identity pairs of the trees", || identity::trait_path_pairs(input.before, input.after));
     let input = match &trait_pairs {
         Some((before, after)) => &StepInput { step: input.step, before, after },
         None => input,
@@ -730,7 +732,7 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
     let input = &StepInput { step: &step, before: input.before, after: input.after };
     // The opaque inputs of each check of this step, also of the rename search (R61.15-2).
     let bases = joint::OpaqueBases::new(input.before, input.after);
-    let mut plain = verify_core(input, bodies, exprs, derive_edits, false, &bases);
+    let mut plain = semilla_core::timing::phase(CORE_PHASE, || verify_core(input, bodies, exprs, derive_edits, false, &bases));
     if !derive_edits || input.step.claims.iter().any(is_identity) {
         if derive_edits {
             identity_api_facts(input, &mut plain);
@@ -738,20 +740,20 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
         item_reasons(input, &mut plain.report);
         kind_reasons(input, &mut plain.report);
         no_compare_result(input.step, &mut plain.report);
-        positions::assign(input, &mut plain);
-        flow::apply(input, bodies, &mut plain);
-        expand::apply(input, bodies, exprs, &mut plain);
+        semilla_core::timing::phase("the positions of the facts", || positions::assign(input, &mut plain));
+        semilla_core::timing::phase("the flow graphs and the equal-MIR checks", || flow::apply(input, bodies, &mut plain));
+        semilla_core::timing::phase("the facts of the expanded code", || expand::apply(input, bodies, exprs, &mut plain));
         macro_module_spotlight(input, &mut plain.report);
         twin_notes(twin_moves, &mut plain.report);
-        astmap::apply(input, bodies, &mut plain);
-        intent::check(input, bodies, &mut plain);
+        semilla_core::timing::phase("the AST map", || astmap::apply(input, bodies, &mut plain));
+        semilla_core::timing::phase("the claims of the intent files", || intent::check(input, bodies, &mut plain));
         agent::apply(input, &mut plain);
         intent::apply(input, bodies, &mut plain);
         tags::apply(input, &mut plain);
-        comments::apply(input, &mut plain);
+        semilla_core::timing::phase("the comments of the facts", || comments::apply(input, &mut plain));
         return plain;
     }
-    let mut outcome = identity::derive(input, bodies, exprs, plain, &bases);
+    let mut outcome = semilla_core::timing::phase("the search for a derived identity (with its core checks)", || identity::derive(input, bodies, exprs, plain, &bases));
     // The search for an identity does more checks, and each check sets its own list of added
     // configurations. The oracle must have the list of this result: the output shows it.
     let _ = bodies.set_selections(input.step, &outcome.selections);
@@ -759,17 +761,17 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
     item_reasons(input, &mut outcome.report);
     kind_reasons(input, &mut outcome.report);
     no_compare_result(input.step, &mut outcome.report);
-    positions::assign(input, &mut outcome);
-    flow::apply(input, bodies, &mut outcome);
-    expand::apply(input, bodies, exprs, &mut outcome);
+    semilla_core::timing::phase("the positions of the facts", || positions::assign(input, &mut outcome));
+    semilla_core::timing::phase("the flow graphs and the equal-MIR checks", || flow::apply(input, bodies, &mut outcome));
+    semilla_core::timing::phase("the facts of the expanded code", || expand::apply(input, bodies, exprs, &mut outcome));
     macro_module_spotlight(input, &mut outcome.report);
     twin_notes(twin_moves, &mut outcome.report);
-    astmap::apply(input, bodies, &mut outcome);
-    intent::check(input, bodies, &mut outcome);
+    semilla_core::timing::phase("the AST map", || astmap::apply(input, bodies, &mut outcome));
+    semilla_core::timing::phase("the claims of the intent files", || intent::check(input, bodies, &mut outcome));
     agent::apply(input, &mut outcome);
     intent::apply(input, bodies, &mut outcome);
     tags::apply(input, &mut outcome);
-    comments::apply(input, &mut outcome);
+    semilla_core::timing::phase("the comments of the facts", || comments::apply(input, &mut outcome));
     outcome
 }
 
@@ -1116,8 +1118,15 @@ fn kind_reasons(input: &StepInput, report: &mut StepReport) {
 
 /// The check of one step. `derived_identity` is true when the identity claims of the step come
 /// from the candidate search (design 24.2, rule 4), not from the agent.
+/// The phase name of a core check in the timing lines (R86.5-1).
+pub const CORE_PHASE: &str = "the core check of a step";
+/// The name of the count of all core checks (also those of the search for an identity).
+pub const CORE_RUNS: &str = "the core checks of all searches";
+
 pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool, derived_identity: bool, shared: &joint::OpaqueBases<'a>) -> StepOutcome {
     let step = input.step;
+    // R86.5-1: the count of the core checks of a step (a test reads it).
+    semilla_core::timing::count(CORE_RUNS, "runs", 1);
     let oracle = bodies;
     let mut report = StepReport { step: step.index, intent: step.intent.clone(), ..Default::default() };
 

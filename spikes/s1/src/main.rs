@@ -185,7 +185,7 @@ fn proved_at(results: &[BodyComparison]) -> String {
 fn run_levels(driver: &Path, lib: &Path, file: &Path) -> Levels {
     DRIVER_LEVELS
         .iter()
-        .map(|level| (level.to_string(), run_driver(driver, lib, file, level)))
+        .map(|level| (level.to_string(), run_driver(driver, lib, file, level).into()))
         .collect()
 }
 

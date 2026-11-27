@@ -94,14 +94,49 @@ pub fn resolve_node<'a>(workspace: &'a Workspace, anchor: &Anchor) -> Option<&'a
 ///
 /// `column` is optional. Without a column, the anchor is the lowest statement on the line.
 pub fn anchor_at(workspace: &Workspace, file: &str, line: usize, column: Option<usize>) -> Option<Anchor> {
+    anchor_in(workspace.items.values(), file, line, column)
+}
+
+/// [R86.1-5] An index of the items of a workspace by their file, for many calls of
+/// [`anchor_at`]: a look-up reads only the items of its file, and a second look-up of one place
+/// gives the anchor of the first one. The items of a file keep the order of the workspace, so
+/// the result is the result of [`anchor_at`].
+pub struct ItemIndex<'a> {
+    by_file: std::collections::HashMap<&'a str, Vec<&'a Item>>,
+    memo: std::cell::RefCell<std::collections::HashMap<(String, usize, Option<usize>), Option<Anchor>>>,
+}
+
+impl<'a> ItemIndex<'a> {
+    pub fn new(workspace: &'a Workspace) -> ItemIndex<'a> {
+        let mut by_file: std::collections::HashMap<&'a str, Vec<&'a Item>> = std::collections::HashMap::new();
+        for item in workspace.items.values() {
+            by_file.entry(item.file.as_str()).or_default().push(item);
+        }
+        ItemIndex { by_file, memo: Default::default() }
+    }
+
+    /// [`anchor_at`] with the index.
+    pub fn anchor_at(&self, file: &str, line: usize, column: Option<usize>) -> Option<Anchor> {
+        let key = (file.to_string(), line, column);
+        if let Some(known) = self.memo.borrow().get(&key) {
+            return known.clone();
+        }
+        let items = self.by_file.get(file).map(Vec::as_slice).unwrap_or_default();
+        let found = anchor_in(items.iter().copied(), file, line, column);
+        self.memo.borrow_mut().insert(key, found.clone());
+        found
+    }
+}
+
+/// [`anchor_at`] over a list of items.
+fn anchor_in<'i>(items: impl Iterator<Item = &'i Item> + Clone, file: &str, line: usize, column: Option<usize>) -> Option<Anchor> {
     let at_line = |item: &&Item| item.file == file && item.line_start <= line && line <= item.line_end;
     // A function or a type first; a module or an impl only when no smaller item has the line.
-    let item = workspace
-        .items
-        .values()
+    let item = items
+        .clone()
         .filter(|item| at_line(item) && item.kind != ItemKind::Mod && item.kind != ItemKind::Impl)
         .min_by_key(|item| item.line_end - item.line_start)
-        .or_else(|| workspace.items.values().filter(at_line).min_by_key(|item| item.line_end - item.line_start))?;
+        .or_else(|| items.filter(at_line).min_by_key(|item| item.line_end - item.line_start))?;
     let mut anchor = Anchor::item(&item.path);
     let Some(body) = &item.body else {
         return Some(anchor);
@@ -201,6 +236,30 @@ mod tests {
     // The edition of the test code (`async fn`); a package with no edition is 2015 code (design 39.1).
 
     const MANIFEST: &str = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+
+    #[test]
+    // rule+ R86.1-5
+    #[test]
+    fn the_item_index_gives_the_anchor_of_anchor_at() {
+        let (_dir, ws) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", "pub fn f() {}\nmod m {\n    pub fn g(a: u32) -> u32 {\n        let b = a;\n        b\n    }\n}\n")]);
+        let index = ItemIndex::new(&ws);
+        for line in 0..10 {
+            for column in [None, Some(0), Some(8), Some(12)] {
+                assert_eq!(index.anchor_at("src/lib.rs", line, column), anchor_at(&ws, "src/lib.rs", line, column), "{line} {column:?}");
+                assert_eq!(index.anchor_at("src/lib.rs", line, column), anchor_at(&ws, "src/lib.rs", line, column), "the second look-up");
+            }
+        }
+    }
+
+    // rule- R86.1-5
+    #[test]
+    fn the_item_index_has_no_anchor_in_another_file() {
+        let (_dir, ws) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", "pub fn f() {}\n")]);
+        let index = ItemIndex::new(&ws);
+        assert!(index.anchor_at("src/lib.rs", 1, None).is_some());
+        assert_eq!(index.anchor_at("src/other.rs", 1, None), None);
+        assert_eq!(anchor_at(&ws, "src/other.rs", 1, None), None);
+    }
 
     #[test]
     fn resolve_and_anchor_at() {

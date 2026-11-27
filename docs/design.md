@@ -9886,3 +9886,96 @@ Rule index: no rule: the subsection has the limits and the open questions.
 - Should a line of the gap list read the result of a claim, or should a body with "MIR changes" keep the plain `--change` form and the one command (the form of a decided line)?
 - Should the step show the callers of a changed body with no check (the closure of R84.1-2) as a review aid?
 - Should a stored step keep the suggested test of a claim, for example with `--reason` on a false claim?
+
+## 86. Batch 14d: the speed of a step (each piece of work one time, the store behind one interface)
+
+Date: 2026-11-27. The decisions of the user:
+
+> 2026-11-24: "a full check/review of a given step is a couple of seconds when cached".
+> 2026-11-27: "Semilla only builds a map out of the hints provided by the agent on the ast. This shouldn't take 3 mins".
+> 2026-11-27: "We should likely cut down allocations to make it work".
+
+**This batch changes no output.** Each output of a step (the step, `status --verbose`, `verify --json`, the review) stays equal byte for byte, but for the time values and the timing lines of `SEMILLA_TIMING`.
+
+### 86.1 One time (S1)
+
+Rule index: the identities are below.
+
+The inputs of each stage of a step, and the key of each result that the step reuses:
+
+| Stage | Inputs | Key of the reused result |
+|---|---|---|
+| the read of a part of a cache folder (records, unit records, expansions) | the files of the folder | the folder and the time of its `.complete` file |
+| the expansions of a step | the folders of each checked configuration and tree | the key of each folder, in the order of the configurations and the trees |
+| the replacer of a rename map | the rename map | the full map (thread-local, last map) |
+| the N0 compare of one configuration (since 5x, part F) | the two trees, the configuration, the rename map, the added items, the four mark sets | all of these (`CompareKey`) |
+| an anchor of a call site | the workspace and the place (file, line, column) | the place, in one index of one workspace |
+| a node of the MIR map | the side and the place (file, byte range) | the side and the place, in one map |
+
+1. [R86.1-1] **The store reads each part of a cache folder one time in a process.** A second read of the records, the unit records, or the expansions of a folder gives the value in memory, with no copy. The key has the time of the `.complete` file: a build that makes the folder again gives a new read (`recstore.rs`).
+2. [R86.1-3] **A rename map has one replacer in a thread.** `paths::rename` keeps the replacer of the last map of the thread; another map makes a new replacer. Before, each text of a record set built the replacer again.
+3. [R86.1-4] **The N0 compares of the configurations run in parallel threads.** The marks and the notes of the opaque inputs stay in sequence (they write one recorder); each compare with no result in memory runs in its own thread. The compare is a function of its inputs only, and the results join in the order of the configurations.
+4. [R86.1-5] **An index of the items of a file serves each anchor of the call sites.** `ItemIndex` keeps the items of each file in the order of the workspace and the anchor of each place: the result is the result of `anchor_at`.
+5. [R86.1-6] **The MIR map looks up a place one time.** A second look-up of a place gives the first node; a map error of the place counts again, with its example, so the counts do not change.
+
+The two core checks of a step with a derived identity (the plain check and the check of each name map) have different inputs (the claims of the map give another rename map): they stay two runs. The passes of the joint rule (design 35) have other marks in each mode: a pass with the marks of an earlier pass gets the compare from memory (since 5x), and the timing lines count each pass.
+
+### 86.2 In proportion to the change (S2, a part)
+
+Rule index: the identities are below.
+
+1. [R86.2-1] **A form of the equivalence check loads on its first read.** The members `q` and `qx` of a record (design 61; 44 % of the bytes of the record files of `pr-winnow-891`) are not parsed when the store reads a folder: the record keeps their place in the file (the open file, the offset, the length), and the text loads when a rule reads it (`LazyText`). The file stays open, so a later build of the folder (a new file) does not change the text of a record in memory. A line that is not of the plain form (the scanner of the top object does not accept it, two members with one key, a value that is not a text) takes the full parse, with its errors.
+
+**Decided by Claude:** the cache format does not change in this batch: the lazy read uses the record files of the driver as they are, so no format key changes. The index of a folder (below) is the design for what is left.
+
+### 86.3 No parse and no copy on the warm path (S3)
+
+Rule index: the identities are below.
+
+1. [R86.3-1] **A text compare with no match makes no new text.** `rename_cow` and `Replacer::apply_cow` borrow the text when no key matches; `Group::add` takes the normal text of a record with no copy of the record (before, each record was cloned to change its text).
+2. [R86.3-2] **A record list is shared.** `Records` is an `Arc` of the list: each reader of a cache folder (the record sets of the configurations, the facts, the variants) gets the one list. A change (`make_mut`) copies the list only if another reader has it. The compare results in memory are shared too.
+3. [R86.3-3] **The scan of a rename map skips a character that starts no key.** A table of the ASCII start characters of the keys removes the hash look-up at each other position. The read of the unit records stops at the unit line (the first line of a file of the driver).
+4. [R86.3-4] **The expansions parse into the typed data.** No `serde_json::Value` tree: the unit line parses into `Expansion` and the name record. A line that the typed parse does not accept takes the generic path of `semilla_normal::read_expansions`, so the result is equal.
+
+### 86.4 The store behind one interface (S4)
+
+Rule index: the identities are below.
+
+1. [R86.4-1] **Each read and each write of a record folder goes through `RecordStore`** (`crates/semilla/src/recstore.rs`): `is_complete`, `key`, `records`, `units`, `expansions`, `mark`, `set_mark`, `remove`, `create`, `put_file`, `complete`. `FileStore` is the implementation with the files of the cache folder and the values in memory. A database (libmdbx) can replace it with no change of the callers. No crate dependency is new.
+
+### 86.5 The timing lines (S5)
+
+Rule index: the identities are below.
+
+1. [R86.5-1] **Each phase has a timing line with its count.** `semilla_core::timing` keeps a total for each phase name: the time, the count of runs, and the counts of the work (for example "38580 records parsed", "3 reads from memory", "20 compare runs"). With `SEMILLA_TIMING=1`, the step prints one line for each phase, in the order of the names. New lines: the phases of the step check (the core check, the search for a derived identity, the flow graphs, the expanded code, the AST map, the intent claims, the positions, the comments, the identity pairs), the construction of the opaque inputs (built and reused), the passes of the joint rule, the count of all core checks, the reads of the store, and the wall time of the parallel compares.
+
+### 86.6 The results
+
+Rule index: no rule: the subsection has the results of the measures.
+
+The warm step of each training pull request: the CPU time (user + system, s) and the peak memory (MB). BASE: the binaries before this batch (load 11 to 32 on 12 cores). Stage 2: S1, S5, and the first part of S3 (load 16 to 90). Final: S3 and the lazy forms of S2 (load 30 to 58). Each output is equal to BASE in the two stages (7 pull requests, 6 outputs each).
+
+| PR | BASE CPU | Stage 2 CPU | Final CPU | BASE memory | Final memory | records parsed (final) |
+|---|---|---|---|---|---|---|
+| `pr-bitflags-465` | 6.3 | 5.9 | 6.4 | ≤ 1070 | 969 | 28064 (forms on need) |
+| `pr-hashbrown-693` | 10.9 | 11.1 | 12.0 | ≤ 1625 | 1250 | 25108 |
+| `pr-indexmap-424` | 55.4 | 40.5 | 35.6 | 2910 | 2386 | 38580 |
+| `pr-itertools-1086` | 12.2 | 10.8 | 13.8 | 1718 | 1401 | 26154 |
+| `pr-num-traits-334` | 32.7 | 21.1 | 20.0 | 3305 | 3066 | 64902 |
+| `pr-uuid-932` | 10.6 | 7.8 | 8.9 | ≤ 1488 | 1175 | 22996 |
+| `pr-winnow-891` | 106.9 | 61.3 | 65.4 | 6784 | 6722 | 85896 |
+
+"≤": the BASE memory of the first three pull requests is the larger of the cold and the warm step (the measure of the script at that time). The target of the brief (3 times less CPU time at stage 2, 10 times at stage 4) is not met: the larger part of the time that is left is in proportion to the size of the crate (86.7). The allocator share of the warm CPU time: BASE 26 % to 36 %, final 25 % to 37 %.
+
+### 86.7 What is left, and the design for it
+
+Rule index: no rule: the subsection has the design of the work that is left.
+
+The CPU time that is left in a warm step is in proportion to the size of the crate: the parse of each record (`read the records of a cache folder`), the notes and the marks of the opaque inputs for each record in each pass of the joint rule (`give the records to the build configuration rules`), the construction of the opaque inputs, the N0 compare of each configuration (`Side::new` groups each record), and the load of the syntax workspace. The design for S2:
+
+1. **The index of a folder** (`index-v1`, a new format key): the driver or the first read writes, for each record, its name, its level, its target, the unit settings, the byte range of its line, a digest of the line, and the small fields that the passes over all bodies read (the callees, the span, the `adts`, the names of the expanded code, the config uses).
+2. **A body that cannot change a line of the output** has: an equal digest in the two trees, no name in the rename map or in its closure, and the same marks in each mode. Its compare result is `Equal n0` with the graph pair of the index; its record is not parsed.
+3. **The content hash of N1** reads the texts of the changed bodies and of their callees only (the hash of a body depends on its text and on the hashes of its callees): the closure of the changed bodies over the callees of the index.
+4. **The marks of the joint rule** for the bodies of item 2 come from the index fields, one time for each mode; a mode that gives the marks of an earlier mode gets the results of that mode.
+
+**Limits.** The two core checks of a step with a derived identity stay two runs. The equal-output check covers the 7 training pull requests and the case set.

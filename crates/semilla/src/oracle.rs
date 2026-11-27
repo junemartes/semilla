@@ -99,6 +99,10 @@ pub struct Added {
     /// [R79.2-1] The compile of the intent crate of a step, by the two trees and the texts of the
     /// intent files: the AST pass and the check of the claims read one compile.
     intent_checks: BTreeMap<(String, String, u64), std::sync::Arc<std::result::Result<crate::intentcrate::Check, String>>>,
+    /// [R86.1-1] The expansions of a step, by the key of each folder that they come from (the
+    /// folder and the time of its `.complete` file, in the order of the checked configurations
+    /// and of the trees). A folder that a build makes again gives a new key.
+    expansions: BTreeMap<Vec<Option<crate::recstore::FolderKey>>, Option<std::sync::Arc<[Vec<semilla_verify::expand::ExpansionUnit>; 2]>>>,
 }
 
 /// The key of a record set: the two trees of a step, and the configuration.
@@ -204,7 +208,8 @@ impl Sides {
 type CompareKey = (String, String, Configuration, BTreeMap<String, String>, Vec<String>, [std::collections::BTreeSet<String>; 4]);
 
 /// The result of the comparison of one configuration: the comparisons and the spans.
-type Compared = (Vec<semilla_normal::BodyComparison>, BTreeMap<String, (String, usize)>);
+/// Shared (R86.3-2): a hit gives the one list in memory.
+type Compared = (std::sync::Arc<Vec<semilla_normal::BodyComparison>>, BTreeMap<String, (String, usize)>);
 
 /// The name of the hint file in the cache folder (batch 5u, part C): the feature selections
 /// that the last step with an added configuration needed. Semilla builds them with the default
@@ -453,15 +458,15 @@ impl NormalOracle {
 
     /// The unit records of a configuration in a tree, by the compiler (batch 5t, part A). The
     /// record files of the N0 build have them. `None`: a record file has no unit record.
-    fn units(&self, tree: &str, config: &Configuration) -> Option<Vec<semilla_normal::UnitRecord>> {
+    fn units(&self, tree: &str, config: &Configuration) -> Option<std::sync::Arc<Vec<semilla_normal::UnitRecord>>> {
         let (_, cache, _, _) = self.cache_folder(tree, "n0", config).ok()?;
-        semilla_normal::read_units(&cache)
+        crate::recstore::store().units(&cache)
     }
 
     /// The target triple of the check build of a tree: the target of the compiler, else the
     /// host of the toolchain.
     fn target(&self, tree: &str, config: &Configuration) -> String {
-        self.units(tree, config).and_then(|units| units.into_iter().map(|unit| unit.triple).find(|triple| !triple.is_empty())).unwrap_or_else(semilla_normal::cargo::host_target)
+        self.units(tree, config).and_then(|units| units.iter().map(|unit| unit.triple.clone()).find(|triple| !triple.is_empty())).unwrap_or_else(semilla_normal::cargo::host_target)
     }
 
     /// The true settings of a checked configuration in a tree.
@@ -470,7 +475,7 @@ impl NormalOracle {
         semilla_verify::ConfigTruth {
             name: config.name(),
             known: units.is_some(),
-            units: units.into_iter().flatten().map(|unit| semilla_verify::Unit { target: unit.target, package: unit.folder, cfg: unit.cfg, files: unit.files, root: unit.root }).collect(),
+            units: units.iter().flat_map(|units| units.iter()).map(|unit| semilla_verify::Unit { target: unit.target.clone(), package: unit.folder.clone(), cfg: unit.cfg.clone(), files: unit.files.clone(), root: unit.root.clone() }).collect(),
         }
     }
 
@@ -494,38 +499,39 @@ impl NormalOracle {
     }
 
     /// The records of a tree at a level, with the default features.
-    pub fn records(&self, tree: &str, level: &str) -> Result<Vec<semilla_normal::BodyRecord>> {
+    pub fn records(&self, tree: &str, level: &str) -> Result<semilla_normal::Records> {
         self.records_with(tree, level, &Configuration::DEV)
     }
 
     /// The records of a tree at a level and a configuration: from the cache, or from a delta
     /// build.
-    fn records_with(&self, tree: &str, level: &str, config: &Configuration) -> Result<Vec<semilla_normal::BodyRecord>> {
+    fn records_with(&self, tree: &str, level: &str, config: &Configuration) -> Result<semilla_normal::Records> {
         self.records_or_build(tree, level, config, true)
     }
 
     /// Makes the records of a tree at a level and a configuration, and reads them with `read`.
     /// A caller that needs only the build reads nothing (batch 5x, part F): the result is empty.
-    pub(crate) fn records_or_build(&self, tree: &str, level: &str, config: &Configuration, read: bool) -> Result<Vec<semilla_normal::BodyRecord>> {
+    pub(crate) fn records_or_build(&self, tree: &str, level: &str, config: &Configuration, read: bool) -> Result<semilla_normal::Records> {
         // Design 62: the tree before a root commit is the empty tree. It has no body, so it has
         // no record, and no build runs.
         if crate::git::is_empty_tree(tree) {
-            return Ok(Vec::new());
+            return Ok(semilla_normal::Records::default());
         }
-        let read_cached = |cache: &std::path::Path| if read { read_cached(cache) } else { Ok(Vec::new()) };
+        let read_cached = |cache: &std::path::Path| if read { read_cached(cache) } else { Ok(semilla_normal::Records::default()) };
         // The cache key: the tree, the level, the configuration, and the build settings that are
         // not in the tree (the outer cargo configuration and the driver binary).
         let (root, cache, marked, name) = self.cache_folder(tree, level, config)?;
         let base = root.join("build");
         // A record with the mark is never a record of the shared folders.
-        if !marked && cache.join(BUILD_CODE_FILE).exists() {
+        let store = crate::recstore::store();
+        if !marked && store.mark(&cache, BUILD_CODE_FILE).is_some() {
             remove_cache(&cache);
         }
         // A compile error of this tree in this configuration: the same build gives it again.
-        if let Ok(error) = std::fs::read_to_string(cache.join(FAILED_FILE)) {
+        if let Some(error) = store.mark(&cache, FAILED_FILE) {
             anyhow::bail!("{error}");
         }
-        if cache.join(".complete").exists() {
+        if store.is_complete(&cache) {
             note_sandbox(&cache);
             return read_cached(&cache);
         }
@@ -534,7 +540,7 @@ impl NormalOracle {
         let lock = std::fs::File::create(base.join(format!("{name}.lock")))?;
         lock.lock()?;
         // Another process can finish the same build while this one waits for the lock.
-        if cache.join(".complete").exists() {
+        if store.is_complete(&cache) {
             lock.unlock()?;
             note_sandbox(&cache);
             return read_cached(&cache);
@@ -553,20 +559,20 @@ impl NormalOracle {
                 let text = format!("{error:#}");
                 if is_compile_error(&text) && !marked {
                     remove_cache(&cache);
-                    std::fs::create_dir_all(&cache)?;
-                    std::fs::write(cache.join(FAILED_FILE), &text)?;
+                    store.create(&cache)?;
+                    store.set_mark(&cache, FAILED_FILE, &text)?;
                 }
                 return Err(error);
             }
         };
         crate::timing(&format!("cargo check {name} of tree {}", &tree[..8.min(tree.len())]), started);
         remove_cache(&cache);
-        std::fs::create_dir_all(&cache)?;
+        store.create(&cache)?;
         // The cache gets only the record file of each unit of this build (design 28.8). Each
         // other file of the records folder stays out, and the result names it. A program of
         // the build decides the name: each hidden character becomes an escape.
         for file in &built.records {
-            std::fs::copy(records.join(file), cache.join(file))?;
+            store.put_file(&cache, file, &records.join(file))?;
         }
         // [R78.1-2] The intent crate (design 78) compiles against the metadata of the N0 build.
         // The build of the other tree in the same folder writes a file with the same name, so
@@ -575,17 +581,17 @@ impl NormalOracle {
             semilla_normal::intent::save_libraries(&cache, &built)?;
         }
         if !built.other.is_empty() {
-            std::fs::write(cache.join(OTHER_FILES_FILE), built.other.iter().map(|name| format!("{}\n", semilla_core::text::inline(name).replace('`', "'"))).collect::<String>())?;
+            store.set_mark(&cache, OTHER_FILES_FILE, &built.other.iter().map(|name| format!("{}\n", semilla_core::text::inline(name).replace('`', "'"))).collect::<String>())?;
         }
         // The sandbox state of the build stays with the records: a later result that uses them
         // shows the same warning.
         if let Some(missing) = semilla_normal::sandbox::missing() {
-            std::fs::write(cache.join(NO_SANDBOX_FILE), missing.line())?;
+            store.set_mark(&cache, NO_SANDBOX_FILE, &missing.line())?;
         }
         if marked {
-            std::fs::write(cache.join(BUILD_CODE_FILE), format!("{}\n", self.code.base))?;
+            store.set_mark(&cache, BUILD_CODE_FILE, &format!("{}\n", self.code.base))?;
         }
-        std::fs::write(cache.join(".complete"), "")?;
+        store.complete(&cache)?;
         lock.unlock()?;
         note_sandbox(&cache);
         read_cached(&cache)
@@ -593,7 +599,7 @@ impl NormalOracle {
 
     /// The records of both trees at some levels. Each level runs in its own thread.
     fn levels(&self, before: &str, after: &str, levels: &[&str], features: &Configuration) -> Result<(semilla_normal::Levels, semilla_normal::Levels)> {
-        let results: Vec<Result<(String, Vec<_>, Vec<_>)>> = std::thread::scope(|scope| {
+        let results: Vec<Result<(String, semilla_normal::Records, semilla_normal::Records)>> = std::thread::scope(|scope| {
             let handles: Vec<_> = levels
                 .iter()
                 .map(|level| scope.spawn(move || Ok((level.to_string(), self.records_with(before, level, features)?, self.records_with(after, level, features)?))))
@@ -721,7 +727,6 @@ impl NormalOracle {
         opaque: &dyn semilla_verify::OpaqueInputs,
     ) -> Result<SetState> {
         let sides = self.sides(step, features)?;
-        let (before, after) = (&sides.before, &sides.after);
         let renames = self.moved_closures(step, features, renames, added, &sides);
         let renames = &renames;
         let started = std::time::Instant::now();
@@ -754,18 +759,16 @@ impl NormalOracle {
         let key: CompareKey = (step.tree_before.clone(), step.tree_after.clone(), features.clone(), renames.clone(), added.to_vec(), [before_marks.opaque.clone(), before_marks.stop.clone(), after_marks.opaque.clone(), after_marks.stop.clone()]);
         let known = self.added.lock().unwrap_or_else(|error| error.into_inner()).compared.get(&key).cloned();
         if let Some((comparisons, spans)) = known {
+            semilla_core::timing::count("the compare of the configurations at N0 (wall time)", "results from memory", 1);
             return Ok(SetState { config: features.clone(), renames: renames.clone(), sides, before_marks, after_marks, comparisons, done: Some(spans) });
         }
-        let started = std::time::Instant::now();
-        let comparisons = semilla_normal::compare_with(before, after, renames, added, &before_marks, &after_marks);
-        N0_TIME.add(started);
-        Ok(SetState { config: features.clone(), renames: renames.clone(), sides, before_marks, after_marks, comparisons, done: None })
+        // The compare runs in `compare_with`, in a thread for each configuration (R86.1-4).
+        Ok(SetState { config: features.clone(), renames: renames.clone(), sides, before_marks, after_marks, comparisons: Default::default(), done: None })
     }
 
 }
 
 /// The totals of the time of the phases that run for each configuration (batch 5x, part F).
-pub(crate) static READ_TIME: crate::TimeTotal = crate::TimeTotal::new();
 pub(crate) static N0_TIME: crate::TimeTotal = crate::TimeTotal::new();
 pub(crate) static MARK_TIME: crate::TimeTotal = crate::TimeTotal::new();
 /// The time of the parts of the body checks of the equivalence check (design 66, part D).
@@ -773,43 +776,17 @@ pub(crate) static FORM_TIME: crate::TimeTotal = crate::TimeTotal::new();
 pub(crate) static STD_FORM_TIME: crate::TimeTotal = crate::TimeTotal::new();
 pub(crate) static SOLVE_TIME: crate::TimeTotal = crate::TimeTotal::new();
 
-/// The key of the records in memory: the cache folder and the time of its `.complete` file.
-type FolderKey = (std::path::PathBuf, std::time::SystemTime);
+use crate::recstore::RecordStore as _;
 
-/// The records of the cache folders that this process read last (batch 5x, part F). One check
-/// of a step reads the same folder many times. The time of the `.complete` file is a part of
-/// the key: a folder that a build made again is a new entry.
-static RECORDS: std::sync::Mutex<BTreeMap<FolderKey, std::sync::Arc<Vec<semilla_normal::BodyRecord>>>> = std::sync::Mutex::new(BTreeMap::new());
-
-/// The most folders with records in memory: the folders of two steps with four configurations.
-const MOST_FOLDERS: usize = 48;
-
-/// Removes a cache folder, and its records in memory.
+/// Removes a cache folder, and its values in memory.
 fn remove_cache(cache: &std::path::Path) {
-    RECORDS.lock().unwrap_or_else(|error| error.into_inner()).retain(|(folder, _), _| folder != cache);
-    let _ = std::fs::remove_dir_all(cache);
+    crate::recstore::store().remove(cache);
 }
 
 /// Reads the records of a complete cache folder.
-fn read_cached(cache: &std::path::Path) -> Result<Vec<semilla_normal::BodyRecord>> {
-    let key = std::fs::metadata(cache.join(".complete")).and_then(|file| file.modified()).ok().map(|time| (cache.to_path_buf(), time));
-    if let Some(key) = &key {
-        let known = RECORDS.lock().unwrap_or_else(|error| error.into_inner()).get(key).cloned();
-        if let Some(records) = known {
-            return Ok(records.as_ref().clone());
-        }
-    }
-    let started = std::time::Instant::now();
-    let records = semilla_normal::read_records(cache);
-    READ_TIME.add(started);
-    if let (Some(key), Ok(records)) = (key, &records) {
-        let mut folders = RECORDS.lock().unwrap_or_else(|error| error.into_inner());
-        if folders.len() >= MOST_FOLDERS {
-            folders.clear();
-        }
-        folders.insert(key, std::sync::Arc::new(records.clone()));
-    }
-    records
+/// [R86.3-2] Each reader gets the one list in memory, with no copy.
+fn read_cached(cache: &std::path::Path) -> Result<semilla_normal::Records> {
+    crate::recstore::store().records(cache)
 }
 
 /// The comparison of one configuration of a step.
@@ -819,7 +796,7 @@ struct SetState {
     sides: std::sync::Arc<Sides>,
     before_marks: semilla_normal::Marks,
     after_marks: semilla_normal::Marks,
-    comparisons: Vec<semilla_normal::BodyComparison>,
+    comparisons: std::sync::Arc<Vec<semilla_normal::BodyComparison>>,
     /// The spans of a comparison that an earlier call did: the comparisons are complete.
     done: Option<BTreeMap<String, (String, usize)>>,
 }
@@ -1157,21 +1134,21 @@ fn merge_prepared(prepared: Vec<(SetState, BTreeMap<String, (String, usize)>)>, 
         };
         let name = state.config.name();
         // The N0 record of each name and target of each side (design 64, part D).
-        let by_key = |levels: &'_ BTreeMap<String, Vec<semilla_normal::BodyRecord>>| -> std::collections::HashMap<(String, String), usize> {
+        let by_key = |levels: &'_ semilla_normal::Levels| -> std::collections::HashMap<(String, String), usize> {
             levels.get("n0").into_iter().flatten().enumerate().map(|(index, record)| ((record.name.clone(), record.target.clone()), index)).collect()
         };
         let (before_keys, after_keys) = (by_key(&state.sides.before), by_key(&state.sides.after));
-        let record_of = |levels: &'_ BTreeMap<String, Vec<semilla_normal::BodyRecord>>, keys: &std::collections::HashMap<(String, String), usize>, key: &Option<(String, String)>| -> Option<Vec<(String, String)>> {
+        let record_of = |levels: &'_ semilla_normal::Levels, keys: &std::collections::HashMap<(String, String), usize>, key: &Option<(String, String)>| -> Option<Vec<(String, String)>> {
             let index = *keys.get(key.as_ref()?)?;
             // Only the constant values: the rest of a record is large.
             Some(levels.get("n0")?.get(index)?.cv.clone())
         };
         // R73.2-1: the initial values of the statics with interior mutability.
-        let statics_of = |levels: &'_ BTreeMap<String, Vec<semilla_normal::BodyRecord>>, keys: &std::collections::HashMap<(String, String), usize>, key: &Option<(String, String)>| -> Option<Vec<(String, String)>> {
+        let statics_of = |levels: &'_ semilla_normal::Levels, keys: &std::collections::HashMap<(String, String), usize>, key: &Option<(String, String)>| -> Option<Vec<(String, String)>> {
             let index = *keys.get(key.as_ref()?)?;
             Some(levels.get("n0")?.get(index)?.sv.clone())
         };
-        for comparison in &state.comparisons {
+        for comparison in state.comparisons.iter() {
             let key = key_of(comparison);
             if key.1.is_none() && two_files.contains(&key.0) {
                 no_file.insert(key.clone());
@@ -1647,7 +1624,7 @@ impl NormalOracle {
         let mut out = Vec::new();
         for config in &checked {
             let Ok(sides) = self.sides(step, config) else { continue };
-            let empty = Vec::new();
+            let empty = semilla_normal::Records::default();
             let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
             let new = EquivSide::new(sides.after.get("n0").unwrap_or(&empty));
             out.push((config.name(), self.reach_config(&solver, &old, &new, &renames, &mut spent, limit, safety)));
@@ -1693,7 +1670,7 @@ impl BodyOracle for NormalOracle {
         let short = |text: &str| text.rsplit_once("::<").map_or(text.to_string(), |(path, args)| format!("{}::<{args}", path.rsplit("::").next().unwrap_or(path)));
         for config in &checked {
             let Ok(sides) = self.sides(step, config) else { continue };
-            let empty = Vec::new();
+            let empty = semilla_normal::Records::default();
             let (old, new) = (sides.before.get("n0").unwrap_or(&empty), sides.after.get("n0").unwrap_or(&empty));
             // The instances by the root, the generic body (the names of the new tree), and the
             // source body of the root: its file, if the root name has more than one source
@@ -1802,7 +1779,7 @@ impl BodyOracle for NormalOracle {
                 continue;
             }
             let Ok(sides) = self.sides(step, config) else { continue };
-            let empty = Vec::new();
+            let empty = semilla_normal::Records::default();
             let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
             let new = EquivSide::new(sides.after.get("n0").unwrap_or(&empty));
             let closure = reach::closure_config(&old, &new, &renames);
@@ -1842,7 +1819,7 @@ impl BodyOracle for NormalOracle {
             });
             match found {
                 Some((records, sides)) => {
-                    let empty = Vec::new();
+                    let empty = semilla_normal::Records::default();
                     let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
                     let new = EquivSide::new(&records);
                     let closure = reach::closure_config(&old, &new, &[]);
@@ -1877,7 +1854,7 @@ impl BodyOracle for NormalOracle {
         Ok([&step.tree_before, &step.tree_after].map(|tree| {
             let mut map = semilla_verify::DefMap::new();
             for config in &checked {
-                for unit in self.units(tree, config).into_iter().flatten() {
+                for unit in self.units(tree, config).iter().flat_map(|units| units.iter()) {
                     for (own, named) in unit.defs.iter().flat_map(|defs| defs.entries()) {
                         let def = map.entry(own.path).or_default();
                         // A path of two targets (two units): the first place in the order of the
@@ -1907,6 +1884,28 @@ impl BodyOracle for NormalOracle {
         let mut states = Vec::new();
         for (index, config) in checked.iter().enumerate() {
             states.push(self.compare_n0(step, renames, added, config, index, opaque)?);
+        }
+        // [R86.1-4] The compare of each configuration with no result in memory runs in its own
+        // thread. The compare is a function of its inputs only, and the results join in the
+        // order of the configurations: the thread order does not change the result.
+        let open: Vec<&mut SetState> = states.iter_mut().filter(|state| state.done.is_none()).collect();
+        if !open.is_empty() {
+            let started = std::time::Instant::now();
+            let compare = |state: &mut SetState| {
+                let started = std::time::Instant::now();
+                state.comparisons = std::sync::Arc::new(semilla_normal::compare_with(&state.sides.before, &state.sides.after, &state.renames, added, &state.before_marks, &state.after_marks));
+                N0_TIME.add(started);
+            };
+            if open.len() == 1 {
+                open.into_iter().for_each(compare);
+            } else {
+                std::thread::scope(|scope| {
+                    for state in open {
+                        scope.spawn(move || compare(state));
+                    }
+                });
+            }
+            semilla_core::timing::add("the compare of the configurations at N0 (wall time)", started);
         }
         // The key of a body: its name and its place. Two definitions of one name under `cfg`
         // (a twin) have one name and two places, and one configuration compiles only one of
@@ -1987,26 +1986,42 @@ impl BodyOracle for NormalOracle {
         })))
     }
 
-    fn expansions(&self, step: &Step) -> Option<[Vec<semilla_verify::expand::ExpansionUnit>; 2]> {
+    fn expansions(&self, step: &Step) -> Option<std::sync::Arc<[Vec<semilla_verify::expand::ExpansionUnit>; 2]>> {
         // The unit records of the N0 build of each checked configuration have the expansion of
         // each macro call (design 63). Each cache folder has its own thread.
         let checked = self.checked(step).ok()?;
         let folders: Vec<(&Configuration, &String)> = checked.iter().flat_map(|config| [(config, &step.tree_before), (config, &step.tree_after)]).collect();
+        // R86.1-1: one read and one conversion for each set of folders.
+        let key: Option<Vec<Option<crate::recstore::FolderKey>>> = folders.iter().map(|(config, tree)| Some(self.cache_folder(tree, "n0", config).ok().and_then(|(_, cache, _, _)| crate::recstore::store().key(&cache)))).collect();
+        if let Some(found) = key.as_ref().filter(|key| key.iter().all(Option::is_some)).and_then(|key| self.added.lock().unwrap_or_else(|error| error.into_inner()).expansions.get(key).cloned()) {
+            semilla_core::timing::count(crate::recstore::EXPANSIONS_PHASE, "reads from memory", 1);
+            return found;
+        }
         let read = |config: &Configuration, tree: &str| -> Option<Vec<semilla_verify::expand::ExpansionUnit>> {
             self.records_or_build(tree, "n0", config, false).ok()?;
             let (_, cache, _, _) = self.cache_folder(tree, "n0", config).ok()?;
-            let units = semilla_normal::read_expansions(&cache)?;
-            Some(units.into_iter().map(|unit| semilla_verify::expand::ExpansionUnit { config: config.name(), target: unit.target, package: unit.package, root: unit.root, cfg: unit.cfg, list: unit.list.into_iter().filter_map(|value| serde_json::from_value(value).ok()).collect(), names: unit.names.and_then(|value| serde_json::from_value(value).ok()).map(std::sync::Arc::new) }).collect())
+            let units = crate::recstore::store().expansions(&cache)?;
+            Some(units.iter().map(|unit| semilla_verify::expand::ExpansionUnit { config: config.name(), ..unit.clone() }).collect())
         };
         let results: Vec<Option<Vec<semilla_verify::expand::ExpansionUnit>>> = std::thread::scope(|scope| {
             let handles: Vec<_> = folders.iter().map(|(config, tree)| scope.spawn(|| read(config, tree))).collect();
             handles.into_iter().map(|handle| handle.join().ok().flatten()).collect()
         });
         let mut sides: [Vec<semilla_verify::expand::ExpansionUnit>; 2] = Default::default();
+        let mut found = Some(());
         for (index, result) in results.into_iter().enumerate() {
-            sides[index % 2].extend(result?);
+            match result {
+                Some(result) => sides[index % 2].extend(result),
+                None => found = None,
+            }
         }
-        Some(sides)
+        let result = found.map(|()| std::sync::Arc::new(sides));
+        // The key after the reads: a build in `records_or_build` can make a folder.
+        let key: Vec<Option<crate::recstore::FolderKey>> = folders.iter().map(|(config, tree)| self.cache_folder(tree, "n0", config).ok().and_then(|(_, cache, _, _)| crate::recstore::store().key(&cache))).collect();
+        if key.iter().all(Option::is_some) {
+            self.added.lock().unwrap_or_else(|error| error.into_inner()).expansions.insert(key, result.clone());
+        }
+        result
     }
 
     fn facts(&self, step: &Step) -> Result<Option<Vec<semilla_verify::BodyFacts>>> {
@@ -2161,6 +2176,7 @@ impl NormalOracle {
         // A target name is the name of one build: the walk over the live callees stays in it.
         let tag = |target: String| if *config == Configuration::DEV { target } else { format!("{target} [{}]", config.name()) };
         let sides = self.sides(step, config)?;
+        // R86.3-2: only the fields of the facts are copied, not the records.
         let records = sides.after.get("n0").cloned().unwrap_or_default();
         // The MIR signature of each body before the step, by its name and its target (batch 5n,
         // A1). A body with a new name has no entry: its signature is not a known cause.
@@ -2168,29 +2184,29 @@ impl NormalOracle {
         let old: BTreeMap<(String, String), String> = sides.before.get("n0").into_iter().flatten().map(|record| ((record.name.clone(), record.target.clone()), signature(&record.text))).collect();
         Ok(
             records
-                .into_iter()
+                .iter()
                 .map(|record| semilla_verify::BodyFacts {
                     signature_changed: old.get(&(record.name.clone(), record.target.clone())).is_some_and(|before| *before != signature(&record.text)),
                     span: record.span.as_ref().map(|span| (span.file.clone(), span.line_start)),
-                    callees: record.callees,
+                    callees: record.callees.clone(),
                     panics: semilla_verify::assert_sites(&record.text),
                     origins: record.externals.iter().filter(|call| !call.krate.is_empty()).map(|call| (call.path.clone(), (call.krate.clone(), call.def.clone()))).collect(),
-                    externals: record.externals.into_iter().map(|call| call.path).collect(),
-                    indirect: record.indirect,
-                    reach_types: record.reach_types.into_iter().map(|t| (t.path, t.krate)).collect(),
-                    drop_types: record.drop_types.into_iter().map(|t| (t.path, t.krate)).collect(),
-                    drop_calls: record.drop_calls.into_iter().map(|t| (t.path, t.call)).collect(),
-                    impl_of: record.impl_of,
-                    drop_of: record.drop_of,
-                    target: tag(record.target),
-                    live: record.live_callees,
-                    sure: record.sure_callees,
-                    ends: record.sure_ends.unwrap_or_default(),
-                    param_types: record.param_types.into_iter().map(|t| (t.path, t.krate)).collect(),
-                    const_types: record.const_types.into_iter().map(|t| (t.path, t.krate)).collect(),
+                    externals: record.externals.iter().map(|call| call.path.clone()).collect(),
+                    indirect: record.indirect.clone(),
+                    reach_types: record.reach_types.iter().map(|t| (t.path.clone(), t.krate.clone())).collect(),
+                    drop_types: record.drop_types.iter().map(|t| (t.path.clone(), t.krate.clone())).collect(),
+                    drop_calls: record.drop_calls.iter().map(|t| (t.path.clone(), t.call.clone())).collect(),
+                    impl_of: record.impl_of.clone(),
+                    drop_of: record.drop_of.clone(),
+                    target: tag(record.target.clone()),
+                    live: record.live_callees.clone(),
+                    sure: record.sure_callees.clone(),
+                    ends: record.sure_ends.clone().unwrap_or_default(),
+                    param_types: record.param_types.iter().map(|t| (t.path.clone(), t.krate.clone())).collect(),
+                    const_types: record.const_types.iter().map(|t| (t.path.clone(), t.krate.clone())).collect(),
                     casts: semilla_verify::discriminant_casts(&record.text),
                     layouts: semilla_verify::layout_types(&record.text),
-                    name: record.name,
+                    name: record.name.clone(),
                 })
                 .collect(),
         )
@@ -2216,7 +2232,7 @@ mod tests {
         let record = |name: &str, file: &str, line: usize, names: serde_json::Value| serde_json::json!({ "name": name, "level": "n0", "text": "fn f() {}", "span": { "file": file, "line_start": line, "line_end": line + 2 }, "names": names }).to_string();
         let old = [record("demo::f", "src/lib.rs", 3, serde_json::json!([{ "word": "len", "member": true, "count": 0 }, { "word": "Vec", "prefix": true, "count": 2, "line": 4 }])), serde_json::json!({ "name": "demo::g", "level": "n0", "text": "fn g() {}" }).to_string()];
         let new = [record("demo::f", "src/lib.rs", 3, serde_json::json!([])), record("demo::main", "src/main.rs", 1, serde_json::json!([])), record("demo::main", "benches/demo.rs", 9, serde_json::json!([]))];
-        let levels = |lines: &[String]| semilla_normal::Levels::from([("n0".to_string(), semilla_normal::parse_records(&lines.join("\n")).unwrap())]);
+        let levels = |lines: &[String]| semilla_normal::Levels::from([("n0".to_string(), semilla_normal::parse_records(&lines.join("\n")).unwrap().into())]);
         let sides = Sides::new(levels(&old), levels(&new));
         let before: Vec<_> = sides.records(false).collect();
         assert_eq!(before.len(), 2);
@@ -2243,7 +2259,7 @@ mod tests {
             let complete = std::fs::File::create(folder.path().join(".complete")).unwrap();
             complete.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
         };
-        let in_memory = || RECORDS.lock().unwrap().keys().filter(|(path, _)| path == folder.path()).count();
+        let in_memory = || crate::recstore::store().in_memory(folder.path());
         write("a", 1_000);
         let first = read_cached(folder.path()).unwrap();
         assert_eq!(first[0].text, "a");
@@ -2379,7 +2395,7 @@ mod tests {
         let record = |target: &str, file: &str, name: &str, text: &str| serde_json::json!({ "name": name, "level": "n0", "text": text, "target": target, "span": { "file": file, "line_start": 1, "line_end": 3 } }).to_string();
         let before = [record("probe.bench.1", "benches/probe.rs", "probe::hash", "a"), record("probe.test.2", "tests/probe.rs", "probe::hash", "b"), record("probe.test.2", "tests/probe.rs", "probe::only", "c")];
         let after = [record("probe.bench.1", "benches/probe.rs", "probe::hash", "a2"), record("probe.test.2", "tests/probe.rs", "probe::hash", "b"), record("probe.test.2", "tests/probe.rs", "probe::only", "c2")];
-        let levels = |lines: &[String]| semilla_normal::Levels::from([("n0".to_string(), semilla_normal::parse_records(&lines.join("\n")).unwrap())]);
+        let levels = |lines: &[String]| semilla_normal::Levels::from([("n0".to_string(), semilla_normal::parse_records(&lines.join("\n")).unwrap().into())]);
         let sides = Sides::new(levels(&before), levels(&after));
         assert_eq!(sides.two_files, ["probe::hash"]);
         let comparison = |name: &str| semilla_normal::BodyComparison { name: name.to_string(), status: semilla_normal::BodyStatus::Different { cfg_changed: false }, config: Vec::new(), elements: None, graphs: Vec::new(), place: None };
@@ -2389,7 +2405,7 @@ mod tests {
             sides: std::sync::Arc::new(sides),
             before_marks: semilla_normal::Marks::default(),
             after_marks: semilla_normal::Marks::default(),
-            comparisons: vec![comparison("probe::hash"), comparison("probe::only")],
+            comparisons: std::sync::Arc::new(vec![comparison("probe::hash"), comparison("probe::only")]),
             done: None,
         };
         let mut own = BTreeMap::new();
