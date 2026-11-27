@@ -28,13 +28,13 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  declarations, filled in by Semilla:
-  ◆ f2 derived: changed macro `twice`: `/// The old doc. macro_rules! twice { ($e:expr) => { $e * 2 }; }` → `/// The old doc. #[cfg(all())] macro_rules! twice { ($e:expr) => { $e * 2 }; }` [declaration · code equal]
+  changed nodes: 2 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::twice!`:
+  ◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `twice`: `/// The old doc. macro_rules! twice { ($e:expr) => { $e * 2 }; }` → `/// The old doc. #[cfg(all())] macro_rules! twice { ($e:expr) => { $e * 2 }; }` [declaration · code equal]
       docs of `depot::twice!`, no edit in this step (src/lib.rs:5): `/// The old doc.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  other facts, filled in by Semilla:
-  ◆ f1 derived: attributes of `depot::twice!`: added `#[cfg(all())]` [attribute · code equal]
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::twice!`: added `#[cfg(all())]` [attribute · code equal]
       ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::twice!=…'
   cover: each of the 1 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
@@ -43,7 +43,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::twice!=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::twice!=the reason of the test'
-◆ f2 derived: changed macro `twice`: `/// The old doc. macro_rules! twice { ($e:expr) => { $e * 2 }; }` → `/// The old doc. #[cfg(all())] macro_rules! twice { ($e:expr) => { $e * 2 }; }` [declaration · code equal]
+◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `twice`: `/// The old doc. macro_rules! twice { ($e:expr) => { $e * 2 }; }` → `/// The old doc. #[cfg(all())] macro_rules! twice { ($e:expr) => { $e * 2 }; }` [declaration · code equal]
     lines: src/lib.rs:6
-◆ f1 derived: attributes of `depot::twice!`: added `#[cfg(all())]` [attribute · code equal]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::twice!`: added `#[cfg(all())]` [attribute · code equal]
     lines: src/lib.rs:6

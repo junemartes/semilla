@@ -74,13 +74,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   ! features that no checked configuration enables: `shop/fast` (`--features fast` checks it), `shop/small` (`--features small` checks it); no result covers the code or the dependencies that they enable
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  tests and benches, filled in by Semilla:
-  ◆ f1 derived: added early exit `if x == 0 { return 1; }` at `shop (bench "probe")::hash/S0` [semantics · no compare]
-      note: no compare: no checked configuration compiles `shop (bench "probe")::hash`
-  ◆ f2 derived: benches/probe.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
+  changed nodes: 1 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  file `benches/probe.rs`:
+  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): benches/probe.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
       note: no compare: no checked configuration compiles `benches/probe.rs`
       ✗ spotlight: inactive code: no checked configuration compiles the changed code (no checked unit reads the file `benches/probe.rs`; `--features fast` checks it), so Semilla did not compare the edit; it needs a reason: --reason 'benches/probe.rs=…'
+  syntax only:
+  item `shop (bench "probe")::hash`:
+  ◆ f1 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added early exit `if x == 0 { return 1; }` at `shop (bench "probe")::hash/S0` [semantics · no compare]
+      note: no compare: no checked configuration compiles `shop (bench "probe")::hash`
   cover: each of the 3 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: inactive code: benches/probe.rs (no checked unit reads the file)
@@ -88,7 +91,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'benches/probe.rs=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'benches/probe.rs=the reason of the test'
-◆ f1 derived: added early exit `if x == 0 { return 1; }` at `shop (bench "probe")::hash/S0` [semantics · no compare]
-    lines: benches/probe.rs:2-4
-◆ f2 derived: benches/probe.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
+◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): benches/probe.rs: each edit of this file is in code that no checked configuration compiles [text · no compare]
     no position
+◆ f1 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added early exit `if x == 0 { return 1; }` at `shop (bench "probe")::hash/S0` [semantics · no compare]
+    lines: benches/probe.rs:2-4

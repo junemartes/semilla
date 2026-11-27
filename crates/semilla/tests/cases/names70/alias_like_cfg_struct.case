@@ -35,22 +35,22 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `shop::width` (src/lib.rs:8): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `shop::width` (src/lib.rs:8): the full compare: `#[same(shop::width)] fn width_same() {}`; a difference: `#[change(shop::width)] fn width_change(b_before: before::shop::Block, b_after: after::shop::Block) -> bool { … }` or `#[different(shop::width)] fn width_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: 2 different edits (f1, f2)
       in: shop::width
       lines: src/lib.rs:9-10, src/lib.rs:-9
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::width=TEXT'; if it does not change, --same 'rewrite b => n', and a `--same` fact (rename, move, or rewrite) that explains each other edit
-  other facts, filled in by Semilla:
-  ◆ f1 derived: added `let` `let n: Block = b * 2;` at `shop::width/S0` [semantics · code different]
+  real edits:
+  item `shop::width`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): added `let` `let n: Block = b * 2;` at `shop::width/S0` [semantics · code different] · not stated
       affected bodies: shop::width (with 1 other edit of this body)
       control flow: + check `overflow: b * 2` (src/lib.rs:9): ok → check `overflow: n + 1`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:9)
       control flow: + arrow entry (src/lib.rs:8) → check `overflow: b * 2` (src/lib.rs:9)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
-  ◆ f2 derived: changed path `b` → `n` at `shop::width/tail/lhs` [semantics · code different]
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed path `b` → `n` at `shop::width/tail/lhs` [semantics · code different] · not stated
       affected bodies: shop::width (with 1 other edit of this body)
       control flow: ~ check `overflow: b + 1` → `overflow: n + 1` (src/lib.rs:-9, src/lib.rs:10)
       control flow: − arrow entry (src/lib.rs:-8) → check `overflow: b + 1` (src/lib.rs:-9)
@@ -61,7 +61,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: added `let` `let n: Block = b * 2;` at `shop::width/S0` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): added `let` `let n: Block = b * 2;` at `shop::width/S0` [semantics · code different] · not stated
     lines: src/lib.rs:9
-◆ f2 derived: changed path `b` → `n` at `shop::width/tail/lhs` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed path `b` → `n` at `shop::width/tail/lhs` [semantics · code different] · not stated
     lines: src/lib.rs:10, src/lib.rs:-9

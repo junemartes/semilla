@@ -28,15 +28,17 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 4 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
-    MIR changes with no claim: `<shop::Inner as std::fmt::Display>::fmt` (src/lib.rs:5): an added body: `#[new(<shop::Inner as core::fmt::Display>::fmt)] fn fmt_new() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-    MIR changes with no claim: `<shop::Outer as std::fmt::Display>::fmt` (src/lib.rs:8): an added body: `#[new(<shop::Outer as core::fmt::Display>::fmt)] fn fmt_new_2() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added · code different]
+    MIR changes with no claim: `<shop::Inner as std::fmt::Display>::fmt` (src/lib.rs:5): an added body: `#[new(<shop::Inner as core::fmt::Display>::fmt)] fn fmt_new() -> bool { … }`
+    MIR changes with no claim: `<shop::Outer as std::fmt::Display>::fmt` (src/lib.rs:8): an added body: `#[new(<shop::Outer as core::fmt::Display>::fmt)] fn fmt_new_2() -> bool { … }`
+  changed nodes: 4 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::impl <Inner as std::fmt::Display>`:
+  ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added · code different] · not stated
       affected bodies: shop::<Inner as std::fmt::Display>::fmt
       control flow: + graph of `<shop::Inner as std::fmt::Display>::fmt`: 4 points, 3 arrows (semilla expand --step 0)
-  ◆ f2 derived: trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added · code different]
+  item `shop::impl <Outer as std::fmt::Display>`:
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added · code different] · not stated
       affected bodies: shop::<Outer as std::fmt::Display>::fmt
       control flow: + graph of `<shop::Outer as std::fmt::Display>::fmt`: 4 points, 3 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
@@ -49,7 +51,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added · code different]
+◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Inner as std::fmt::Display>` added with: `fn fmt` [added · code different] · not stated
     lines: src/lib.rs:4-6
-◆ f2 derived: trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added · code different]
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Outer as std::fmt::Display>` added with: `fn fmt` (the public API can change: a different crate can use the item) [added · code different] · not stated
     lines: src/lib.rs:7-9

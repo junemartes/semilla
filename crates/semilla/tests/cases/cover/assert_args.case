@@ -50,12 +50,13 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::check` (src/lib.rs:10): the same MIR text; a changed callee: `depot::check::{closure#0}`; no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `depot::check::{closure#0} #[test]` (src/lib.rs:9): the same MIR text; a changed callee: `depot::check`, `depot::check::{closure#0}`; the template of `depot::check` covers its item `depot::check`
-  tests and benches, filled in by Semilla:
-  ◆ f1 derived: replace macro input `assert_eq!( v.iter().sum::<u32>(), 6 );` → `assert_eq!( v.iter().copied().sum::<u32>(), 6, "the sum" );` at `depot::check/S1` [macro · code different]
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::check`:
+  ◆ f1 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): replace macro input `assert_eq!( v.iter().sum::<u32>(), 6 );` → `assert_eq!( v.iter().copied().sum::<u32>(), 6, "the sum" );` at `depot::check/S1` [macro · code different] · not stated
       affected bodies: depot::check
       equivalence: `depot::check`: MIR changes: the same MIR text; a changed callee: `depot::check::{closure#0}`
       equivalence: `depot::check::{closure#0} #[test]`: MIR changes: the same MIR text; a changed callee: `depot::check`, `depot::check::{closure#0}`
@@ -69,5 +70,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: replace macro input `assert_eq!( v.iter().sum::<u32>(), 6 );` → `assert_eq!( v.iter().copied().sum::<u32>(), 6, "the sum" );` at `depot::check/S1` [macro · code different]
+◆ f1 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): replace macro input `assert_eq!( v.iter().sum::<u32>(), 6 );` → `assert_eq!( v.iter().copied().sum::<u32>(), 6, "the sum" );` at `depot::check/S1` [macro · code different] · not stated
     lines: src/lib.rs:13-15, src/lib.rs:17, src/lib.rs:-13-18

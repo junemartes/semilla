@@ -17,11 +17,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::first` (src/lib.rs:1): the full compare: `#[same(shop::first)] fn first_same() {}`; a difference: `#[change(shop::first)] fn first_change(o: Option<u32>) -> bool { … }` or `#[different(shop::first)] fn first_different() -> bool { … }`
-    MIR changes with no claim: `shop::show` (src/lib.rs:2): the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
-  not stated: 2 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `shop::show` (src/lib.rs:2): the full compare: `#[same(shop::show)] fn show_same() {}`; a difference: `#[change(shop::show)] fn show_change(x: u32) -> bool { … }` or `#[different(shop::show)] fn show_different() -> bool { … }`
+  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: 2 different edits (f2, f3)
       in: shop::show
       lines: src/lib.rs:2, src/lib.rs:-2
@@ -30,18 +29,20 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: shop::first
       lines: src/lib.rs:1, src/lib.rs:-1
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::first=TEXT'; if it does not change, --same 'rewrite $a.unwrap_or(0) => $a.expect("none")'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed method_call: `o.unwrap_or(0)` → `o.expect("none")` at `shop::first/tail` [semantics · code different]
+  real edits:
+  item `shop::first`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `o.unwrap_or(0)` → `o.expect("none")` at `shop::first/tail` [semantics · code different] · not stated
       affected bodies: shop::first
       control flow: ~ call `Option::<u32>::unwrap_or` → `Option::<u32>::expect` (src/lib.rs:-1, src/lib.rs:1)
       equivalence: MIR changes
-  ◆ f2 derived: deleted statement `String::new()` at `shop::show/tail` [semantics · code different]
+  item `shop::show`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `String::new()` at `shop::show/tail` [semantics · code different] · not stated
       affected bodies: shop::show (with 1 other edit of this body)
       control flow: ~ call `String::new` → `format` (src/lib.rs:-2, src/lib.rs:2)
       control flow: − arrow entry (src/lib.rs:-2) → call `String::new` (src/lib.rs:-2)
       control flow: − arrow call `String::new` (src/lib.rs:-2) → return (src/lib.rs:-2) (return)
       equivalence: MIR changes
-  ◆ f3 derived: added macro statement `format!("{x}")` at `shop::show/tail` [semantics · code different]
+  ◆ f3 add (Semilla; R90.2-3, 4 new MIR elements): added macro statement `format!("{x}")` at `shop::show/tail` [semantics · code different] · not stated
       affected bodies: shop::show (with 1 other edit of this body)
       control flow: + construct `{x}` (src/lib.rs:2): return → call `format`
       control flow: + call `must_use::<String>` (src/lib.rs:2): return → return
@@ -57,9 +58,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed method_call: `o.unwrap_or(0)` → `o.expect("none")` at `shop::first/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `o.unwrap_or(0)` → `o.expect("none")` at `shop::first/tail` [semantics · code different] · not stated
     lines: src/lib.rs:1, src/lib.rs:-1
-◆ f2 derived: deleted statement `String::new()` at `shop::show/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `String::new()` at `shop::show/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-2
-◆ f3 derived: added macro statement `format!("{x}")` at `shop::show/tail` [semantics · code different]
+◆ f3 add (Semilla; R90.2-3, 4 new MIR elements): added macro statement `format!("{x}")` at `shop::show/tail` [semantics · code different] · not stated
     lines: src/lib.rs:2

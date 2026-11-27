@@ -1,0 +1,51 @@
+note: an added struct with its fields is an addition, and a changed `macro_rules` definition has no MIR: no entry is a type change
+rule-: R90.2-4
+must_not_match: type change \(
+must_match: ◆ f[0-9]+ add, syntax only \(
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! twice {
+    ($e:expr) => { $e * 2 };
+}
+
+pub fn total(a: u32) -> u32 {
+    a + 1
+}
+=== new src/lib.rs
+macro_rules! twice {
+    ($e:expr) => { $e + $e };
+}
+
+pub struct Pair {
+    pub left: u32,
+    pub right: u32,
+}
+
+pub fn total(a: u32) -> u32 {
+    a + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed nodes: 4 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::Pair`:
+  ◆ f2 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher; 3 nodes): added `depot::Pair` (the public API changes: a different crate can now use the item) [added · no code]
+      ! public API: the compare does not cover the code of a different crate
+  item `depot::twice!`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `twice`: `macro_rules! twice { ($e:expr) => { $e * 2 }; }` → `macro_rules! twice { ($e:expr) => { $e + $e }; }` [declaration · code equal]
+  cover: each of the 7 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher; 3 nodes): added `depot::Pair` (the public API changes: a different crate can now use the item) [added · no code]
+    lines: src/lib.rs:5-7
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `twice`: `macro_rules! twice { ($e:expr) => { $e * 2 }; }` → `macro_rules! twice { ($e:expr) => { $e + $e }; }` [declaration · code equal]
+    lines: src/lib.rs:2-4, src/lib.rs:-2

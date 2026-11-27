@@ -39,11 +39,12 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::Tool::b` (src/lib.rs:5): no template: `depot::Tool::b` is no item of the syntax tree (a body that the compiler makes)
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: removed macro call `getter!(b)` (made: `pub fn Tool::b`) [removed · code different]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::Tool::getter!#0`:
+  ◆ f1 delete, syntax only (Semilla; R90.2-6, no MIR element; the matcher): removed macro call `getter!(b)` (made: `pub fn Tool::b`) [removed · code different]
       affected bodies: depot::Tool::b
       control flow: − graph of `depot::Tool::b`: 2 points, 1 arrow (semilla expand --step 0)
       expansion: `getter!(b)` at `depot::Tool::getter!#0` (src/lib.rs:-12): expansion removed: made `depot::Tool::b`
@@ -56,5 +57,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! spotlight: cfg attribute: depot::Tool::getter!#0 (the code has a `cfg` attribute that the compiler did not evaluate in the checked configuration)
 
 === positions
-◆ f1 derived: removed macro call `getter!(b)` (made: `pub fn Tool::b`) [removed · code different]
+◆ f1 delete, syntax only (Semilla; R90.2-6, no MIR element; the matcher): removed macro call `getter!(b)` (made: `pub fn Tool::b`) [removed · code different]
     lines: src/lib.rs:-9-12

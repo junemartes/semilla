@@ -35,24 +35,24 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
-    MIR changes with no claim: `<shop::Dog as shop::Speak>::name` (src/lib.rs:8): a removed body: `#[removed(<shop::Dog as shop::Speak>::name)] fn name_removed() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `<shop::Dog as shop::Speak>::name` (src/lib.rs:8): a removed body: `#[removed(<shop::Dog as shop::Speak>::name)] fn name_removed() -> bool { … }`
     MIR changes with no claim: `shop::Speak::name` (src/lib.rs:2): the full compare: `#[same(shop::Speak::name)] fn name_same() {}`; a difference: `#[change(shop::Speak::name)] fn name_change() -> bool { … }` or `#[different(shop::Speak::name)] fn name_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: edit, see f2 (f2)
       in: shop::<Dog as Speak>::name
       lines: src/lib.rs:9, src/lib.rs:-7-11
       to state it: --change 'shop::<Dog as Speak>::name=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::<Dog as Speak>::name=TEXT'
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: body added to `shop::Speak::name`: `{ 3 }` [added · code different]
-      affected bodies: shop::Speak::name
-      control flow: + graph of `shop::Speak::name`: 2 points, 1 arrow (semilla expand --step 0)
-  other facts, filled in by Semilla:
-  ◆ f2 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 3 }` [semantics · code different]
+  real edits:
+  item `shop::<Dog as Speak>::name`:
+  ◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 3 }` [semantics · code different] · not stated
       affected bodies: shop::<Dog as Speak>::name
       control flow: − graph of `<shop::Dog as shop::Speak>::name`: 2 points, 1 arrow (semilla expand --step 0)
+  item `shop::Speak::name`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): body added to `shop::Speak::name`: `{ 3 }` [added · code different] · not stated
+      affected bodies: shop::Speak::name
+      control flow: + graph of `shop::Speak::name`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 10 changed line(s) is in a fact
   control flow: 2 bodies
     <shop::Dog as shop::Speak>::name (src/lib.rs:8): graph removed: 2 points, 1 arrow
@@ -60,7 +60,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: body added to `shop::Speak::name`: `{ 3 }` [added · code different]
-    lines: src/lib.rs:2-4, src/lib.rs:-2
-◆ f2 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 3 }` [semantics · code different]
+◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 3 }` [semantics · code different] · not stated
     lines: src/lib.rs:9, src/lib.rs:-7-11
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): body added to `shop::Speak::name`: `{ 3 }` [added · code different] · not stated
+    lines: src/lib.rs:2-4, src/lib.rs:-2

@@ -116,22 +116,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 change: `Price::cents` "one more" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
       places: depot::money::Price::cents/tail
-    ◆ f1 stated: changed expression `self.0` → `self.0 + 1` at `depot::money::Price::cents/tail` [semantics · code different]
-        affected bodies: depot::money::Price::cents
-        control flow: + check `overflow: self.0 + 1` (src/lib.rs:13): ok → return, fail → panic `overflow`
-        control flow: + panic `overflow` (src/lib.rs:13)
-        control flow: + arrow entry (src/lib.rs:13) → check `overflow: self.0 + 1` (src/lib.rs:13)
-        control flow: … 1 more (semilla expand --step 0)
-        equivalence: MIR changes
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+      entries, in the list below: f1
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::money::Price::cents` (src/lib.rs:13): the full compare: `#[same(depot::money::Price::cents)] fn cents_same() {}`; a difference: `#[change(depot::money::Price::cents)] fn cents_change(this_before: &before::depot::money::Price, this_after: &after::depot::money::Price) -> bool { … }` or `#[different(depot::money::Price::cents)] fn cents_different() -> bool { … }`
-  not stated: 0 item(s)
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::money::Price::cents`:
+  ◆ f1 replace (a1; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 1` at `depot::money::Price::cents/tail` [semantics · code different]
+      affected bodies: depot::money::Price::cents
+      control flow: + check `overflow: self.0 + 1` (src/lib.rs:13): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:13)
+      control flow: + arrow entry (src/lib.rs:13) → check `overflow: self.0 + 1` (src/lib.rs:13)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     depot::money::Price::cents (src/lib.rs:13): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: changed expression `self.0` → `self.0 + 1` at `depot::money::Price::cents/tail` [semantics · code different]
+◆ f1 replace (a1; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 1` at `depot::money::Price::cents/tail` [semantics · code different]
     lines: src/lib.rs:13, src/lib.rs:-13

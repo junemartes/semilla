@@ -118,22 +118,23 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       the stated pair is no fact: the new tree has the item `depot::limit` too
       Semilla sees: f1 2 site(s): changed path `limit` → `cap` [semantics]
       Semilla sees: f2 added `depot::cap` (the public API changes: a different crate can now use the item) [added]
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
-    MIR changes with no claim: `depot::cap` (src/lib.rs:26): an added body: the claim template of the node n3 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+    MIR changes with no claim: `depot::cap` (src/lib.rs:26): an added body: `#[new(depot::cap)] fn cap_new() -> bool { let new = after::depot::cap(); true }`
     MIR changes with no claim: `depot::uses_limit` (src/lib.rs:27): the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
-  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: changed path `limit` → `cap` (f1)
       in: depot::uses_limit
       lines: src/lib.rs:27, src/lib.rs:-26
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::uses_limit=TEXT'; if it does not change, --same 'rewrite limit => cap'
-  new and removed items, filled in by Semilla:
-  ◆ f2 derived: added `depot::cap` (the public API changes: a different crate can now use the item) [added · code different]
+  real edits:
+  item `depot::cap`:
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::cap` (the public API changes: a different crate can now use the item) [added · code different] · not stated
       affected bodies: depot::cap
       control flow: + graph of `depot::cap`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
-  other facts, filled in by Semilla:
-  ◆ f1 derived: 2 site(s): changed path `limit` → `cap` [semantics · code equal]
+  transformations:
+  item `depot::uses_limit`:
+  ◆ f1 same code (Semilla; R90.2-1, equal MIR; 2 nodes): 2 site(s): changed path `limit` → `cap` [semantics · code equal]
       in: depot::uses_limit (2)
       control flow: ~ call `limit` → `cap` (src/lib.rs:-26, src/lib.rs:27)
       control flow: ~ check `overflow: limit() + limit()` → `overflow: cap() + cap()` (src/lib.rs:-26, src/lib.rs:27)
@@ -147,7 +148,7 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f2 derived: added `depot::cap` (the public API changes: a different crate can now use the item) [added · code different]
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::cap` (the public API changes: a different crate can now use the item) [added · code different] · not stated
     lines: src/lib.rs:26
-◆ f1 derived: 2 site(s): changed path `limit` → `cap` [semantics · code equal]
+◆ f1 same code (Semilla; R90.2-1, equal MIR; 2 nodes): 2 site(s): changed path `limit` → `cap` [semantics · code equal]
     lines: src/lib.rs:27, src/lib.rs:-26

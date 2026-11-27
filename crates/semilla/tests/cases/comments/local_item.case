@@ -49,12 +49,11 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `shop::fee` (src/lib.rs:8): the same MIR text; a changed callee: `shop::fee::part`; the full compare: `#[same(shop::fee)] fn fee_same() {}`; a difference: `#[change(shop::fee)] fn fee_change(x: u32) -> bool { … }` or `#[different(shop::fee)] fn fee_different() -> bool { … }`
     MIR changes with no claim: `shop::fee::part fn part(x: u32) -> u32 { x / 5 }` (src/lib.rs:10): no template: `shop::fee::part fn part(x: u32) -> u32 { x / 5 }` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
-    MIR changes with no claim: `shop::price` (src/lib.rs:2): the claim template of the node n3 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  not stated: 2 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `shop::price` (src/lib.rs:2): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
+  changed nodes: 3 in 4 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: 2 different edits (f2, f3)
       in: shop::price
       lines: src/lib.rs:5, src/lib.rs:-6-7
@@ -63,15 +62,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: shop::fee
       lines: src/lib.rs:11, src/lib.rs:-13
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::fee=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed item: `/// Gives one tenth. fn part(x: u32) -> u32 { x / 10 }` → `/// Gives one tenth. fn part(x: u32) -> u32 { x / 5 }` at `shop::fee/S0` [semantics · code different]
+  real edits:
+  item `shop::fee`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed item: `/// Gives one tenth. fn part(x: u32) -> u32 { x / 10 }` → `/// Gives one tenth. fn part(x: u32) -> u32 { x / 5 }` at `shop::fee/S0` [semantics · code different] · not stated
       affected bodies: shop::fee::part
       equivalence: `shop::fee`: MIR changes: the same MIR text; a changed callee: `shop::fee::part`
       equivalence: `shop::fee::part fn part(x: u32) -> u32 { x / 5 }`: MIR changes
       docs of `shop::fee`, no edit in this step (src/lib.rs:7): `/// Gives the fee.`
       docs at line 10, no edit in this step (src/lib.rs:9): `/// Gives one tenth.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  ◆ f2 derived: changed expression `max(min(x, 100), 1)` → `min(x, 100)` at `shop::price/tail/lhs` [semantics · code different]
+  item `shop::price`:
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `max(min(x, 100), 1)` → `min(x, 100)` at `shop::price/tail/lhs` [semantics · code different] · not stated
       affected bodies: shop::price
       control flow: − call `max::<u32>` (src/lib.rs:-7): return → check `overflow: max(min(x, 100), 1) + x / 10`
       control flow: ~ check `overflow: max(min(x, 100), 1) + x / 10` → `overflow: min(x, 100) + x / 10` (src/lib.rs:-7, src/lib.rs:5)
@@ -79,9 +80,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes alone; the body: MIR changes
       docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price with a tax of 10 percent.`
-  ◆ f3 derived: deleted statement `use core::cmp::max;` at `shop::price/S1` [semantics · code equal]
+  transformations:
+  file `src/lib.rs`:
+  ◆ f4 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
+  item `shop::price`:
+  ◆ f3 same code (Semilla; R90.2-1, equal MIR): deleted statement `use core::cmp::max;` at `shop::price/S1` [semantics · code equal]
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
-  ◆ f4 derived: layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
   cover: each of the 6 changed line(s) is in a fact
   control flow: 3 bodies
     shop::fee (src/lib.rs:8): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `shop::fee::part`)
@@ -91,11 +95,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 3 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: changed item: `/// Gives one tenth. fn part(x: u32) -> u32 { x / 10 }` → `/// Gives one tenth. fn part(x: u32) -> u32 { x / 5 }` at `shop::fee/S0` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed item: `/// Gives one tenth. fn part(x: u32) -> u32 { x / 10 }` → `/// Gives one tenth. fn part(x: u32) -> u32 { x / 5 }` at `shop::fee/S0` [semantics · code different] · not stated
     lines: src/lib.rs:11, src/lib.rs:-13
-◆ f2 derived: changed expression `max(min(x, 100), 1)` → `min(x, 100)` at `shop::price/tail/lhs` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `max(min(x, 100), 1)` → `min(x, 100)` at `shop::price/tail/lhs` [semantics · code different] · not stated
     lines: src/lib.rs:5, src/lib.rs:-7
-◆ f3 derived: deleted statement `use core::cmp::max;` at `shop::price/S1` [semantics · code equal]
-    lines: src/lib.rs:-6
-◆ f4 derived: layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
+◆ f4 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
     lines: src/lib.rs:-4
+◆ f3 same code (Semilla; R90.2-1, equal MIR): deleted statement `use core::cmp::max;` at `shop::price/S1` [semantics · code equal]
+    lines: src/lib.rs:-6

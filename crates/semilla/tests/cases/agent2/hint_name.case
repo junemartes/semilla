@@ -119,17 +119,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       a name in a pattern matches only that name (`wrap`, `x`). For a variable, write `$wrap`, `$x`
       a fact that holds: `--same 'rewrite wrap($x) => wrap2($x)'` (2 site(s))
       no edit of the step has the old form or the new form; the old tree has the form `wrap(x)` at 0 place(s)
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::a` (src/lib.rs:30): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
     MIR changes with no claim: `depot::b` (src/lib.rs:31): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
-  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: changed path `wrap` → `wrap2` (f1)
       in: depot::a, depot::b
       lines: src/lib.rs:30-31, src/lib.rs:-30-31
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::a,depot::b=TEXT'; if it does not change, --same 'rewrite wrap => wrap2'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: 2 site(s): changed path `wrap` → `wrap2` [semantics · code equal]
+  transformations:
+  item `depot::a`:
+  ◆ f1 same code (Semilla; R90.2-1, equal MIR; 2 nodes): 2 site(s): changed path `wrap` → `wrap2` [semantics · code equal]
       in: depot::a, depot::b
       control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-30, src/lib.rs:30)
       control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-31, src/lib.rs:31)
@@ -144,5 +144,5 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f1 derived: 2 site(s): changed path `wrap` → `wrap2` [semantics · code equal]
+◆ f1 same code (Semilla; R90.2-1, equal MIR; 2 nodes): 2 site(s): changed path `wrap` → `wrap2` [semantics · code equal]
     lines: src/lib.rs:30-31, src/lib.rs:-30-31

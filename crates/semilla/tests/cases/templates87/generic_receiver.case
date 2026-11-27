@@ -16,16 +16,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::count` (src/lib.rs:2): the full compare: `#[same(depot::count)] fn count_same() {}`; a difference: `#[change(depot::count)] fn count_change(s_before: &before::depot::Shelf<u8>, s_after: &after::depot::Shelf<u8>) -> bool { … }` or `#[different(depot::count)] fn count_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed expression `s.items.len()` → `s.items.len() + 1` (f1)
       in: depot::count
       lines: src/lib.rs:2, src/lib.rs:-2
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::count=TEXT'; if it does not change, --same 'rewrite $a.len() => $a.len() + 1'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed expression `s.items.len()` → `s.items.len() + 1` at `depot::count/tail` [semantics · code different]
+  real edits:
+  item `depot::count`:
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `s.items.len()` → `s.items.len() + 1` at `depot::count/tail` [semantics · code different] · not stated
       affected bodies: depot::count
       control flow: + check `overflow: s.items.len() + 1` (src/lib.rs:2): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:2)
@@ -38,5 +38,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed expression `s.items.len()` → `s.items.len() + 1` at `depot::count/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `s.items.len()` → `s.items.len() + 1` at `depot::count/tail` [semantics · code different] · not stated
     lines: src/lib.rs:2, src/lib.rs:-2

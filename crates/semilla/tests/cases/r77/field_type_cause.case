@@ -27,21 +27,23 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::Bits::count` (src/lib.rs:4): a type of the signature changes (the type of `self` changes: `shop::Bits`: `items: Vec < u8 >` → `items: Vec < u16 >`, `lo: u8` → `lo: i8`): `#[same(shop::Bits::count)] fn count(this_before: &before::shop::Bits, this_after: &after::s… (188 characters more; `semilla expand --step 0` shows the full line) …ount_change() -> bool { … }` or `#[different(shop::Bits::count)] fn count_different() -> bool { … }`
     MIR changes with no claim: `shop::Bits::first` (src/lib.rs:5): a type of the signature changes (the type of `self` changes: `shop::Bits`: `items: Vec < u8 >` → `items: Vec < u16 >`, `lo: u8` → `lo: i8`): `#[same(shop::Bits::first)] fn first(this_before: &before::shop::Bits, this_after: &after::s… (188 characters more; `semilla expand --step 0` shows the full line) …irst_change() -> bool { … }` or `#[different(shop::Bits::first)] fn first_different() -> bool { … }`
-  declarations, filled in by Semilla:
-  ◆ f1 derived: type of `shop::Bits.items`: `Vec<u8>` → `Vec<u16>` (the public API can change: a different crate can use the item) [declaration · code different]
+  changed nodes: 2 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::Bits.items`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): type of `shop::Bits.items`: `Vec<u8>` → `Vec<u16>` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
       affected bodies: shop::Bits::count, shop::Bits::first
       through: `shop::Bits` (2 bodies), `shop::Bits.items` (2 bodies)
       ! public API: the compare does not cover the code of a different crate
-  ◆ f2 derived: type of `shop::Bits.lo`: `u8` → `i8` (the public API can change: a different crate can use the item) [declaration · code different]
+  item `shop::Bits.lo`:
+  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): type of `shop::Bits.lo`: `u8` → `i8` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
       affected bodies: shop::Bits::count, shop::Bits::first
       through: `shop::Bits` (2 bodies)
       ! public API: the compare does not cover the code of a different crate
-  other facts, filled in by Semilla:
-  ◆ f3 derived: the compiled code of `shop::Bits::first` changes with no edit at its place: `*x as u32` [indirect · code different]
+  item `shop::Bits::first`:
+  ◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::Bits::first` changes with no edit at its place: `*x as u32` [indirect · code different]
       affected bodies: shop::Bits::first
       note: lines 5; the cause: a changed definition that the body uses (f1, f2); the step changes no other input of the body
   cover: each of the 2 changed line(s) is in a fact
@@ -51,9 +53,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: type of `shop::Bits.items`: `Vec<u8>` → `Vec<u16>` (the public API can change: a different crate can use the item) [declaration · code different]
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): type of `shop::Bits.items`: `Vec<u8>` → `Vec<u16>` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
     lines: src/lib.rs:1, src/lib.rs:-1
-◆ f2 derived: type of `shop::Bits.lo`: `u8` → `i8` (the public API can change: a different crate can use the item) [declaration · code different]
+◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): type of `shop::Bits.lo`: `u8` → `i8` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
     lines: src/lib.rs:1, src/lib.rs:-1
-◆ f3 derived: the compiled code of `shop::Bits::first` changes with no edit at its place: `*x as u32` [indirect · code different]
+◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::Bits::first` changes with no edit at its place: `*x as u32` [indirect · code different]
     no position

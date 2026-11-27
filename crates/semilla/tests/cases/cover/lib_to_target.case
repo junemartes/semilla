@@ -66,7 +66,6 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 7 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 9 MIR changes with no claim
     MIR changes with no claim: `checks::one` (tests/checks.rs:4): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `checks::one::{closure#0} #[test]` (tests/checks.rs:3): the template of `checks::one` covers its item `depot (test "checks")::one`
@@ -77,8 +76,22 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::checks::one::{closure#0} #[test]` (src/checks.rs:-3): the template of `depot::checks::one` covers its item `depot::checks::one`
     MIR changes with no claim: `depot::checks::two` (src/checks.rs:10): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `depot::checks::two::{closure#0} #[test]` (src/checks.rs:-9): the template of `depot::checks::two` covers its item `depot::checks::two`
-  tests and benches, filled in by Semilla:
-  ◆ f3 derived: removed `depot::checks` [removed · code different]
+  changed nodes: 7 in 5 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot (test "checks")::one`:
+  ◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot (test "checks")::one` [added · code different] · not stated
+      affected bodies: depot (test "checks")::one
+      control flow: + graph of `checks::one`: 2 points, 1 arrow (semilla expand --step 0)
+      control flow: + graph of `checks::one::{closure#0} #[test]`: 4 points, 3 arrows (semilla expand --step 0)
+      expansion: `#[test]` at `depot (test "checks")::one` (tests/checks.rs:3): expansion added: makes `checks::test`, `checks::one`
+  item `depot (test "checks")::two`:
+  ◆ f5 add (Semilla; R90.2-3, a body of the new MIR only): added `depot (test "checks")::two` [added · code different] · not stated
+      affected bodies: depot (test "checks")::two
+      control flow: + graph of `checks::two`: 2 points, 1 arrow (semilla expand --step 0)
+      control flow: + graph of `checks::two::{closure#0} #[test]`: 4 points, 3 arrows (semilla expand --step 0)
+      expansion: `#[test]` at `depot (test "checks")::two` (tests/checks.rs:9): expansion added: makes `checks::test`, `checks::two`
+  item `depot::checks`:
+  ◆ f3 delete (Semilla; R90.2-3, a body of the old MIR only; 3 nodes): removed `depot::checks` [removed · code different] · not stated
       affected bodies: depot::checks::one, depot::checks::two
       control flow: − graph of `depot::checks::one`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: − graph of `depot::checks::one::{closure#0} #[test]`: 4 points, 3 arrows (semilla expand --step 0)
@@ -86,18 +99,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 1 more (semilla expand --step 0)
       expansion: `#[test]` at `depot::checks::one` (src/checks.rs:-3): expansion removed: made `depot::checks::test`, `depot::checks::one`
       expansion: `#[test]` at `depot::checks::two` (src/checks.rs:-9): expansion removed: made `depot::checks::test`, `depot::checks::two`
-  ◆ f4 derived: added `depot (test "checks")::one` [added · code different]
-      affected bodies: depot (test "checks")::one
-      control flow: + graph of `checks::one`: 2 points, 1 arrow (semilla expand --step 0)
-      control flow: + graph of `checks::one::{closure#0} #[test]`: 4 points, 3 arrows (semilla expand --step 0)
-      expansion: `#[test]` at `depot (test "checks")::one` (tests/checks.rs:3): expansion added: makes `checks::test`, `checks::one`
-  ◆ f5 derived: added `depot (test "checks")::two` [added · code different]
-      affected bodies: depot (test "checks")::two
-      control flow: + graph of `checks::two`: 2 points, 1 arrow (semilla expand --step 0)
-      control flow: + graph of `checks::two::{closure#0} #[test]`: 4 points, 3 arrows (semilla expand --step 0)
-      expansion: `#[test]` at `depot (test "checks")::two` (tests/checks.rs:9): expansion added: makes `checks::test`, `checks::two`
-  ◆ f1 derived: removed `use` line: `use crate::list::first;` in `depot::checks` [import · code equal]
-  ◆ f2 derived: added `use` line: `use depot::list::first;` in `depot (test "checks")` [import · code equal]
+  syntax only:
+  item `depot (test "checks")::use#0`:
+  ◆ f2 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `use` line: `use depot::list::first;` in `depot (test "checks")` [import · code equal]
+  item `depot::checks::use#0`:
+  ◆ f1 delete, syntax only (Semilla; R90.2-6, no MIR element; the matcher): removed `use` line: `use crate::list::first;` in `depot::checks` [import · code equal]
   cover: each of the 28 changed line(s) is in a fact
   control flow: 9 bodies
     checks::one (tests/checks.rs:4): graph added: 2 points, 1 arrow
@@ -121,13 +127,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! pair: `depot::checks::one` (removed) and `depot (test "checks")::one` (added) are 100% similar: they can be one item with a new place and a second change. Semilla does not derive one item: no name map of the step has this pair
   ! pair: `depot::checks::two` (removed) and `depot (test "checks")::two` (added) are 100% similar: they can be one item with a new place and a second change. Semilla does not derive one item: no name map of the step has this pair
 === positions
-◆ f3 derived: removed `depot::checks` [removed · code different]
-    lines: src/checks.rs:-3-13, src/lib.rs:-6-7
-◆ f4 derived: added `depot (test "checks")::one` [added · code different]
+◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot (test "checks")::one` [added · code different] · not stated
     lines: tests/checks.rs:3-8
-◆ f5 derived: added `depot (test "checks")::two` [added · code different]
+◆ f5 add (Semilla; R90.2-3, a body of the new MIR only): added `depot (test "checks")::two` [added · code different] · not stated
     lines: tests/checks.rs:9-13
-◆ f1 derived: removed `use` line: `use crate::list::first;` in `depot::checks` [import · code equal]
-    lines: src/checks.rs:-1-2
-◆ f2 derived: added `use` line: `use depot::list::first;` in `depot (test "checks")` [import · code equal]
+◆ f3 delete (Semilla; R90.2-3, a body of the old MIR only; 3 nodes): removed `depot::checks` [removed · code different] · not stated
+    lines: src/checks.rs:-3-13, src/lib.rs:-6-7
+◆ f2 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `use` line: `use depot::list::first;` in `depot (test "checks")` [import · code equal]
     lines: tests/checks.rs:1-2
+◆ f1 delete, syntax only (Semilla; R90.2-6, no MIR element; the matcher): removed `use` line: `use crate::list::first;` in `depot::checks` [import · code equal]
+    lines: src/checks.rs:-1-2

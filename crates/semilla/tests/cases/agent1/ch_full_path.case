@@ -59,18 +59,20 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 change: `depot::limit` "the limit is 20" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
       places: depot::limit/tail
-    ◆ f1 stated: changed literal `10` → `20` at `depot::limit/tail` [semantics · code different]
-        affected bodies: depot::limit
-        equivalence: MIR changes
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+      entries, in the list below: f1
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::limit` (src/lib.rs:11): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
-  not stated: 0 item(s)
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::limit`:
+  ◆ f1 replace (a1; R90.2-2, 1 changed MIR element): changed literal `10` → `20` at `depot::limit/tail` [semantics · code different]
+      affected bodies: depot::limit
+      equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     depot::limit (src/lib.rs:11): same graph (the edit keeps the control flow); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 stated: changed literal `10` → `20` at `depot::limit/tail` [semantics · code different]
+◆ f1 replace (a1; R90.2-2, 1 changed MIR element): changed literal `10` → `20` at `depot::limit/tail` [semantics · code different]
     lines: src/lib.rs:11, src/lib.rs:-11

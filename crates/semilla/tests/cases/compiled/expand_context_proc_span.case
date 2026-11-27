@@ -58,26 +58,30 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::two` (shop/src/lib.rs:7): no template: the check of the intent files stops before the templates: the compile of the facade `before` failed (error[E0463]: can't find crate for `depot` which `shop` depends on)
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 4 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: replace macro input `depot::here!(2)` → `depot::here!(3)` (f1)
       in: shop::two
       lines: shop/src/lib.rs:8, shop/src/lib.rs:-6
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::two=TEXT'; if it does not change, --same 'rewrite depot::here!(2) => depot::here!(3)'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: replace macro input `depot::here!(2)` → `depot::here!(3)` at `shop::two/tail` [macro · code different]
-      affected bodies: shop::two
-      equivalence: MIR changes
-      expansion: `depot::here!(3)` at `shop::two/tail` (shop/src/lib.rs:8): expansion changed: changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `6u32` → `8u32` at `expansion/elems[1]` [semantics]
-  ◆ f2 derived: the compiled code of `shop::one` changes with no edit at its place: `depot::here!(1)` [indirect · code different]
+  real edits:
+  file `shop/src/lib.rs`:
+  ◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `shop/src/lib.rs`: added `// The line of each call is in its value.` [docs · no code]
+  item `shop::one`:
+  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::one` changes with no edit at its place: `depot::here!(1)` [indirect · code different]
       affected bodies: shop::one
       expansion: `depot::here!(1)` at `shop::one/tail` (shop/src/lib.rs:4): expansion changed: only the context of the call changes: the line of the call (`depot::here!(1)`)
       note: lines 4
       ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'shop::one=…'
-  ◆ f3 derived: layout of `shop/src/lib.rs`: 1 changed line with equal tokens [layout · no code]
-  ◆ f4 derived: comment in `shop/src/lib.rs`: added `// The line of each call is in its value.` [docs · no code]
+  item `shop::two`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): replace macro input `depot::here!(2)` → `depot::here!(3)` at `shop::two/tail` [macro · code different] · not stated
+      affected bodies: shop::two
+      equivalence: MIR changes
+      expansion: `depot::here!(3)` at `shop::two/tail` (shop/src/lib.rs:8): expansion changed: changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `6u32` → `8u32` at `expansion/elems[1]` [semantics]
+  transformations:
+  file `shop/src/lib.rs`:
+  ◆ f3 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `shop/src/lib.rs`: 1 changed line with equal tokens [layout · no code]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     shop::two (shop/src/lib.rs:7): same graph (the edit keeps the control flow); MIR changes
@@ -88,11 +92,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'shop::one=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::one=the reason of the test'
-◆ f1 derived: replace macro input `depot::here!(2)` → `depot::here!(3)` at `shop::two/tail` [macro · code different]
-    lines: shop/src/lib.rs:8, shop/src/lib.rs:-6
-◆ f2 derived: the compiled code of `shop::one` changes with no edit at its place: `depot::here!(1)` [indirect · code different]
-    no position
-◆ f3 derived: layout of `shop/src/lib.rs`: 1 changed line with equal tokens [layout · no code]
-    lines: shop/src/lib.rs:2
-◆ f4 derived: comment in `shop/src/lib.rs`: added `// The line of each call is in its value.` [docs · no code]
+◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `shop/src/lib.rs`: added `// The line of each call is in its value.` [docs · no code]
     lines: shop/src/lib.rs:1
+◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiled code of `shop::one` changes with no edit at its place: `depot::here!(1)` [indirect · code different]
+    no position
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): replace macro input `depot::here!(2)` → `depot::here!(3)` at `shop::two/tail` [macro · code different] · not stated
+    lines: shop/src/lib.rs:8, shop/src/lib.rs:-6
+◆ f3 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `shop/src/lib.rs`: 1 changed line with equal tokens [layout · no code]
+    lines: shop/src/lib.rs:2

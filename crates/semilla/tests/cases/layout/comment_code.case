@@ -52,29 +52,31 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `depot::total` (src/lib.rs:6): the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `depot::total` (src/lib.rs:6): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: bool, b: &bool, v: &[u32]) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: deleted statement `for x in v { n += x; }` (f2)
       in: depot::total
       lines: src/lib.rs:-11
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  other facts, filled in by Semilla:
-  ◆ f2 derived: deleted statement `for x in v { n += x; }` at `depot::total/S4` [semantics · code different]
+  real edits:
+  item `depot::total`:
+  ◆ f2 delete (Semilla; R90.2-3, 9 removed MIR elements): deleted statement `for x in v { n += x; }` at `depot::total/S4` [semantics · code different] · not stated
       affected bodies: depot::total
       control flow: − for `v` (src/lib.rs:-11): done → return, next → call `<u32 as AddAssign<&u32>>::add_assign`
       control flow: − call `<u32 as AddAssign<&u32>>::add_assign` (src/lib.rs:-11): return → for `v`
       control flow: − arrow check `overflow: n += s.len() as u32` (src/lib.rs:-10) → for `v` (src/lib.rs:-11) (ok)
       equivalence: MIR changes
-  ◆ f1 derived: added comment `// for x in v { n += x; }` [docs · no code]
+  syntax only:
+  item `depot::total`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added comment `// for x in v { n += x; }` [docs · no code]
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     depot::total (src/lib.rs:6): graph changes: −1 call, −1 for, +1 arrow, −4 arrows; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 derived: deleted statement `for x in v { n += x; }` at `depot::total/S4` [semantics · code different]
+◆ f2 delete (Semilla; R90.2-3, 9 removed MIR elements): deleted statement `for x in v { n += x; }` at `depot::total/S4` [semantics · code different] · not stated
     lines: src/lib.rs:-11
-◆ f1 derived: added comment `// for x in v { n += x; }` [docs · no code]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added comment `// for x in v { n += x; }` [docs · no code]
     lines: src/lib.rs:11

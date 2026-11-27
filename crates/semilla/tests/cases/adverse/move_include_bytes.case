@@ -52,18 +52,19 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 0 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: source place of, see f2 (f2)
       in: depot::list
       lines: src/list.rs:-1-15, src/list/mod.rs:1-15
       to state it: --change 'depot::list=TEXT'
   to state them, add these options to the command of the step: --change 'depot::list=TEXT'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: src/list/raw.bin: added [file · code different]
+  real edits:
+  file `src/list/raw.bin`:
+  ◆ f1 add (Semilla; R90.3-2, a file edit (no tree)): src/list/raw.bin: added [file · code different]
       affected bodies: depot::list::RAW
       ✗ spotlight: a file that is not on the allow list of files that no tool reads to build or to test (docs, license texts, images); it needs a reason: --reason 'src/list/raw.bin:=…'
-  ◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 14 lines keep their tokens; the meaning of 1 node depends on the path of the file: `include_bytes!("raw.bin")` (`src/list/mod.rs:9`) [macro · no code]
+  item `depot::list`:
+  ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 14 lines keep their tokens; the meaning of 1 node depends on the path of the file: `include_bytes!("raw.bin")` (`src/list/mod.rs:9`) [macro · no code]
       expansion: `include_bytes!("raw.bin")` at `depot::list::RAW` (src/list/mod.rs:9): expansion changed: changed literal `b"abc"` → `b"xyz"` at `expansion` [semantics] (also the change of f1)
       docs of `depot::list`, no edit in this step (src/list/mod.rs:1-2):
           | //! Tools for lists.
@@ -77,7 +78,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'src/list/raw.bin:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/list/raw.bin:=the reason of the test' --change 'depot::list=the text of the test'
-◆ f2 stated: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 14 lines keep their tokens; the meaning of 1 node depends on the path of the file: `include_bytes!("raw.bin")` (`src/list/mod.rs:9`) [macro · no code]
-    lines: src/list.rs:-1-15, src/list/mod.rs:1-15
-◆ f1 derived: src/list/raw.bin: added [file · code different]
+◆ f1 add (Semilla; R90.3-2, a file edit (no tree)): src/list/raw.bin: added [file · code different]
     lines: src/list/raw.bin:1
+◆ f2 replace (a1; R90.3-2, no changed node (the fact of today)): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 14 lines keep their tokens; the meaning of 1 node depends on the path of the file: `include_bytes!("raw.bin")` (`src/list/mod.rs:9`) [macro · no code]
+    lines: src/list.rs:-1-15, src/list/mod.rs:1-15

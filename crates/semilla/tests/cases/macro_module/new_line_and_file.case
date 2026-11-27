@@ -36,15 +36,17 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::extra::more` (src/extra.rs:1): an added body: `#[new(depot::extra::more)] fn more_new() -> bool { let new = after::depot::extra::more(); true }`
-  new and removed items, filled in by Semilla:
-  ◆ f2 derived: added `depot::extra::more` [added · code different]
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::extra::more`:
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::extra::more` [added · code different] · not stated
       affected bodies: depot::extra::more
       control flow: + graph of `depot::extra::more`: 2 points, 1 arrow (semilla expand --step 0)
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro call `pick! { mod unix; }` → `pick! { mod unix; mod extra; }` (made: `mod unix`; makes: `mod unix`, `mod extra`) [declaration · code equal]
+  syntax only:
+  item `depot::pick!#0`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro call `pick! { mod unix; }` → `pick! { mod unix; mod extra; }` (made: `mod unix`; makes: `mod unix`, `mod extra`) [declaration · code equal]
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     depot::extra::more (src/extra.rs:1): graph added: 2 points, 1 arrow
@@ -52,7 +54,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! spotlight: module of a macro input: `depot::extra` (`src/extra.rs`) has its line `mod extra;` in the input of the macro call `depot::pick!#0` (`src/lib.rs:7`); Semilla does not expand the macro, so it does not know if the build has this module
 
 === positions
-◆ f2 derived: added `depot::extra::more` [added · code different]
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::extra::more` [added · code different] · not stated
     lines: src/extra.rs:1-3
-◆ f1 derived: changed macro call `pick! { mod unix; }` → `pick! { mod unix; mod extra; }` (made: `mod unix`; makes: `mod unix`, `mod extra`) [declaration · code equal]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro call `pick! { mod unix; }` → `pick! { mod unix; mod extra; }` (made: `mod unix`; makes: `mod unix`, `mod extra`) [declaration · code equal]
     lines: src/lib.rs:7

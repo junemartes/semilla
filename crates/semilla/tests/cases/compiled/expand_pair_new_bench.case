@@ -60,22 +60,25 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-  AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `extra::x` (benches/extra.rs:4): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `extra::x::{closure#0} #[test]` (benches/extra.rs:3): the template of `extra::x` covers its item `shop (bench "extra")::x`
     MIR changes with no claim: `extra::{test-harness-main}` (no place): no result of the equivalence check; no template: `extra` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro `base`: `macro_rules! base { () => { 1 } }` → `macro_rules! base { () => { 1 + 0 } }` [declaration · code different]
-      affected bodies: shop::one
-      expansion: `base!()` at `shop::one/tail` (src/lib.rs:3): expansion changed: changed expression `1` → `1 + 0` at `expansion` [semantics]
-  tests and benches, filled in by Semilla:
-  ◆ f3 derived: added `shop (bench "extra")::x` [added · code different]
+  changed nodes: 3 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop (bench "extra")::x`:
+  ◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `shop (bench "extra")::x` [added · code different] · not stated
       affected bodies: shop (bench "extra")::x
       control flow: + graph of `extra::x`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: + graph of `extra::x::{closure#0} #[test]`: 4 points, 3 arrows (semilla expand --step 0)
       expansion: `#[test]` at `shop (bench "extra")::x` (benches/extra.rs:3): expansion added: makes `extra::test`, `extra::x`
-  ◆ f2 derived: added macro `ck` [added · no code]
+  syntax only:
+  item `shop (bench "extra")::ck!`:
+  ◆ f2 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added macro `ck` [added · no code]
+  item `shop::base!`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `base`: `macro_rules! base { () => { 1 } }` → `macro_rules! base { () => { 1 + 0 } }` [declaration · code different]
+      affected bodies: shop::one
+      expansion: `base!()` at `shop::one/tail` (src/lib.rs:3): expansion changed: changed expression `1` → `1 + 0` at `expansion` [semantics]
   cover: each of the 8 changed line(s) is in a fact
   control flow: 3 bodies
     extra::x (benches/extra.rs:4): graph added: 2 points, 1 arrow
@@ -88,9 +91,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro `base`: `macro_rules! base { () => { 1 } }` → `macro_rules! base { () => { 1 + 0 } }` [declaration · code different]
-    lines: src/lib.rs:1, src/lib.rs:-1
-◆ f3 derived: added `shop (bench "extra")::x` [added · code different]
+◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `shop (bench "extra")::x` [added · code different] · not stated
     lines: benches/extra.rs:3-6
-◆ f2 derived: added macro `ck` [added · no code]
+◆ f2 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added macro `ck` [added · no code]
     lines: benches/extra.rs:1-2
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `base`: `macro_rules! base { () => { 1 } }` → `macro_rules! base { () => { 1 + 0 } }` [declaration · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1

@@ -30,9 +30,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 4 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  declarations, filled in by Semilla:
-  ◆ f1 derived: type `u32` → `u64` in 4 places: parameter `x` of `shop::cost`, return type of `shop::cost`, parameter `x` of `shop::price`, return type of `shop::price` (the public API can change: a different crate can use the item) [declaration · code different]
+  changed nodes: 4 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::cost`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 4 nodes): type `u32` → `u64` in 4 places: parameter `x` of `shop::cost`, return type of `shop::cost`, parameter `x` of `shop::price`, return type of `shop::price` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
       affected bodies: shop::cost, shop::price (with 1 other edit of this body)
       ! public API: the compare does not cover the code of a different crate
       docs of `shop::cost`, no edit in this step (src/lib.rs:3): `/// Gives the cost of a count below 2^32.`
@@ -43,5 +44,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 2 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: type `u32` → `u64` in 4 places: parameter `x` of `shop::cost`, return type of `shop::cost`, parameter `x` of `shop::price`, return type of `shop::price` (the public API can change: a different crate can use the item) [declaration · code different]
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 4 nodes): type `u32` → `u64` in 4 places: parameter `x` of `shop::cost`, return type of `shop::cost`, parameter `x` of `shop::price`, return type of `shop::price` (the public API can change: a different crate can use the item) [declaration · code different] · not stated
     lines: src/lib.rs:2, src/lib.rs:4, src/lib.rs:-2, src/lib.rs:-4

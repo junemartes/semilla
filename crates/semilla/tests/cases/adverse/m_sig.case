@@ -45,20 +45,22 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  declarations, filled in by Semilla:
-  ◆ f1 derived: where clause of `depot::list::larger` added: `where u32: Copy,` (the public API can change: a different crate can use the item) [declaration · code equal]
+  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::list::larger`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): where clause of `depot::list::larger` added: `where u32: Copy,` (the public API can change: a different crate can use the item) [declaration · code equal] · not stated
       ! public API: the compare does not cover the code of a different crate
       docs of `depot::list::larger`, no edit in this step (src/list/mod.rs:10): `/// The larger one.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  other facts, filled in by Semilla:
-  ◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move · no code]
+  transformations:
+  item `depot::list`:
+  ◆ f2 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move · no code]
   cover: each of the 28 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: where clause of `depot::list::larger` added: `where u32: Copy,` (the public API can change: a different crate can use the item) [declaration · code equal]
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): where clause of `depot::list::larger` added: `where u32: Copy,` (the public API can change: a different crate can use the item) [declaration · code equal] · not stated
     lines: src/list.rs:-11, src/list/mod.rs:11
-◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move · no code]
+◆ f2 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move · no code]
     lines: src/list.rs:-1-10, src/list.rs:-12-14, src/list/mod.rs:1-10, src/list/mod.rs:12-14

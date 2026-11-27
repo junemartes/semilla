@@ -33,9 +33,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro call `table!( 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, )` → `table!( 0, 1, 2, 3, 4, 9, 6, 7, 8, 9, )` (makes: `pub const TABLE`) [declaration · code different]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `shop::table!#0`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro call `table!( 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, )` → `table!( 0, 1, 2, 3, 4, 9, 6, 7, 8, 9, )` (makes: `pub const TABLE`) [declaration · code different]
       affected bodies: shop::TABLE
       expansion: `table!( 0, 1, 2, 3, 4, 9, 6, 7, 8, 9, )` at `shop::table!#0` (src/lib.rs:7): expansion changed: value of `shop::TABLE` changed: &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9] → &[0, 1, 2, 3, 4, 9, 6, 7, 8, 9] (the public API can change: a different crate can use the item) [semantics]
   cover: each of the 2 changed line(s) is in a fact
@@ -44,5 +45,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro call `table!( 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, )` → `table!( 0, 1, 2, 3, 4, 9, 6, 7, 8, 9, )` (makes: `pub const TABLE`) [declaration · code different]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro call `table!( 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, )` → `table!( 0, 1, 2, 3, 4, 9, 6, 7, 8, 9, )` (makes: `pub const TABLE`) [declaration · code different]
     lines: src/lib.rs:8, src/lib.rs:-8

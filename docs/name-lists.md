@@ -17,6 +17,7 @@ The decisions of batch 10n for each list of the audit are in design 65.3 and 65.
 | `crates/semilla-core/src/ops.rs` | `const RETIRED` | tool | the names of the claim operations that Semilla does not accept any more (its own options) |
 | `crates/semilla-core/src/report.rs` | `const CAUSES` | tool | the names of the evidence rules of Semilla (its own data) |
 | `crates/semilla-core/src/report.rs` | `const FILLED_GROUPS` | tool | the names of the groups of the report (its own data) |
+| `crates/semilla-core/src/report.rs` | `const ENTRY_SECTIONS` | tool | the names of the sections of the one list of the entries of design 90 (its own data) |
 | `crates/semilla-intent/src/lib.rs` | `fn cfg_expr "all"` | language | the operators of a `cfg` predicate (`all`, `any`, `not`) of the Rust reference; the option `cfg = "…"` of a claim (design 67) |
 | `crates/semilla-intent/src/heads.rs` | `const OPTIONS` | tool | the options of a claim attribute of the intent language (`cfg`, `reason`, `except`; the own data of Semilla: its language, design 78), for the fix of a wrong option name |
 | `crates/semilla-intent/src/prelude.rs` | `const EXCEPT` | tool | the observations of `except = […]` that the check of the intent language knows (the own data of Semilla: its language, design 67); each other name gives "claimed" (the safe side) |
@@ -65,6 +66,7 @@ The decisions of batch 10n for each list of the audit are in design 65.3 and 65.
 | `crates/semilla-verify/src/checks.rs` | `fn check_wrap_expression "call"` | tool | the kinds of the expression nodes of the syntax tree of Semilla |
 | `crates/semilla-verify/src/checks.rs` | `fn declares "fn"` | language | the item keywords of the Rust language |
 | `crates/semilla-verify/src/checks.rs` | `fn names_owner "crate"` | language | the path keywords of the Rust language (`crate`, `self`, `super`) |
+| `crates/semilla-verify/src/diffmap.rs` | `fn node_kind "body"` | tool | the parts of the facts of Semilla that are not the rename or the move of an item (a renamed local, a renamed parameter, a change of the compiled code with no edit; its own data, design 90) |
 | `crates/semilla-verify/src/facts.rs` | `const DOC_PAGE_KEYS` | tool | the keys of `doc(…)` of rustdoc that change only the doc pages |
 | `crates/semilla-verify/src/facts.rs` | `fn attribute_macro "derive"` | language | the attributes of the language that read the item and are no attribute macro (`derive`, `repr`, `cfg`, `cfg_attr`); each other name that is not a built-in attribute of the shared list (R65.4-1) can be an attribute macro (R65.9-2); with the name record, an attribute that the compiler keeps on the item (a derive helper, a tool attribute) is no macro (R70.2-1, part f) |
 | `crates/semilla-verify/src/facts.rs` | `fn is_fact_edit "struct"` | tool | the kinds of the item nodes of the syntax tree of Semilla |

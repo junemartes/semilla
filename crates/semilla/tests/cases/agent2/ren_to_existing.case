@@ -118,16 +118,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 same: rename wrap wrap2 (false: Semilla derives no rename `wrap` → `wrap2` from the syntax tree)
       the stated pair is no fact: the new tree has the item `depot::wrap` too
       Semilla sees: f1 changed path `wrap` → `wrap2` at `depot::a/tail/callee` [semantics]
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::a` (src/lib.rs:30): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed path `wrap` → `wrap2` (f1)
       in: depot::a
       lines: src/lib.rs:30, src/lib.rs:-30
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::a=TEXT'; if it does not change, --same 'rewrite wrap => wrap2'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed path `wrap` → `wrap2` at `depot::a/tail/callee` [semantics · code equal]
+  transformations:
+  item `depot::a`:
+  ◆ f1 same code (Semilla; R90.2-1, equal MIR): changed path `wrap` → `wrap2` at `depot::a/tail/callee` [semantics · code equal]
       control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-30, src/lib.rs:30)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
@@ -138,5 +138,5 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f1 derived: changed path `wrap` → `wrap2` at `depot::a/tail/callee` [semantics · code equal]
+◆ f1 same code (Semilla; R90.2-1, equal MIR): changed path `wrap` → `wrap2` at `depot::a/tail/callee` [semantics · code equal]
     lines: src/lib.rs:30, src/lib.rs:-30

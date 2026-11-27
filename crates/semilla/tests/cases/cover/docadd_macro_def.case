@@ -27,18 +27,18 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro `twice`: `macro_rules! twice { ($e:expr) => { $e * 2 }; }` → [1] [declaration · code equal]
+  changed nodes: 2 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::twice!`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `twice`: `macro_rules! twice { ($e:expr) => { $e * 2 }; }` → [1] [declaration · code equal]
         [1] /// The new doc. /// One more line. macro_rules! twice { ($e:expr) => { $e * 2 }; }
       docs of `depot::twice!`, added in this step: see f2
-  other facts, filled in by Semilla:
-  ◆ f2 derived: added docs `/// The new doc. /// One more line.` [docs · no code]
+  ◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added docs `/// The new doc. /// One more line.` [docs · no code]
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro `twice`: `macro_rules! twice { ($e:expr) => { $e * 2 }; }` → [1] [declaration · code equal]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `twice`: `macro_rules! twice { ($e:expr) => { $e * 2 }; }` → [1] [declaration · code equal]
     lines: src/lib.rs:5-6
-◆ f2 derived: added docs `/// The new doc. /// One more line.` [docs · no code]
+◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added docs `/// The new doc. /// One more line.` [docs · no code]
     lines: src/lib.rs:5-6

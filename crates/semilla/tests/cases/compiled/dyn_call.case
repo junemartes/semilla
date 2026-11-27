@@ -29,19 +29,19 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `depot::talk` (src/lib.rs:5): the full compare: `#[same(depot::talk)] fn talk_same() {}`; a difference: `#[change(depot::talk)] fn talk_change() -> bool { … }` or `#[different(depot::talk)] fn talk_different() -> bool { … }` [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
-  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `depot::talk` (src/lib.rs:5): the full compare: `#[same(depot::talk)] fn talk_same() {}`; a difference: `#[change(depot::talk)] fn talk_change() -> bool { … }` or `#[different(depot::talk)] fn talk_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: 2 different edits (f1, f2)
       in: depot::talk
       lines: src/lib.rs:6, src/lib.rs:-6
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::talk=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  other facts, filled in by Semilla:
-  ◆ f1 derived: deleted statement `7` at `depot::talk/tail` [semantics · code different]
+  real edits:
+  item `depot::talk`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `7` at `depot::talk/tail` [semantics · code different] · not stated
       affected bodies: depot::talk (with 1 other edit of this body)
       equivalence: MIR changes
-  ◆ f2 derived: added statement `s.speak()` at `depot::talk/tail` [semantics · code different]
+  ◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added statement `s.speak()` at `depot::talk/tail` [semantics · code different] · not stated
       affected bodies: depot::talk (with 1 other edit of this body)
       control flow: + call `s.speak` [dyn] (src/lib.rs:6): return → return
       control flow: + arrow entry (src/lib.rs:5) → call `s.speak` [dyn] (src/lib.rs:6)
@@ -52,7 +52,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: deleted statement `7` at `depot::talk/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `7` at `depot::talk/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-6
-◆ f2 derived: added statement `s.speak()` at `depot::talk/tail` [semantics · code different]
+◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added statement `s.speak()` at `depot::talk/tail` [semantics · code different] · not stated
     lines: src/lib.rs:6

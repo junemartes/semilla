@@ -52,16 +52,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `demo::part::go` (examples/demo/part.rs:1): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `1` → `2` (f1)
       in: depot (example "demo")::part::go
       lines: examples/demo/part.rs:2, examples/demo/part.rs:-2
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot (example "demo")::part::go=TEXT'; if it does not change, --same 'rewrite 1 => 2'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `1` → `2` at `depot (example "demo")::part::go/S0/init` [semantics · code different]
+  real edits:
+  item `depot (example "demo")::part::go`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot (example "demo")::part::go/S0/init` [semantics · code different] · not stated
       affected bodies: depot (example "demo")::part::go
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
@@ -70,5 +70,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed literal `1` → `2` at `depot (example "demo")::part::go/S0/init` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot (example "demo")::part::go/S0/init` [semantics · code different] · not stated
     lines: examples/demo/part.rs:2, examples/demo/part.rs:-2

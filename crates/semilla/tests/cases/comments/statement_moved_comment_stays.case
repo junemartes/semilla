@@ -28,21 +28,23 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:1): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
-  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: 2 different edits (f2, f1)
       in: shop::price
       lines: src/lib.rs:3, src/lib.rs:-4
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 4 => 8', and a `--same` fact (rename, move, or rewrite) that explains each other edit
-  other facts, filled in by Semilla:
-  ◆ f2 derived: changed literal `4` → `8` at `shop::price/S1/init/rhs` [semantics · code different]
+  real edits:
+  item `shop::price`:
+  ◆ f2 replace (Semilla; R90.2-2, 4 changed MIR elements): changed literal `4` → `8` at `shop::price/S1/init/rhs` [semantics · code different] · not stated
       affected bodies: shop::price
       equivalence: MIR changes alone; the body: MIR changes
       comment above line 3, no edit in this step (src/lib.rs:2): `// First get the tax.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  ◆ f1 derived: moved statement `let tax = x / 10;` from `shop::price/S0` to `shop::price/S1` [semantics · code equal]
+  transformations:
+  item `shop::price`:
+  ◆ f1 same code (Semilla; R90.2-1, equal MIR): moved statement `let tax = x / 10;` from `shop::price/S0` to `shop::price/S1` [semantics · code equal]
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
@@ -51,7 +53,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f2 derived: changed literal `4` → `8` at `shop::price/S1/init/rhs` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 4 changed MIR elements): changed literal `4` → `8` at `shop::price/S1/init/rhs` [semantics · code different] · not stated
     lines: src/lib.rs:3, src/lib.rs:-4
-◆ f1 derived: moved statement `let tax = x / 10;` from `shop::price/S0` to `shop::price/S1` [semantics · code equal]
+◆ f1 same code (Semilla; R90.2-1, equal MIR): moved statement `let tax = x / 10;` from `shop::price/S0` to `shop::price/S1` [semantics · code equal]
     lines: src/lib.rs:3, src/lib.rs:-4

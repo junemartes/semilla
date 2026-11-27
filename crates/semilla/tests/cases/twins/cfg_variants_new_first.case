@@ -41,9 +41,12 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: added `depot::sep#0` (the public API changes: a different crate can now use the item) [added · no compare]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 1 not mapped
+    n1 not mapped [R79.5-1]: added fn `depot::sep#0` (src/lib.rs:1): not mapped, syntax only in f1: `#[cfg(target_os = "none")]\npub fn sep() -> char {\n    '_'\n}`
+        no template: `depot::sep#0` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library); a claim on the items that it changes maps it
+  not mapped:
+  item `depot::sep#0`:
+  ◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added `depot::sep#0` (the public API changes: a different crate can now use the item) [added · no compare]
       ! public API: the compare does not cover the code of a different crate
       note: no compare: no checked configuration compiles `depot::sep#0`
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::sep#0`; inactive code: no checked configuration compiles the changed code (`#[cfg(target_os = "none")]` at src/lib.rs:1; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::sep#0=…'
@@ -54,5 +57,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::sep#0=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::sep#0=the reason of the test'
-◆ f1 derived: added `depot::sep#0` (the public API changes: a different crate can now use the item) [added · no compare]
+◆ f1 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added `depot::sep#0` (the public API changes: a different crate can now use the item) [added · no compare]
     lines: src/lib.rs:1-4

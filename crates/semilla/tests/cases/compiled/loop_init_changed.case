@@ -31,16 +31,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::acc` (src/lib.rs:1): the full compare: `#[same(shop::acc)] fn acc_same() {}`; a difference: `#[change(shop::acc)] fn acc_change(n: u32) -> bool { … }` or `#[different(shop::acc)] fn acc_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `0` → `1` (f1)
       in: shop::acc
       lines: src/lib.rs:3, src/lib.rs:-3
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::acc=TEXT'; if it does not change, --same 'rewrite 0 => 1'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `0` → `1` at `shop::acc/S1/init` [semantics · code different]
+  real edits:
+  item `shop::acc`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `shop::acc/S1/init` [semantics · code different] · not stated
       affected bodies: shop::acc
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
@@ -49,5 +49,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed literal `0` → `1` at `shop::acc/S1/init` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `shop::acc/S1/init` [semantics · code different] · not stated
     lines: src/lib.rs:3, src/lib.rs:-3

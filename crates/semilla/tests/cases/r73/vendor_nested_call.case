@@ -53,9 +53,10 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: vendor/depot/src/lib.rs: changed [file · code different]
+  changed nodes: 0 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  file `vendor/depot/src/lib.rs`:
+  ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): vendor/depot/src/lib.rs: changed [file · code different]
       affected bodies: shop::made
       expansion: `mkfn!(made, depot::add!(4; 5))` at `shop::mkfn!#0` (shop/src/lib.rs:3): expansion changed: changed operator `4 + 5` → `4 * 5` at `shop::made/tail` [semantics]
       expansion: `depot::add!(4; 5)` at `shop::mkfn!#0` (shop/src/lib.rs:3): expansion changed: changed operator `4 + 5` → `4 * 5` at `expansion` [semantics]
@@ -68,5 +69,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'vendor/depot/src/lib.rs:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'vendor/depot/src/lib.rs:=the reason of the test'
-◆ f1 derived: vendor/depot/src/lib.rs: changed [file · code different]
+◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): vendor/depot/src/lib.rs: changed [file · code different]
     lines: vendor/depot/src/lib.rs:2, vendor/depot/src/lib.rs:-2

@@ -27,9 +27,10 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: added `depot::extern C` [added · no code]
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::extern C`:
+  ◆ f1 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher; 2 nodes): added `depot::extern C` [added · no code]
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::extern C`; it needs a reason: --reason 'depot::extern C=…'
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
@@ -38,5 +39,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::extern C=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::extern C=the reason of the test'
-◆ f1 derived: added `depot::extern C` [added · no code]
+◆ f1 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher; 2 nodes): added `depot::extern C` [added · no code]
     lines: src/lib.rs:5-8

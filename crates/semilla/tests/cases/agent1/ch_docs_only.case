@@ -60,15 +60,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 change: `idle` "more" (false: the tag `change` does not agree with the edit that Semilla sees)
       Semilla sees only edits that keep the behavior in `depot::idle`:
           f1 changed docs `/// Gives three.` → `/// Gives the number three.` [docs]
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  not stated: 0 item(s)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed docs `/// Gives three.` → `/// Gives the number three.` [docs · no code]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::idle`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed docs `/// Gives three.` → `/// Gives the number three.` [docs · no code]
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f1 derived: changed docs `/// Gives three.` → `/// Gives the number three.` [docs · no code]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed docs `/// Gives three.` → `/// Gives the number three.` [docs · no code]
     lines: src/lib.rs:13, src/lib.rs:-13

@@ -256,15 +256,15 @@ fn each_template_of_a_body_with_no_claim_passes_the_check_of_the_intent_files() 
         let output = semilla_env(&repo, &["intent", "check", &path], &[]);
         assert!(output.status.success(), "{template}\n{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     }
-    // [R84.2-2] An item whose node the AST pass leaves with its own template (a step with an
-    // intent file that has no claim on the item): the line names the node and gives no second
-    // copy.
+    // [R84.2-2] An item with no claim (a step with an intent file that has no claim on the
+    // item): since design 90 the map gives the node of `grow` its kind from the MIR, so no
+    // request of the node names it, and the line of the body keeps its own template.
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/step.rs", "use semilla_intent::prelude::*;\n\n#[same(shop::half)]\nfn half_same() {}\n");
     let text = run(&repo, &["step", "the claim", "--intent", ".semilla/intent/step.rs"], 0);
     let line = cover_line(&text, "shop::grow");
-    assert!(line.contains("the claim template of the node n") && !line.contains("#[same(shop::grow)]"), "{line}\n{text}");
-    assert!(text.contains("template: #[same(shop::grow)]"), "{text}");
+    assert!(!line.contains("the claim template of the node n") && line.contains("`#[same(shop::grow)] fn grow_same() {}`"), "{line}\n{text}");
+    assert!(!text.contains("template: #[same(shop::grow)]"), "{text}");
     // The negative case: an item with no such node keeps its own template.
     assert!(cover_line(&text, "shop::tier").contains("`#[same(shop::tier)] fn tier_same() {}`"), "{text}");
 }

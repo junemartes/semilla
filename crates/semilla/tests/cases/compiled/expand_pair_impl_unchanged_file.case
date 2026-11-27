@@ -59,25 +59,26 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `shop::cost` (src/lib.rs:7): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
-  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `shop::cost` (src/lib.rs:7): the full compare: `#[same(shop::cost)] fn cost_same() {}`; a difference: `#[change(shop::cost)] fn cost_change() -> bool { … }` or `#[different(shop::cost)] fn cost_different() -> bool { … }`
+  changed nodes: 3 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: 2 different edits (f1, f2)
       in: shop::cost
       lines: src/lib.rs:7, src/lib.rs:-7
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::cost=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  declarations, filled in by Semilla:
-  ◆ f3 derived: changed macro `fee`: `macro_rules! fee { ($v:expr) => { $v + 1 } }` → `macro_rules! fee { ($v:expr) => { $v + 2 } }` [declaration · code different]
+  real edits:
+  item `shop::cost`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): deleted statement `fee!(5)` at `shop::cost/tail` [semantics · code different] · not stated
+      affected bodies: shop::cost (with 1 other edit of this body)
+      equivalence: MIR changes
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `5` at `shop::cost/tail` [semantics · code different] · not stated
+      affected bodies: shop::cost (with 1 other edit of this body)
+      equivalence: MIR changes
+  syntax only:
+  item `shop::fee!`:
+  ◆ f3 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `fee`: `macro_rules! fee { ($v:expr) => { $v + 1 } }` → `macro_rules! fee { ($v:expr) => { $v + 2 } }` [declaration · code different]
       affected bodies: shop::price
       expansion: `fee!(1)` at `shop::price/tail` (src/lib.rs:6): expansion changed: changed literal `1` → `2` at `expansion/rhs` [semantics]
-  other facts, filled in by Semilla:
-  ◆ f1 derived: deleted statement `fee!(5)` at `shop::cost/tail` [semantics · code different]
-      affected bodies: shop::cost (with 1 other edit of this body)
-      equivalence: MIR changes
-  ◆ f2 derived: added statement `5` at `shop::cost/tail` [semantics · code different]
-      affected bodies: shop::cost (with 1 other edit of this body)
-      equivalence: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     shop::cost (src/lib.rs:7): same graph (the edit keeps the control flow); MIR changes
@@ -87,9 +88,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f3 derived: changed macro `fee`: `macro_rules! fee { ($v:expr) => { $v + 1 } }` → `macro_rules! fee { ($v:expr) => { $v + 2 } }` [declaration · code different]
-    lines: src/lib.rs:1, src/lib.rs:-1
-◆ f1 derived: deleted statement `fee!(5)` at `shop::cost/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): deleted statement `fee!(5)` at `shop::cost/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-7
-◆ f2 derived: added statement `5` at `shop::cost/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `5` at `shop::cost/tail` [semantics · code different] · not stated
     lines: src/lib.rs:7
+◆ f3 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `fee`: `macro_rules! fee { ($v:expr) => { $v + 1 } }` → `macro_rules! fee { ($v:expr) => { $v + 2 } }` [declaration · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1

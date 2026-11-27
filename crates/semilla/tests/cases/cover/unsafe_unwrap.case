@@ -42,27 +42,31 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 2 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `depot::clear` (src/lib.rs:9): the full compare: `#[same(depot::clear)] fn clear_same() {}`; a difference: `#[change(depot::clear)] fn clear_change() -> bool { … }` or `#[different(depot::clear)] fn clear_different() -> bool { … }` [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
-  not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `depot::clear` (src/lib.rs:9): the full compare: `#[same(depot::clear)] fn clear_same() {}`; a difference: `#[change(depot::clear)] fn clear_change() -> bool { … }` or `#[different(depot::clear)] fn clear_different() -> bool { … }`
+  changed nodes: 4 in 4 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 3 places: 3 different edits (f3, f1, f4)
       in: depot::clear
       lines: src/lib.rs:10-13, src/lib.rs:-10-14
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::clear=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  other facts, filled in by Semilla:
-  ◆ f4 derived: added `unsafe` `unsafe { *p = 0 }` at `depot::clear/S0/then/S0` [semantics · code different]
+  real edits:
+  item `depot::clear`:
+  ◆ f4 add (Semilla; R90.2-3, 1 new MIR element): added `unsafe` `unsafe { *p = 0 }` at `depot::clear/S0/then/S0` [semantics · code different] · not stated
       affected bodies: depot::clear
       equivalence: no result alone (the body has 3 edits; an edit of the fact adds or removes a node); the body: MIR changes (the same line for f3)
       ! unsafe code: the changed body has an `unsafe` block
       comment above line 12, added in this step: see f2
-  ◆ f1 derived: moved statement `if *live { *p = 0; *live = false; }` from `depot::clear/S0/body/S0` to `depot::clear/S0` (a pair by similarity (0.83)) [semantics · code equal]
+  transformations:
+  item `depot::clear`:
+  ◆ f1 same code (Semilla; R90.2-1, equal MIR): moved statement `if *live { *p = 0; *live = false; }` from `depot::clear/S0/body/S0` to `depot::clear/S0` (a pair by similarity (0.83)) [semantics · code equal]
       equivalence: MIR changes alone; the body: MIR changes
       ! unsafe code: the changed body has an `unsafe` block
-  ◆ f3 derived: deleted statement `unsafe { if *live { *p = 0; *live = false; } }` (each inner statement is a moved statement of the body) at `depot::clear/S0` [semantics · code equal]
+  ◆ f3 same code (Semilla; R90.2-1, equal MIR): deleted statement `unsafe { if *live { *p = 0; *live = false; } }` (each inner statement is a moved statement of the body) at `depot::clear/S0` [semantics · code equal]
       equivalence: the same line as f4
       ! unsafe code: the changed body has an `unsafe` block
-  ◆ f2 derived: added comment `// SAFETY: the pointer is valid.` [docs · no code]
+  syntax only:
+  item `depot::clear`:
+  ◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added comment `// SAFETY: the pointer is valid.` [docs · no code]
   cover: each of the 9 changed line(s) is in a fact
   control flow: 1 body
     depot::clear (src/lib.rs:9): same graph (the edit keeps the control flow); MIR changes
@@ -71,11 +75,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! spotlight: unsafe code: depot::clear/S0/then/S0
 
 === positions
-◆ f4 derived: added `unsafe` `unsafe { *p = 0 }` at `depot::clear/S0/then/S0` [semantics · code different]
+◆ f4 add (Semilla; R90.2-3, 1 new MIR element): added `unsafe` `unsafe { *p = 0 }` at `depot::clear/S0/then/S0` [semantics · code different] · not stated
     lines: src/lib.rs:12
-◆ f1 derived: moved statement `if *live { *p = 0; *live = false; }` from `depot::clear/S0/body/S0` to `depot::clear/S0` (a pair by similarity (0.83)) [semantics · code equal]
+◆ f1 same code (Semilla; R90.2-1, equal MIR): moved statement `if *live { *p = 0; *live = false; }` from `depot::clear/S0/body/S0` to `depot::clear/S0` (a pair by similarity (0.83)) [semantics · code equal]
     lines: src/lib.rs:10-13, src/lib.rs:-10-14
-◆ f3 derived: deleted statement `unsafe { if *live { *p = 0; *live = false; } }` (each inner statement is a moved statement of the body) at `depot::clear/S0` [semantics · code equal]
+◆ f3 same code (Semilla; R90.2-1, equal MIR): deleted statement `unsafe { if *live { *p = 0; *live = false; } }` (each inner statement is a moved statement of the body) at `depot::clear/S0` [semantics · code equal]
     lines: src/lib.rs:-10-14
-◆ f2 derived: added comment `// SAFETY: the pointer is valid.` [docs · no code]
+◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added comment `// SAFETY: the pointer is valid.` [docs · no code]
     lines: src/lib.rs:11

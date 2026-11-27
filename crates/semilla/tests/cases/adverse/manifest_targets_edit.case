@@ -58,18 +58,18 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `list::first` (checks/list_checks.rs:2): the same MIR text; a changed callee: `list::first::{closure#0}`; no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `list::first::{closure#0} #[test]` (checks/list_checks.rs:1): the same MIR text; a changed callee: `list::first`, `list::first::{closure#0}`; the template of `list::first` covers its item `depot (test "list")::first`
     MIR changes with no claim: `tool::main` (cmd/tool.rs:1): no template: the item is in a binary target, and the intent crate links the libraries only (design 78)
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 3 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `1` → `2` (f1)
       in: depot (bin "tool")::main
       lines: checks/list_checks.rs:3, checks/list_checks.rs:-3, cmd/tool.rs:2, cmd/tool.rs:-2
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot (bin "tool")::main=TEXT'; if it does not change, --same 'rewrite 1 => 2'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: 3 site(s): changed literal `1` → `2` [semantics · code different]
+  real edits:
+  item `depot (bin "tool")::main`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 3 nodes): 3 site(s): changed literal `1` → `2` [semantics · code different] · not stated
       in: depot (bin "tool")::main, depot (test "list")::first (2)
       affected bodies: depot (bin "tool")::main, depot (test "list")::first
       equivalence: `list::first`: MIR changes: the same MIR text; a changed callee: `list::first::{closure#0}`
@@ -86,5 +86,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: 3 site(s): changed literal `1` → `2` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 3 nodes): 3 site(s): changed literal `1` → `2` [semantics · code different] · not stated
     lines: checks/list_checks.rs:3, checks/list_checks.rs:-3, cmd/tool.rs:2, cmd/tool.rs:-2

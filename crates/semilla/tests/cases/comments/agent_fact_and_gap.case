@@ -4,8 +4,8 @@ option: shop::price=the tax is 20 percent
 same_facts_as_no_option: yes
 rule+: R58.6-2 R58.10-1
 rule-: R58.6-2
-must_match: stated: changed literal `10` → `5` .*\n(.*\n)*\s+docs of `shop::price`, no edit in this step
-must_match: derived: changed literal `1` → `2` .*\n(.*\n)*\s+docs of `shop::count`, no edit in this step
+must_match: \(a1; [^\n]*\): changed literal `10` → `5` .*\n(.*\n)*\s+docs of `shop::price`, no edit in this step
+must_match: \(Semilla; [^\n]*\): changed literal `1` → `2` .*\n(.*\n)*\s+docs of `shop::count`, no edit in this step
 must_not_match: (?m)^\s+\? .*\n(\s+(in|lines|to state it): .*\n)*\s+(docs|comment) 
 must_match: comments: 2 comment
 === both Cargo.toml
@@ -40,27 +40,29 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 change: `shop::price` "the tax is 20 percent" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
       places: shop::price/tail/rhs/rhs
-    ◆ f2 stated: changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different]
-        affected bodies: shop::price
-        control flow: ~ check `overflow: x + x / 10` → `overflow: x + x / 5` (src/lib.rs:-3, src/lib.rs:3)
-        equivalence: MIR changes
-        docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price with a tax of 10 percent.`
-        note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+      entries, in the list below: f2
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::count` (src/lib.rs:6): the full compare: `#[same(shop::count)] fn count_same() {}`; a difference: `#[change(shop::count)] fn count_change(x: u32) -> bool { … }` or `#[different(shop::count)] fn count_different() -> bool { … }`
     MIR changes with no claim: `shop::price` (src/lib.rs:2): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 2 entries; 2 real edits (1 stated by the agent); 0 not mapped
   ? 1 place: changed literal `1` → `2` (f1)
       in: shop::count
       lines: src/lib.rs:7, src/lib.rs:-7
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::count=TEXT'; if it does not change, --same 'rewrite 1 => 2'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `1` → `2` at `shop::count/tail/rhs` [semantics · code different]
+  real edits:
+  item `shop::count`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::count/tail/rhs` [semantics · code different] · not stated
       affected bodies: shop::count
       control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-7, src/lib.rs:7)
       equivalence: MIR changes
       docs of `shop::count`, no edit in this step (src/lib.rs:5): `/// Gives the count plus 1.`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  item `shop::price`:
+  ◆ f2 replace (a1; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different]
+      affected bodies: shop::price
+      control flow: ~ check `overflow: x + x / 10` → `overflow: x + x / 5` (src/lib.rs:-3, src/lib.rs:3)
+      equivalence: MIR changes
+      docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price with a tax of 10 percent.`
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
     shop::count (src/lib.rs:6): same structure: 1 changed check; MIR changes
@@ -69,7 +71,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   comments: 2 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f2 stated: changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different]
-    lines: src/lib.rs:3, src/lib.rs:-3
-◆ f1 derived: changed literal `1` → `2` at `shop::count/tail/rhs` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::count/tail/rhs` [semantics · code different] · not stated
     lines: src/lib.rs:7, src/lib.rs:-7
+◆ f2 replace (a1; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-3

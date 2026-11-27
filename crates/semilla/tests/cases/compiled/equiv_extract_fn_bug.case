@@ -27,27 +27,27 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::cost` (src/lib.rs:5): the full compare: `#[same(shop::cost)] fn cost_same() {}`; a difference: `#[change(shop::cost)] fn cost_change(w: u32) -> bool { … }` or `#[different(shop::cost)] fn cost_different() -> bool { … }`
-    MIR changes with no claim: `shop::ship` (src/lib.rs:1): an added body: the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `shop::ship` (src/lib.rs:1): an added body: `#[new(shop::ship)] fn ship_new(w: u32) -> bool { let new = after::shop::ship(w); true }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` (f1)
       in: shop::cost
       lines: src/lib.rs:6, src/lib.rs:-2
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::cost=TEXT'; if it does not change, --same 'rewrite if $a > 10 { 15 } else { 5 } => ship($a)'
-  new and removed items, filled in by Semilla:
-  ◆ f2 derived: added `shop::ship` [added · code different]
-      affected bodies: shop::ship
-      control flow: + graph of `shop::ship`: 3 points, 3 arrows (semilla expand --step 0)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `shop::cost/S0/init` [semantics · code different]
+  real edits:
+  item `shop::cost`:
+  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `shop::cost/S0/init` [semantics · code different] · not stated
       affected bodies: shop::cost
       control flow: + call `ship` (src/lib.rs:6): return → check `overflow: base + 1`
       control flow: − branch `w > 10` (src/lib.rs:-2): false → check `overflow: base + 1`, true → check `overflow: base + 1`
       control flow: + arrow entry (src/lib.rs:5) → call `ship` (src/lib.rs:6)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
+  item `shop::ship`:
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::ship` [added · code different] · not stated
+      affected bodies: shop::ship
+      control flow: + graph of `shop::ship`: 3 points, 3 arrows (semilla expand --step 0)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
     shop::cost (src/lib.rs:5): graph changes: +1 call, −1 branch, +2 arrows, −3 arrows; MIR changes
@@ -55,7 +55,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 derived: added `shop::ship` [added · code different]
-    lines: src/lib.rs:1-4
-◆ f1 derived: changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `shop::cost/S0/init` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `shop::cost/S0/init` [semantics · code different] · not stated
     lines: src/lib.rs:6, src/lib.rs:-2
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::ship` [added · code different] · not stated
+    lines: src/lib.rs:1-4

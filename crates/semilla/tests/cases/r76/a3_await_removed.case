@@ -32,28 +32,28 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 3 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
-    MIR changes with no claim: `shop::total` (src/lib.rs:5): the same MIR text; a changed callee: `shop::total::{closure#0}`; the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(a: u32) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }` [the AST map: 3 node(s) of its item not mapped (complete the intent file)]
-    MIR changes with no claim: `shop::total::{closure#0} { let v = get(a).await; v }` (src/lib.rs:5): the template of `shop::total` covers its item `shop::total` [the AST map: 3 node(s) of its item not mapped (complete the intent file)]
-  not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `shop::total` (src/lib.rs:5): the same MIR text; a changed callee: `shop::total::{closure#0}`; the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(a: u32) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
+    MIR changes with no claim: `shop::total::{closure#0} { let v = get(a).await; v }` (src/lib.rs:5): the template of `shop::total` covers its item `shop::total`
+  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
   ? 3 places: 3 different edits (f1, f2, f3)
       in: shop::total
       lines: src/lib.rs:7, src/lib.rs:-7-8
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  other facts, filled in by Semilla:
-  ◆ f1 derived: deleted statement `let w = get(v).await;` at `shop::total/S1` [semantics · code different]
+  real edits:
+  item `shop::total`:
+  ◆ f1 delete (Semilla; R90.2-3, 12 removed MIR elements): deleted statement `let w = get(v).await;` at `shop::total/S1` [semantics · code different] · not stated
       affected bodies: shop::total (with 2 other edits of this body)
       control flow: − call `get` (src/lib.rs:-7): return → await `get(v).await`
       control flow: − await `get(v).await` (src/lib.rs:-7): done → return
       control flow: − arrow await `get(a).await` (src/lib.rs:-6) → call `get` (src/lib.rs:-7) (done)
       equivalence: `shop::total`: MIR changes: the same MIR text; a changed callee: `shop::total::{closure#0}`
       equivalence: `shop::total::{closure#0} { let v = get(a).await; v }`: MIR changes
-  ◆ f2 derived: added statement `v` at `shop::total/tail` [semantics · code different]
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added statement `v` at `shop::total/tail` [semantics · code different] · not stated
       affected bodies: shop::total (with 2 other edits of this body)
       equivalence: `shop::total`: MIR changes: the same MIR text; a changed callee: `shop::total::{closure#0}`
       equivalence: `shop::total::{closure#0} { let v = get(a).await; v }`: MIR changes
-  ◆ f3 derived: deleted statement `w` at `shop::total/tail` [semantics · code different]
+  ◆ f3 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `w` at `shop::total/tail` [semantics · code different] · not stated
       affected bodies: shop::total (with 2 other edits of this body)
       equivalence: `shop::total`: MIR changes: the same MIR text; a changed callee: `shop::total::{closure#0}`
       equivalence: `shop::total::{closure#0} { let v = get(a).await; v }`: MIR changes
@@ -64,9 +64,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: deleted statement `let w = get(v).await;` at `shop::total/S1` [semantics · code different]
+◆ f1 delete (Semilla; R90.2-3, 12 removed MIR elements): deleted statement `let w = get(v).await;` at `shop::total/S1` [semantics · code different] · not stated
     lines: src/lib.rs:-7
-◆ f2 derived: added statement `v` at `shop::total/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added statement `v` at `shop::total/tail` [semantics · code different] · not stated
     lines: src/lib.rs:7
-◆ f3 derived: deleted statement `w` at `shop::total/tail` [semantics · code different]
+◆ f3 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `w` at `shop::total/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-8

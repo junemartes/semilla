@@ -95,30 +95,32 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::Tool::grow` (src/lib.rs:34): the full compare: `#[same(depot::Tool::grow)] fn grow_same() {}`; a difference: `#[change(depot::Tool::grow)] fn grow_change(mut this_before: before::depot::Tool, mut this_after: after::depot::Tool, by: u32) -> bool { … }` or `#[different(depot::Tool::grow)] fn grow_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed expression `by` → `by + 1` (f1)
       in: depot::Tool::grow
       lines: src/lib.rs:24, src/lib.rs:26-27, src/lib.rs:32-42, src/lib.rs:-2-3, src/lib.rs:-8-19
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::Tool::grow=TEXT'; if it does not change, --same 'rewrite by => by + 1'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics · code different]
+  real edits:
+  item `depot::Tool::grow`:
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics · code different] · not stated
       affected bodies: depot::Tool::grow
       control flow: + check `overflow: by + 1` (src/lib.rs:38): ok → check `overflow: self.n += by + 1`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:38)
       control flow: ~ check `overflow: self.n += by` → `overflow: self.n += by + 1` (src/lib.rs:-14, src/lib.rs:38)
       control flow: … 2 more (semilla expand --step 0)
       equivalence: MIR changes
-  ◆ f2 derived: layout of `src/lib.rs`: 8 changed lines with equal tokens; 2 changed lines of 1 item with equal tokens at a new place [layout · no code]
+  transformations:
+  file `src/lib.rs`:
+  ◆ f2 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 8 changed lines with equal tokens; 2 changed lines of 1 item with equal tokens at a new place [layout · no code]
   cover: each of the 38 changed line(s) is in a fact
   control flow: 1 body
     depot::Tool::grow (src/lib.rs:34): graph changes: +1 check, +1 panic, 1 changed check, +3 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics · code different] · not stated
     lines: src/lib.rs:24, src/lib.rs:26-27, src/lib.rs:32-42, src/lib.rs:-2-3, src/lib.rs:-8-19
-◆ f2 derived: layout of `src/lib.rs`: 8 changed lines with equal tokens; 2 changed lines of 1 item with equal tokens at a new place [layout · no code]
+◆ f2 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 8 changed lines with equal tokens; 2 changed lines of 1 item with equal tokens at a new place [layout · no code]
     lines: src/lib.rs:25, src/lib.rs:28-31, src/lib.rs:-1, src/lib.rs:-4-7

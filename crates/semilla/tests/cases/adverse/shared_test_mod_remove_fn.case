@@ -52,16 +52,18 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `a::common::extra` (tests/common/mod.rs:6): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `b::common::extra` (tests/common/mod.rs:6): the template of `a::common::extra` covers its item `depot (test "a")::common::extra`
-  tests and benches, filled in by Semilla:
-  ◆ f1 derived: removed `depot (test "a")::common::extra` [removed · code different]
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot (test "a")::common::extra`:
+  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "a")::common::extra` [removed · code different] · not stated
       affected bodies: depot (test "a")::common::extra
       control flow: − graph of `a::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: − graph of `b::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
-  ◆ f2 derived: removed `depot (test "b")::common::extra` [removed · code different]
+  item `depot (test "b")::common::extra`:
+  ◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "b")::common::extra` [removed · code different] · not stated
       affected bodies: depot (test "a")::common::extra
       control flow: − graph of `a::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: − graph of `b::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
@@ -73,7 +75,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! spotlight: inactive code: depot (test "b")::common::extra (no checked configuration compiles `depot (test "b")::common::extra`)
 
 === positions
-◆ f1 derived: removed `depot (test "a")::common::extra` [removed · code different]
+◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "a")::common::extra` [removed · code different] · not stated
     lines: tests/common/mod.rs:-5-6
-◆ f2 derived: removed `depot (test "b")::common::extra` [removed · code different]
+◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "b")::common::extra` [removed · code different] · not stated
     lines: tests/common/mod.rs:-6

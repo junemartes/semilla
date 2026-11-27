@@ -116,13 +116,84 @@ pub(crate) fn change_facts(files: &[IntentFile]) -> Vec<String> {
     let Ok(parsed) = parse_files(files) else { return Vec::new() };
     let mut out = Vec::new();
     for file in &parsed {
+        // [R90.4-1] A claim with a reason is one fact of its items, with the reason as its
+        // sentence: the form of `--change 'ITEM[,ITEM]=TEXT'`.
+        let mut grouped: Vec<(String, String, Vec<String>)> = Vec::new();
         for claim in file.claims().filter(|claim| claim.kind == ClaimKind::Change) {
-            for target in &claim.targets {
-                out.push(format!("{}=the claim `fn {}` of the intent file `{}`", target.name(), claim.func.name, file.path));
+            match &claim.options.reason {
+                Some(reason) => {
+                    let names: Vec<String> = claim.targets.iter().map(|target| target.name()).collect();
+                    match grouped.iter_mut().find(|(func, text, _)| *func == claim.func.name && text == reason) {
+                        Some((_, _, items)) => items.extend(names),
+                        None => grouped.push((claim.func.name.clone(), reason.clone(), names)),
+                    }
+                }
+                None => {
+                    for target in &claim.targets {
+                        out.push(format!("{}=the claim `fn {}` of the intent file `{}`", target.name(), claim.func.name, file.path));
+                    }
+                }
             }
         }
+        out.extend(grouped.into_iter().map(|(_, reason, items)| format!("{}={reason}", items.join(","))));
     }
     out
+}
+
+/// [R90.4-1] The path of the statements that Semilla makes from the options of a step.
+pub const OPTIONS_PATH: &str = "options.rs";
+
+/// [R90.4-1] The intent statement with the meaning of an option of a step (design 90): `--same
+/// 'rename A B'` is `#[rename(before::A, after::B)]`, `--same 'move A B'` is
+/// `#[moved(before::A, after::B)]`, `--same 'rewrite FROM => TO'` is `#[rewrite("FROM", "TO")]`,
+/// and `--change 'A,B=TEXT'` is `#[change(A, B, reason = "TEXT")] fn statement() -> bool { true }`.
+/// `None`: the option has no
+/// form of a statement (its check gives the error of today).
+pub fn option_statement(kind: &str, text: &str) -> Option<String> {
+    let quoted = |text: &str| format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""));
+    // A `change` claim is a property: its body is the expression `true` (the option states no
+    // property; the statement of an option is not a claim for the proof).
+    let body = if kind == "change" { " -> bool { true }" } else { " {}" };
+    let head = match kind {
+        "same" => {
+            let (op, rest) = text.trim().split_once(' ')?;
+            match op {
+                "rename" | "move" => {
+                    let (from, to) = rest.trim().split_once(' ')?;
+                    let word = if op == "rename" { "rename" } else { "moved" };
+                    format!("#[{word}(before::{}, after::{})]", from.trim(), to.trim())
+                }
+                "rewrite" => {
+                    let (from, to) = rest.split_once(" => ")?;
+                    format!("#[rewrite({}, {})]", quoted(from.trim()), quoted(to.trim()))
+                }
+                _ => return None,
+            }
+        }
+        "change" => {
+            let (items, sentence) = text.split_once('=')?;
+            let items: Vec<&str> = items.split(',').map(str::trim).collect();
+            format!("#[change({}, reason = {})]", items.join(", "), quoted(sentence))
+        }
+        _ => return None,
+    };
+    Some(format!("{head}\nfn statement(){body}\n"))
+}
+
+/// [R90.4-1] The fact of the agent of an option, read on the path of the intent files: Semilla
+/// makes the statement of the option (`option_statement`) and reads it with the reader of a
+/// statement of an intent file. The second value is false when the option has no statement that
+/// gives the option again (a path that the parser of the intent language does not read): the
+/// option keeps its text, so its check and its error message stay.
+pub fn read_option(kind: &str, text: &str) -> (String, bool) {
+    let Some(statement) = option_statement(kind, text) else { return (text.to_string(), false) };
+    let file = IntentFile { path: OPTIONS_PATH.into(), text: statement };
+    let found = if kind == "same" { same_facts(std::slice::from_ref(&file)) } else { change_facts(std::slice::from_ref(&file)) };
+    let same = |a: &str, b: &str| a.split_whitespace().eq(b.split_whitespace());
+    match found.as_slice() {
+        [one] if same(one, text) => (one.clone(), true),
+        _ => (text.to_string(), false),
+    }
 }
 
 /// The options of a claim, as the result line shows them.
@@ -741,9 +812,8 @@ pub fn semantic_lines(step: &semilla_core::StepReport, limit: Option<usize>) -> 
         // output has its coverage line; the full text lists each node.
         let Some(map) = &step.ast else { return Vec::new() };
         if limit.is_some() {
-            let mut lines = vec![format!("  {} (no intent file; the full text of the step lists each node)", map.line())];
-            lines.extend(cover_lines(step, limit, "  "));
-            return lines;
+            // [R90.5-3] The coverage line of the map is the line of the gap list (design 90).
+            return cover_lines(step, limit, "  ");
         }
         let mut lines = vec!["  semantic changes (no intent file: the map of the AST pass and the equal-MIR check):".to_string()];
         lines.extend(crate::astmap::lines(map, None, step.step));

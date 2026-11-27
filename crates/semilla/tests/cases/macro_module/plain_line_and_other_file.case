@@ -39,20 +39,21 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::unix::open` (src/unix.rs:1): the full compare: `#[same(depot::unix::open)] fn open_same() {}`; a difference: `#[change(depot::unix::open)] fn open_change() -> bool { … }` or `#[different(depot::unix::open)] fn open_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `3` → `4` (f2)
       in: depot::unix::open
       lines: src/unix.rs:2, src/unix.rs:-2
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::unix::open=TEXT'; if it does not change, --same 'rewrite 3 => 4'
-  other facts, filled in by Semilla:
-  ◆ f2 derived: changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different]
+  real edits:
+  file `src/other.rs`:
+  ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): src/other.rs: changed [file · no code]
+      ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/other.rs:=…'
+  item `depot::unix::open`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different] · not stated
       affected bodies: depot::unix::open
       equivalence: MIR changes
-  ◆ f1 derived: src/other.rs: changed [file · no code]
-      ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/other.rs:=…'
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     depot::unix::open (src/unix.rs:1): same graph (the edit keeps the control flow); MIR changes
@@ -60,7 +61,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'src/other.rs:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/other.rs:=the reason of the test'
-◆ f2 derived: changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different]
-    lines: src/unix.rs:2, src/unix.rs:-2
-◆ f1 derived: src/other.rs: changed [file · no code]
+◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): src/other.rs: changed [file · no code]
     lines: src/other.rs:2, src/other.rs:-2
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different] · not stated
+    lines: src/unix.rs:2, src/unix.rs:-2

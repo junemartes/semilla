@@ -13,6 +13,7 @@
 
 pub mod agent;
 pub mod astmap;
+pub mod diffmap;
 pub mod cfgcond;
 mod comments;
 pub mod checks;
@@ -186,6 +187,10 @@ pub struct MirDiff {
     pub own: Vec<(usize, Sym)>,
     /// True for a body that rustc evaluates at compile time: a constant or a static (design 44).
     pub evaluated: bool,
+    /// [R90.1-1] The token ranges of the pairs of elements that differ (old, new), inside one
+    /// aligned region (design 90). An element that differs and is in no pair is new or
+    /// removed code.
+    pub changed: Vec<(MirPlace, MirPlace)>,
 }
 
 /// One compile unit of a checked build, from the record of the compiler (batch 5t, part A).
@@ -805,6 +810,11 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
             *change = format!("{}={text}", items.split(',').map(macro_call_key).collect::<Vec<_>>().join(","));
         }
     }
+    // [R90.4-1] One path for the statements of the agent (design 90): each option is a short
+    // form of an intent statement. Semilla makes the statement and reads it with the reader of
+    // the statements of the intent files.
+    step.agent.same = std::mem::take(&mut step.agent.same).iter().map(|text| intent::read_option("same", text).0).collect();
+    step.agent.change = std::mem::take(&mut step.agent.change).iter().map(|text| intent::read_option("change", text).0).collect();
     // Design 67: a claim of the forms of `--same` in an intent file is a `same` fact.
     for text in intent::same_facts(&step.agent.intent) {
         if !step.agent.same.contains(&text) {
@@ -839,6 +849,7 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
         agent::apply(input, &mut plain);
         intent::apply(input, bodies, &mut plain);
         tags::apply(input, &mut plain);
+        diffmap::entries(&mut plain, [input.before, input.after]);
         semilla_core::timing::phase("the comments of the facts", || comments::apply(input, &mut plain));
         return plain;
     }
@@ -861,6 +872,7 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
     agent::apply(input, &mut outcome);
     intent::apply(input, bodies, &mut outcome);
     tags::apply(input, &mut outcome);
+    diffmap::entries(&mut outcome, [input.before, input.after]);
     semilla_core::timing::phase("the comments of the facts", || comments::apply(input, &mut outcome));
     outcome
 }
@@ -3674,3 +3686,5 @@ mod tests71;
 mod tests79;
 #[cfg(test)]
 mod tests83;
+#[cfg(test)]
+mod tests90;

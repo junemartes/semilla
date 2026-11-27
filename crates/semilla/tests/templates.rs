@@ -201,7 +201,9 @@ fn each_printed_template_of_each_shape_passes_the_check_in_one_file() {
     assert!(cover_line(&text, "shop::Table::<V>::get").contains("`#[same(shop::Table::get)] fn get_same() {}`") && cover_line(&text, "shop::Table::<V>::get").contains("`#[change(shop::Table::get)] fn get_change() -> bool { … }`"), "{text}");
     assert!(templates.iter().all(|template| !template.contains("::<")), "{templates:#?}");
     // A removed method and an added method of an inherent impl: the receiver of the type.
-    assert!(text.contains("template: #[removed(shop::Wrap::gone_label)] fn gone_label_removed(this: &before::shop::Wrap, prefix: &str) -> bool { let old = before::shop::Wrap::gone_label(this, prefix); true }"), "{text}");
+    // Design 90: the removed method is a "delete" of the map; the template is on the coverage
+    // line of its body.
+    assert!(text.contains("#[removed(shop::Wrap::gone_label)] fn gone_label_removed(this: &before::shop::Wrap, prefix: &str) -> bool { let old = before::shop::Wrap::gone_label(this, prefix); true }"), "{text}");
     assert!(text.contains("#[new(shop::Wrap::triple)] fn triple_new(this: &after::shop::Wrap)"), "{text}");
     // [R87.2-2] A body that no path of the language names: `no template` with the cause. The
     // negative case: each body with a name of the record has a template.

@@ -198,6 +198,21 @@ pub fn assign(input: &Input, report: &mut StepReport) {
                 }
             }
             map.owning.extend(own.owns.keys().copied());
+            // [R90.2-1] The MIR evidence of each node that owns an element: the elements with a
+            // partner in their region (R90.1-1) and the elements alone.
+            let changed: [BTreeSet<&crate::MirPlace>; 2] = [diff.changed.iter().map(|(old, _)| old).collect(), diff.changed.iter().map(|(_, new)| new).collect()];
+            for (edit, elements) in &own.owns {
+                let entry = report.node_mir.entry(*edit).or_default();
+                for side in 0..2 {
+                    for element in &elements[side] {
+                        if element.tokens.as_ref().is_some_and(|place| changed[side].contains(place)) {
+                            entry.paired[side] += 1;
+                        } else {
+                            entry.alone[side] += 1;
+                        }
+                    }
+                }
+            }
             note_through(input, &own, &name, &mut through_of);
             map.counts.linked += own.linked;
             for (cause, count) in &own.causes {
@@ -217,6 +232,12 @@ pub fn assign(input: &Input, report: &mut StepReport) {
                 // dependence). So an idle edit of a binding keeps the doubt rule. A rename and a
                 // move keep their rules.
                 let (risky, safe): (Vec<usize>, Vec<usize>) = idle.into_iter().partition(|edit| (own.linked > 0 && remote_form(&input.edits[*edit])) || (binding_form(&input.edits[*edit]) && !refactoring.contains(edit)));
+                for edit in &safe {
+                    report.node_mir.entry(*edit).or_default().equal = true;
+                }
+                for edit in &risky {
+                    report.node_mir.entry(*edit).or_default().doubt = true;
+                }
                 map.idle_equal.extend(safe);
                 map.idle_doubt.extend(risky.iter().copied());
                 let mut kept = owning;
@@ -228,6 +249,9 @@ pub fn assign(input: &Input, report: &mut StepReport) {
                 }
                 found = kept;
             } else {
+                for edit in &idle {
+                    report.node_mir.entry(*edit).or_default().doubt = true;
+                }
                 let idle = idle.into_iter();
                 map.idle_doubt.extend(idle);
                 for owner in owning {
@@ -528,7 +552,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             continue;
         }
         unknown.insert(description.clone(), report.facts.len());
-        report.facts.push(Fact { comments: Vec::new(), positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { kind: None, source: Vec::new(), check: String::new(), nodes: Vec::new(), syntax_only: false, not_stated: false, comments: Vec::new(), positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: body.span.as_ref().map(|(file, _)| file.clone()),
@@ -612,6 +636,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             fact.branches = crate::mirmap::branch_mark(&elements);
         }
     }
+    node_states(input, report);
     // Each edit counts one time: an edit with the doubt rule in one body is a doubt.
     map.counts.owners = map.owning.len();
     map.counts.doubt = map.idle_doubt.difference(&map.owning).count();
@@ -621,6 +646,34 @@ pub fn assign(input: &Input, report: &mut StepReport) {
     map.counts.mapper_skipped = input.maps.over_limit.clone();
     (map.counts.round3, map.counts.composites, map.counts.gap_pairs) = (input.maps.round3, input.maps.composites, input.maps.gap_pairs);
     report.mir_map = map.counts;
+}
+
+/// [R90.2-1] The MIR evidence of the nodes that the element rule does not reach (design 90): a
+/// node of a body on one side only, a node of a changed body with no element data (no unique
+/// answer), and a node of an item whose bodies have equal MIR.
+fn node_states(input: &Input, report: &mut StepReport) {
+    for body in changed(input.bodies) {
+        let name = input.body_index.item_of(body).unwrap_or_else(|| body.name.clone());
+        let one_side = matches!(body.status, BodyStatus::BeforeOnly | BodyStatus::AfterOnly);
+        let no_data = matches!(body.status, BodyStatus::Different { .. }) && body.elements.is_none();
+        if !one_side && !no_data {
+            continue;
+        }
+        for edit in text_edits(input, body, &name) {
+            let entry = report.node_mir.entry(edit).or_default();
+            entry.one_side |= one_side;
+            entry.doubt |= no_data;
+        }
+    }
+    for (index, edit) in input.edits.iter().enumerate() {
+        if report.node_mir.contains_key(&index) {
+            continue;
+        }
+        let Some(item) = edit.item() else { continue };
+        if matches!(input.body_index.status(item), Some(BodyStatus::Equal { .. })) {
+            report.node_mir.entry(index).or_default().equal = true;
+        }
+    }
 }
 
 /// The most bodies with no edit of one crate that get a fact each (design 40.3).
@@ -908,7 +961,7 @@ pub fn source_files(input: &Input, report: &mut StepReport) {
         };
         let anchor = Anchor::item(&name);
         let place = anchor.to_string();
-        report.facts.push(Fact { comments: Vec::new(), positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { kind: None, source: Vec::new(), check: String::new(), nodes: Vec::new(), syntax_only: false, not_stated: false, comments: Vec::new(), positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: Some(file.clone()),

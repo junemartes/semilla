@@ -29,16 +29,16 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::f` (src/lib.rs:2)
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: replace macro input, see f1 (f1)
       in: depot::f
       lines: src/lib.rs:5, src/lib.rs:-5
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::f=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  other facts, filled in by Semilla:
-  ◆ f1 derived: replace macro input `table!( A = 1, #[cfg(unix)] B = 2, );` → `table!( A = 1, #[cfg(windows)] B = 2, );` at `depot::f/S0` [macro · no compare]
+  transformations:
+  item `depot::f`:
+  ◆ f1 same code (Semilla; R90.2-1, equal MIR): replace macro input `table!( A = 1, #[cfg(unix)] B = 2, );` → `table!( A = 1, #[cfg(windows)] B = 2, );` at `depot::f/S0` [macro · no compare]
       equivalence: equivalent (proved by equal MIR)
       expansion: `table!( A = 1, #[cfg(windows)] B = 2, )` at `depot::f/S0` (src/lib.rs:3): expansion changed: deleted statement `pub const B: u32 = 2;` at `expansion/S1` [semantics]
       note: this body uses `#[cfg(unix)]`, `#[cfg(windows)]`, which Semilla did not check (`depot::f`); no compare: no checked configuration compiles `depot::f`
@@ -52,5 +52,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::f=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::f=the reason of the test'
-◆ f1 derived: replace macro input `table!( A = 1, #[cfg(unix)] B = 2, );` → `table!( A = 1, #[cfg(windows)] B = 2, );` at `depot::f/S0` [macro · no compare]
+◆ f1 same code (Semilla; R90.2-1, equal MIR): replace macro input `table!( A = 1, #[cfg(unix)] B = 2, );` → `table!( A = 1, #[cfg(windows)] B = 2, );` at `depot::f/S0` [macro · no compare]
     lines: src/lib.rs:5, src/lib.rs:-5

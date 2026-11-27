@@ -33,18 +33,20 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: renamed `shop::price` → `shop::cost` [rename · code equal]
+  changed nodes: 0 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `shop::cost`:
+  ◆ f2 rename (Semilla; R90.2-5, the pair check holds): public API: `shop::price` is now `shop::cost` (a different crate can no longer use the old path) [rename · no code]
       docs of `shop::cost`, no edit in this step (src/lib.rs:1): `/// `price` gives the price with the tax.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
-  ◆ f2 derived: public API: `shop::price` is now `shop::cost` (a different crate can no longer use the old path) [rename · no code]
+  item `shop::price`:
+  ◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `shop::price` → `shop::cost` [rename · code equal]
   cover: each of the 4 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
-◆ f1 derived: renamed `shop::price` → `shop::cost` [rename · code equal]
-    lines: src/lib.rs:2, src/lib.rs:7, src/lib.rs:-2, src/lib.rs:-7
-◆ f2 derived: public API: `shop::price` is now `shop::cost` (a different crate can no longer use the old path) [rename · no code]
+◆ f2 rename (Semilla; R90.2-5, the pair check holds): public API: `shop::price` is now `shop::cost` (a different crate can no longer use the old path) [rename · no code]
     no position
+◆ f1 rename (Semilla; R90.2-5, the pair check holds): renamed `shop::price` → `shop::cost` [rename · code equal]
+    lines: src/lib.rs:2, src/lib.rs:7, src/lib.rs:-2, src/lib.rs:-7

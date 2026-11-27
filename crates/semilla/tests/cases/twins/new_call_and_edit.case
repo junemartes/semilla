@@ -29,12 +29,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
-  new and removed items, filled in by Semilla:
-  ◆ f2 derived: added macro call `table!(Z = 9,)` (makes: `pub const Z`) [added · no code]
+  changed nodes: 2 in 2 entries; 0 real edits (0 stated by the agent); 1 not mapped
+    n2 not mapped [R79.5-1]: added macro `depot::a::table!#0` (src/lib.rs:5): not mapped, syntax only in f2: `    table!(Z = 9,);`
+        no template: `depot::a::table!#0` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library); a claim on the items that it changes maps it
+  not mapped:
+  item `depot::a::table!#0`:
+  ◆ f2 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added macro call `table!(Z = 9,)` (makes: `pub const Z`) [added · no code]
       expansion: `table!(Z = 9,)` at `depot::a::table!#0` (src/lib.rs:5): expansion added: makes `depot::a::Z`
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro call `table!(B = 2,)` → `table!(B = 3,)` (makes: `pub const B`) [declaration · code equal]
+  syntax only:
+  item `depot::a::table!#2`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro call `table!(B = 2,)` → `table!(B = 3,)` (makes: `pub const B`) [declaration · code equal]
       expansion: `table!(B = 3,)` at `depot::a::table!#2` (src/lib.rs:7): expansion changed: value of `depot::a::B` changed: 2 → 3 [semantics]
   cover: each of the 3 changed line(s) is in a fact
   expansions: 1 changed, 1 added, 1 equal
@@ -44,7 +48,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   note: twins: `depot::a::table!#1` of the old tree and `depot::a::table!#2` of the new tree are one pair (a pair by similarity (0.86)); the facts name the pair `depot::a::table!#2`
 
 === positions
-◆ f2 derived: added macro call `table!(Z = 9,)` (makes: `pub const Z`) [added · no code]
+◆ f2 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added macro call `table!(Z = 9,)` (makes: `pub const Z`) [added · no code]
     lines: src/lib.rs:5
-◆ f1 derived: changed macro call `table!(B = 2,)` → `table!(B = 3,)` (makes: `pub const B`) [declaration · code equal]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro call `table!(B = 2,)` → `table!(B = 3,)` (makes: `pub const B`) [declaration · code equal]
     lines: src/lib.rs:7, src/lib.rs:-6

@@ -19,11 +19,12 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `shop::f` (src/lib.rs:3)
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro `cost`: `macro_rules! cost { ($n:expr) => {{ let total = $n * 3 + 1; total }} }` → [1] [declaration · code equal]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `shop::cost!`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `cost`: `macro_rules! cost { ($n:expr) => {{ let total = $n * 3 + 1; total }} }` → [1] [declaration · code equal]
         [1] macro_rules! cost { ($n:expr) => {{ let base = $n * 3; let total = base + 1; total }} }
       expansion: `cost!(n)` at `shop::f/tail` (src/lib.rs:3): expansion changed: extracted variable `base` = `n * 3` (1 use) at `expansion/S0/body/S0` [move]
   cover: each of the 2 changed line(s) is in a fact
@@ -34,5 +35,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro `cost`: `macro_rules! cost { ($n:expr) => {{ let total = $n * 3 + 1; total }} }` → [1] [declaration · code equal]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `cost`: `macro_rules! cost { ($n:expr) => {{ let total = $n * 3 + 1; total }} }` → [1] [declaration · code equal]
     lines: src/lib.rs:1, src/lib.rs:-1

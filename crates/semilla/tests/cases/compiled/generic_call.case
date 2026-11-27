@@ -28,11 +28,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `<shop::Food as shop::Tax>::rate` (src/lib.rs:3): the full compare: `#[same(<shop::Food as shop::Tax>::rate)] fn rate_same() {}`; a difference: `#[change(<shop::Food as shop::Tax>::rate)] fn rate_change() -> bool { … }` or `#[different(<shop::Food as shop::Tax>::rate)] fn rate_different() -> bool { … }`
     MIR changes with no claim: `shop::rated` (src/lib.rs:5): the full compare: `#[same(shop::rated)] fn rated_same() {}`; a difference: `#[change(shop::rated)] fn rated_change() -> bool { … }` or `#[different(shop::rated)] fn rated_different() -> bool { … }`
-  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `5` → `6` (f1)
       in: shop::<Food as Tax>::rate
       lines: src/lib.rs:3, src/lib.rs:-3
@@ -41,11 +40,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: shop::rated
       lines: src/lib.rs:6, src/lib.rs:-6
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::rated=TEXT'; if it does not change, --same 'rewrite 1 => 2'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different]
+  real edits:
+  item `shop::<Food as Tax>::rate`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different] · not stated
       affected bodies: shop::<Food as Tax>::rate
       equivalence: MIR changes
-  ◆ f2 derived: changed literal `1` → `2` at `shop::rated/tail/rhs` [semantics · code different]
+  item `shop::rated`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::rated/tail/rhs` [semantics · code different] · not stated
       affected bodies: shop::rated
       equivalence: MIR changes
   cover: each of the 4 changed line(s) is in a fact
@@ -55,7 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different] · not stated
     lines: src/lib.rs:3, src/lib.rs:-3
-◆ f2 derived: changed literal `1` → `2` at `shop::rated/tail/rhs` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::rated/tail/rhs` [semantics · code different] · not stated
     lines: src/lib.rs:6, src/lib.rs:-6

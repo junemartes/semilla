@@ -599,6 +599,8 @@ fn facts(output: &str) -> Vec<Fact> {
     let mut facts: Vec<Fact> = Vec::new();
     let mut block = false;
     for line in output.lines() {
+        // [R90.5-2] The mark of a real edit that no statement names is no part of the fact.
+        let line = line.strip_suffix(" · not stated").unwrap_or(line);
         let Some(rest) = line.trim_start().strip_prefix("◆ f") else {
             block = block && line.starts_with("        ");
             if block {

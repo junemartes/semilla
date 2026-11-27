@@ -30,11 +30,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::f` (src/lib.rs:1): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(a: f64, b: f64) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
     MIR changes with no claim: `shop::g` (src/lib.rs:5): the full compare: `#[same(shop::g)] fn g_same() {}`; a difference: `#[change(shop::g)] fn g_change(a: f64) -> bool { … }` or `#[different(shop::g)] fn g_different() -> bool { … }`
-  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed method_call: `(a + b).min(7.0)` → `(a + b).max(7.0)` (f1)
       in: shop::f
       lines: src/lib.rs:2, src/lib.rs:-2
@@ -43,12 +42,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: shop::g
       lines: src/lib.rs:6, src/lib.rs:-6
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::g=TEXT'; if it does not change, --same 'rewrite $a.min(9.0) => $a.max(9.0)'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed method_call: `(a + b).min(7.0)` → `(a + b).max(7.0)` at `shop::f/tail` [semantics · code different]
+  real edits:
+  item `shop::f`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed method_call: `(a + b).min(7.0)` → `(a + b).max(7.0)` at `shop::f/tail` [semantics · code different] · not stated
       affected bodies: shop::f
       control flow: ~ call `f64::<impl f64>::min` → `f64::<impl f64>::max` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: MIR changes
-  ◆ f2 derived: changed method_call: `a.min(9.0)` → `a.max(9.0)` at `shop::g/tail` [semantics · code different]
+  item `shop::g`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed method_call: `a.min(9.0)` → `a.max(9.0)` at `shop::g/tail` [semantics · code different] · not stated
       affected bodies: shop::g
       control flow: ~ call `f64::<impl f64>::min` → `f64::<impl f64>::max` (src/lib.rs:-6, src/lib.rs:6)
       equivalence: MIR changes
@@ -59,7 +60,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed method_call: `(a + b).min(7.0)` → `(a + b).max(7.0)` at `shop::f/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed method_call: `(a + b).min(7.0)` → `(a + b).max(7.0)` at `shop::f/tail` [semantics · code different] · not stated
     lines: src/lib.rs:2, src/lib.rs:-2
-◆ f2 derived: changed method_call: `a.min(9.0)` → `a.max(9.0)` at `shop::g/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed method_call: `a.min(9.0)` → `a.max(9.0)` at `shop::g/tail` [semantics · code different] · not stated
     lines: src/lib.rs:6, src/lib.rs:-6

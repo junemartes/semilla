@@ -32,14 +32,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
   ! build code changed in this step; read this change first
-  ◆ f1 derived: build.rs: changed [build code · code different]
+  ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): build.rs: changed [build code · code different]
       affected bodies: shop::price
       ✗ spotlight: build script: this file is code of the build script of `shop`. Cargo runs it before each build of the package, and it can change the code and the result of the build; a build input: the MIR of 1 body changed with no edit of its text, and this change can reach its crate; it needs a reason: --reason 'build.rs:=…'
       diff:
         @@ line 3 @@
         -     std::fs::write(format!("{out}/mac.rs"), "macro_rules! rate { () => { 10 } }\n").unwrap();
         +     std::fs::write(format!("{out}/mac.rs"), "macro_rules! rate { () => { 12 } }\n").unwrap();
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
+  changed nodes: 0 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
   cover: each of the 2 changed line(s) is in a fact
   expansions: 1 changed
     `rate!()` at `shop::price/tail` (src/lib.rs:4): expansion changed: `macro rate` (crate shop): changed literal `10` → `12` at `expansion` [semantics]; the cause is not known: Semilla does not see the definition of `rate` (crate shop): the record has no hash of it
@@ -48,5 +48,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'build.rs:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'build.rs:=the reason of the test'
-◆ f1 derived: build.rs: changed [build code · code different]
+◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): build.rs: changed [build code · code different]
     lines: build.rs:3, build.rs:-3

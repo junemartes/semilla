@@ -127,6 +127,38 @@ Semilla derives each fact, also when you state none. There is one fact for each 
 - An identifier in a pattern is a local only if it is a sure binding. A name of a constant, a static, a variant, or a struct with no named fields, and a name that starts with an upper-case letter, is a use of an item: "changed pattern `LOW` → `HIGH` at `yard::work::n2b/S0/arm[0].pat` [semantics]", not "renamed local". The words `ref` and `mut` and the sign `@` make a binding sure. A name from a `use` line in a block of a body resolves through that line, not through the module.
 - If Semilla cannot derive a pair, the two items show as removed and added, and a note gives the cause: "… show(s) as removed and added: Semilla does not derive the rename (…)". This is also the result when two name maps pass with the same count of other facts. The note does not reject the step. A swap of two names gives no rename fact: each body edit is its own fact. A pair warning (`! pair: …`) shows a removed and an added item with a similar text. It does not reject the step. If they are two different items, run the printed `semilla pair refuse` command with a reason. Two entities of a different kind with one path are not a pair: "removed `quickcheck::arbitrary::Gen` (a trait)" and "added `quickcheck::arbitrary::Gen` (a struct)". An `impl` block follows the rename of its type: its changed header is one `declaration` fact, and each member edit is its own fact.
 
+## The map of the diff
+
+Each step gives one list of entries (design 90). Each changed node of the syntax diff is in exactly one entry. Semilla aligns the MIR of each changed body, and the alignment gives each node its kind:
+
+| Kind | Meaning |
+|---|---|
+| `same code` | the text changes and the MIR does not (a renamed local, a new layout, another sugar form) |
+| `rename`, `move` | a renamed or a moved item; the pair passes its check (equal MIR, each use follows) |
+| `replace` | the node has a changed MIR element (a real edit) |
+| `add`, `delete` | each MIR element of the node is new, or removed (a real edit) |
+| `type change` | a signature, a field, or a variant changes; the entry lists the bodies whose MIR changes (a real edit) |
+| `not mapped` | the alignment has no unique answer for the node; the request has a template |
+| `…, syntax only` | the node has no MIR element (docs, a comment, an attribute, a visibility, an item with no body): the matcher gives its pair |
+
+```text
+  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::price`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics · code different] · not stated
+  transformations:
+  item `shop::total`:
+  ◆ f2 same code (Semilla; R90.2-1, equal MIR; 2 nodes): `shop::total`: renamed local `sum` → `both`, 2 edit(s) [rename · code equal]
+```
+
+- The coverage line: `changed nodes: N in M entries; K real edits (S stated by the agent); J not mapped`. A syntax-only entry and an entry with no node of its own (the public API line of a rename) are not real edits.
+- The list has the sections `real edits`, `not mapped`, `transformations`, and `syntax only`, in this order. A line `item `PATH`:` starts the entries of one item.
+- Each entry line: the number, the kind, the source (`Semilla`, or your fact `aN`), the check (the rule and what holds), the text, the category, and the compare result.
+- A real edit that no fact of yours states has the mark `· not stated`. The step passes.
+- Your options are short forms of statements of the intent file, and they give the same entries: `--same 'rename A B'` is `#[rename(before::A, after::B)]`, `--same 'move A B'` is `#[moved(before::A, after::B)]`, `--same 'rewrite FROM => TO'` is `#[rewrite("FROM", "TO")]`, and `--change 'A,B=TEXT'` is `#[change(A, B, reason = "TEXT")]`.
+- Semilla pairs a renamed or a moved item from your hints first (`--same 'rename …'`, `#[rename]`, `#[moved]`), then from one map of its matcher. It checks each pair one time. A pair that does not pass shows as a `delete` and an `add`, with a template `#[rename(before::OLD, after::NEW)] fn …() {}`.
+- `semilla expand --step N` lists each node: `nI STATE [RULE]: CHANGE NODE `AT` (PLACE): KIND in fN`.
+
 ## The facts that you state
 
 You know the intent of the step. Semilla knows the edits. A fact of yours connects the two: it puts the edits of the step below one line that the reviewer reads first. **Write very simple, high-level facts.** A step usually has 0 to 3 facts.
@@ -181,7 +213,7 @@ semilla step "use the method for the total" \
 **The gap list.** After your facts, Semilla prints each edit of existing code that can change the behavior and that no fact states. Tests, benches, new items, and removed items are not in the list. The list never rejects a step.
 
 ```text
-  not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 3 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: changed expression `c.total` → `c.total()` (f1)
       in: shop::a, shop::b
       to state it: --same 'rewrite $a.total => $a.total()'
@@ -419,17 +451,17 @@ fn bump_effects(x: u32) -> bool {
 - `mapped by Semilla (KEY)`: the matcher of Semilla pairs the node (its identity, equal tokens, a similarity, one place, an extracted or an inlined variable), or a rule of Semilla explains it: a doc or comment edit; test, bench, or example code; a removed item with no reader; an added item that no old code reaches; a `use` line that the name record shows unused, or whose readers each have their own change.
 - `not mapped`: nothing maps the node. This is a request to you: complete the intent file.
 
-The line in the section "semantic changes", before the line of the changed bodies:
+The coverage line, after the line of the changed bodies, and the request of each node that is not mapped:
 
 ```
-    AST changes: 5 mapped by claims, 12 mapped by Semilla, 2 not mapped
+  changed nodes: 19 in 14 entries; 6 real edits (4 stated by the agent); 2 not mapped
       n4 not mapped [R79.5-1]: added `let` `shop::caller/S0` (src/lib.rs:16): `let bits = x.count_ones();`
           template: #[same(shop::caller)] fn caller(x: u32) -> bool { after::shop::caller(x) == before::shop::caller(x) }
       n9 not mapped [R79.5-1]: added fn `shop::added` (src/lib.rs:21): `pub fn added(…) -> u64 { … }`
           template: #[new(shop::added)] fn added_new(values: &[u32], scale: u8) -> bool { let new = after::shop::added(values, scale); true }
 ```
 
-- A step with no intent file shows one line: `AST changes: 0 mapped by claims, M mapped by Semilla, K not mapped (no intent file; the full text of the step lists each node)`. The full text is `semilla expand --step N` (also for a rejected step) or `semilla status --verbose`.
+- The coverage line of the map of the diff (design 90) replaces the line `AST changes` of design 79, also in a step with no intent file. The step output has the request of each node that is not mapped (the first lines and a count). The full text is `semilla expand --step N` (also for a rejected step) or `semilla status --verbose`.
 - `semilla status --verbose` and `semilla expand --step N` list each node with its number (`n1` to `nT`, the order of the syntax diff), its state, and the rule that decides it, and the anchors of each claim. The JSON (`ast`: `nodes`, `entries`, `anchors`, `errors`) and the MCP tool `results` give the same data.
 - A step with nodes that are not mapped passes. A false claim and an error still reject it.
 
@@ -452,7 +484,7 @@ A property that does not call a function of its scope gives no anchor of that ve
 
 **The loop of the agent.**
 
-1. Run the step. Read the line `AST changes` and each `not mapped` line.
+1. Run the step. Read the coverage line `changed nodes: …` and each `not mapped` line.
 2. Put a claim for each node that is not mapped in the intent file. Each template is a complete claim that `semilla intent check` accepts: write the property in place of `true`. A template of a changed function is a `#[same]` claim (write `#[change(…, reason = "…")]` with the new behavior if it changes); an added or a removed function gets `#[new]` or `#[removed]`; an added constant `#[new(…)]`; a field or a variant of a type a `#[relation]` that reads it. A node with no form for a claim gives `no template: CAUSE` (an item of a trait impl, a twin, a macro call, a binary target).
 3. Run `semilla intent check FILE` (fast), then the step again.
 4. Repeat until each node is mapped. Then make each claim `proved`.

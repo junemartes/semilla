@@ -118,16 +118,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 change: `<Cost as Display>::fmt` "more" (false: the tag `change` does not agree with the edit that Semilla sees)
       `<Cost as Display>::fmt` names no item, no module, and no file of the old tree or the new tree
       candidates: `depot::money::<Price as fmt::Display>::fmt`, `depot::stock::<Bin as std::fmt::Display>::fmt`, `depot::money::<Price as fmt::Debug>::fmt`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `<depot::money::Price as std::fmt::Display>::fmt` (src/lib.rs:6): the full compare: `#[same(<depot::money::Price as core::fmt::Display>::fmt)] fn fmt_same() {}`; a difference: `#[change(<depot::money::Price as core::fmt::Display>::fmt)] fn fmt_change() -> bool { … }` or `#[different(<depot::money::Price as core::fmt::Display>::fmt)] fn fmt_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: changed literal `"{}"` → `"${}"` (f1)
       in: depot::money::<Price as fmt::Display>::fmt
       lines: src/lib.rs:6, src/lib.rs:-6
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::money::<Price as fmt::Display>::fmt=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different]
+  real edits:
+  item `depot::money::<Price as fmt::Display>::fmt`:
+  ◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different] · not stated
       affected bodies: depot::money::<Price as fmt::Display>::fmt
       control flow: ~ construct `{}` (src/lib.rs:-6, src/lib.rs:6): callees −`Arguments::<'_>::new::<2, 1>` +`Arguments::<'_>::new::<4, 1>`
       equivalence: MIR changes
@@ -142,5 +142,5 @@ correct each false fact and run the step again. Or run the step with no false fa
 run again (without the false fact): semilla step 'the change'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change'
-◆ f1 derived: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different] · not stated
     lines: src/lib.rs:6, src/lib.rs:-6

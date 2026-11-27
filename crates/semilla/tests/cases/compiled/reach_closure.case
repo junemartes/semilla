@@ -46,17 +46,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? i1 `#[same(shop::big)] fn same_0()` (.semilla/intent/step.rs:3): claimed: a raw pointer
   ? i2 `#[same(shop::report)] fn same_1()` (.semilla/intent/step.rs:6): claimed: a raw pointer
   semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
-    AST changes: 1 mapped by claims, 0 mapped by Semilla, 0 not mapped
     changed bodies: 0 equal MIR, 0 explained by claims, 0 MIR changes with no claim, 2 MIR changes that the claims on the item do not explain
       not explained by its claims: `shop::big` (src/lib.rs:1): MIR changes: the same MIR text; a changed callee: `shop::big::{closure#0}`
       not explained by its claims: `shop::big::{closure#0} |x| *x >= 9` (src/lib.rs:2): MIR changes
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
   ? 1 place: changed operator `*x > 9` → `*x >= 9` (f1)
       in: shop::big
       lines: src/lib.rs:2, src/lib.rs:-2
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::big=TEXT'; if it does not change, --same 'rewrite $a > 9 => $a >= 9'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: changed operator `*x > 9` → `*x >= 9` at `shop::big/tail/args[0]/body` [semantics · code different]
+  real edits:
+  item `shop::big`:
+  ◆ f1 replace (i1; R90.2-2, 1 changed MIR element): changed operator `*x > 9` → `*x >= 9` at `shop::big/tail/args[0]/body` [semantics · code different]
       affected bodies: shop::big
       equivalence: `shop::big`: MIR changes: the same MIR text; a changed callee: `shop::big::{closure#0}`
       equivalence: `shop::big::{closure#0} |x| *x >= 9`: MIR changes
@@ -67,5 +67,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed operator `*x > 9` → `*x >= 9` at `shop::big/tail/args[0]/body` [semantics · code different]
+◆ f1 replace (i1; R90.2-2, 1 changed MIR element): changed operator `*x > 9` → `*x >= 9` at `shop::big/tail/args[0]/body` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

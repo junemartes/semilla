@@ -1373,13 +1373,16 @@ fn fact_items_where(model: &Model, steps: Option<&[usize]>, full: bool, code: Op
             let fact = &view.fact;
             // The origin of the fact (design 54.5): `derived` or `stated`.
             let origin = if fact.status.is_empty() { "derived" } else { fact.status.as_str() };
+            // [R90.5-1] The head of an entry of the map of the diff (design 90).
+            let origin = fact.entry_head().unwrap_or_else(|| origin.to_string());
+            let open = if fact.not_stated { " · not stated" } else { "" };
             // Design 54.7: a long text and a text with more than one line are in a block
             // below the fact line.
             // R71.1-1: a text over the budget shows the changed part, the sizes, and the command.
             let command = semilla_core::budget::full_text_command(&fact.id, view.step);
             let budget = text::Budget { command: Some(&command), keep: fact.category == semilla_core::Category::Docs };
             let (line, blocks) = text::fact_layout_with(&fact.description, Some(budget));
-            let mut text = format!("step {}: {} {origin}: {line} [{}]{}", view.step, fact.id, fact.label(), fact.mark());
+            let mut text = format!("step {}: {} {origin}: {line} [{}]{}{open}", view.step, fact.id, fact.label(), fact.mark());
             for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
                 let anchors = group.sites.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ");
                 // A folded fact has the count and the text in its description: only the anchors

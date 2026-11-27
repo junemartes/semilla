@@ -75,12 +75,11 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 4 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `shop::base` (src/lib.rs:5): the full compare: `#[same(shop::base)] fn base_same() {}`; a difference: `#[change(shop::base)] fn base_change(v: u32) -> bool { … }` or `#[different(shop::base)] fn base_different() -> bool { … }`
-    MIR changes with no claim: `shop::keep` (src/lib.rs:4): the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
-    MIR changes with no claim: `shop::pick` (src/lib.rs:3): the claim template of the node n4 of the AST map (semilla expand --step 0) [the AST map: 2 node(s) of its item not mapped (complete the intent file)]
-  not stated: 2 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `shop::keep` (src/lib.rs:4): the full compare: `#[same(shop::keep)] fn keep_same() {}`; a difference: `#[change(shop::keep)] fn keep_change(v: u32) -> bool { … }` or `#[different(shop::keep)] fn keep_different() -> bool { … }`
+    MIR changes with no claim: `shop::pick` (src/lib.rs:3): the full compare: `#[same(shop::pick)] fn pick_same() {}`; a difference: `#[change(shop::pick)] fn pick_change(v: u32) -> bool { … }` or `#[different(shop::pick)] fn pick_different() -> bool { … }`
+  changed nodes: 5 in 5 entries; 4 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: 2 different edits (f2, f3)
       in: shop::keep
       lines: src/lib.rs:4, src/lib.rs:-4
@@ -89,31 +88,34 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: shop::pick
       lines: src/lib.rs:3, src/lib.rs:-3
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
-  declarations, filled in by Semilla:
-  ◆ f1 derived: changed macro `bump`: `macro_rules! bump { ($v:expr) => { $v + 1 } }` → `macro_rules! bump { ($v:expr) => { $v + 2 } }` [declaration · code different]
-      affected bodies: shop::base
-      expansion: `bump!(v)` at `shop::base/tail` (src/lib.rs:5): expansion changed: changed literal `1` → `2` at `expansion/rhs` [semantics]
-  other facts, filled in by Semilla:
-  ◆ f2 derived: deleted statement `v` at `shop::keep/tail` [semantics · code different]
+  real edits:
+  item `shop::keep`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `v` at `shop::keep/tail` [semantics · code different] · not stated
       affected bodies: shop::keep (with 1 other edit of this body)
       control flow: − arrow entry (src/lib.rs:-4) → return (src/lib.rs:-4)
       equivalence: MIR changes
-  ◆ f3 derived: added macro statement `bump!(v)` at `shop::keep/tail` [semantics · code different]
+  ◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): added macro statement `bump!(v)` at `shop::keep/tail` [semantics · code different] · not stated
       affected bodies: shop::keep (with 1 other edit of this body)
       control flow: + check `overflow: v + 2` (src/lib.rs:4): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:4)
       control flow: + arrow entry (src/lib.rs:4) → check `overflow: v + 2` (src/lib.rs:4)
       equivalence: MIR changes
-  ◆ f4 derived: deleted statement `bump!(v)` at `shop::pick/tail` [semantics · code different]
+  item `shop::pick`:
+  ◆ f4 replace (Semilla; R90.2-2, 2 changed MIR elements): deleted statement `bump!(v)` at `shop::pick/tail` [semantics · code different] · not stated
       affected bodies: shop::pick (with 1 other edit of this body)
       control flow: − check `overflow: v + 1` (src/lib.rs:-3): ok → return, fail → panic `overflow`
       control flow: − panic `overflow` (src/lib.rs:-3)
       control flow: − arrow entry (src/lib.rs:-3) → check `overflow: v + 1` (src/lib.rs:-3)
       equivalence: MIR changes
-  ◆ f5 derived: added statement `v` at `shop::pick/tail` [semantics · code different]
+  ◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `v` at `shop::pick/tail` [semantics · code different] · not stated
       affected bodies: shop::pick (with 1 other edit of this body)
       control flow: + arrow entry (src/lib.rs:3) → return (src/lib.rs:3)
       equivalence: MIR changes
+  syntax only:
+  item `shop::bump!`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `bump`: `macro_rules! bump { ($v:expr) => { $v + 1 } }` → `macro_rules! bump { ($v:expr) => { $v + 2 } }` [declaration · code different]
+      affected bodies: shop::base
+      expansion: `bump!(v)` at `shop::base/tail` (src/lib.rs:5): expansion changed: changed literal `1` → `2` at `expansion/rhs` [semantics]
   cover: each of the 6 changed line(s) is in a fact
   control flow: 3 bodies
     shop::base (src/lib.rs:5): same structure: 1 changed check; no edit in the body; MIR changes; the expansion of `bump!(v)` changes (semilla expand src/lib.rs:5 --step 0)
@@ -126,13 +128,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed macro `bump`: `macro_rules! bump { ($v:expr) => { $v + 1 } }` → `macro_rules! bump { ($v:expr) => { $v + 2 } }` [declaration · code different]
-    lines: src/lib.rs:1, src/lib.rs:-1
-◆ f2 derived: deleted statement `v` at `shop::keep/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `v` at `shop::keep/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-4
-◆ f3 derived: added macro statement `bump!(v)` at `shop::keep/tail` [semantics · code different]
+◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): added macro statement `bump!(v)` at `shop::keep/tail` [semantics · code different] · not stated
     lines: src/lib.rs:4
-◆ f4 derived: deleted statement `bump!(v)` at `shop::pick/tail` [semantics · code different]
+◆ f4 replace (Semilla; R90.2-2, 2 changed MIR elements): deleted statement `bump!(v)` at `shop::pick/tail` [semantics · code different] · not stated
     lines: src/lib.rs:-3
-◆ f5 derived: added statement `v` at `shop::pick/tail` [semantics · code different]
+◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `v` at `shop::pick/tail` [semantics · code different] · not stated
     lines: src/lib.rs:3
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `bump`: `macro_rules! bump { ($v:expr) => { $v + 1 } }` → `macro_rules! bump { ($v:expr) => { $v + 2 } }` [declaration · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1

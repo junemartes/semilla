@@ -35,9 +35,10 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 2 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: variant `depot::Mode::Busy` added: `Busy` (the public API can change: a different crate can use the item) [added · no code]
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::Mode::Busy`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): variant `depot::Mode::Busy` added: `Busy` (the public API can change: a different crate can use the item) [added · no code] · not stated
       ! public API: the compare does not cover the code of a different crate
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::Mode::Busy`; it needs a reason: --reason 'depot::Mode::Busy=…'
   cover: each of the 4 changed line(s) is in a fact
@@ -46,5 +47,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::Mode::Busy=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::Mode::Busy=the reason of the test'
-◆ f1 derived: variant `depot::Mode::Busy` added: `Busy` (the public API can change: a different crate can use the item) [added · no code]
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): variant `depot::Mode::Busy` added: `Busy` (the public API can change: a different crate can use the item) [added · no code] · not stated
     lines: src/lib.rs:7-10

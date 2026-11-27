@@ -38,13 +38,17 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
-  new and removed items, filled in by Semilla:
-  ◆ f2 derived: added `depot::Slab::name#1` (a twin of `depot::Slab::name` under `cfg(not(unix))`) with the body: `{ "one\n/// two\n//! three\nfour" }` [added · no compare]
+  changed nodes: 2 in 2 entries; 0 real edits (0 stated by the agent); 1 not mapped
+    n2 not mapped [R79.5-1]: added fn `depot::Slab::name#1` (src/lib.rs:9): not mapped, syntax only in f2: `    /// The name.\n    #[cfg(not(unix))]\n    pub fn name(&self) -> &'static str {\n        "one\n/// two\n//! three\nfour"\n    }`
+        no template: `depot::Slab::name#1` has no plain path for a claim (a twin, a macro call, an item of a target that is not a library); a claim on the items that it changes maps it
+  not mapped:
+  item `depot::Slab::name#1`:
+  ◆ f2 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added `depot::Slab::name#1` (a twin of `depot::Slab::name` under `cfg(not(unix))`) with the body: `{ "one\n/// two\n//! three\nfour" }` [added · no compare]
       note: no compare: no checked configuration compiles `depot::Slab::name#1`
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::Slab::name#1`; inactive code: no checked configuration compiles the changed code (`#[cfg(not(unix))]` at src/lib.rs:10; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::Slab::name#1=…'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: attributes of `depot::Slab::name`: added `#[cfg(unix)]` [attribute · code equal]
+  syntax only:
+  item `depot::Slab::name`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::Slab::name`: added `#[cfg(unix)]` [attribute · code equal]
       ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::Slab::name=…'
   cover: each of the 10 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
@@ -55,7 +59,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::Slab::name=<why>' --reason 'depot::Slab::name#1=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::Slab::name=the reason of the test' --reason 'depot::Slab::name#1=the reason of the test'
-◆ f2 derived: added `depot::Slab::name#1` (a twin of `depot::Slab::name` under `cfg(not(unix))`) with the body: `{ "one\n/// two\n//! three\nfour" }` [added · no compare]
+◆ f2 not mapped (Semilla; R90.2-6, no MIR element; the matcher of today maps no partner (R79.5-1)): added `depot::Slab::name#1` (a twin of `depot::Slab::name` under `cfg(not(unix))`) with the body: `{ "one\n/// two\n//! three\nfour" }` [added · no compare]
     lines: src/lib.rs:8-16
-◆ f1 derived: attributes of `depot::Slab::name`: added `#[cfg(unix)]` [attribute · code equal]
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::Slab::name`: added `#[cfg(unix)]` [attribute · code equal]
     lines: src/lib.rs:4

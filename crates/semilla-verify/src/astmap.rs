@@ -55,7 +55,7 @@ const RULE_NODES: &str = "R79.1-1";
 const RULE_ANCHOR: &str = "R79.2-3";
 const RULE_RELATION: &str = "R79.2-4";
 const RULE_MATCHER: &str = "R79.3-1";
-const RULE_NO_CODE: &str = "R79.3-2";
+pub(crate) const RULE_NO_CODE: &str = "R79.3-2";
 const RULE_NO_READER: &str = "R79.3-3";
 const RULE_NOT_REACHED: &str = "R79.3-4";
 const RULE_USE: &str = "R79.3-5";
@@ -152,6 +152,18 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
         map.entries.push(found);
     }
     containers(input, &nodes, &mut map.entries);
+    // [R90.2-1] The kind of each node from the MIR alignment (design 90). A node that the
+    // projection decides is mapped; a node with no unique answer gets its request (R90.6-1).
+    let indices: Vec<usize> = outcome.edits.iter().enumerate().filter(|(_, edit)| is_node(edit)).map(|(index, _)| index).collect();
+    let trees = [input.before, input.after];
+    for place in crate::diffmap::nodes(outcome, trees, &mut map, &indices) {
+        let edit = nodes[place];
+        map.entries[place].before = side_text(edit, 0, trees);
+        map.entries[place].after = side_text(edit, 1, trees);
+        let added = matches!(edit.kind, EditKind::ItemAdded | EditKind::Inserted);
+        let item = if added { &edit.after } else { &edit.before }.as_ref().map(|anchor| anchor.item.clone()).unwrap_or_default();
+        map.entries[place].template = templates.entry((added, item)).or_insert_with(|| template(input, outcome, edit, &mut pending)).clone();
+    }
     let mut not_mapped = BTreeSet::new();
     for (edit, entry) in nodes.iter().zip(&map.entries) {
         if entry.state == AstState::NotMapped {
@@ -1027,7 +1039,7 @@ fn entry(input: &StepInput, edit: &Edit, anchors: &[ClaimAnchor], pure: &Pure) -
     // A line of the old tree has the mark `-` (the form of a position, design 55).
     let line = if matches!(edit.kind, EditKind::ItemRemoved | EditKind::Deleted) { format!("-{}", edit.line) } else { edit.line.to_string() };
     let file = edit.file.clone().or_else(|| (0..2).rev().find_map(|side| items[side].as_ref().and_then(|item| trees[side].items.get(item)).map(|item| item.file.clone()))).unwrap_or_default();
-    let mut entry = AstEntry { change: change_word(edit.kind).into(), node: node_word(edit, trees), at, place: format!("{file}:{line}"), state: AstState::Semilla, by: String::new(), rule: RULE_NODES.into(), before: String::new(), after: String::new(), template: String::new() };
+    let mut entry = AstEntry { change: change_word(edit.kind).into(), node: node_word(edit, trees), at, place: format!("{file}:{line}"), state: AstState::Semilla, by: String::new(), rule: RULE_NODES.into(), before: String::new(), after: String::new(), template: String::new(), kind: None, syntax_only: false, entry: String::new() };
     let set = |entry: &mut AstEntry, state: AstState, by: &str, rule: &str| {
         entry.state = state;
         entry.by = by.to_string();
@@ -1257,8 +1269,9 @@ fn template(input: &StepInput, outcome: &StepOutcome, edit: &Edit, pending: &mut
 pub fn lines(map: &AstMap, limit: Option<usize>, step: usize) -> Vec<String> {
     // The full text gives the count of the changed nodes, and each entry its node number `nI`
     // (the order of the syntax diff): each number from 1 to the count is in exactly one line.
-    let count = if limit.is_none() { format!(" (of {} changed nodes)", map.nodes) } else { String::new() };
-    let mut lines = vec![format!("    {}{count}", map.line())];
+    // [R90.5-3] The coverage line of the map of the diff (design 90) replaces the line "AST
+    // changes": the line of the gap list has it. The full text lists each node.
+    let mut lines = if limit.is_none() { vec![format!("    each changed node (of {}):", map.nodes)] } else { Vec::new() };
     for error in &map.errors {
         lines.push(format!("      ✗ anchor: {error}"));
     }

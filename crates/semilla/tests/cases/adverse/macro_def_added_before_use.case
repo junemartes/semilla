@@ -20,9 +20,10 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: added `depot::two!#1` (a twin of `depot::two!`) [added · code different]
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `depot::two!#1`:
+  ◆ f1 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `depot::two!#1` (a twin of `depot::two!`) [added · code different]
       affected bodies: depot::a
       expansion: `two!()` at `depot::a/tail` (src/lib.rs:5): expansion changed: changed literal `2` → `3` at `expansion` [semantics]
   cover: each of the 2 changed line(s) is in a fact
@@ -31,5 +32,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: added `depot::two!#1` (a twin of `depot::two!`) [added · code different]
+◆ f1 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `depot::two!#1` (a twin of `depot::two!`) [added · code different]
     lines: src/lib.rs:3-4

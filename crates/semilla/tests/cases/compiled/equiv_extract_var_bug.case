@@ -22,21 +22,21 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `shop::total` (src/lib.rs:1): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+    MIR changes with no claim: `shop::total` (src/lib.rs:1): the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(n: u32, p: u32) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: 2 different edits (f1, f2)
       in: shop::total
       lines: src/lib.rs:2-3, src/lib.rs:-2
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, --same 'rewrite n * p => sum', and a `--same` fact (rename, move, or rewrite) that explains each other edit
-  other facts, filled in by Semilla:
-  ◆ f1 derived: added `let` `let sum = n + p;` at `shop::total/S0` [semantics · code different]
+  real edits:
+  item `shop::total`:
+  ◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let sum = n + p;` at `shop::total/S0` [semantics · code different] · not stated
       affected bodies: shop::total (with 1 other edit of this body)
       control flow: + check `overflow: n + p` (src/lib.rs:2): ok → check `overflow: sum + 1`, fail → panic `overflow`
       control flow: + arrow entry (src/lib.rs:1) → check `overflow: n + p` (src/lib.rs:2)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
-  ◆ f2 derived: changed expression `n * p` → `sum` at `shop::total/tail/lhs` [semantics · code different]
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `n * p` → `sum` at `shop::total/tail/lhs` [semantics · code different] · not stated
       affected bodies: shop::total (with 1 other edit of this body)
       control flow: − check `overflow: n * p` (src/lib.rs:-2): ok → check `overflow: n * p + 1`, fail → panic `overflow`
       control flow: ~ check `overflow: n * p + 1` → `overflow: sum + 1` (src/lib.rs:-2, src/lib.rs:3)
@@ -48,7 +48,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: added `let` `let sum = n + p;` at `shop::total/S0` [semantics · code different]
+◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let sum = n + p;` at `shop::total/S0` [semantics · code different] · not stated
     lines: src/lib.rs:2
-◆ f2 derived: changed expression `n * p` → `sum` at `shop::total/tail/lhs` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `n * p` → `sum` at `shop::total/tail/lhs` [semantics · code different] · not stated
     lines: src/lib.rs:3, src/lib.rs:-2

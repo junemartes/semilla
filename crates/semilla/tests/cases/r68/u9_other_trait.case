@@ -31,18 +31,24 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 6 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
-    MIR changes with no claim: `<shop::X as std::ops::Add>::add` (src/lib.rs:5): a removed body: `#[removed(<shop::X as core::ops::arith::Add>::add)] fn add_removed() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-    MIR changes with no claim: `<shop::X as std::ops::Sub>::sub` (src/lib.rs:5): an added body: `#[new(<shop::X as core::ops::arith::Sub>::sub)] fn sub_new() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: trait impl `<X as std::ops::Add>` removed with: `type Output`, `fn add` (the public API can change: a different crate can use the item) [removed · code different]
-      affected bodies: shop::<X as std::ops::Add>::add
-      control flow: − graph of `<shop::X as std::ops::Add>::add`: 4 points, 3 arrows (semilla expand --step 0)
-      ! public API: the compare does not cover the code of a different crate
-  ◆ f2 derived: trait impl `<X as core::ops::Sub>` added with: `type Output`, `fn sub` (the public API can change: a different crate can use the item) [added · code different]
+    MIR changes with no claim: `<shop::X as std::ops::Add>::add` (src/lib.rs:5): a removed body: `#[removed(<shop::X as core::ops::arith::Add>::add)] fn add_removed() -> bool { … }`
+    MIR changes with no claim: `<shop::X as std::ops::Sub>::sub` (src/lib.rs:5): an added body: `#[new(<shop::X as core::ops::arith::Sub>::sub)] fn sub_new() -> bool { … }`
+  changed nodes: 6 in 2 entries; 2 real edits (0 stated by the agent); 2 not mapped
+    n1 not mapped [R79.3-6]: removed type `shop::<X as std::ops::Add>::Output` (src/lib.rs:-4): not mapped, syntax only in f1: `    type Output = X;`
+        no template: the head of a container has no claim; a claim on each member that is not mapped maps it
+    n4 not mapped [R79.3-6]: added type `shop::<X as core::ops::Sub>::Output` (src/lib.rs:4): not mapped, syntax only in f2: `    type Output = X;`
+        no template: the head of a container has no claim; a claim on each member that is not mapped maps it
+  real edits:
+  item `shop::impl <X as core::ops::Sub>`:
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only; 3 nodes): trait impl `<X as core::ops::Sub>` added with: `type Output`, `fn sub` (the public API can change: a different crate can use the item) [added · code different] · not stated
       affected bodies: shop::<X as core::ops::Sub>::sub
       control flow: + graph of `<shop::X as std::ops::Sub>::sub`: 4 points, 3 arrows (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  item `shop::impl <X as std::ops::Add>`:
+  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only; 3 nodes): trait impl `<X as std::ops::Add>` removed with: `type Output`, `fn add` (the public API can change: a different crate can use the item) [removed · code different] · not stated
+      affected bodies: shop::<X as std::ops::Add>::add
+      control flow: − graph of `<shop::X as std::ops::Add>::add`: 4 points, 3 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
@@ -51,7 +57,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: trait impl `<X as std::ops::Add>` removed with: `type Output`, `fn add` (the public API can change: a different crate can use the item) [removed · code different]
-    lines: src/lib.rs:-3, src/lib.rs:-5-6
-◆ f2 derived: trait impl `<X as core::ops::Sub>` added with: `type Output`, `fn sub` (the public API can change: a different crate can use the item) [added · code different]
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only; 3 nodes): trait impl `<X as core::ops::Sub>` added with: `type Output`, `fn sub` (the public API can change: a different crate can use the item) [added · code different] · not stated
     lines: src/lib.rs:3, src/lib.rs:5-6
+◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only; 3 nodes): trait impl `<X as std::ops::Add>` removed with: `type Output`, `fn add` (the public API can change: a different crate can use the item) [removed · code different] · not stated
+    lines: src/lib.rs:-3, src/lib.rs:-5-6

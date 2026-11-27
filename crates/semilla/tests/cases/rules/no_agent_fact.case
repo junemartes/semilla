@@ -1,7 +1,7 @@
 note: design 48.3, 54.6: a step with no fact of the agent has no list of agent facts. A group with no fact has no heading.
-rule-: R48.3-1 R54.6-1
+rule-: R48.3-1
 exit: 0
-must_match: other facts, filled in by Semilla:
+must_match: real edits:
 must_not_match: facts of the agent
 must_not_match: [✓✗] a1 
 must_not_match: ◆ f[0-9]+ stated
@@ -59,12 +59,11 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 3 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `depot::a` (src/lib.rs:6): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
     MIR changes with no claim: `depot::b` (src/lib.rs:7): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
     MIR changes with no claim: `depot::limit` (src/lib.rs:11): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
-  not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
   ? 2 places: changed expression `c.total` → `c.total()` (f1)
       in: depot::a, depot::b
       lines: src/lib.rs:6-7, src/lib.rs:-6-7
@@ -73,8 +72,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: depot::limit
       lines: src/lib.rs:11, src/lib.rs:-11
       to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+  real edits:
+  item `depot::a`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different] · not stated
       in: depot::a, depot::b
       affected bodies: depot::a, depot::b
       control flow: + call `Cart::total` (src/lib.rs:6): return → check `overflow: c.total() + 1`
@@ -83,7 +83,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 5 more (semilla expand --step 0)
       equivalence: `depot::a`: MIR changes
       equivalence: `depot::b`: MIR changes
-  ◆ f2 derived: changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
+  item `depot::limit`:
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
       affected bodies: depot::limit
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
@@ -94,7 +95,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different] · not stated
     lines: src/lib.rs:6-7, src/lib.rs:-6-7
-◆ f2 derived: changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different] · not stated
     lines: src/lib.rs:11, src/lib.rs:-11

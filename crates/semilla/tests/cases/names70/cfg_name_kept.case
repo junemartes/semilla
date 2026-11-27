@@ -46,16 +46,16 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::width` (src/lib.rs:14): the full compare: `#[same(shop::width)] fn width_same() {}`; a difference: `#[change(shop::width)] fn width_change(b: usize) -> bool { … }` or `#[different(shop::width)] fn width_different() -> bool { … }`
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   ? 1 place: added operand `+ skip!(wide::make())` (f1)
       in: shop::width
       lines: src/lib.rs:15, src/lib.rs:-15
       to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::width=TEXT'; if it does not change, --same 'rewrite $a + 1 => $a + skip!(wide::make()) + 1'
-  other facts, filled in by Semilla:
-  ◆ f1 derived: added operand `+ skip!(wide::make())` at `shop::width/tail` [semantics · code different]
+  real edits:
+  item `shop::width`:
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): added operand `+ skip!(wide::make())` at `shop::width/tail` [semantics · code different] · not stated
       affected bodies: shop::width
       control flow: + check `overflow: b + skip!(wide::make())` (src/lib.rs:15): ok → check `overflow: b + skip!(wide::make()) + 1`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:15)
@@ -71,5 +71,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: added operand `+ skip!(wide::make())` at `shop::width/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): added operand `+ skip!(wide::make())` at `shop::width/tail` [semantics · code different] · not stated
     lines: src/lib.rs:15, src/lib.rs:-15

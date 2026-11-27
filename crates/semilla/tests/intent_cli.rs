@@ -196,10 +196,21 @@ fn each_template_of_the_help_is_a_claim_that_intent_check_accepts() {
     write(&repo, "src/lib.rs", new);
     write(&repo, ".semilla/intent/step.rs", "intent!(\"Add an extra mode\");\n");
     let text = run(&repo, &["step", "extra mode", "--intent", ".semilla/intent/step.rs"], 0);
-    let found = templates(&text);
-    assert!(found.iter().any(|template| template.starts_with("#[same(shop::Cart::total)] fn total(this_before: &before::shop::Cart, this_after: &after::shop::Cart, k: u32, extra: bool) -> bool")), "{text}");
-    assert!(found.iter().any(|template| template.contains("let old = before::shop::first(c_before); let new = after::shop::first(c_after); true")), "{text}");
-    assert!(text.contains("no template: the type `&dyn Fn(u8) -> u8` of the parameter `f` has no form in a claim (`dyn …`)"), "{text}");
+    // Design 90: the map gives the changed nodes of these bodies their kinds, so the templates
+    // are the templates of the coverage lines of the bodies (the full text has each one in full;
+    // a form with `…` is a text for the agent to complete).
+    let full = run(&repo, &["expand", "--step", "0"], 0);
+    let found: Vec<String> = full
+        .lines()
+        .filter(|line| line.contains("MIR changes with no claim: ") && !line.contains("characters more"))
+        .flat_map(|line| line.split('`').filter(|part| part.starts_with("#[") && !part.contains('…') && !part.contains("characters more")).map(str::to_string).collect::<Vec<_>>())
+        .chain(templates(&text))
+        .filter(|template| !template.contains("characters more"))
+        .collect();
+    // A long template has a cut in the line (R71.1-1); the gate of R87.1-1 checked it in full.
+    assert!(full.contains("`#[same(shop::Cart::total)] fn total(this_before: &before::shop::Cart, this_after: &after::shop"), "{full}");
+    assert!(full.contains("`#[same(shop::first)] fn first(c_before: &before::shop::Cart, c_after: &after::shop::Cart) -> bool"), "{full}");
+    assert!(full.contains("the type `&dyn Fn(u8) -> u8` of the parameter `f` has no form in a claim (`dyn …`)"), "{full}");
     // Each template, in place in the intent file, passes `semilla intent check`.
     for template in &found {
         write(&repo, ".semilla/intent/try.rs", &format!("{template}\n"));

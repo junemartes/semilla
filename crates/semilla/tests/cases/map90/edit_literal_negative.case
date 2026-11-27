@@ -1,0 +1,47 @@
+note: a changed literal is never same code: the mark of a real edit
+rule-: R90.2-1 R90.7-3
+must_not_match: same code \(
+must_match: · not stated
+rule-: R90.2-7
+rule+: R90.5-2
+must_not_match: changed statement
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32) -> u32 {
+    a * 2
+}
+=== new src/lib.rs
+pub fn total(a: u32) -> u32 {
+    a * 4
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  ? 1 place: changed literal `2` → `4` (f1)
+      in: depot::total
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite 2 => 4'
+  real edits:
+  item `depot::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `4` at `depot::total/tail/rhs` [semantics · code different] · not stated
+      affected bodies: depot::total
+      control flow: ~ check `overflow: a * 2` → `overflow: a * 4` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:1): same structure: 1 changed check; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `4` at `depot::total/tail/rhs` [semantics · code different] · not stated
+    lines: src/lib.rs:2, src/lib.rs:-2

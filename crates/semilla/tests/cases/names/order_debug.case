@@ -24,11 +24,12 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  AST changes: 0 mapped by claims, 1 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `dyn std::fmt::Debug` (no place): no result of the equivalence check; no template: `dyn std::fmt::Debug` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
-  declarations, filled in by Semilla:
-  ◆ f1 derived: member order of `depot::P`: `a, b` → `b, a` [declaration · code different]
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::P`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `depot::P`: `a, b` → `b, a` [declaration · code different] · not stated
       affected bodies: <depot::P as std::fmt::Debug>::fmt
       through: `depot::P` (1 body)
       expansion: derived `Debug` of `depot::P`: expansion changed: changed literal `"a"` → `"b"` at `depot::<P as ::core::fmt::Debug>::fmt/tail/args[2]` [semantics]; changed expression `self.a` → `self.b` at `depot::<P as ::core::fmt::Debug>::fmt/tail/args[3]/operand` [semantics]; changed literal `"… (103 characters more; `semilla expand f1 --step 0` shows the full line) …lf.b` → `self.a` at `depot::<P as ::core::fmt::Debug>::fmt/tail/args[5]/operand/operand` [semantics]
@@ -42,5 +43,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::P=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::P=the reason of the test'
-◆ f1 derived: member order of `depot::P`: `a, b` → `b, a` [declaration · code different]
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `depot::P`: `a, b` → `b, a` [declaration · code different] · not stated
     lines: src/lib.rs:4, src/lib.rs:-3

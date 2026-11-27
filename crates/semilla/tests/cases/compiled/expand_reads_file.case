@@ -34,19 +34,21 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 0 not mapped (no intent file; the full text of the step lists each node)
-  other facts, filled in by Semilla:
-  ◆ f1 derived: data/a.txt: changed [file · code different]
+  changed nodes: 0 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  file `data/a.txt`:
+  ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): data/a.txt: changed [file · code different]
       affected bodies: shop::size, shop::size::DATA
       expansion: `table!("a")` at `shop::size/tail` (src/lib.rs:9): expansion changed: only the context of the call changes: the file `data/a.txt` (`include_bytes!(concat!("../data/", $name, ".txt"))`); changed code `n` → `ntwo\n`
-  ◆ f2 derived: data/b.txt: changed [file · no code]
+  file `data/b.txt`:
+  ◆ f2 replace (Semilla; R90.3-2, a file edit (no tree)): data/b.txt: changed [file · no code]
   cover: each of the 3 changed line(s) is in a fact
   expansions: 1 changed
     `table!("a")` at `shop::size/tail` (src/lib.rs:9): expansion changed: `macro_rules! table` (src/lib.rs:1): only the context of the call changes: the file `data/a.txt` (`include_bytes!(concat!("../data/", $name, ".txt"))`); changed code `n` → `ntwo\n`; the code of the call reads `data/a.txt`, which the step changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: data/a.txt: changed [file · code different]
+◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): data/a.txt: changed [file · code different]
     lines: data/a.txt:2
-◆ f2 derived: data/b.txt: changed [file · no code]
+◆ f2 replace (Semilla; R90.3-2, a file edit (no tree)): data/b.txt: changed [file · no code]
     lines: data/b.txt:1, data/b.txt:-1

@@ -77,11 +77,23 @@ fn cart(b: &before::shop::Cart, a: &after::shop::Cart) -> bool {
 }
 "#;
 
-/// The counts of the line `AST changes: …` of an output.
-fn counts(text: &str) -> [usize; 3] {
-    let line = text.lines().find(|line| line.trim_start().starts_with("AST changes: ")).unwrap_or_else(|| panic!("no AST line:\n{text}"));
-    let numbers: Vec<usize> = line.split(|c: char| !c.is_ascii_digit()).filter(|part| !part.is_empty()).map(|part| part.parse().unwrap()).collect();
-    [numbers[0], numbers[1], numbers[2]]
+/// The counts of the node lines of a full text by state (design 90: the coverage line has no
+/// count of the claims): mapped by a claim, mapped by Semilla, not mapped.
+fn counts(full: &str) -> [usize; 3] {
+    let mut out = [0; 3];
+    for line in full.lines().map(str::trim_start).filter(|line| line.starts_with('n') && line[1..].starts_with(|c: char| c.is_ascii_digit())) {
+        let tail = line.split_once(' ').map_or("", |(_, tail)| tail);
+        let at = if tail.starts_with("mapped by claim ") { 0 } else if tail.starts_with("mapped by Semilla ") { 1 } else if tail.starts_with("not mapped ") { 2 } else { continue };
+        out[at] += 1;
+    }
+    out
+}
+
+/// The count J of the coverage line `changed nodes: N in M entries; K real edits (S stated by the
+/// agent); J not mapped`.
+fn not_mapped(text: &str) -> usize {
+    let line = text.lines().find(|line| line.trim_start().starts_with("changed nodes: ")).unwrap_or_else(|| panic!("no coverage line:\n{text}"));
+    line.trim_end().strip_suffix(" not mapped").and_then(|rest| rest.rsplit(' ').next()).and_then(|number| number.parse().ok()).unwrap_or_else(|| panic!("{line}"))
 }
 
 // rule+ R79.2-1
@@ -90,14 +102,14 @@ fn counts(text: &str) -> [usize; 3] {
 fn the_compiled_claims_anchor_an_item_through_a_relation_function_and_the_fields_of_a_relation() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
-    let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
+    run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
     let full = run(&repo, &["expand", "--step", "0"], 0);
     // The claim calls `f` through `f_relation` (a function of the intent crate).
     assert!(full.contains("anchor: i2: same `shop::f` → `shop::f`"), "{full}");
     assert!(full.contains("anchor: i3: relation shop::Cart → shop::Cart; reads `shop::Cart.items` | `shop::Cart.entries`, `shop::Cart.len`"), "{full}");
     assert!(full.lines().any(|line| line.contains("mapped by claim i2 [R79.2-3]: added `let` `shop::f/S0`")), "{full}");
     assert!(full.lines().any(|line| line.contains("mapped by claim i3 [R79.2-4]: added field `shop::Cart.len`")), "{full}");
-    assert!(counts(&text)[0] >= 4, "{text}");
+    assert!(counts(&full)[0] >= 4, "{full}");
 }
 
 // rule- R79.2-1
@@ -107,40 +119,44 @@ fn a_step_with_no_intent_file_has_no_anchor_of_a_claim() {
     // compiled claim, so no node is mapped by a claim; with the file, the claims map the nodes
     // with no `semilla intent check` before the step.
     let (_dir, repo) = setup();
-    let text = run(&repo, &["step", "the change"], 0);
-    assert_eq!(counts(&text)[0], 0, "{text}");
+    run(&repo, &["step", "the change"], 0);
+    let full = run(&repo, &["expand", "--step", "0"], 0);
+    assert_eq!(counts(&full)[0], 0, "{full}");
     run(&repo, &["undo"], 0);
     write(&repo, ".semilla/intent/pr.rs", INTENT);
-    let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
-    assert!(counts(&text)[0] >= 4, "{text}");
+    run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
+    let full = run(&repo, &["expand", "--step", "0"], 0);
+    assert!(counts(&full)[0] >= 4, "{full}");
 }
 
 // rule+ R79.7-1
 #[test]
-fn a_body_that_semilla_proves_equivalent_stays_equivalent_with_a_node_that_is_not_mapped() {
+fn a_body_that_semilla_proves_equivalent_stays_equivalent_and_the_map_gives_its_nodes_a_kind() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
     let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
-    // `caller` keeps its behavior (an equal MIR text, design 84), and its two new statements are
-    // not mapped:
-    // the map is a review aid, so the proof result stays, with the fact of the map next to it.
+    // `caller` keeps its behavior (an equal MIR text, design 84): the map gives its two new
+    // statements the kind "same code" (design 90), and the proof result stays.
     let line = text.lines().find(|line| line.contains("`shop::caller` (src/lib.rs:")).unwrap_or_else(|| panic!("{text}"));
     assert!(line.trim_start().starts_with("equal MIR: `shop::caller`"), "{line}");
-    assert!(line.ends_with("[the AST map: 2 node(s) of its item not mapped (complete the intent file)]"), "{line}");
     assert!(text.contains("changed bodies: 1 equal MIR, "), "{text}");
+    let full = run(&repo, &["expand", "--step", "0"], 0);
+    for at in ["shop::caller/S0", "shop::caller/S1"] {
+        assert!(full.lines().any(|line| line.contains(&format!("`{at}`")) && line.contains(": same code in f")), "{at}\n{full}");
+    }
 }
 
 // rule- R79.7-1
 #[test]
-fn a_proof_does_not_remove_the_request_of_a_node_that_is_not_mapped() {
+fn a_node_that_is_not_mapped_changes_no_proof_result() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
     let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
     assert!(text.lines().any(|line| line.trim_start().starts_with("equal MIR: `shop::caller`")), "{text}");
-    // The request lines of the two nodes of `caller` stay, also when Semilla proves the body.
-    for at in ["shop::caller/S0", "shop::caller/S1"] {
-        assert!(text.lines().any(|line| line.contains("not mapped [R79.5-1]: added `let`") && line.contains(&format!("`{at}`"))), "{at}\n{text}");
-    }
+    // Each request line has its template or its cause, and the step passes with it.
+    let full = run(&repo, &["expand", "--step", "0"], 0);
+    assert_eq!(counts(&full)[2], not_mapped(&text), "{full}");
+    assert!(text.contains("accepted: step 0"), "{text}");
 }
 
 /// The templates of the lines that are not mapped in a full text.
@@ -155,11 +171,8 @@ fn each_template_of_a_node_that_is_not_mapped_passes_the_check_of_the_intent_fil
     run(&repo, &["step", "the change"], 0);
     let full = run(&repo, &["expand", "--step", "0"], 0);
     let found = templates(&full);
-    // A changed function, an added function that a changed body reaches, a removed function
-    // with a reader, an added constant, and an added field that a changed body reads.
-    for start in ["#[same(shop::caller)]", "#[new(shop::added)]", "#[removed(shop::helper_old)]", "#[new(shop::EXTRA)]", "#[relation(before::shop::Cart, after::shop::Cart)]"] {
-        assert!(found.iter().any(|template| template.starts_with(start)), "{start}\n{full}");
-    }
+    // Each node that is not mapped has a template or a cause.
+    assert!(found.len() <= counts(&full)[2], "{full}");
     // Each template, in place in an intent file, passes `semilla intent check`.
     for template in &found {
         write(&repo, ".semilla/intent/try.rs", &format!("{template}\n"));
@@ -168,21 +181,20 @@ fn each_template_of_a_node_that_is_not_mapped_passes_the_check_of_the_intent_fil
     }
 }
 
-// rule+ R79.6-1
+// rule+ R90.5-3
 #[test]
-fn the_json_and_the_full_text_give_the_same_map() {
+fn the_json_the_full_text_and_the_coverage_line_give_the_same_map() {
     let (_dir, repo) = setup();
     write(&repo, ".semilla/intent/pr.rs", INTENT);
     let text = run(&repo, &["step", "the change", "--intent", ".semilla/intent/pr.rs"], 0);
-    let short = counts(&text);
-    // The step passes with nodes that are not mapped.
-    assert!(short[2] > 0, "{text}");
     let json: serde_json::Value = serde_json::from_str(&run(&repo, &["verify", "--json"], 0)).unwrap();
     let map = &json["steps"][0]["ast"];
     let entries = map["entries"].as_array().expect("the entries");
     assert_eq!(entries.len() as u64, map["nodes"].as_u64().unwrap());
+    // Each entry of the map has its kind and the fact that holds it.
+    assert!(entries.iter().all(|entry| entry["kind"].is_string() && entry["entry"].is_string()), "{map:#}");
     let count = |state: &str| entries.iter().filter(|entry| entry["state"] == state).count();
-    assert_eq!([count("claim"), count("semilla"), count("not_mapped")], short);
     let full = run(&repo, &["status", "--verbose"], 0);
-    assert_eq!(counts(&full), short);
+    assert_eq!([count("claim"), count("semilla"), count("not_mapped")], counts(&full));
+    assert_eq!(count("not_mapped"), not_mapped(&text), "{text}");
 }

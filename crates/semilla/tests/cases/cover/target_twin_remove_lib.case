@@ -50,11 +50,12 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  AST changes: 0 mapped by claims, 0 mapped by Semilla, 1 not mapped (no intent file; the full text of the step lists each node)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
-    MIR changes with no claim: `depot::list::first` (src/list.rs:8): a removed body: the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  new and removed items, filled in by Semilla:
-  ◆ f1 derived: removed `depot::list::first` (the public API changes: a different crate can no longer use the item) [removed · code different]
+    MIR changes with no claim: `depot::list::first` (src/list.rs:8): a removed body: `#[removed(depot::list::first)] fn first_removed(v: &[u32]) -> bool { let old = before::depot::list::first(v); true }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::list::first`:
+  ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::list::first` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
       affected bodies: depot::list::first
       control flow: − graph of `depot::list::first`: 4 points, 3 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
@@ -64,5 +65,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: removed `depot::list::first` (the public API changes: a different crate can no longer use the item) [removed · code different]
+◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::list::first` (the public API changes: a different crate can no longer use the item) [removed · code different] · not stated
     lines: src/list.rs:-7-9
