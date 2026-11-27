@@ -85,15 +85,92 @@ pub(crate) struct Recorder<'a, 'b> {
 const SETTLE_PHASE: &str = "the passes of the joint rule";
 /// The phase name of the construction of the opaque inputs (R86.5-1).
 const OPAQUE_PHASE: &str = "the construction of the opaque inputs";
+/// [R89.5-1] The phase name of the key, the read, and the write of the stored constructions.
+const STORE_PHASE: &str = "the stored constructions of the opaque inputs";
 
 pub(crate) struct OpaqueBases<'a> {
     sides: [&'a semilla_syntax::Workspace; 2],
     made: RefCell<Vec<(Vec<crate::cfgcond::Query>, crate::opaque::Opaque<'a>)>>,
+    /// [R89.1-1] The store of the constructions, and the stored constructions of the two trees:
+    /// the queries of each one, and its payload (read at the first use).
+    store: Option<std::sync::Arc<dyn crate::PhaseStore>>,
+    stored: RefCell<Option<StoredBases>>,
 }
+
+/// The stored constructions of two trees: the key of the inputs, and for each slot the queries
+/// and the payload of the construction.
+struct StoredBases {
+    key: String,
+    slots: Vec<(Vec<crate::cfgcond::Query>, Vec<u8>)>,
+}
+
+/// The most stored constructions for two trees: one for each answer set of the passes of the
+/// joint rule.
+const MOST_SLOTS: usize = 8;
 
 impl<'a> OpaqueBases<'a> {
     pub(crate) fn new(before: &'a semilla_syntax::Workspace, after: &'a semilla_syntax::Workspace) -> OpaqueBases<'a> {
-        OpaqueBases { sides: [before, after], made: RefCell::new(Vec::new()) }
+        OpaqueBases { sides: [before, after], made: RefCell::new(Vec::new()), store: None, stored: RefCell::new(None) }
+    }
+
+    /// The bases with a store of the constructions (R89.1-1).
+    pub(crate) fn with_store(mut self, store: Option<std::sync::Arc<dyn crate::PhaseStore>>) -> OpaqueBases<'a> {
+        self.store = store;
+        self
+    }
+
+    /// [R89.1-1] The key of the inputs of a construction: the digest of the bytes of the two
+    /// workspaces (each member, also the files and the items that the identity pairs of the
+    /// compiler give a new key) and the identity of the program.
+    pub(crate) fn key(store: &dyn crate::PhaseStore, before: &semilla_syntax::Workspace, after: &semilla_syntax::Workspace) -> String {
+        let (before, after) = (semilla_syntax::stored::encode(before), semilla_syntax::stored::encode(after));
+        store.key(crate::PhaseKind::Opaque, &[&before, &after])
+    }
+
+    /// The stored constructions of the two trees, read one time.
+    fn stored(&self) -> Option<std::cell::RefMut<'_, StoredBases>> {
+        let store = self.store.as_ref()?;
+        let mut stored = self.stored.borrow_mut();
+        if stored.is_none() {
+            let key = semilla_core::timing::phase(STORE_PHASE, || OpaqueBases::key(store.as_ref(), self.sides[0], self.sides[1]));
+            let mut slots = Vec::new();
+            while slots.len() < MOST_SLOTS {
+                let Some(payload) = store.get(crate::PhaseKind::Opaque, &format!("{key} {}", slots.len())) else { break };
+                // The first line has the queries; a payload of another form ends the list.
+                let Some(end) = payload.iter().position(|byte| *byte == b'\n') else { break };
+                let Some(queries) = serde_json::from_slice::<Vec<crate::cfgcond::StoredQuery>>(&payload[..end]).ok().and_then(|list| list.iter().map(crate::cfgcond::StoredQuery::query).collect::<Option<Vec<_>>>()) else { break };
+                slots.push((queries, payload[end + 1..].to_vec()));
+            }
+            *stored = Some(StoredBases { key, slots });
+        }
+        Some(std::cell::RefMut::map(stored, |stored| stored.as_mut().unwrap()))
+    }
+
+    /// [R89.1-1] A stored construction with the same answers now, or `None`.
+    fn from_store(&self) -> Option<crate::opaque::Opaque<'a>> {
+        let stored = self.stored()?;
+        let (queries, payload) = stored.slots.iter().find(|(queries, _)| crate::cfgcond::same_answers(queries))?;
+        let opaque = semilla_core::timing::phase(STORE_PHASE, || serde_json::from_slice::<crate::opaque::StoredOpaque>(payload).ok())?;
+        let made = crate::opaque::Opaque::from_stored(opaque, self.sides[0], self.sides[1]);
+        self.made.borrow_mut().push((queries.clone(), made.clone()));
+        Some(made)
+    }
+
+    /// [R89.1-1] Writes a new construction into the next slot of the store. A construction with
+    /// a query that has no stored form is not stored.
+    fn to_store(&self, queries: &[crate::cfgcond::Query], made: &crate::opaque::Opaque<'a>) {
+        let Some(store) = self.store.clone() else { return };
+        let Some(mut stored) = self.stored() else { return };
+        if stored.slots.len() >= MOST_SLOTS {
+            return;
+        }
+        let Some(list) = queries.iter().map(crate::cfgcond::Query::stored).collect::<Option<Vec<_>>>() else { return };
+        let (Ok(mut payload), Ok(opaque)) = (serde_json::to_vec(&list), serde_json::to_vec(&made.stored())) else { return };
+        payload.push(b'\n');
+        payload.extend_from_slice(&opaque);
+        let key = format!("{} {}", stored.key, stored.slots.len());
+        semilla_core::timing::phase(STORE_PHASE, || store.put(crate::PhaseKind::Opaque, &key, payload.clone()));
+        stored.slots.push((queries.to_vec(), opaque));
     }
 
     /// True if the opaque inputs are for these two trees (the same two workspaces).
@@ -108,7 +185,14 @@ impl<'a> OpaqueBases<'a> {
             semilla_core::timing::count(OPAQUE_PHASE, "reused", 1);
             return base.clone();
         }
+        if let Some(made) = self.from_store() {
+            semilla_core::timing::count(OPAQUE_PHASE, "from the store", 1);
+            semilla_core::timing::count(semilla_core::timing::WORK_PHASE, crate::OPAQUE_FROM_STORE, 1);
+            return made;
+        }
         let (made, queries) = semilla_core::timing::phase(OPAQUE_PHASE, || crate::cfgcond::logged(|| crate::opaque::Opaque::new(self.sides[0], self.sides[1])));
+        semilla_core::timing::count(semilla_core::timing::WORK_PHASE, crate::OPAQUE_COMPUTED, 1);
+        self.to_store(&queries, &made);
         self.made.borrow_mut().push((queries, made.clone()));
         made
     }
@@ -1038,5 +1122,109 @@ mod tests {
         // Two other workspaces do not fit the opaque inputs of the check.
         let (_other, ws2) = load_source("fa = []\n", source);
         assert!(bases.fits(&ws, &ws) && !bases.fits(&ws2, &ws2));
+    }
+
+    /// A store of the entries in memory, with the count of the reads that found an entry.
+    #[derive(Default)]
+    struct MemoryStore {
+        entries: std::sync::Mutex<BTreeMap<String, Vec<u8>>>,
+        found: std::sync::atomic::AtomicUsize,
+    }
+
+    impl crate::PhaseStore for MemoryStore {
+        fn key(&self, _kind: crate::PhaseKind, inputs: &[&[u8]]) -> String {
+            // The test key is the full text of the inputs, with their lengths.
+            inputs.iter().map(|input| format!("{}:{}", input.len(), String::from_utf8_lossy(input))).collect::<Vec<_>>().join("|")
+        }
+        fn get(&self, _kind: crate::PhaseKind, key: &str) -> Option<Vec<u8>> {
+            let found = self.entries.lock().unwrap().get(key).cloned();
+            if found.is_some() {
+                self.found.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            found
+        }
+        fn put(&self, _kind: crate::PhaseKind, key: &str, payload: Vec<u8>) {
+            self.entries.lock().unwrap().insert(key.to_string(), payload);
+        }
+    }
+
+    const STORED_SOURCE: &str = "#[cfg(feature = \"fa\")]\npub fn cut(a: u64) -> u64 {\n    a\n}\n#[cfg(not(feature = \"fa\"))]\npub struct Hold(u8);\npub fn top(h: Hold) -> u64 {\n    let _ = h;\n    1\n}\n";
+
+    /// The answers of the opaque inputs for each item of the workspace, with each list of
+    /// the entries of the driver of the test.
+    fn all_answers(opaque: &dyn crate::OpaqueInputs, ws: &Workspace) -> Vec<(bool, bool)> {
+        let lists: Vec<Vec<String>> = vec![Vec::new(), vec!["cfg demo::cut".to_string()], vec!["demo::Hold".to_string()], vec!["touch demo::Hold".to_string()]];
+        let mut out = Vec::new();
+        for item in ws.items.values() {
+            let span = Some((item.file.clone(), item.line_start));
+            for types in &lists {
+                for after in [false, true] {
+                    out.push((opaque.callee(after, &item.path, span.as_ref(), types), opaque.layout(after, &item.path, span.as_ref(), types)));
+                }
+            }
+        }
+        out
+    }
+
+    /// [R89.1-1] A construction of the opaque inputs goes into the store with the answers of
+    /// the rule that it read. A later check of the same two workspaces with the same answers
+    /// takes it from the store: its stored form and each answer are those of a new
+    /// construction.
+    // rule+ R89.1-1
+    #[test]
+    fn a_stored_construction_gives_the_answers_of_a_new_construction() {
+        let (_dir, ws) = load_source("fa = []\n", STORED_SOURCE);
+        let truths = truths(&[&["fa"], &[]]);
+        let _scope = crate::cfgcond::enter(crate::cfgcond::Cover::new(&[(&ws, &truths), (&ws, &truths)]));
+        let store = std::sync::Arc::new(MemoryStore::default());
+        let first = OpaqueBases::new(&ws, &ws).with_store(Some(store.clone()));
+        let made = first.get();
+        assert_eq!(store.entries.lock().unwrap().len(), 1);
+        assert_eq!(store.found.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let second = OpaqueBases::new(&ws, &ws).with_store(Some(store.clone()));
+        let stored = second.get();
+        assert_eq!(store.found.load(std::sync::atomic::Ordering::SeqCst), 1, "the second check takes the construction from the store");
+        assert_eq!(serde_json::to_string(&stored.stored()).unwrap(), serde_json::to_string(&made.stored()).unwrap());
+        assert_eq!(all_answers(&stored, &ws), all_answers(&crate::opaque::Opaque::new(&ws, &ws), &ws));
+        // The two constructions of the passes of the joint rule: each mode with other answers
+        // has its own slot, and a later check takes each one from the store.
+        crate::cfgcond::with_mode(&crate::cfgcond::Mode::Strict, || {
+            let _ = OpaqueBases::new(&ws, &ws).with_store(Some(store.clone())).get();
+            assert_eq!(store.entries.lock().unwrap().len(), 2);
+            let again = OpaqueBases::new(&ws, &ws).with_store(Some(store.clone())).get();
+            assert_eq!(all_answers(&again, &ws), all_answers(&crate::opaque::Opaque::new(&ws, &ws), &ws));
+        });
+    }
+
+    /// [R89.1-1] The negative case: another input of the key (one changed item of a workspace)
+    /// gives no stored construction, and a stored construction with another answer of the rule
+    /// now (another mode, another configuration) is not used.
+    // rule- R89.1-1
+    #[test]
+    fn another_input_or_another_answer_gives_no_stored_construction() {
+        let (_dir, ws) = load_source("fa = []\n", STORED_SOURCE);
+        let (_other, changed) = load_source("fa = []\n", &STORED_SOURCE.replace("    1\n", "    2\n"));
+        let truths = truths(&[&["fa"], &[]]);
+        let _scope = crate::cfgcond::enter(crate::cfgcond::Cover::new(&[(&ws, &truths), (&ws, &truths)]));
+        let store = std::sync::Arc::new(MemoryStore::default());
+        let _ = OpaqueBases::new(&ws, &ws).with_store(Some(store.clone())).get();
+        // Another workspace: another key, so no entry.
+        let _ = OpaqueBases::new(&ws, &changed).with_store(Some(store.clone())).get();
+        assert_eq!(store.found.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(store.entries.lock().unwrap().len(), 2);
+        // The same key, another answer of the rule now: the stored construction is not used.
+        crate::cfgcond::with_mode(&crate::cfgcond::Mode::Without("feature=\"fa\"".to_string()), || {
+            let made = OpaqueBases::new(&ws, &ws).with_store(Some(store.clone())).get();
+            assert_eq!(store.found.load(std::sync::atomic::Ordering::SeqCst), 1, "the slot is read");
+            assert_eq!(store.entries.lock().unwrap().len(), 3, "a new slot");
+            assert_eq!(all_answers(&made, &ws), all_answers(&crate::opaque::Opaque::new(&ws, &ws), &ws));
+        });
+        // A query of a stored form gives the same query again.
+        let (_, queries) = crate::cfgcond::logged(|| crate::opaque::Opaque::new(&ws, &ws));
+        assert!(!queries.is_empty());
+        for query in &queries {
+            let stored = query.stored().unwrap();
+            assert_eq!(stored.query().unwrap().stored().unwrap(), stored);
+        }
     }
 }

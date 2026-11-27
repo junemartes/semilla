@@ -158,6 +158,10 @@ impl Guard<'_> {
 }
 
 impl semilla_verify::BodyOracle for Guard<'_> {
+    fn phase_store(&self) -> Option<std::sync::Arc<dyn semilla_verify::PhaseStore>> {
+        self.inner.phase_store()
+    }
+
     fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> Result<Vec<semilla_verify::BodyComparison>> {
         if self.off(step) { Ok(Vec::new()) } else { self.inner.compare(step, renames, added) }
     }

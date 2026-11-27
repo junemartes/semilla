@@ -110,6 +110,70 @@ fn tokens(text: &str) -> Option<Vec<Token>> {
 /// The token diff of two files: for each token, true if the edit changed it. The diff has two
 /// levels (the lines, then the tokens of each changed line group), so that two edits with a
 /// long distance do not mark the tokens between them.
+/// The token lists of the two texts of a file and their diff (R89.3-3). A side with no text has
+/// `None`; a text that is not a token list has `Some(None)`.
+struct FileDiff {
+    lists: [Option<Option<Vec<Token>>>; 2],
+    /// The diff of the two lists, if each side has a list or no text.
+    changed: (Vec<bool>, Vec<bool>),
+}
+
+/// The most pairs of texts and texts with regions in the memory of a thread.
+const MOST_MEMO: usize = 256;
+
+type TextPair = (Option<String>, Option<String>);
+
+thread_local! {
+    static DIFFS: std::cell::RefCell<std::collections::HashMap<TextPair, std::rc::Rc<FileDiff>>> = Default::default();
+    static REGIONS: std::cell::RefCell<std::collections::HashMap<String, std::rc::Rc<Vec<Region>>>> = Default::default();
+}
+
+/// [R89.3-3] The tokens and the diff of the two texts of a file, from the memory of the thread
+/// when an earlier check of the thread made them: each core check of a step reads the same
+/// changed files. The value is a function of the two texts only.
+fn file_diff(texts: [Option<&String>; 2]) -> std::rc::Rc<FileDiff> {
+    let key: TextPair = (texts[0].cloned(), texts[1].cloned());
+    if let Some(known) = DIFFS.with(|memo| memo.borrow().get(&key).cloned()) {
+        return known;
+    }
+    let lists = [texts[0].map(|text| tokens(text)), texts[1].map(|text| tokens(text))];
+    let empty = Vec::new();
+    let list = |index: usize| match &lists[index] {
+        Some(Some(list)) => Some(list),
+        None => Some(&empty),
+        Some(None) => None,
+    };
+    let changed = match (list(0), list(1)) {
+        (Some(old), Some(new)) => diff(old, new),
+        _ => (Vec::new(), Vec::new()),
+    };
+    let made = std::rc::Rc::new(FileDiff { lists, changed });
+    DIFFS.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if memo.len() >= MOST_MEMO {
+            memo.clear();
+        }
+        memo.insert(key, made.clone());
+    });
+    made
+}
+
+/// [R89.3-3] The `cfg` regions of a text, from the memory of the thread (a function of the text).
+fn file_regions(text: &String) -> std::rc::Rc<Vec<Region>> {
+    if let Some(known) = REGIONS.with(|memo| memo.borrow().get(text).cloned()) {
+        return known;
+    }
+    let made = std::rc::Rc::new(regions(text));
+    REGIONS.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if memo.len() >= MOST_MEMO {
+            memo.clear();
+        }
+        memo.insert(text.clone(), made.clone());
+    });
+    made
+}
+
 fn diff(old: &[Token], new: &[Token]) -> (Vec<bool>, Vec<bool>) {
     // The token ranges of the lines that have a token.
     let lines = |list: &[Token]| -> Vec<(usize, usize)> {
@@ -488,7 +552,9 @@ pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2],
         if texts[0] == texts[1] {
             continue;
         }
-        let lists = [texts[0].map(|text| tokens(text)), texts[1].map(|text| tokens(text))];
+        // [R89.3-3] The tokens and the diff of a pair of texts, one time in a thread.
+        let pair = file_diff(texts);
+        let lists = &pair.lists;
         // A side with no file has no token. A text that is not a token list has one token.
         let fallback = |index: usize| -> Vec<Token> {
             match &lists[index] {
@@ -499,7 +565,10 @@ pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2],
         let (own_old, own_new) = (fallback(0), fallback(1));
         let old = lists[0].as_ref().and_then(|list| list.as_ref()).unwrap_or(&own_old);
         let new = lists[1].as_ref().and_then(|list| list.as_ref()).unwrap_or(&own_new);
-        let (old_changed, new_changed) = diff(old, new);
+        let (old_changed, new_changed) = match (&lists[0], &lists[1]) {
+            (Some(Some(_)) | None, Some(Some(_)) | None) => pair.changed.clone(),
+            _ => diff(old, new),
+        };
         for (side, (list, changed)) in [(old, old_changed), (new, new_changed)].into_iter().enumerate() {
             if !changed.iter().any(|flag| *flag) {
                 continue;
@@ -513,7 +582,7 @@ pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2],
                 }
                 continue;
             }
-            let regions = texts[side].map(|text| regions(text)).unwrap_or_default();
+            let regions = texts[side].map(|text| file_regions(text)).unwrap_or_default();
             if regions.is_empty() {
                 continue;
             }
@@ -829,4 +898,44 @@ pub fn target_hidden(sides: [&Workspace; 2], host: &BTreeSet<String>) -> Vec<Tar
 /// R68.12-1: the true atoms of the output of `rustc --print cfg` (`target_os="linux"`, `unix`).
 pub fn print_cfg_atoms(text: &str) -> BTreeSet<String> {
     text.lines().map(str::trim).filter(|line| !line.is_empty()).map(|line| line.split_whitespace().collect::<String>()).collect()
+}
+
+#[cfg(test)]
+mod tests89 {
+    use super::*;
+
+    /// The diff of two texts with no memory (the rule before R89.3-3).
+    fn plain(old: &str, new: &str) -> (Vec<bool>, Vec<bool>) {
+        let (old, new) = (tokens(old).unwrap(), tokens(new).unwrap());
+        diff(&old, &new)
+    }
+
+    /// [R89.3-3] The tokens and the diff of a pair of texts come from the memory of the thread
+    /// the second time, and they are the tokens and the diff of a new computation.
+    // rule+ R89.3-3
+    #[test]
+    fn a_pair_of_texts_gives_the_diff_of_a_new_computation() {
+        let (old, new) = ("fn a() -> u8 {\n    1\n}\n".to_string(), "fn a() -> u8 {\n    2\n}\n".to_string());
+        let first = file_diff([Some(&old), Some(&new)]);
+        let second = file_diff([Some(&old), Some(&new)]);
+        assert!(std::rc::Rc::ptr_eq(&first, &second));
+        assert_eq!(second.changed, plain(&old, &new));
+        let found = file_regions(&"#[cfg(unix)]\nfn b() {}\n".to_string());
+        assert_eq!(found.len(), regions("#[cfg(unix)]\nfn b() {}\n").len());
+    }
+
+    /// [R89.3-3] The negative case: another text gives its own diff (the key is the two full
+    /// texts), and a side with no text has no token.
+    // rule- R89.3-3
+    #[test]
+    fn another_pair_of_texts_gives_its_own_diff() {
+        let (old, new, other) = ("fn a() {}\n".to_string(), "fn a() { 1; }\n".to_string(), "fn a() { 2; }\n".to_string());
+        let first = file_diff([Some(&old), Some(&new)]);
+        let second = file_diff([Some(&old), Some(&other)]);
+        assert!(!std::rc::Rc::ptr_eq(&first, &second));
+        assert_eq!(second.changed, plain(&old, &other));
+        let removed = file_diff([Some(&old), None]);
+        assert!(removed.lists[1].is_none());
+        assert_eq!(removed.changed.0, vec![true; tokens(&old).unwrap().len()]);
+    }
 }

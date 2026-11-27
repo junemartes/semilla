@@ -99,6 +99,9 @@ pub struct BodyIndex {
 
 impl BodyIndex {
     pub fn new(bodies: &[BodyComparison], after: &Workspace, before: &Workspace) -> BodyIndex {
+        // [R89.3-1] The line starts of each file, one time for each file of each tree: the place
+        // of each body is a search in the table, not a scan of the text before it.
+        let mut lines = [LineTables::default(), LineTables::default()];
         let mut index = BodyIndex { by_item: BTreeMap::new(), items: BTreeMap::new(), places: BTreeMap::new(), statuses: BTreeMap::new(), config: BTreeMap::new(), differs_in: BTreeMap::new(), equal_in: BTreeMap::new(), stopped: BTreeMap::new(), available: !bodies.is_empty() };
         for body in bodies {
             let twin_differs = index.statuses.get(&body.name).is_some_and(|status| !matches!(status, BodyStatus::Equal { .. }));
@@ -110,7 +113,8 @@ impl BodyIndex {
             // can find the item (batch 6b, part 2): a line of a body from a macro in the new
             // tree can be a line of a different function in the old tree.
             let other = |workspace: &Workspace| find_item_by(&body.name, None, workspace);
-            let item = if body.status == BodyStatus::BeforeOnly { find_item(body, before).or_else(|| other(after)) } else { find_item(body, after).or_else(|| other(before)) };
+            let [lines_after, lines_before] = &mut lines;
+            let item = if body.status == BodyStatus::BeforeOnly { find_item(body, before, lines_before).or_else(|| other(after)) } else { find_item(body, after, lines_after).or_else(|| other(before)) };
             // The rules of the build configuration change no status (design 35). A body with a
             // cause in `stopped` is a body with a text edit: its uses go to the notes.
             let stopped = !body.stopped.is_empty();
@@ -273,10 +277,10 @@ impl BodyIndex {
 
 /// Finds the syntax item of a MIR body: by the byte range first (design 40.2), then by the
 /// line of the span, then by the name.
-fn find_item(body: &BodyComparison, workspace: &Workspace) -> Option<String> {
+fn find_item(body: &BodyComparison, workspace: &Workspace, lines: &mut LineTables) -> Option<String> {
     if let (Some((file, _)), Some(range)) = (&body.span, body.range)
         && !crate::is_test_harness_main(&body.name)
-        && let Some(item) = find_item_by_range(file, range, workspace)
+        && let Some(item) = find_item_in(file, range, workspace, lines)
     {
         return Some(item);
     }
@@ -287,14 +291,32 @@ fn find_item(body: &BodyComparison, workspace: &Workspace) -> Option<String> {
 /// written (design 40.2). `None` if the workspace does not have the file, or no function
 /// contains the range.
 pub fn find_item_by_range(file: &str, range: (usize, usize), workspace: &Workspace) -> Option<String> {
+    find_item_in(file, range, workspace, &mut LineTables::default())
+}
+
+/// The byte offset of the start of each line of the files of one workspace, made at the first
+/// use of each file (R89.3-1).
+#[derive(Default)]
+pub(crate) struct LineTables(std::collections::HashMap<String, Vec<usize>>);
+
+impl LineTables {
+    /// The line (from 1) and the column (in characters) of a byte offset of a text: the result
+    /// of a count of the line ends before the offset. `None` if the offset is not a character
+    /// boundary of the text.
+    pub(crate) fn place(&mut self, file: &str, text: &str, offset: usize) -> Option<(usize, usize)> {
+        text.get(..offset)?;
+        let starts = self.0.entry(file.to_string()).or_insert_with(|| std::iter::once(0).chain(text.match_indices('\n').map(|(at, _)| at + 1)).collect());
+        // The count of the line starts at or before the offset is the line.
+        let line = starts.partition_point(|start| *start <= offset);
+        let start = starts[line - 1];
+        Some((line, text[start..offset].chars().count()))
+    }
+}
+
+/// [`find_item_by_range`] with the line tables of the workspace.
+fn find_item_in(file: &str, range: (usize, usize), workspace: &Workspace, lines: &mut LineTables) -> Option<String> {
     let text = workspace.rust_files.get(file)?;
-    let pos = |offset: usize| -> Option<(usize, usize)> {
-        let before = text.get(..offset)?;
-        let line = before.matches('\n').count() + 1;
-        let column = before.rsplit('\n').next().unwrap_or("").chars().count();
-        Some((line, column))
-    };
-    let (start, end) = (pos(range.0)?, pos(range.1)?);
+    let (start, end) = (lines.place(file, text, range.0)?, lines.place(file, text, range.1)?);
     let inside = |item: &&semilla_syntax::Item| item.kind == semilla_syntax::ItemKind::Fn && item.file == file && (item.line_start, item.col_start) <= start && end <= (item.line_end, item.col_end);
     let found: Vec<&semilla_syntax::Item> = match workspace.body_items() {
         Some(index) => index.by_file.get(file).into_iter().flatten().filter_map(|body| workspace.items.get(&body.path)).filter(inside).collect(),
@@ -2716,3 +2738,40 @@ fn is_panic_call(path: &str) -> bool {
     ["core::panicking::", "std::panicking::", "std::rt::panic", "std::rt::begin_panic", "core::panic::", "std::process::abort", "core::intrinsics::abort"].iter().any(|prefix| path.starts_with(prefix))
 }
 
+
+#[cfg(test)]
+mod tests89 {
+    use super::LineTables;
+
+    /// The place of an offset by a scan of the text before it (the rule before R89.3-1).
+    fn scan(text: &str, offset: usize) -> Option<(usize, usize)> {
+        let before = text.get(..offset)?;
+        Some((before.matches('\n').count() + 1, before.rsplit('\n').next().unwrap_or("").chars().count()))
+    }
+
+    /// [R89.3-1] The line table gives the place of the scan for each offset of a text, also at
+    /// the start of a line, at the end, and after a character of more than one byte.
+    // rule+ R89.3-1
+    #[test]
+    fn the_line_table_gives_the_place_of_the_scan() {
+        let text = "fn a() {}\n\n  // é ü\nfn b() -> u8 {\n    1\n}\n";
+        let mut tables = LineTables::default();
+        for offset in 0..=text.len() {
+            assert_eq!(tables.place("src/lib.rs", text, offset), scan(text, offset), "offset {offset}");
+        }
+    }
+
+    /// [R89.3-1] The negative case: an offset in a character or after the end has no place,
+    /// and the table of one file does not serve a different file.
+    // rule- R89.3-1
+    #[test]
+    fn an_offset_that_is_not_a_boundary_has_no_place() {
+        let text = "// é\nfn a() {}\n";
+        let mut tables = LineTables::default();
+        assert_eq!(tables.place("src/lib.rs", text, 4), None);
+        assert_eq!(tables.place("src/lib.rs", text, text.len() + 1), None);
+        let other = "\n\n\nfn b() {}\n";
+        assert_eq!(tables.place("src/other.rs", other, 5), scan(other, 5));
+        assert_eq!(tables.place("src/lib.rs", text, 7), scan(text, 7));
+    }
+}

@@ -1305,6 +1305,31 @@ fn index_problems(cache: &Path) -> Vec<String> {
     problems
 }
 
+/// The count of the checks of property 15 (R89.6-1): the compares of a stored path and a full
+/// path.
+static STORED_CHECKS: AtomicUsize = AtomicUsize::new(0);
+
+/// [R89.6-1] The problems of property 15 for one case: the output of a check with the stored
+/// phase results is the output of a check with no database (the full path).
+fn stored_path_problems(work: &mut Work, first: &Path, second: &Path, step: &Run, options: &[String]) -> Result<Vec<String>, String> {
+    let (stored, full) = match step.code {
+        0 => {
+            // `verify` checks each stored step again (`status` can show a stored result).
+            let args = ["verify".to_string()];
+            let stored = work.semilla(first, &args)?;
+            // The second copy with no database: each phase result is computed.
+            for entry in std::fs::read_dir(second.join("cache")).map_err(|error| error.to_string())?.flatten() {
+                let _ = std::fs::remove_dir_all(entry.path().join("store"));
+            }
+            (stored, work.semilla(second, &args)?)
+        }
+        1 => (work.step(first, options)?, step.clone()),
+        _ => return Ok(Vec::new()),
+    };
+    STORED_CHECKS.fetch_add(1, Ordering::SeqCst);
+    Ok(if stored.stdout == full.stdout { Vec::new() } else { vec![format!("the check with the stored results is different:\n{}", difference(&full.text(), &stored.text()))] })
+}
+
 /// The work of one case: the folder, and the results of the checks.
 struct Work {
     folder: PathBuf,
@@ -1503,6 +1528,14 @@ fn check(case: &Case) -> Result<Outcome, String> {
     let again = work.step(&second, &case.options)?;
     if again != step {
         work.fail("same_result", format!("the second run is different:\n{}", difference(&step_text, &again.text())));
+    }
+    // Property 15 (R89.6-1): the stored path equals the full path. A check that takes the
+    // phase results of design 89 from the store gives the output of a check that computes each
+    // of them. An accepted step: `verify` in the first copy (its store has the results of the
+    // step) and in the second copy with no database. A rejected step: the step again in the
+    // first copy, and the first step (a new cache).
+    for problem in stored_path_problems(&mut work, &first, &second, &step, &case.options)? {
+        work.fail("stored_path", problem);
     }
 
     // The run with no option, for a case with options.
@@ -1836,6 +1869,7 @@ fn load_cases() -> Vec<Case> {
 // rule- R57.4-2
 // rule+ R87.6-1
 // rule+ R88.7-1
+// rule+ R89.6-1
 #[test]
 fn each_case_gives_its_expected_text_and_keeps_the_properties() {
     let start = std::time::Instant::now();
@@ -1908,6 +1942,7 @@ fn each_case_gives_its_expected_text_and_keeps_the_properties() {
     println!("case set: {} case(s), {runs} run(s) of semilla, {known_count} known failure(s), {written} expected text(s) written, {threads} thread(s), {:.1} s", cases.len(), start.elapsed().as_secs_f64());
     println!("no accepted step, so no check of the fact positions, for {} case(s): {}", no_positions.len(), no_positions.join(", "));
     println!("property 15 (the index): {} record folder(s), {} pair(s) of folders", INDEX_FOLDERS.load(Ordering::SeqCst), INDEX_PAIRS.load(Ordering::SeqCst));
+    println!("property 15 (the stored path, R89.6-1): {} compare(s) of a stored path and a full path", STORED_CHECKS.load(Ordering::SeqCst));
     assert!(problems.is_empty(), "{} problem(s) in the case set:\n{}", problems.len(), problems.join("\n"));
 }
 

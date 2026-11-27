@@ -494,6 +494,31 @@ pub(crate) fn logged<R>(run: impl FnOnce() -> R) -> (R, Vec<Query>) {
     (result, found)
 }
 
+/// [R89.1-1] The stored form of a query: the text of the condition, the file, and the answer.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct StoredQuery {
+    condition: String,
+    file: Option<String>,
+    answer: bool,
+}
+
+impl Query {
+    /// The stored form of the query. `None` if the text of the condition does not give the same
+    /// condition again: then the query has no stored form.
+    pub(crate) fn stored(&self) -> Option<StoredQuery> {
+        let condition = self.condition.to_string();
+        let again = condition.parse::<TokenStream>().ok()?;
+        (again.to_string() == condition).then(|| StoredQuery { condition, file: self.file.clone(), answer: self.answer })
+    }
+}
+
+impl StoredQuery {
+    /// The query of a stored form. `None` if the text is not a token stream.
+    pub(crate) fn query(&self) -> Option<Query> {
+        Some(Query { condition: self.condition.parse().ok()?, file: self.file.clone(), answer: self.answer })
+    }
+}
+
 /// True if each query of a log gives the same answer now, with the `Cover` and the mode of this
 /// thread (R61.15-2).
 pub(crate) fn same_answers(queries: &[Query]) -> bool {
