@@ -36,6 +36,25 @@ pub fn stable_hash(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
+/// The digest of a text in hexadecimal digits (the first 16 bytes of its SHA-256 digest).
+pub fn digest_text(bytes: &[u8]) -> String {
+    semilla_normal::index::digest_bytes(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// [R88.5-1] The identity of the Semilla binary of this process (the version of its parser and
+/// of its loader): the path, the size, and the time of the file.
+pub fn binary_identity() -> String {
+    static IDENTITY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    IDENTITY
+        .get_or_init(|| {
+            let path = std::env::current_exe().ok();
+            let meta = path.as_ref().and_then(|path| std::fs::metadata(path).ok());
+            let text = format!("{:?}|{:?}|{:?}", path.and_then(|path| std::fs::canonicalize(path).ok()), meta.as_ref().map(|meta| meta.len()), meta.and_then(|meta| meta.modified().ok()));
+            format!("{:016x}", stable_hash(text.as_bytes()))
+        })
+        .clone()
+}
+
 /// True if `path` is `folder` or is in `folder`. The two paths are canonical when they exist.
 pub fn is_inside(path: &Path, folder: &Path) -> bool {
     let canonical = |path: &Path| {
@@ -76,7 +95,11 @@ impl Store {
                 let marker = dir.join("repository");
                 let usable = std::fs::create_dir_all(dir.join("tmp")).and_then(|_| std::fs::write(&marker, format!("{}\n", real.display())));
                 match usable {
-                    Ok(()) => return Store { dir, temporary: false },
+                    Ok(()) => {
+                        // [R88.1-1] The database of the store is in the cache folder.
+                        crate::recstore::open_database(&dir);
+                        return Store { dir, temporary: false };
+                    }
                     Err(error) => format!("Semilla cannot write the cache folder {} ({error})", dir.display()),
                 }
             }
@@ -102,6 +125,7 @@ impl Store {
                     let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
                 }
                 let _ = std::fs::create_dir_all(dir.join("tmp"));
+                crate::recstore::open_database(&dir);
                 return Store { dir, temporary: true };
             }
             count += 1;

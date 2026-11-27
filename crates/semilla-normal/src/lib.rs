@@ -22,6 +22,7 @@ pub mod intent;
 pub mod elements;
 pub mod graph;
 pub mod hash;
+pub mod index;
 pub mod lazy;
 pub mod paths;
 pub mod sandbox;
@@ -196,6 +197,45 @@ pub struct BodyRecord {
     /// `panic="abort"`) have different settings. `read_records` sets it; empty if not known.
     #[serde(skip)]
     pub unit: String,
+    /// [R88.3-1] The digests and the paths of the text: from the index of the record file, or
+    /// made at the first read. Not a member of the line.
+    #[serde(skip)]
+    pub known: index::Known,
+}
+
+impl BodyRecord {
+    /// The digests and the paths of the text of the record (R88.3-1).
+    pub fn facts(&self) -> &std::sync::Arc<index::TextFacts> {
+        self.known.get(&self.text, &self.shape)
+    }
+}
+
+/// [R88.3-1] True if two records have the same text: by the digests of the index if the two
+/// records have them, else by the texts.
+pub fn same_text(a: &BodyRecord, b: &BodyRecord) -> bool {
+    match (a.known.from_index(), b.known.from_index()) {
+        (Some(x), Some(y)) => x.text == y.text,
+        _ => a.text == b.text,
+    }
+}
+
+/// [R88.3-2] True if the text of `old` after the rename map is the text of `new`. If the two
+/// records have the facts of the index and no key of the map can match a path of the old text,
+/// the renamed text is the old text: the digests decide, and no text is read.
+pub fn same_after_renames(old: &BodyRecord, new: &BodyRecord, renames: &[(String, String)]) -> bool {
+    match (old.known.from_index(), new.known.from_index()) {
+        (Some(x), Some(y)) if renames.is_empty() || !index::may_rename(&x.paths, renames) => x.text == y.text,
+        _ => paths::rename_cow(&old.text, renames) == new.text.as_str(),
+    }
+}
+
+/// [R88.3-2] The digest of the text of a record after a rename map: the digest of the index if no
+/// key of the map can match a path of the text, else the digest of the renamed text.
+pub fn renamed_digest(record: &BodyRecord, renames: &[(String, String)]) -> index::Digest {
+    match record.known.from_index() {
+        Some(facts) if renames.is_empty() || !index::may_rename(&facts.paths, renames) => facts.text,
+        _ => index::digest(&paths::rename_cow(&record.text, renames)),
+    }
 }
 
 /// One instance of a generic body (design 61, part B).
@@ -589,7 +629,7 @@ pub fn read_records(dir: &Path) -> Result<Vec<BodyRecord>> {
 /// The member of a record that loads on its first read (R86.2-1): the two forms of the
 /// equivalence check, the members `q` and `qx` of [`BodyRecord`]. This is the format of the
 /// records of Semilla, not a name of the code under review.
-fn lazy_member(key: &str) -> Option<bool> {
+pub(crate) fn lazy_member(key: &str) -> Option<bool> {
     match key {
         "q" => Some(false),
         "qx" => Some(true),
@@ -669,7 +709,7 @@ fn read_lazy(file: &Path) -> Option<Vec<BodyRecord>> {
 
 /// The build settings of the unit record of a record file with no feature (see
 /// [`BodyRecord::unit`]). Empty if the file has no unit record.
-fn unit_settings(text: &str) -> String {
+pub fn unit_settings(text: &str) -> String {
     let Some(line) = text.lines().find(|line| line.starts_with(UNIT_LINE)) else { return String::new() };
     let Ok(unit) = serde_json::from_str::<UnitLine>(line) else { return String::new() };
     unit.unit.cfg.iter().filter(|name| !name.starts_with("feature=")).cloned().collect::<Vec<_>>().join(",")
@@ -1168,6 +1208,12 @@ struct Group {
     files: BTreeMap<String, String>,
     /// The build settings of the unit of each target, with no feature (R61.16-2).
     units: BTreeMap<String, String>,
+    /// [R88.3-1] The digests of the raw texts of each target, from the index of the records.
+    /// `None` if a record of the group has no digest from the index, or a text that the
+    /// normal form of the test positions changes: then the compare reads the texts.
+    digests: Option<BTreeMap<String, BTreeSet<index::Digest>>>,
+    /// True if a record of the group has no digest of its raw text.
+    no_digest: bool,
 }
 
 /// Normalizes the `TestDesc` const of a `#[test]` function `name`:
@@ -1376,6 +1422,15 @@ impl Group {
         // R86.3-1: the normal text is a borrow of the record when the record has no test position.
         let text = without_test_positions(&record.text, &record.name);
         let target = if use_targets { record.target.clone() } else { String::new() };
+        match (record.known.from_index(), &text) {
+            (Some(facts), std::borrow::Cow::Borrowed(_)) if !self.no_digest => {
+                self.digests.get_or_insert_default().entry(target.clone()).or_default().insert(facts.text);
+            }
+            _ => {
+                self.no_digest = true;
+                self.digests = None;
+            }
+        }
         if !renames.is_empty() {
             self.raw
                 .get_or_insert_default()
@@ -1433,6 +1488,8 @@ impl Group {
             graphs: keep(&self.graphs, targets),
             files: keep(&self.files, targets),
             units: keep(&self.units, targets),
+            digests: self.digests.as_ref().map(|digests| keep(digests, targets)),
+            no_digest: self.no_digest,
         }
     }
 
@@ -1621,14 +1678,30 @@ impl Side {
     }
 }
 
+/// The count of the bodies that the N0 compare found equal by the digests of the index
+/// (R88.3-1; a timing line reads it).
+pub static FROM_INDEX: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Tries the levels in order for one body, and stops at the first equal level.
 fn ladder(before: &impl Groups, after: &impl Groups, name: &str) -> BodyStatus {
     let equal =
         |level: &str, proof: Vec<String>| BodyStatus::Equal { level: level.to_string(), proof };
 
     if let (Some(b), Some(a)) = (before.group("n0", name), after.group("n0", name)) {
-        if same_bodies(b.raw(), a.raw()) {
-            return equal("n0", Vec::new());
+        // [R88.3-1] The digests of the index first: equal digests are equal texts, and other
+        // digests are other texts. Only a group with no digests reads the texts.
+        match (&b.digests, &a.digests) {
+            (Some(old), Some(new)) => {
+                if same_bodies(old, new) {
+                    FROM_INDEX.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return equal("n0", Vec::new());
+                }
+            }
+            _ => {
+                if same_bodies(b.raw(), a.raw()) {
+                    return equal("n0", Vec::new());
+                }
+            }
         }
         if same_bodies(&b.texts, &a.texts) {
             return equal("n1", vec!["rename-map".to_string()]);
@@ -1793,9 +1866,12 @@ fn graph_pairs(old: Option<&Group>, new: Option<&Group>, names: [&str; 2]) -> Ve
 /// The targets of a body differ when the body moves to another crate (`move-item`), or when the
 /// package of a crate changes. No target map exists then, so the bodies are equal only when each
 /// side has exactly one distinct text for all its targets, and the two texts are the same.
-fn same_bodies(
-    before: &BTreeMap<String, BTreeSet<String>>,
-    after: &BTreeMap<String, BTreeSet<String>>,
+///
+/// [R88.3-1] The values can be the texts or their digests: the result is the same, because a
+/// digest names one text.
+fn same_bodies<T: Ord>(
+    before: &BTreeMap<String, BTreeSet<T>>,
+    after: &BTreeMap<String, BTreeSet<T>>,
 ) -> bool {
     if before.keys().eq(after.keys()) {
         return before == after;
@@ -1803,8 +1879,8 @@ fn same_bodies(
     // A change of the package version or of a dependency changes the hash in each target name
     // (design 37.12). The targets then pair by their name without the hash: for each such name,
     // the two sides have the same number of targets with the same texts.
-    fn by_stem(texts: &BTreeMap<String, BTreeSet<String>>) -> BTreeMap<&str, Vec<&BTreeSet<String>>> {
-        let mut stems: BTreeMap<&str, Vec<&BTreeSet<String>>> = BTreeMap::new();
+    fn by_stem<T: Ord>(texts: &BTreeMap<String, BTreeSet<T>>) -> BTreeMap<&str, Vec<&BTreeSet<T>>> {
+        let mut stems: BTreeMap<&str, Vec<&BTreeSet<T>>> = BTreeMap::new();
         for (target, texts) in texts {
             stems.entry(target_stem(target)).or_default().push(texts);
         }
@@ -1814,8 +1890,8 @@ fn same_bodies(
     if by_stem(before) == by_stem(after) {
         return true;
     }
-    fn single(texts: &BTreeMap<String, BTreeSet<String>>) -> Option<&String> {
-        let all: BTreeSet<&String> = texts.values().flatten().collect();
+    fn single<T: Ord>(texts: &BTreeMap<String, BTreeSet<T>>) -> Option<&T> {
+        let all: BTreeSet<&T> = texts.values().flatten().collect();
         match all.into_iter().collect::<Vec<_>>()[..] {
             [text] => Some(text),
             _ => None,

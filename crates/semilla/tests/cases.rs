@@ -1201,6 +1201,110 @@ fn difference(old: &str, new: &str) -> String {
     out
 }
 
+/// The complete record folders below a cache folder, by their name (the level, the
+/// configuration, and the tool settings): `.../mir/TREE/NAME/.complete`.
+fn record_folders(cache: &Path) -> BTreeMap<String, Vec<PathBuf>> {
+    fn walk(dir: &Path, out: &mut BTreeMap<String, Vec<PathBuf>>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let in_mir = path.parent().and_then(Path::parent).and_then(Path::file_name).is_some_and(|name| name == "mir");
+            if in_mir && path.join(".complete").is_file() {
+                out.entry(entry.file_name().to_string_lossy().into_owned()).or_default().push(path);
+            } else {
+                walk(&path, out);
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(cache, &mut out);
+    out
+}
+
+/// The records of a record folder with the facts of the index of each file (the read of the
+/// store), in the order of the full read.
+fn index_records(folder: &Path) -> Result<Vec<semilla_normal::BodyRecord>, String> {
+    let files = semilla_normal::unit_order(std::fs::read_dir(folder).map_err(|error| error.to_string())?.flatten().map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")).collect());
+    let mut out = Vec::new();
+    for file in files {
+        let bytes = std::fs::read(&file).map_err(|error| error.to_string())?;
+        let handle = std::sync::Arc::new(std::fs::File::open(&file).map_err(|error| error.to_string())?);
+        match semilla_normal::index::build(&bytes, Some(&handle)) {
+            Some((index, _)) => out.extend(semilla_normal::index::records(&index, Some(&handle)).ok_or("an index does not decode")?),
+            None => {
+                let text = String::from_utf8_lossy(&bytes);
+                let unit = semilla_normal::unit_settings(&text);
+                out.extend(semilla_normal::parse_records(&text).map_err(|error| error.to_string())?.into_iter().map(|mut record| {
+                    record.unit.clone_from(&unit);
+                    record
+                }));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The counts of the record folders and of the pairs of folders that property 15 checked.
+static INDEX_FOLDERS: AtomicUsize = AtomicUsize::new(0);
+static INDEX_PAIRS: AtomicUsize = AtomicUsize::new(0);
+
+/// The problems of property 15 for the record folders of a cache folder: for each two folders
+/// of one name (two trees), the compare and the text tests of the records with the facts of the
+/// index give the results of the records of the full read.
+fn index_problems(cache: &Path) -> Vec<String> {
+    let mut problems = Vec::new();
+    INDEX_FOLDERS.fetch_add(record_folders(cache).values().map(Vec::len).sum(), Ordering::SeqCst);
+    for (name, folders) in record_folders(cache) {
+        let mut sides = Vec::new();
+        for folder in &folders {
+            match (semilla_normal::read_records(folder).map_err(|error| error.to_string()), index_records(folder)) {
+                (Ok(full), Ok(indexed)) => {
+                    if full != indexed {
+                        problems.push(format!("{name}: the records of the index are not the records of the full read"));
+                    }
+                    sides.push((full, indexed));
+                }
+                (Err(error), _) | (_, Err(error)) => problems.push(format!("{name}: a record folder does not read: {error}")),
+            }
+        }
+        for (a, (old_full, old_index)) in sides.iter().enumerate() {
+            for (b, (new_full, new_index)) in sides.iter().enumerate() {
+                if a == b {
+                    continue;
+                }
+                let levels = |records: &Vec<semilla_normal::BodyRecord>| semilla_normal::group_levels(records.iter().cloned());
+                let (old_full_levels, new_full_levels) = (levels(old_full), levels(new_full));
+                let suggested: BTreeMap<String, String> = semilla_normal::suggest_renames(&old_full_levels, &new_full_levels).into_iter().collect();
+                INDEX_PAIRS.fetch_add(1, Ordering::SeqCst);
+                for renames in [BTreeMap::new(), suggested] {
+                    let full = semilla_normal::compare(&old_full_levels, &new_full_levels, &renames, &[]);
+                    let by_index = semilla_normal::compare(&levels(old_index), &levels(new_index), &renames, &[]);
+                    if full != by_index {
+                        problems.push(format!("{name}: the compare with the index is not the compare of the full read ({} renames)", renames.len()));
+                    }
+                    let pairs: Vec<(String, String)> = renames.iter().map(|(key, value)| (key.clone(), value.clone())).collect();
+                    // The records of a name pair by the target without its hash: the hash can
+                    // differ in the two trees.
+                    let new_by_key: BTreeMap<(&str, &str), &semilla_normal::BodyRecord> = new_index.iter().map(|record| ((record.name.as_str(), semilla_normal::target_stem(&record.target)), record)).collect();
+                    for old in old_index {
+                        let Some(new) = new_by_key.get(&(old.name.as_str(), semilla_normal::target_stem(&old.target))) else { continue };
+                        if semilla_normal::same_text(old, new) != (old.text == new.text) {
+                            problems.push(format!("{name}: `same_text` of the index is not the text compare for {}", old.name));
+                        }
+                        if semilla_normal::same_after_renames(old, new, &pairs) != (semilla_normal::paths::rename(&old.text, &pairs) == new.text) {
+                            problems.push(format!("{name}: the renamed text test of the index is not the text compare for {}", old.name));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    problems
+}
+
 /// The work of one case: the folder, and the results of the checks.
 struct Work {
     folder: PathBuf,
@@ -1336,6 +1440,11 @@ fn check(case: &Case) -> Result<Outcome, String> {
     // The step of the case. Its result is the expected text.
     let first = work.copy("a")?;
     let step = work.step(&first, &case.options)?;
+    // Property 15 (R88.2-1, R88.3-1, R88.3-2): on the record folders of the step, the compare
+    // with the facts of the index gives the result of the compare with a decode of each record.
+    for problem in index_problems(&first.join("cache")) {
+        work.fail("index", problem);
+    }
     let mut text = step.text();
     let step_text = text.clone();
     let output = step.all();
@@ -1726,6 +1835,7 @@ fn load_cases() -> Vec<Case> {
 // rule+ R44.1-1 R51.3-4 R55-1 R55.2-1 R55.3-4 R55.4-1 R55.4-3 R55.8-1 R57.4-1 R57.4-2 R57.4-3 R57.4-4 R60.4-6
 // rule- R57.4-2
 // rule+ R87.6-1
+// rule+ R88.7-1
 #[test]
 fn each_case_gives_its_expected_text_and_keeps_the_properties() {
     let start = std::time::Instant::now();
@@ -1797,6 +1907,7 @@ fn each_case_gives_its_expected_text_and_keeps_the_properties() {
     }
     println!("case set: {} case(s), {runs} run(s) of semilla, {known_count} known failure(s), {written} expected text(s) written, {threads} thread(s), {:.1} s", cases.len(), start.elapsed().as_secs_f64());
     println!("no accepted step, so no check of the fact positions, for {} case(s): {}", no_positions.len(), no_positions.join(", "));
+    println!("property 15 (the index): {} record folder(s), {} pair(s) of folders", INDEX_FOLDERS.load(Ordering::SeqCst), INDEX_PAIRS.load(Ordering::SeqCst));
     assert!(problems.is_empty(), "{} problem(s) in the case set:\n{}", problems.len(), problems.join("\n"));
 }
 

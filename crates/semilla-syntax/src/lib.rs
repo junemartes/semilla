@@ -20,6 +20,7 @@ mod mapper;
 pub mod rs;
 mod net;
 pub mod sites;
+pub mod stored;
 pub mod tree;
 pub mod tt;
 
