@@ -10789,23 +10789,23 @@ Rule index: no rule: the subsection has the decisions, the limits, and the open 
 
 - **Q1 for the phases of the core check.** The calls of the opaque inputs for each record, the marks, the N0 compare, the joint rule, `Opaque::apply`, the flow graphs, the unit lines, the expanded items, and the claims of the intent files stay computed (91.1). Each of them reads a global structure: the construction of the opaque inputs (a function of each item of the two trees), the marks (a set over all bodies), or the lists of `names` of each record of an item. A key with the digest of the global structure changes with each new pair of trees, so it gives no reuse; a key with the parts that one item reads needs a record of each read of the construction (the hard names, the opaque types, the items under `cfg`, the glob imports that the item sees). The batch has no such record. The construction itself has no split for each side: its sets (the shadow names, the modules, the glob sources) join the two trees before each item reads them.
 - **Q2 (an equal body is not decoded).** Each record is still decoded from the index (R88.2-1): the passes of the core check read the small members of each record.
-- **The check of the step before in a step after a step.** `semilla step` stores the result of the session (design 37.21): the check of the change set of two steps checks step N again (a new process has no result of the check of step N). A stored result of the check of one step needs a stored form of each type of the outcome (the edits, the comparisons, the node pairs, the verdicts, the answers of the intent check); 15a changes these types now.
+- **The check of the step before in a step after a step.** (Done in batch 14i: the stored step result, R93.1-2.) `semilla step` stores the result of the session (design 37.21): the check of the change set of two steps checks step N again (a new process has no result of the check of step N). A stored result of the check of one step needs a stored form of each type of the outcome (the edits, the comparisons, the node pairs, the verdicts, the answers of the intent check); 15a changes these types now.
 
 **Limits.**
 
 - The target of the brief is not met: the own work of Semilla in step N+1 is 5.8 s to 6.1 s (the target: 1 s plus the items that change), and a warm step is 1.1 s to 11.3 s (met by `pr-bitflags-465` and `pr-uuid-932` only, as in batch 14g). 91.8 has what is left by phase; the largest parts are the check of the new pair, the check of step N again, and the driver.
-- The database syncs before its file grows (`SafeNoSync`): in a step that comes less than about 30 s after a step that wrote much data, the write of the stored workspace of the new tree waits for the sync (`fsync` of 0.4 s to 1.2 s in step N+1 of `pr-hashbrown-693`, from a trace of the system calls). A step of an agent after a pause has less data to sync.
+- (Batch 14i: the steady point runs in a thread of its own, R93.2-1.) The database syncs before its file grows (`SafeNoSync`): in a step that comes less than about 30 s after a step that wrote much data, the write of the stored workspace of the new tree waits for the sync (`fsync` of 0.4 s to 1.2 s in step N+1 of `pr-hashbrown-693`, from a trace of the system calls). A step of an agent after a pause has less data to sync.
 - The cache folder grows by the parts of the parsed files (one part for each new content of a file); `cache --clean` removes the parts that no tree of a stored step has.
 - A construction of the opaque inputs serves only its pair of trees.
-- Q4: the memory of a warm step does not change (91.8): it stays above the value before batch 14f on 6 of 7 pull requests (+17 MB to +88 MB; the decoded records with the digests and the paths of the index). The peak of step N+1 is the same in the two binaries (544 MB to 980 MB, the largest process of the build). The peak of a cold step grows by 21 MB to 108 MB on 3 pull requests (91.8).
-- The time of the driver is the largest part of `cargo check` in step N+1 (91.8): the driver writes the records of each body of each compiled unit. This batch does not change how the build runs.
+- (Batch 14i, R93.7-1: the cause of the peak of a cold step, the parts of the files of a load in one transaction; 93.8 has the measure.) Q4: the memory of a warm step does not change (91.8): it stays above the value before batch 14f on 6 of 7 pull requests (+17 MB to +88 MB; the decoded records with the digests and the paths of the index). The peak of step N+1 is the same in the two binaries (544 MB to 980 MB, the largest process of the build). The peak of a cold step grows by 21 MB to 108 MB on 3 pull requests (91.8).
+- (Batch 14i, R93.3-1: the driver writes a pointer for a body whose record the store has; 93.8 has the measure.) The time of the driver is the largest part of `cargo check` in step N+1 (91.8): the driver writes the records of each body of each compiled unit. This batch does not change how the build runs.
 
 **Open questions for the user.**
 
-- Should the database open with `UtterlyNoSync`, or with a larger growth step, so that a write does not wait for the sync before the file grows? `UtterlyNoSync` can lose the database (not only the last transactions) at a stop of the machine.
-- Should a later batch give the outcome of the check of one step a stored form, so that a step after a step does not check the step before again?
+- (Answered by Claude in batch 14i, 93.9: neither; a steady point in a thread of its own.) Should the database open with `UtterlyNoSync`, or with a larger growth step, so that a write does not wait for the sync before the file grows? `UtterlyNoSync` can lose the database (not only the last transactions) at a stop of the machine.
+- (Done in batch 14i, R93.1-1.) Should a later batch give the outcome of the check of one step a stored form, so that a step after a step does not check the step before again?
 - Should a later batch give the construction of the opaque inputs a record of the parts that each item reads (the condition for a key of each item of the core check)?
-- Should the driver write the records of only the units and the bodies that change (the largest part of the build in a step after a step)?
+- (Done in batch 14i for the bodies, R93.3-1; 93.9 has the limits.) Should the driver write the records of only the units and the bodies that change (the largest part of the build in a step after a step)?
 
 ## 92. Batch 15a2: the map of the diff: the defects and the open questions of batch 15a
 
@@ -10970,6 +10970,180 @@ Rule index: no rule: the subsection has the open questions.
 - Should rule (a) of R92.6-1 also join the facts of a symbol link (a changed signature and the changed calls in other bodies)?
 - Should the fact that keeps the strongest kind after a split (R92.7-1) get a text of its own nodes only?
 - The constructor of a changed tuple struct or variant is now a body of the entry of its field (R92.6-1): its spotlight "an indirect change that Semilla cannot explain" goes, and two cases of the case set (`adverse/o_tuple_field_order`, `compiled/expand_one_owner_line`) change from rejected to accepted. Is that the wanted meaning?
+
+## 93. Batch 14i: the speed of a step, part 5 (a step after a step does work in proportion to the change)
+
+Date: 2026-11-27. The decisions of the user:
+
+> 2026-11-24: "a full check/review of a given step is a couple of seconds when cached".
+> 2026-11-27: "We should have a way to avoid parsing manually and instead store and reuse the compiler info".
+> 2026-11-27 (an addition to S3): "We don't need to write the body again for items that don't change. Could we use some sort of deduplicated store with pointers or (even better) just storing the deltas?"
+
+**This batch changes no output.** Each output of a step stays equal byte for byte, but for the time values and the timing lines of `SEMILLA_TIMING`. The records of the driver stay equal to the records of a full run of the driver of 14h (R93.3-2). The search for a derived identity (`identity::derive`) does not change. Code: `crates/semilla-core/src/stored.rs` (the stored form), `StepMemo` and `StoredSteps` in `crates/semilla/src/app.rs` (the stored step results), `crates/semilla/src/recstore.rs` (the steady point, the body records, the clean), `crates/semilla-mir/src/bodykey.rs` (the key of a body record), `crates/semilla-mir/src/parts.rs` (the parts of the time of the driver, the memos), `build_with_bodies` in `crates/semilla/src/oracle.rs`.
+
+### 93.1 The stored result of a step check (S1)
+
+Rule index: the identities are below.
+
+1. [R93.1-1] **The result of a step check (`StepOutcome`) has a stored form with each of its members.** Each type of the result has a serde form. The output form of a type leaves out some members (`Edit::refactor` places, `StepReport::node_mir`); such a member has `skip_serializing_if = "stored::output_only"`, and `stored::lossless` turns the skip off while Semilla writes the stored form, so the output form does not change. A member of type `&'static str` (a node kind) reads back through a set of kept texts. Two members are not in the stored form: `intent_answers` and `templates` (the check takes them in `intent::apply` and in the gate); a result with a value in one of them is not stored (`StepOutcome::storable`). Tests: `the_stored_form_has_each_member` (positive), `the_output_form_leaves_out_the_stored_members` (negative; `stored.rs`).
+2. [R93.1-2] **A step check reads the result of an equal check from the store: a step after a step does not check the step before again.** The memo of a process (design 37.21) asks the database when it has no result. A result from the store gives the log of the configurations of its step to the oracle (the output reads it) and reads the state of the records folders that its check read again (the warnings of the sandbox and of the other files). Tests: `a_step_after_a_step_takes_the_result_of_the_step_before_from_the_store` (positive), `the_first_step_computes_its_result` (negative; `tests/store88.rs`).
+3. [R93.1-3] **The key text of a stored step result is `step OLD:NEW DIGEST BINARY`**: the pair of trees (for the clean), the digest of each other input, and the identity of the Semilla binary; the format key is `semilla-step-1`. A read checks the format key and the full key text (R88.4-1). Tests: `a_stored_step_result_is_read_with_its_key` (positive), `another_input_or_format_gives_no_stored_step_result` (negative; `recstore.rs`).
+4. [R93.1-4] **The digest of the inputs has each input of the check**: the JSON of the step with no result of the build check (the trees, the intent text, the claims, the reasons, the facts of the agent with the text of each intent file, the tags, the configuration list), its syntax state, the mode, the state "after the commit", the tools key (the Semilla binary, the driver, the solver, the cargo settings outside the tree), each variable `SEMILLA_*` but `SEMILLA_TIMING`, the state "not checked" of the step, the host files of the build code, and for each of the two trees its folder set (the key of the build code state) and the settings key of its builds. The check of one step reads no other stored step: the checks of design 67 part D (`later_claims`) run after the stored result. Tests: `an_equal_step_with_equal_inputs_has_the_same_key` (positive), `a_change_of_an_input_gives_another_key` (negative; `app.rs`).
+
+### 93.2 No wait for a sync in a step (S2)
+
+Rule index: the identities are below.
+
+1. [R93.2-1] **A process that opens the database makes a steady point in a thread of its own.** A commit does not sync (`SafeNoSync` stays). libmdbx makes a steady point (a sync) when its file is full and no auto-sync limit is set: a write of the command then waits for the sync of each page of the earlier commands that is not on the disk yet (91.9: 0.4 s to 1.2 s). The thread calls `sync(true)` when the database opens: libmdbx writes the pages first with no lock (a pre-sync), so a write of the command does not wait for them, and the pages that the earlier commands freed serve the writes of this command. `UtterlyNoSync` is not used. Tests: `a_process_makes_a_steady_point_in_a_thread_of_its_own` (positive), `with_no_background_sync_the_process_makes_no_steady_point` (negative: the test variable `SEMILLA_TEST_NO_BACKGROUND_SYNC`; `recstore.rs`).
+
+### 93.3 The driver asks the store before it prints (S3)
+
+Rule index: the identities are below.
+
+1. [R93.3-1] **The driver writes a pointer line for a body whose record the store has.** Semilla gives the driver of a build at N0 the file of the known keys (`SEMILLA_MIR_KNOWN`, in the folder of the temporary files of the build; cargo does not track the variable). For each body, the driver makes the names of its expanded code and its places with no print, then the key of its record (`bodykey.rs`). A known key gives the line `{"semilla-body":"KEY"}`; each other body gets its full record. The last line of the file gives the key of each body line (`null`: no key). Semilla puts the stored record in the place of each pointer, removes the last line, and writes each new record with a key into the store (one transaction). A pointer whose record the store does not have (a clean of another process) gives a new build with no keys. Tests: `a_change_of_an_input_gives_a_new_key_and_an_equal_tree_gives_pointers` (positive and negative: a changed callee, a changed type, a renamed name, and a moved line give a new key; a line below each body does not; `crates/semilla-normal/tests/body_keys.rs`), `a_step_after_a_step_writes_only_the_new_body_records` (positive), `a_line_above_each_body_gives_each_body_a_new_record` (negative; `tests/store88.rs`).
+2. [R93.3-2] **The records of the stored path are the records of a full run.** A pointer line gets the record of its key, and the file has the text of a full run. Tests: `a_pointer_line_gets_the_stored_record_of_its_key` (positive), `a_pointer_with_no_stored_record_is_an_error` (negative; `recstore.rs`). Property 15 of the case runner: on each case with a step after a step, each record file of the copy with the store equals the record file of the copy with no body record (`record_problems` in `tests/cases.rs`).
+
+3. [R93.3-3; no negative case: the test compares two records, and the mutation of 93.8 (a memo by the instance only) fails it] **The record of a body does not depend on the order of the bodies of a compile.** The memo of the effect summaries of the driver (`effects.rs`) has the depth in its key (the depth limit cuts a walk), and an entry serves a walk only if no instance that the entry visited is open in that walk (a cycle gives another summary). Test: the record of `b` in `a_change_of_an_input_gives_a_new_key_and_an_equal_tree_gives_pointers` is equal with and with no earlier body that reaches its callee past the depth limit (part 2 of the batch, F1).
+
+**The key of a body record** (`body KEY`, format `semilla-body-1`, the payload is the JSON line). The key is the first 16 bytes of SHA-256 of the parts below (part 2 of the batch: F2 removed `crate_hash` of the crates of the workspace, F3 made the key with no print and no element ranges). Each input that can change a record, and the part of the key that covers it (with its test in `body_keys.rs`):
+
+| Input of the record | Part of the key | Test |
+|---|---|---|
+| the MIR of the body (statements, types by identity, constants, calls) | the stable hash of its MIR and of its promoted constants (`StableHash`, as rustc incremental uses it) | a changed callee (`callee`) |
+| the callees and their resolution, to each depth | the reach: the def path hash and the MIR hash of each item that the MIR names (functions, closures, coroutines, constants, the statics of its constants), with the callee of each call that the compiler resolves (`Instance::try_resolve`) and the local implementors of each trait item; the walk goes into the MIR of the metadata of a crate of the workspace if the metadata has it | a changed callee; a new body of an impl method that resolves a call (`copy`) |
+| the impls that resolve a reached instance | the resolution above; each impl header and clause of the unit (a new impl changes the unit) | `copy` |
+| the types and the layouts | the unit: the stable hash of each local ADT, field type, type alias, signature, impl type and trait reference, constant and static type, clause (no span), and the MIR of each local `Drop` impl; for a crate of the workspace that this crate uses, its interface (the same parts, and the MIR of the evaluation of each constant, static, and `const fn`); for each other crate, its `crate_hash` | a field type of the same length (`typed`); a field type in `keys` for `user::alone` |
+| the places (the element ranges, the symbols, the span, the macro call) | the places of the body with no print: each span of its MIR as an offset of the file as written, with the line of its span and the call and the definition of each macro expansion; the place of each definition that its MIR names (with the variants and the fields of a type, each resolved callee, and the `Drop` impl and its method of each type that the drop glue of a named type runs, to any depth); the place of each reached closure, and, for a body with no generic parameter, of each reached generic item | a moved line (`caller`, `other`); a line between a body and a type that it names (`field`, F4); a changed comment in a body (`caller`, G3); a line below each body keeps each key |
+| the names of the expanded code (with their lines and rivals) | the names (a part of the key and of the record), the stable hash of the HIR of the owner, the def path hashes of the unit and of the interfaces | a renamed callee |
+| `cfg` and the features | the tool: each argument of the compile | the feature `extra` |
+| the values of constants | the reach (an `Unevaluated` constant, a promoted constant, a trait constant through the local impl); the interface (the MIR of the evaluation of each constant of a crate of the workspace) | `reads` (`LIMIT`), `gate` (`<u64 as K>::Q`), `user::reads_k` (`keys::K`) |
+| the tool | the level, the fingerprint of the driver (`SEMILLA_MIR_RUN`), `SEMILLA_MIR_FORMS`, `SEMILLA_TEST_RULE_OFF`, each argument, the current folder | no test of its own (each part is in the key text) |
+| the order of the bodies of the compile | none: the record does not depend on it (R93.3-3) | the record of `b` |
+| a word of `print::unique` | none: such a body gets no key | the memo test of R93.5-2 |
+
+**The interface file** (`lib<crate><extra>.semilla-interface` next to the metadata file of a library, written after the compile): `semilla-interface-1 DIGEST HASH`, with the digest of the metadata file (cargo sets the time of a metadata file after the compile, so the time does not tell the compile). A user of the crate takes the interface only if the digest is the digest of the metadata file that it reads; else it takes `crate_hash`. The metadata of a check build has no MIR of a function: a new body of a function of a library gives a body of a user of the library no new key (`user::uses`).
+
+The stable hash of a span is relative to its item: a line above the item does not change the MIR hash (a line at the top of `src/raw.rs` of `pr-hashbrown-693` changes 14 of 792 MIR hashes of the library). So the places are a part of the key. A body whose work calls `print::unique` gets no key: its text is never equal to another.
+
+**No work for a known key (F3).** The driver makes the names of the expanded code, the places with no print, and the key; a known key gives the pointer line, and no other part runs for the body (no text, element ranges, graph, reach, forms). The MIR of each body stays in the list of the bodies of the crate: the live and the sure callees of another body read it.
+
+### 93.4 The clean (S5)
+
+Rule index: the identities are below.
+
+1. [R93.4-1] **`semilla cache --clean` removes each stored step result of a pair that no stored step has (or of another binary), and each body record that no pointer list of a tree of a stored step has.** The pointer list of a records folder is its mark `.bodies` (the key of each body line of its files; `-`: no key). The live set reads the marks of the records folders of the trees of the stored steps. Tests: `the_clean_removes_the_step_results_and_the_body_records_that_no_stored_step_uses` (positive), `the_clean_keeps_the_step_results_and_the_body_records_of_the_stored_steps` (negative; `recstore.rs`).
+
+### 93.5 The parts of the time of the driver (S3, S6)
+
+Rule index: the identities are below.
+
+1. [R93.5-1] **The timing line of the driver has the time and the count of each part of its work**: `unit` (the lists after the expansion and the unit record), `items`, `mir` (the MIR queries), `text` (the canonical body and its print), `elements`, `graph`, `reach`, `names`, `forms`, `json`, `write`, `key`, with the counts `memo` and `pointers`. Semilla adds the sums over the crates to its timing lines. Tests: `the_parts_of_the_driver_are_sums_over_the_crates` (positive), `a_part_of_another_form_does_not_count` (negative; `cargo.rs`).
+2. [R93.5-2] **The driver makes a result one time in a compile when its inputs are equal**: the current folder (one read), the text of each path (a function of the path and the current folder), and the form of each callee of the standard library or instance of a generic function (a function of its instance). A value whose work called `print::unique` is made again for each caller. Tests: `a_memo_gives_its_value_again` (positive), `a_value_with_a_unique_word_is_not_kept` (negative; `parts.rs`).
+
+### 93.6 The timing lines (S6)
+
+Rule index: the identities are below.
+
+1. [R93.6-1] **The counts of each new stored kind**: "step results from the store" and "step results computed" (the line of the stored step results), "records from the store", "records written", and "bytes written" (the line of the body records), "steady points" (the line of the steady point). Tests: `a_step_after_a_step_takes_the_result_of_the_step_before_from_the_store` (positive), `the_first_step_computes_its_result` (negative; `tests/store88.rs`).
+
+### 93.7 The memory of a cold step (S4)
+
+Rule index: the identities are below.
+
+1. [R93.7-1] **The parts of the syntax data of the files of a load, and the new body records of a build, wait for a write only up to 4 MB**: a larger batch is one write transaction at once. The resolution of the pointer lines is a stream (part 2, F5): it reads the file two times (the place of the last line, then each line) and writes each line to a new file, so no text of a whole record file is in memory. In 14h the parts of each parsed file of a load waited in memory for one transaction at the end of the load, and libmdbx kept a second copy in the pages of the transaction (the cause of the higher peak memory of a cold step, 91.9). A stored step result is written from a borrow of the result, with no copy. Tests: `a_large_batch_of_file_parts_goes_into_the_store_at_once` (positive), `a_small_part_waits_for_the_end_of_the_load` (negative; `recstore.rs`).
+
+### 93.8 The results
+
+Rule index: no rule: the subsection has the results of the measures.
+
+**The tree of the measures** is this batch rebased on batch 15a2 (main `c74475f3`). The time pairs keep BASE `5f9ec714` (14h, binaries `ad16a303`/driver `e925ed17`); the outputs are compared with main `c74475f3` (`7064807d`/`e925ed17`), because 15a2 changes the output. The binaries of this batch: `semilla` `925f265c`, driver `17bd359c`. CPUs 0 to 5; the other CPUs had the work of another batch. Seconds, MB.
+
+**The outputs.** The 6 outputs of each of the 7 training pull requests are equal to main: 42 of 42. The output of step N+1 of the 3 pull requests of the split is equal to main: 3 of 3. The full test suite on the rebased tree: 1416 passed, 0 failed; the case set: 703 cases, 2 known failures, 0 expected texts written; property 15 (R93.3-2) compared 30 record files of 5 steps after a step.
+
+**The property of S3 on the 3 pull requests** (the records of BASE and of this batch, both binaries at one path): `pr-hashbrown-693` 33 of 33 record files equal (7356 body lines), `pr-indexmap-424` 42 of 42 (9234), `pr-itertools-1086` 73 of 74 (16826): 2 records of `itertools.lib` of the new tree of step N differ in the effect text of one call in a form of a callee (`qx`, `q`): the depth limit of the effect summary in this batch, the full effect in BASE. The cause: the memo of the effect summaries of the driver (`effects.rs`) keeps a summary that the depth limit cut, so a summary depends on the bodies that the compile checked before; with pointer lines, other bodies run first. A first measure (before the fix of the places of the items that a body reaches) found 6 more changed bodies in the step N+1 output of `pr-indexmap-424` (the name of a closure type with its place).
+
+**A step after a step** (the median of 3; the load of the pair; BASE → this batch):
+
+| PR (load) | wall | `cargo check` | the driver (CPU, sum) | gate | build code test | own work | derived identity |
+|---|---|---|---|---|---|---|---|
+| `pr-hashbrown-693` (2.5 to 9.9) | 11.05 → 9.28 | 3.50 → 3.32 | 4.82 → 3.83 | 1.07 → 1.02 | 0.42 → 0.25 | 6.05 → 4.68 | 0 → 0 |
+| `pr-indexmap-424` (9.9 to 10.9) | 14.18 → 10.98 | 3.96 → 3.76 | 5.92 → 4.11 | 2.57 → 2.50 | 0.39 → 0.23 | 7.25 → 4.47 | 1.06 → 0 (15a2) |
+| `pr-itertools-1086` (10.9 to 3.1) | 21.64 → 14.39 | 11.73 → 8.22 | 17.80 → 10.41 | 1.77 → 1.28 | 0.18 → 0.17 | 7.95 → 4.71 | 0 → 0 |
+
+The target is not met: the own work is 4.5 s to 4.7 s (the target: 3 s), and the driver is 58 % to 80 % of BASE (the target: 50 %). At a load near 2 (the driver before the fix of the places), the driver was 3.28 → 2.31, 4.15 → 2.29, and 13.13 → 10.28 s, and the own work 4.43 → 3.78, 5.19 → 3.51, and 5.86 → 4.90 s. What is left in the own work of `pr-hashbrown-693`: the core check of the new pair 1.4 s (the constructions of the opaque inputs 0.63 s, the records to the rules of the build configuration 0.90 s), the index of the new record folder 0.64 s, the body records 0.34 s (30 MB of new records), the database 0.67 s. The driver: 520 of 2410 bodies of `pr-hashbrown-693` got a pointer (1004 of 3034 for `pr-indexmap-424`): a line at the top of `src/raw.rs` moves each body below it, and most bodies reach a function of that file; an integration test reaches the library, whose `crate_hash` changes. The memos of R93.5-2 give the rest: `getcwd` was 13 % of the CPU of the driver.
+
+**Warm and cold steps** (warm: the median of 3; BASE → this batch; the load of the pair):
+
+| PR | warm wall | warm CPU | warm memory | cold wall | cold memory | cache | database file |
+|---|---|---|---|---|---|---|---|
+| `pr-bitflags-465` (5.0 to 7.0) | 1.57 → 0.26 | 1.75 → 0.24 | 288 → 66 | 17.6 → 18.7 | 414 → 414 | 315 → 379 | 67 → 134 |
+| `pr-hashbrown-693` (7.8 to 6.2) | 2.26 → 1.00 | 2.42 → 0.92 | 420 → 216 | 18.1 → 16.1 | 473 → 585 | 300 → 429 | 67 → 201 |
+| `pr-indexmap-424` (5.0 to 4.1) | 3.33 → 1.15 | 3.56 → 1.02 | 479 → 230 | 21.4 → 21.1 | 547 → 682 | 430 → 559 | 67 → 201 |
+| `pr-itertools-1086` (4.5 to 5.1) | 3.23 → 1.36 | 3.87 → 1.31 | 747 → 335 | 35.0 → 36.8 | 804 → 928 | 688 → 945 | 134 → 403 |
+| `pr-num-traits-334` (4.3 to 4.3) | 4.00 → 0.47 | 4.52 → 0.44 | 655 → 121 | 26.2 → 25.8 | 718 → 774 | 540 → 669 | 134 → 268 |
+| `pr-uuid-932` (4.0 to 6.8) | 1.73 → 0.37 | 1.88 → 0.34 | 323 → 115 | 34.6 → 38.6 | 500 → 500 | 661 → 725 | 67 → 134 |
+| `pr-winnow-891` (6.6 to 7.2) | 9.16 → 1.39 | 10.22 → 1.30 | 1364 → 317 | 76.0 → 79.9 | 1506 → 1646 | 1750 → 2072 | 201 → 537 |
+
+A warm step takes its result from the store (R93.1-2): no PR is slower than BASE. The cold memory of 14g (BASE of 14h; load 10.2 to 11.4): `pr-hashbrown-693` 446, `pr-itertools-1086` 826, `pr-num-traits-334` 692, `pr-winnow-891` 1511. **S4 is not met**: the cold peak of this batch is higher on 5 of 7 PRs (+56 MB to +140 MB). The new cause is the body records of a build: the resolution reads each record file and writes it again in memory (two texts of the largest file), with the batches of the new records.
+
+**A cache of BASE.** The binary of this batch on the cache of a cold step of BASE (`pr-hashbrown-693`, `pr-uuid-932`) reads the cache and writes the body records and the step result; its output is not equal to the warm step of BASE, because the binary has the output changes of 15a2 (a compare with a cache of main did not run).
+
+**The build of Semilla** (a release build of a copy of the tree into an empty target folder): BASE 93.9 s wall, 478.8 s user (load 0.9 to 5.0); this batch 95.0 s wall, 474.9 s user (load 0.2 to 4.2); main (15a2) 89.2 s, 459.6 s.
+
+### 93.9 Decisions, limits, and open questions
+
+Rule index: no rule: the subsection has the decisions, the limits, and the open questions.
+
+**Decided by Claude** (the answers to the open questions of 91.9, and the choices of the addition of the user to S3).
+
+- The outcome of a step check gets a stored form (91.9, the second question: yes). The output form of each type stays; a member that only the stored form has is written under `stored::lossless`. `intent_answers` and `templates` are not stored: the check takes them, and a result with a value is not stored.
+- The key of a stored step result has the build code state of the two trees of the step only (its folder sets), not the build code state of the whole change set: the check of one step reads only its two trees. The memo of a process keeps its key of 37.21 (the whole state): a result of the memo is as before.
+- The steady point runs in a thread of its own when a process opens the database (91.9, the first question). `UtterlyNoSync` is not used; the growth step (64 MB) and the size of the file do not change. A larger growth step or a larger file only delays the sync of the earlier commands to the next growth, and an auto-sync limit of libmdbx needs a call of its C interface that the crate `libmdbx` does not give (new `unsafe` code).
+- One store of body records by content (the addition of the user, part 1): each record is stored one time in the database (kind `b`), by its key. The key has the tool (the driver, the tool chain, the level, the flags of the compile). The pointer list of a tree is the mark `.bodies` of its records folder. The records folder keeps its full record files: the readers of 14f (the index, the forms that load at their place in the file, the unit lines) read the files with no change, and the property of S3 compares files. So a body that does not change costs one pointer line in the build and no new record in the store, but its line is in the file of the new tree too.
+- No deltas of the pointer list (part 2): a pointer list is 33 bytes for each body (`pr-hashbrown-693`: 2452 bodies, 81 kB in one mark file), and its write takes less than 1 ms. No text deltas inside one body: a body record is small (a median of a few kB), a chain of deltas makes each read decode the chain, and a clean must know each chain before it removes a base.
+- The driver asks the store before it prints (part 3): the key of 93.3, with the stable hash of rustc. The stable hash of a span is relative to its item, so the places (`el`, the span, the macro call, the names) are parts of the key; the driver makes them before the key (93.5: the `elements` and `names` parts run for each body).
+- rustc incremental (part 4): not done. The measure of 93.8 shows that the MIR queries are the smallest part of the driver (0.06 s of 3.3 s for `pr-hashbrown-693`), and each build folder already has the incremental data of the tree before it (cargo gives `-C incremental` in the stable build folder of each repository and configuration).
+- The key of a body has the MIR of each local item that it reaches, to any depth: the effect summary of a call reads the callee to the depth 4, the forms of the callees to the depth 2, the instances to the depth 3. A key with the reach to the depth 4 only is smaller, but a later change of a depth limit of the driver would make it wrong.
+- The unit part of the key has the `crate_hash` of each crate of the crate graph: a dependent crate of the workspace (an integration test) gets new keys when its library changes. Part 2 (F2) replaces this for a crate of the workspace: the key has its interface file (93.3).
+- The driver makes three results one time in a compile (R93.5-2): the measure of 93.8 found 13 % of the CPU time of the driver in `getcwd` (the text of each path).
+- The parts of the syntax data of the files of a load, and the new body records of a build, go into the store in batches of 4 MB (R93.7-1). This replaces "one write transaction for one load" of 91.9.
+- The test of a warm step of R88.6-1, R89.5-1, and R87.1-3 uses another intent text: the result of the same step comes from the store (R93.1-2), so the check of those rules needs a step with another key.
+
+**Limits and known defects** (after part 2; 93.10 has the measures).
+
+- The target of the brief is not met: the own work of step N+1 is 3.3 s to 5.6 s (the target is 3 s), and the driver is 28 % to 81 % of BASE (the target is 50 %; `pr-itertools-1086` meets it). Most records change in a step after a step that moves lines: the key of a body has its places and the places of the items that it names.
+- The peak memory of a cold step is higher than at BASE (S4 and F5 not met); 93.10 has the cause.
+- The records folder of a tree keeps its full files: the body store does not make the cache smaller; the cache grows by the database (the body records and the step results).
+- The body records of a cold step are new records (67 MB for `pr-hashbrown-693`): a cold step writes them.
+- The stored step result of a step with a value of `intent_answers` or of `templates` is not stored.
+- The key of a body has the `crate_hash` of each crate that is not of the workspace (a dependency); the interface file covers each crate of the workspace.
+- G1 to G3 are not done (93.10); the key is the content key of F2.
+- Fixed in part 2: the order of the bodies (F1, R93.3-3); the resolution of the pointer lines holds two texts of each record file (F5: a stream).
+
+**Open questions for the user.**
+
+- Should a later batch make the records folder a pointer list, and the index of 14f point into the body store (a smaller cache)?
+- Should a later batch give the key of a body the reach to the depth limits of the driver only (more reuse)?
+- Should a later batch keep the session folders of the incremental compile of a check, so that the driver can use the dependency graph of rustc (G1 to G3)?
+- Should a later batch keep the database pages out of the peak memory (a smaller map of the database file in a cold step)?
+
+### 93.10 Part 2 of the batch (F1 to F6, and the direction of G1 to G3)
+
+Rule index: no rule: the subsection has the changes and the results of part 2; its rules are R93.3-1 to R93.3-3 and R93.7-1.
+
+**What changed since part 1.** F1: the effect memo of the driver is independent of the order of the bodies (R93.3-3); a full run of the driver gives other records than BASE where the order changed a summary (`pr-hashbrown-693`: 603 records of 7356, the members `q` and `qx`), and no expected text of the case set changed (0 of 727 cases). F2: no `crate_hash` of a crate of the workspace in the key (the interface file); the key table of 93.3 lists each input with its test. F3: the key has no print and no element ranges; a known key runs no other part. F4: a test of the places of the body and of the definitions that it names. F5: the resolution of the pointer lines is a stream. A fix of the gap of the drop glue: the places of the `Drop` impls of the types that the drop glue runs (the S3 property found it on `pr-hashbrown-693`).
+
+**G1 to G3 (the dependency tracking of rustc): not done.** The cause, from the interface of the pinned tool chain: an anon task (`DepGraph::with_anon_task`) gets a dep node whose hash comes from the indices of its reads in the session, so it is never green in the next session; a task with a key of its own (`with_task`) needs a dep kind, and the dep kinds are the closed list of the queries of rustc: a node with the kind and the key of a query is the node of that query. The reads of the driver through the tables of `rustc_public` and of the source map are not tracked (G3); a check of a session and of a failed build would need the session folders of the incremental compile, which a check of Semilla does not keep. The nearest form is the content key of F2 (93.3), which the brief of part 2 names for this case: each untracked read of G3 is a part of the key (the spans and the lines of the source text as places; the arguments and the variables of the tool; the forms of the callees and the current folder are memos of the process with no record input; a word of `print::unique` gives no key). A test: a changed comment in a body gives the body a new key. **Decided by Claude.**
+
+**The results of part 2** (the tree rebased on main `50eeb4f5`; the binaries `semilla` and the driver of the commit message; BASE `5f9ec714` for the times; main `50eeb4f5` for the outputs):
+
+- The full test suite: 1434 passed, 0 failed; the case set: 754 cases, 2 known failures, 0 expected texts written (F1 changed no expected text).
+- The outputs: 42 of 42 equal to main; the step N+1 output: 3 of 3.
+- The S3 property (the stored path against a full run of the same driver): 33 of 33, 42 of 42, and 74 of 74 record files (`pr-hashbrown-693`, `pr-indexmap-424`, `pr-itertools-1086`). A full run of this driver differs from a full run of BASE in 603, 625, and 786 records (the members `q` and `qx`: F1).
+- Step N+1 (bodies, changed records, records from the store, records written): 2452, 987, 564, 1846; 3076, 701, 1737, 1297; 5635, 21, 4896, 694.
+- Step N+1 (the median of 3; load 2.0 to 4.1; BASE → this batch): wall 8.35 → 7.01, 10.33 → 8.09, 20.42 → 10.87 s; the driver 3.29 → 2.68, 4.12 → 2.96, 15.00 → 4.24 s; the own work 4.45 → 3.81, 5.20 → 3.33, 10.23 → 5.59 s.
+- Warm steps: 0.23 s to 1.76 s (BASE 1.33 s to 11.63 s). The cold peak memory is higher than BASE on 5 of 7 pull requests (+79 MB to +158 MB): F5 is not met. The cause, measured on `pr-hashbrown-693` (the peak is in the process of Semilla, not in the driver): (1) about +50 MB of pages of the database file that the process maps (`RssFile`): a cold step writes 67 MB of body records; a full driver (no body store) does not have this part; (2) about +25 MB of `RssAnon` at the end of the step, after the peak of BASE, when Semilla writes the stored step result (5.2 MB of JSON). During the check, the `RssAnon` curve is equal to BASE (453 MB against 452 MB).
+- The mutation check: 17 of 17 changes caught.
 
 ## 94. Batch 15b: the map of the diff: the transformations extract, inline, and reorder
 

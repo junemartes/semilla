@@ -50,7 +50,7 @@ pub const RULE_CLOSURE: &str = "R95.6-1";
 pub const ORDER_MATTERS: &str = "the order can matter";
 
 /// One entry of the code that a transformation does not explain (R94.1-2).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Left {
     pub inline: bool,
     pub body: String,
@@ -62,7 +62,7 @@ pub struct Left {
 }
 
 /// One transformation of the step that the map applies (for the check of a statement).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Applied {
     pub inline: bool,
     pub body: String,
@@ -76,7 +76,7 @@ pub struct Applied {
 
 /// The plan of the transformations of a step: the kind of each node that a transformation
 /// gives, the nodes whose facts make one entry, and the entries of the code left.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Plan {
     pub nodes: BTreeMap<usize, NodeKind>,
     pub joins: Vec<(usize, usize)>,
@@ -84,6 +84,7 @@ pub struct Plan {
     pub applied: Vec<Applied>,
     /// [R94.6-1] The candidates of each statement of the agent that does not hold, with the
     /// cause: `(inline, body, callee)`.
+    #[serde(with = "semilla_core::stored::pairs")]
     pub failed: BTreeMap<(bool, String, String), String>,
     /// [R94.1-3] The notes of the ties, and the templates of each candidate.
     pub notes: Vec<String>,

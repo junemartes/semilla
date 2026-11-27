@@ -653,6 +653,88 @@ struct StepMemo {
     /// The inputs of a step check that the step does not have: the mode, the phase, and the
     /// build code state.
     inputs: String,
+    /// [R93.1-1] The stored step results of the database (design 93.1), or `None`.
+    stored: Option<StoredSteps>,
+}
+
+/// [R93.1-1] The stored step results of the database of the cache folder.
+struct StoredSteps {
+    db: std::sync::Arc<crate::recstore::Db>,
+    /// The inputs of the check of each step (by its index) that the step does not have: the
+    /// mode, the phase, the build code state of its two trees, the tools, and the settings.
+    inputs: BTreeMap<usize, String>,
+    /// The log of the configurations of the oracle (the output reads it).
+    log: crate::oracle::ConfigLog,
+    /// The start of the list of the read records folders for the check that runs now.
+    noted: usize,
+}
+
+/// [R93.1-1] The stored form of a step result: the result, the configurations of the step (the
+/// log of the oracle), and the records folders that the check read (their warnings).
+#[derive(serde::Deserialize)]
+struct StoredStep {
+    outcome: StepOutcome,
+    configs: Option<crate::oracle::StepConfigs>,
+    folders: Vec<std::path::PathBuf>,
+}
+
+/// [R93.7-1] The write form of [`StoredStep`]: it borrows the result (no copy in memory).
+#[derive(serde::Serialize)]
+struct StoredStepRef<'a> {
+    outcome: &'a StepOutcome,
+    configs: Option<crate::oracle::StepConfigs>,
+    folders: Vec<std::path::PathBuf>,
+}
+
+/// [R93.6-1] The phase name of the stored step results in the timing lines.
+pub(crate) const STEP_STORE_PHASE: &str = "the stored step results (design 93)";
+
+impl StoredSteps {
+    /// The key text of the result of a step, or `None` (a step with no inputs).
+    fn key(&self, step: &Step) -> Option<String> {
+        let inputs = self.inputs.get(&step.index)?;
+        // The result of the build check is not an input of the check (as in the memo). The
+        // syntax state of a step is not in its JSON.
+        let plain = Step { build_check: None, ..step.clone() };
+        let text = format!("{}\nsyntax only {}\n{inputs}", serde_json::to_string(&plain).ok()?, step.syntax_only);
+        Some(crate::recstore::step_key(&step.tree_before, &step.tree_after, &text))
+    }
+
+    fn get(&mut self, step: &Step) -> Option<StepOutcome> {
+        let key = self.key(step)?;
+        let started = std::time::Instant::now();
+        let found = self.db.get(crate::recstore::Kind::Step, &key, crate::recstore::STEP_FORMAT, |payload| serde_json::from_slice::<StoredStep>(payload).ok());
+        semilla_core::timing::add(STEP_STORE_PHASE, started);
+        let Some(found) = found else {
+            semilla_core::timing::count(STEP_STORE_PHASE, "step results computed", 1);
+            self.noted = crate::oracle::noted_count();
+            return None;
+        };
+        semilla_core::timing::count(STEP_STORE_PHASE, "step results from the store", 1);
+        // The output reads the configurations of the step and the warnings of its folders.
+        if let Some(configs) = found.configs
+            && let Ok(mut all) = self.log.lock()
+        {
+            all.insert((step.tree_before.clone(), step.tree_after.clone()), configs);
+        }
+        crate::oracle::note_folders(&found.folders);
+        Some(found.outcome)
+    }
+
+    fn put(&mut self, step: &Step, outcome: &StepOutcome) {
+        let Some(key) = self.key(step) else { return };
+        if !outcome.storable() {
+            return;
+        }
+        let configs = self.log.lock().ok().and_then(|all| all.get(&(step.tree_before.clone(), step.tree_after.clone())).cloned());
+        let stored = StoredStepRef { outcome, configs, folders: crate::oracle::noted_since(self.noted) };
+        let started = std::time::Instant::now();
+        if let Ok(payload) = semilla_core::stored::lossless(|| serde_json::to_vec(&stored)) {
+            semilla_core::timing::count(STEP_STORE_PHASE, "bytes written", payload.len() as u64);
+            let _ = self.db.put(vec![(crate::recstore::Kind::Step, key, crate::recstore::STEP_FORMAT, payload)]);
+        }
+        semilla_core::timing::add(STEP_STORE_PHASE, started);
+    }
 }
 
 impl StepMemo {
@@ -666,13 +748,22 @@ impl StepMemo {
 
 impl semilla_verify::StepCache for StepMemo {
     fn get(&mut self, step: &Step) -> Option<StepOutcome> {
-        self.results.get(&self.key(step)).cloned()
+        if let Some(found) = self.results.get(&self.key(step)) {
+            return Some(found.clone());
+        }
+        // [R93.1-1] A result of an earlier command, from the store.
+        let found = self.stored.as_mut()?.get(step)?;
+        self.results.insert(self.key(step), found.clone());
+        Some(found)
     }
 
     fn put(&mut self, step: &Step, outcome: &StepOutcome) {
         // A step with an error of the build can give a different result on the next run.
         if outcome.report.errors.is_empty() {
             self.results.insert(self.key(step), outcome.clone());
+            if let Some(stored) = self.stored.as_mut() {
+                stored.put(step, outcome);
+            }
         }
     }
 }
@@ -974,6 +1065,17 @@ impl App {
         for tree in trees {
             if let Ok(ws) = self.workspace(&tree) {
                 live.texts.extend(ws.rust_files.values().map(|text| crate::recstore::hex_digest(text.as_bytes())));
+            }
+            // [R93.4-1] The pointer lists of the records folders of the tree, in each folder set.
+            for set in ["shared", "build-code"] {
+                let Ok(keys) = std::fs::read_dir(self.repo.cache_dir().join(set)) else { continue };
+                for key in keys.flatten() {
+                    let Ok(folders) = std::fs::read_dir(key.path().join("mir").join(&tree)) else { continue };
+                    for folder in folders.flatten() {
+                        let list = std::fs::read_to_string(folder.path().join(crate::recstore::BODIES_FILE)).unwrap_or_default();
+                        live.bodies.extend(list.lines().filter(|line| *line != "-" && !line.is_empty()).map(str::to_string));
+                    }
+                }
             }
         }
         live
@@ -2241,6 +2343,32 @@ impl App {
         Ok((format!("verify: {base}, {}, the session of this folder (not a commit)", count(set.steps.len())), result))
     }
 
+    /// [R93.1-1] The stored step results for the check of a change set: the inputs of the check
+    /// of each step that the step does not have. `None`: no database, or a check with no MIR.
+    fn stored_steps(&self, set: &ChangeSet, skip: &BTreeSet<usize>, code: &BuildCode, log: &crate::oracle::ConfigLog) -> Option<StoredSteps> {
+        if self.no_bodies {
+            return None;
+        }
+        let db = crate::recstore::database_for(&self.repo.cache_dir()).or_else(|| crate::recstore::open_database(&self.repo.cache_dir()))?;
+        let oracle = NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: Default::default(), added: Default::default(), after_commit: set.after_commit.is_some() };
+        let driver = semilla_normal::cargo::find_driver().ok();
+        // Each variable of Semilla can change a check (a test switch, a budget); the timing
+        // lines change no result.
+        let variables: Vec<String> = std::env::vars().filter(|(name, _)| name.starts_with("SEMILLA_") && name != "SEMILLA_TIMING").map(|(name, value)| format!("{name}={value}")).collect();
+        let common = format!("mode {:?}\nafter commit {}\ntools {}\nvariables {variables:?}", self.mode, set.after_commit.is_some(), self.tools_key());
+        let mut inputs = BTreeMap::new();
+        for step in &set.steps {
+            // The build code state of the two trees: the folder set of each tree (its key), and
+            // the settings of its builds outside the tree.
+            let tree = |tree: &str| match oracle.root(tree) {
+                Ok((root, marked)) => format!("{} {marked} {}", root.display(), semilla_normal::cargo::settings_key(&root.join("build"), driver.as_deref())),
+                Err(error) => format!("no folder set: {error:#}"),
+            };
+            inputs.insert(step.index, format!("{common}\nskipped {}\nhost files {:?}\nbefore {}\nafter {}", skip.contains(&step.index), code.host_files(step), tree(&step.tree_before), tree(&step.tree_after)));
+        }
+        Some(StoredSteps { db, inputs, log: log.clone(), noted: 0 })
+    }
+
     pub fn check_set(&mut self, set: &ChangeSet, require_groups: bool) -> Result<CheckResult> {
         let code = self.build_code(set)?;
         self.check_set_with(set, require_groups, &code)
@@ -2276,7 +2404,8 @@ impl App {
         let mut load = |tree: &str| cache.get(tree).cloned().with_context(|| format!("no workspace for tree {tree}"));
         let started = std::time::Instant::now();
         // The key of a step result has each input of the step check that is not in the step.
-        let mut memo = StepMemo { results: std::mem::take(&mut self.step_memo), inputs: format!("{:?} {} {skip:?} {code:?} {}", self.mode, self.no_bodies, set.after_commit.is_some()) };
+        let stored = self.stored_steps(set, &skip, code, &log);
+        let mut memo = StepMemo { results: std::mem::take(&mut self.step_memo), inputs: format!("{:?} {} {skip:?} {code:?} {}", self.mode, self.no_bodies, set.after_commit.is_some()), stored };
         let (mut report, mut outcomes) = semilla_verify::verify_changeset_cached(set, &mut load, &bodies, &exprs, Options { require_groups, derive_edits: true }, &mut memo);
         self.step_memo = memo.results;
         // Design 67, part D: a later step that changes a body that a claim of an earlier step
@@ -3172,5 +3301,55 @@ mod store_tests {
         assert_ne!(one, super::syntax_key("abc", b"{\"a\":1}", "binary-1"));
         assert_ne!(one, super::syntax_key("abd", b"{}", "binary-1"));
         assert_eq!(crate::store::binary_identity().len(), 16);
+    }
+
+    fn stored(inputs: &str) -> super::StoredSteps {
+        let dir = tempfile::tempdir().unwrap().keep();
+        let db = crate::recstore::open_database(&dir).unwrap();
+        super::StoredSteps { db, inputs: [(0, inputs.to_string())].into_iter().collect(), log: Default::default(), noted: 0 }
+    }
+
+    fn step() -> semilla_core::Step {
+        semilla_core::Step { index: 0, intent: "the step".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), syntax_only: false, build_check: None, agent: Default::default(), tags: Vec::new(), configurations: None }
+    }
+
+    // [R93.1-2] The key of a stored step result has each input of the check: an equal step
+    // with equal inputs has the same key, and the result of the build check is not an input.
+    // rule+ R93.1-4
+    #[test]
+    fn an_equal_step_with_equal_inputs_has_the_same_key() {
+        let store = stored("mode Run");
+        let mut checked = step();
+        checked.build_check = Some(semilla_core::BuildCheck::Passes);
+        assert_eq!(store.key(&step()), store.key(&checked));
+        assert!(store.key(&step()).is_some());
+    }
+
+    // [R93.1-2] The negative case: a change of each input gives another key (the pair of trees,
+    // the intent files, the configuration list, the claims, the syntax state, and the inputs
+    // outside the step: the options, the tools, the build code state).
+    // rule- R93.1-4
+    #[test]
+    fn a_change_of_an_input_gives_another_key() {
+        let store = stored("mode Run");
+        let key = store.key(&step()).unwrap();
+        let mut changes: Vec<semilla_core::Step> = Vec::new();
+        changes.push(semilla_core::Step { tree_before: "c".into(), ..step() });
+        changes.push(semilla_core::Step { tree_after: "c".into(), ..step() });
+        changes.push(semilla_core::Step { configurations: Some(vec!["release".into()]), ..step() });
+        changes.push(semilla_core::Step { syntax_only: true, ..step() });
+        changes.push(semilla_core::Step { intent: "another".into(), ..step() });
+        let mut intent = step();
+        intent.agent.intent.push(semilla_core::IntentFile { path: "a.rs".into(), text: "claim".into() });
+        changes.push(intent.clone());
+        let mut other_text = intent;
+        other_text.agent.intent[0].text = "claim 2".into();
+        changes.push(other_text);
+        for change in &changes {
+            assert_ne!(store.key(change).unwrap(), key, "{change:?}");
+        }
+        assert_ne!(stored("mode NoBuildCode").key(&step()).unwrap(), key);
+        // A step with no inputs has no key.
+        assert!(store.key(&semilla_core::Step { index: 1, ..step() }).is_none());
     }
 }

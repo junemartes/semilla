@@ -252,14 +252,16 @@ pub struct StepReport {
     /// [R90.2-1] The MIR evidence of each changed node, by the index of its edit (design 90).
     /// The check of the step uses it to give each node its kind. It is not stored: a stored
     /// step keeps the kinds on its entries.
-    #[serde(skip)]
+    ///
+    /// [R93.1-1] The stored form of a step result has it (`stored::lossless`).
+    #[serde(default, skip_serializing_if = "crate::stored::output_only")]
     pub node_mir: std::collections::BTreeMap<usize, NodeMir>,
 }
 
 /// [R90.2-1] The MIR evidence of one changed node of the syntax diff (design 90): the elements
 /// of the MIR alignment that the node owns (the owner rule of design 40.3: the smallest node
 /// that contains the node of the element), and the state of its bodies.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeMir {
     /// The elements that differ that the node owns and that have a partner of the other side
     /// in their aligned region (R90.1-1), on each side (0: old, 1: new).

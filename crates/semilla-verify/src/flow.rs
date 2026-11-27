@@ -25,7 +25,7 @@ use semilla_syntax::Workspace;
 use crate::MirPlace;
 
 /// One point of a graph.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FlowPoint {
     /// `entry`, `branch`, `call`, `return`, `panic`, `check`, `loop`, or the name of a
     /// construct (`try`, `for`).
@@ -134,7 +134,7 @@ pub fn short_path(text: &str) -> String {
 }
 
 /// The graph of one body.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FlowGraph {
     pub points: Vec<FlowPoint>,
     /// The first point, the second point, the label.
@@ -157,7 +157,7 @@ pub struct FlowGraph {
 pub const NOT_COMPARED: &str = "two records of one body in one configuration";
 
 /// One side of a pair of graphs.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum FlowSide {
     /// The side has no record of the body.
     NoBody,
@@ -180,7 +180,7 @@ fn coroutine_rank(status: &crate::BodyStatus) -> FlowResult {
 }
 
 /// The graphs of one body in one configuration and one pair of targets.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GraphPair {
     /// The name of the configuration.
     pub config: String,
@@ -200,7 +200,7 @@ pub struct GraphPair {
 }
 
 /// The result of a body (design 60, B4).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum FlowResult {
     Same,
     SameStructure,

@@ -1510,7 +1510,57 @@ fn next_step_problems(work: &mut Work, case: &Case) -> Result<Vec<String>, Strin
     write(&kept)?;
     let stored = work.step(&kept, &[])?;
     NEXT_STEPS.fetch_add(1, Ordering::SeqCst);
-    Ok(if stored.stdout == full.stdout { Vec::new() } else { vec![format!("the step after the step with the stored results is different:\n{}", difference(&full.text(), &stored.text()))] })
+    let mut problems = if stored.stdout == full.stdout { Vec::new() } else { vec![format!("the step after the step with the stored results is different:\n{}", difference(&full.text(), &stored.text()))] };
+    // [R93.3-2] The records of the stored path (the pointers of the driver and the body records
+    // of the store) are the records of the full path (a store with no body record).
+    problems.extend(record_problems(&kept, &other));
+    Ok(problems)
+}
+
+/// [R93.3-2] The count of the record files that the property of the body records compared.
+static RECORD_FILES: AtomicUsize = AtomicUsize::new(0);
+
+/// [R93.3-2] The record files of the records folders of a copy: the path from the folder of
+/// the trees, and the text with each word of `unique` masked.
+fn record_files(copy: &Path) -> BTreeMap<String, String> {
+    fn walk(folder: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(folder) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && depth < 7 {
+                walk(&path, depth + 1, out);
+            } else if path.extension().is_some_and(|extension| extension == "jsonl") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&copy.join("cache"), 0, &mut files);
+    let mut out = BTreeMap::new();
+    for file in files {
+        let parts: Vec<String> = file.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect();
+        let Some(at) = parts.iter().position(|part| part == "mir") else { continue };
+        let Ok(text) = std::fs::read_to_string(&file) else { continue };
+        let masked: String = text.split("unknown_").enumerate().map(|(index, part)| if index == 0 { part.to_string() } else { format!("unknown_{}", part.split_once('#').map(|(word, rest)| format!("{word}#{}", rest.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.'))).unwrap_or_else(|| part.to_string())) }).collect();
+        out.insert(parts[at + 1..].join("/"), masked);
+    }
+    out
+}
+
+/// [R93.3-2] The problems of the property of the body records: each record file of `stored`
+/// equals the record file of `full`.
+fn record_problems(stored: &Path, full: &Path) -> Vec<String> {
+    let (stored, full) = (record_files(stored), record_files(full));
+    let mut problems = Vec::new();
+    for (path, text) in &stored {
+        RECORD_FILES.fetch_add(1, Ordering::SeqCst);
+        match full.get(path) {
+            Some(other) if other == text => {}
+            Some(_) => problems.push(format!("the record file `{path}` of the stored path is different from the full path")),
+            None => problems.push(format!("the record file `{path}` is only in the stored path")),
+        }
+    }
+    problems
 }
 
 /// The work of one case: the folder, and the results of the checks.
@@ -2155,6 +2205,7 @@ fn each_case_gives_its_expected_text_and_keeps_the_properties() {
     println!("property 15 (the stored path, R89.6-1): {} compare(s) of a stored path and a full path", STORED_CHECKS.load(Ordering::SeqCst));
     println!("property 15 (the stored items, R91.3-1): {} file(s) from the store, {} step(s) after a step", ITEM_FILES.load(Ordering::SeqCst), NEXT_STEPS.load(Ordering::SeqCst));
     println!("property 15 (an empty database, R91.7-1): {} command(s) with an empty database", EMPTY_CHECKS.load(Ordering::SeqCst));
+    println!("property 15 (the body records, R93.3-2): {} record file(s) of a step after a step", RECORD_FILES.load(Ordering::SeqCst));
     assert!(problems.is_empty(), "{} problem(s) in the case set:\n{}", problems.len(), problems.join("\n"));
 }
 

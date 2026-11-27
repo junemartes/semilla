@@ -912,8 +912,7 @@ fn place(tcx: TyCtxt<'_>, span: Span) -> (String, [i64; 2], usize, usize, usize,
 /// in its code. The two trees of a step build in two folders, so the path is not code of the
 /// author. Cargo starts the compiler in the workspace root.
 fn stable_paths(text: &str) -> String {
-    let Ok(root) = std::env::current_dir() else { return text.to_string() };
-    let root = root.to_string_lossy().into_owned();
+    let root = crate::current_folder().to_string_lossy().into_owned();
     if root.len() < 2 || !text.contains(&root) {
         return text.to_string();
     }

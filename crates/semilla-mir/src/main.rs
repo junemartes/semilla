@@ -40,6 +40,7 @@ extern crate rustc_session;
 extern crate rustc_span;
 extern crate rustc_trait_selection;
 
+mod bodykey;
 mod config;
 mod consts;
 mod effects;
@@ -53,6 +54,7 @@ mod made;
 mod names;
 mod normalize;
 mod open;
+mod parts;
 mod pretty;
 mod print;
 mod reach;
@@ -372,6 +374,13 @@ struct SpanInfo {
     range: Option<(i64, i64)>,
 }
 
+/// [R93.3-1] The member of a pointer line (the key of a record of the store of Semilla).
+const POINTER_MEMBER: &str = "semilla-body";
+
+/// [R93.3-1] The member of the last line of a record file with the keys on: the key of each
+/// body line.
+const KEYS_MEMBER: &str = "semilla-keys";
+
 /// Where the records go.
 enum Output {
     Stdout,
@@ -529,7 +538,8 @@ struct DriverTimes {
 fn write_timing_line(path: &Path, name: &str, times: &DriverTimes) {
     let nanos = |time: std::time::SystemTime| time.duration_since(std::time::UNIX_EPOCH).map(|value| value.as_nanos()).unwrap_or(0);
     let end = times.start + times.before + times.driver + times.after;
-    let line = format!("semilla-driver-timing {name} {} {} {} {} {} {}\n", nanos(times.start), nanos(end), times.before.as_nanos(), times.driver.as_nanos(), times.after.as_nanos(), std::process::id());
+    // [R93.5-1] The parts of the time of the driver come last.
+    let line = format!("semilla-driver-timing {name} {} {} {} {} {} {} {}\n", nanos(times.start), nanos(end), times.before.as_nanos(), times.driver.as_nanos(), times.after.as_nanos(), std::process::id(), parts::field());
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = file.write_all(line.as_bytes());
     }
@@ -549,7 +559,7 @@ fn run_compiler_timed(level: Level, rustc_args: &[String], output: Output, open:
     // Keep the values of the build that cargo asked for (from the profile of the tree).
     full_args.extend(inherited_checks(rustc_args));
 
-    let mut callbacks = Callbacks { level, output, open, error: None, made: None, expansions: None, driver: std::time::Duration::ZERO, analysis: None };
+    let mut callbacks = Callbacks { level, output, open, error: None, made: None, expansions: None, driver: std::time::Duration::ZERO, analysis: None, interface: None };
     let result = rustc_driver::catch_fatal_errors(|| {
         rustc_driver::compiler_entrypoint(&full_args, &mut callbacks)
     });
@@ -566,6 +576,10 @@ fn run_compiler_timed(level: Level, rustc_args: &[String], output: Output, open:
         let driver = callbacks.driver + to.saturating_duration_since(from);
         DriverTimes { start: start_system, before, driver, after: ended.saturating_duration_since(to) }
     });
+    // [R93.3-1] The interface file of a library, after its metadata file.
+    if let (Ok(()), Some(hash)) = (&result, &callbacks.interface) {
+        bodykey::write_interface(rustc_args, hash);
+    }
     match result {
         Ok(()) => (ExitCode::SUCCESS, times),
         Err(_) => (ExitCode::FAILURE, None),
@@ -588,6 +602,8 @@ struct Callbacks {
     driver: std::time::Duration,
     /// [R91.5-1] The start and the end of the driver after the analysis.
     analysis: Option<(std::time::Instant, std::time::Instant)>,
+    /// [R93.3-1] The interface hash of this crate, for the file after the compile.
+    interface: Option<String>,
 }
 
 impl rustc_driver::Callbacks for Callbacks {
@@ -640,16 +656,16 @@ impl Callbacks {
         open::print_links(tcx);
         // The list is large, and Semilla reads it only from the N0 records.
         if self.level == Level::N0 {
-            self.made = guarded(|| made::collect(tcx));
+            self.made = parts::timed(parts::Part::Unit, || guarded(|| made::collect(tcx)));
         }
         if self.level == Level::N0 {
-            self.expansions = guarded(|| rustc_middle::ty::print::with_no_trimmed_paths!(expand::collect(tcx)));
+            self.expansions = parts::timed(parts::Part::Unit, || guarded(|| rustc_middle::ty::print::with_no_trimmed_paths!(expand::collect(tcx))));
         }
         Compilation::Continue
     }
 
     fn after_analysis_work(&mut self, tcx: TyCtxt<'_>) -> Compilation {
-        if let Err(error) = traits::write(tcx) {
+        if let Err(error) = parts::timed(parts::Part::Unit, || traits::write(tcx)) {
             self.error = Some(format!("cannot write the trait table: {error}"));
             return Compilation::Stop;
         }
@@ -661,6 +677,11 @@ impl Callbacks {
             }
         };
         let records = rustc_public::rustc_internal::run(tcx, || collect(level, &target));
+        // [R93.3-1] The interface of this crate for the keys of the crates that use it (each
+        // compile at N0 writes it after the compile).
+        if level == Level::N0 && matches!(self.output, Output::File(_)) {
+            self.interface = parts::timed(parts::Part::Key, || bodykey::interface_hash(tcx));
+        }
         let records = match records {
             Ok(records) => records,
             Err(error) => {
@@ -670,22 +691,43 @@ impl Callbacks {
         };
         // The first line is the record of the compile unit (batch 5t, part A).
         let mut text = String::new();
-        let mut unit = UnitLine { unit: unit_record(tcx, &target) };
-        unit.unit.made = self.made.take().and_then(|items| guarded(|| made::finish(tcx, items)));
-        unit.unit.expansions = self.expansions.take();
-        // R70.1-1: the name record, at the levels of the expansion records.
-        if level == Level::N0 {
-            unit.unit.names = guarded(|| names::collect(tcx));
-        }
-        if level == Level::N0 {
-            unit.unit.defs = rustc_middle::ty::print::with_resolve_crate_name!(rustc_middle::ty::print::with_no_trimmed_paths!(guarded(|| symbols::defs(tcx))));
-        }
-        text.push_str(&serde_json::to_string(&unit).expect("a unit record is valid JSON"));
-        text.push('\n');
-        for record in &records {
-            text.push_str(&serde_json::to_string(record).expect("a record is valid JSON"));
+        let unit = parts::timed(parts::Part::Unit, || {
+            let mut unit = UnitLine { unit: unit_record(tcx, &target) };
+            unit.unit.made = self.made.take().and_then(|items| guarded(|| made::finish(tcx, items)));
+            unit.unit.expansions = self.expansions.take();
+            // R70.1-1: the name record, at the levels of the expansion records.
+            if level == Level::N0 {
+                unit.unit.names = guarded(|| names::collect(tcx));
+            }
+            if level == Level::N0 {
+                unit.unit.defs = rustc_middle::ty::print::with_resolve_crate_name!(rustc_middle::ty::print::with_no_trimmed_paths!(guarded(|| symbols::defs(tcx))));
+            }
+            unit
+        });
+        parts::timed(parts::Part::Json, || {
+            text.push_str(&serde_json::to_string(&unit).expect("a unit record is valid JSON"));
             text.push('\n');
-        }
+            // [R93.3-1] A pointer line has the key of a record of the store. With the keys on,
+            // the last line gives the key of each body line (`null`: no key).
+            let mut keys: Vec<Option<String>> = Vec::new();
+            for line in &records {
+                match line {
+                    Line::Full(record, key) => {
+                        text.push_str(&serde_json::to_string(record).expect("a record is valid JSON"));
+                        keys.push(key.clone());
+                    }
+                    Line::Pointer(key) => {
+                        text.push_str(&serde_json::json!({ POINTER_MEMBER: key }).to_string());
+                        keys.push(Some(key.clone()));
+                    }
+                }
+                text.push('\n');
+            }
+            if std::env::var_os(bodykey::KNOWN_ENV).is_some() && level == Level::N0 {
+                text.push_str(&serde_json::json!({ KEYS_MEMBER: keys }).to_string());
+                text.push('\n');
+            }
+        });
         match &self.output {
             Output::Stdout => {
                 let mut stdout = std::io::stdout().lock();
@@ -694,7 +736,7 @@ impl Callbacks {
                 Compilation::Stop
             }
             Output::File(path) => {
-                if let Err(error) = write_atomically(path, &text) {
+                if let Err(error) = parts::timed(parts::Part::Write, || write_atomically(path, &text)) {
                     self.error = Some(format!("cannot write {}: {error}", path.display()));
                     return Compilation::Stop;
                 }
@@ -748,10 +790,27 @@ struct UnitLine {
     unit: UnitRecord,
 }
 
+/// [R93.5-2] The current folder of the compile: the compiler does not change it, so the driver
+/// reads it one time.
+pub(crate) fn current_folder() -> &'static std::path::Path {
+    static CURRENT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    CURRENT.get_or_init(|| std::env::current_dir().unwrap_or_default())
+}
+
 /// A path without `.` and `..` parts, relative to the current folder if it is below it. Cargo
 /// starts the compiler in the workspace root for a package of the workspace.
+///
+/// [R93.5-2] The text of a path is a function of the path and of the current folder, so the
+/// driver makes it one time for each path of a compile (a body maps each of its elements).
 pub(crate) fn workspace_path(path: &std::path::Path) -> String {
-    let current = std::env::current_dir().unwrap_or_default();
+    thread_local! {
+        static TEXTS: std::cell::RefCell<HashMap<PathBuf, String>> = std::cell::RefCell::new(HashMap::new());
+    }
+    TEXTS.with(|texts| parts::kept(texts, path.to_path_buf(), || workspace_path_text(path)))
+}
+
+fn workspace_path_text(path: &std::path::Path) -> String {
+    let current = current_folder();
     let full = if path.is_absolute() { path.to_path_buf() } else { current.join(path) };
     let mut clean = PathBuf::new();
     for part in full.components() {
@@ -763,7 +822,7 @@ pub(crate) fn workspace_path(path: &std::path::Path) -> String {
             part => clean.push(part),
         }
     }
-    clean.strip_prefix(&current).unwrap_or(&clean).to_string_lossy().into_owned()
+    clean.strip_prefix(current).unwrap_or(&clean).to_string_lossy().into_owned()
 }
 
 fn unit_record(tcx: TyCtxt<'_>, target: &str) -> UnitRecord {
@@ -818,8 +877,21 @@ fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     std::fs::rename(&temporary, path)
 }
 
+/// [R93.3-1] One body line of a record file: a full record (with its key, if it has one), or
+/// a pointer to a record of the store of Semilla.
+enum Line {
+    Full(Box<BodyRecord>, Option<String>),
+    Pointer(String),
+}
+
+impl Line {
+    fn full(record: BodyRecord) -> Line {
+        Line::Full(Box::new(record), None)
+    }
+}
+
 /// Returns the records of all local bodies. Paths print in full, with the crate name first.
-fn collect(level: Level, target: &str) -> Vec<BodyRecord> {
+fn collect(level: Level, target: &str) -> Vec<Line> {
     rustc_middle::ty::print::with_resolve_crate_name!(
         rustc_middle::ty::print::with_no_trimmed_paths!(collect_bodies(level, target))
     )
@@ -827,14 +899,16 @@ fn collect(level: Level, target: &str) -> Vec<BodyRecord> {
 
 /// At N3, a body without an inlined call gets no record: its N3 body is its N2 body, and the
 /// compare uses the N2 record of the same target and name.
-fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
+fn collect_bodies(level: Level, target: &str) -> Vec<Line> {
     // The printer needs the source of each constant that is not configuration-free.
-    if guarded(|| rustc_middle::ty::tls::with(config::note_local_bodies)).is_none() {
-        return vec![failed_record("the driver failed to read the constants".to_string(), level, target)];
+    if parts::timed(parts::Part::Items, || guarded(|| rustc_middle::ty::tls::with(config::note_local_bodies))).is_none() {
+        return vec![Line::full(failed_record("the driver failed to read the constants".to_string(), level, target))];
     }
-    let bodies: Vec<(CrateItem, Body)> = rustc_public::all_local_items()
+    // [R93.3-1] The keys of the store of Semilla: only at N0, and only if Semilla gives them.
+    let keys = if level == Level::N0 { parts::timed(parts::Part::Key, || rustc_middle::ty::tls::with(|tcx| bodykey::Keys::of(tcx, level.name()))) } else { None };
+    let bodies: Vec<(CrateItem, Body)> = parts::timed(parts::Part::Items, rustc_public::all_local_items)
         .into_iter()
-        .filter_map(|item| guarded(|| item_body(item)).flatten().map(|body| (item, body)))
+        .filter_map(|item| parts::timed(parts::Part::Mir, || guarded(|| item_body(item))).flatten().map(|body| (item, body)))
         .collect();
     // The `main` function of the test harness (see `harness.rs`). A failure of the test must not
     // hide a body: then the item keeps its def path and its full text.
@@ -846,14 +920,14 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
     // A constant with a literal initializer has no MIR body. If the literal comes from the
     // build configuration, the constant gets a record that names its source.
     let known: HashSet<String> = bodies.iter().map(|(item, _)| item.name()).collect();
-    let literal: Vec<BodyRecord> = if level == Level::N3 {
+    let literal: Vec<Line> = if level == Level::N3 {
         Vec::new()
     } else {
         guarded(|| rustc_middle::ty::tls::with(|tcx| {
             config::literal_constants(tcx)
                 .into_iter()
                 .filter(|(name, _, _)| !known.contains(name))
-                .map(|(name, identity, span)| config_record(name, identity, rustc_public::rustc_internal::stable(span), level, target))
+                .map(|(name, identity, span)| Line::full(config_record(name, identity, rustc_public::rustc_internal::stable(span), level, target)))
                 .collect()
         }))
         .unwrap_or_default()
@@ -868,7 +942,7 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                 if level == Level::N3 {
                     return None;
                 }
-                return guarded(|| harness_record(name.clone(), body, level, target)).or_else(|| Some(failed_record(name, level, target)));
+                return Some(Line::full(guarded(|| harness_record(name.clone(), body, level, target)).unwrap_or_else(|| failed_record(name, level, target))));
             }
             let name = item.name();
             // The descriptor of a `#[test]` function: its text names the crate `test` by one path
@@ -881,10 +955,36 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                     if level == Level::N3 {
                         return None;
                     }
-                    let mut found = record(name.clone(), body, level, target, &[], &generics_text(*item), Some(item.def_id()));
+                    let generics = generics_text(*item);
+                    // [R93.3-1] The key comes first: the places with no print, and the names of the
+                    // expanded code (a part of the key and of the record).
+                    let unique_before = print::unique_count();
+                    let early = (level == Level::N0 && keys.is_some()).then(|| body_names(*item));
+                    let key = match (&keys, &early) {
+                        (Some(keys), Some(names)) if print::unique_count() == unique_before => parts::timed(parts::Part::Key, || {
+                            rustc_middle::ty::tls::with(|tcx| {
+                                let def = rustc_public::rustc_internal::internal(tcx, item.def_id());
+                                let places = guarded(|| keys.places(tcx, def)).flatten()?;
+                                let flags = format!("{} {:?}", item.requires_monomorphization(), test_crate);
+                                let parts = [generics.clone(), places, to_json(names), flags];
+                                let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
+                                keys.key(tcx, def, &parts)
+                            })
+                        }),
+                        _ => None,
+                    };
+                    if let (Some(keys), Some(key)) = (&keys, &key)
+                        && keys.is_known(key)
+                    {
+                        parts::count_pointer();
+                        return Some(Line::Pointer(key.clone()));
+                    }
+                    let early_names = early;
+                    let mut found = record_with(name.clone(), body, level, target, &[], &generics, Some(item.def_id()), None);
                     if level == Level::N0 {
-                        add_reach(&mut found, *item, body);
-                        add_forms(&mut found, *item, body);
+                        parts::timed(parts::Part::Reach, || add_reach(&mut found, *item, body));
+                        parts::timed(parts::Part::Forms, || add_forms(&mut found, *item, body));
+                        let reach_started = std::time::Instant::now();
                         found.live_callees = guarded(|| reach::live_callees(item.def_id(), body, &by_def)).flatten();
                         if let Some((sure, ends)) = guarded(|| reach::sure_callees(item.def_id(), body, &by_def)).flatten() {
                             found.sure_callees = Some(sure);
@@ -912,20 +1012,13 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                                 found.adts.push(entry);
                             }
                         }
+                        parts::add(parts::Part::Reach, reach_started);
                         // The names of the expanded code (batch 5p). No list: the marker `?` in
                         // `adts` makes the body opaque.
-                        let names = guarded(|| {
-                            rustc_middle::ty::tls::with(|tcx| {
-                                let local = rustc_public::rustc_internal::internal(tcx, item.def_id()).as_local();
-                                local.map(|local| config::names(tcx, local))
-                            })
-                        });
-                        match names.flatten() {
+                        let names = early_names.unwrap_or_else(|| body_names(*item));
+                        match names {
                             Some(names) => {
-                                found.names = names
-                                    .into_iter()
-                                    .map(|(name, count)| NameRecord { word: name.word, member: name.member, qual: name.qual, prefix: name.prefix, mac: name.mac, line: name.line, count, rival: name.rival })
-                                    .collect();
+                                found.names = names;
                             }
                             None => {
                                 if !found.adts.iter().any(|entry| entry == "?") {
@@ -934,7 +1027,9 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                             }
                         }
                     }
-                    return Some(found);
+                    // [R93.3-1] A record whose work called `unique` gets no key.
+                    let key = key.filter(|_| print::unique_count() == unique_before);
+                    return Some(Line::Full(Box::new(found), key));
                 };
                 let mut inlined = Vec::new();
                 let full = inline::inline_calls_named(body, callees, inline::Scope::All, &mut inlined)?;
@@ -959,17 +1054,18 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                 let mut found = record(name.clone(), &full, level, target, &tries, &generics_text(*item), Some(item.def_id()));
                 inlined.sort();
                 found.inlined = inlined;
-                Some(found)
+                Some(Line::full(found))
             })
-            .unwrap_or_else(|| Some(failed_record(name, level, target)))
-            .map(|mut found| {
+            .unwrap_or_else(|| Some(Line::full(failed_record(name, level, target))))
+            .map(|line| {
+                let Line::Full(mut found, key) = line else { return line };
                 if let Some(path) = &test_crate {
                     let (from, to) = (format!("{path}::"), "test::");
                     found.text = found.text.replace(&from, to);
                     found.shape = found.shape.replace(&from, to);
                     found.term = found.term.map(|term| term.replace(&from, to));
                 }
-                found
+                Line::Full(found, key)
             })
         })
         .chain(literal)
@@ -1179,7 +1275,75 @@ fn record(
     generics: &str,
     item: Option<rustc_public::DefId>,
 ) -> BodyRecord {
+    record_with(name, body, level, target, term_tries, generics, item, None)
+}
+
+/// [R93.3-1] The places of a body: its canonical body (with the old number of each local), the
+/// source ranges of its elements, its span, and its macro call. They are parts of the key of
+/// the record, so the driver makes them before the print.
+struct Places {
+    canonical: Body,
+    order: Vec<usize>,
+    elements: Option<spans::Elements>,
+    span: Option<SpanInfo>,
+    site: Option<(String, usize, usize)>,
+}
+
+/// The places of a body (see [`Places`]).
+fn places(body: &Body, level: Level, item: Option<rustc_public::DefId>) -> Places {
+    let text_started = std::time::Instant::now();
     let (canonical, order) = normalize::canonical_body_with_order(body);
+    let span = guarded(|| {
+        let lines = body.span.get_lines();
+        SpanInfo {
+            file: body.span.get_filename(),
+            line_start: lines.start_line,
+            line_end: lines.end_line,
+            range: if level == Level::N0 { spans::body_range(body.span) } else { None },
+        }
+    });
+    let site = if level == Level::N0 { guarded(|| body_site(body)).flatten() } else { None };
+    parts::add_time(parts::Part::Text, text_started);
+    // [R93.5-1] The source ranges are a part of their own.
+    let elements = if level == Level::N0 { parts::timed(parts::Part::Elements, || guarded(|| spans::elements(&canonical, item, Some((body, &order))))) } else { None };
+    Places { canonical, order, elements, span, site }
+}
+
+/// [R93.3-1] The names of the expanded code of an item (batch 5p), or `None` (no list).
+fn body_names(item: CrateItem) -> Option<Vec<NameRecord>> {
+    let names = parts::timed(parts::Part::Names, || guarded(|| {
+        rustc_middle::ty::tls::with(|tcx| {
+            let local = rustc_public::rustc_internal::internal(tcx, item.def_id()).as_local();
+            local.map(|local| config::names(tcx, local))
+        })
+    }));
+    names.flatten().map(|names| {
+        names
+            .into_iter()
+            .map(|(name, count)| NameRecord { word: name.word, member: name.member, qual: name.qual, prefix: name.prefix, mac: name.mac, line: name.line, count, rival: name.rival })
+            .collect()
+    })
+}
+
+/// The JSON text of a part of a key.
+fn to_json<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_default()
+}
+
+/// [`record`] with the places of the body, if the driver made them before.
+#[allow(clippy::too_many_arguments)]
+fn record_with(
+    name: String,
+    body: &Body,
+    level: Level,
+    target: &str,
+    term_tries: &[Body],
+    generics: &str,
+    item: Option<rustc_public::DefId>,
+    places_before: Option<Places>,
+) -> BodyRecord {
+    let Places { canonical, order, elements, span, site } = places_before.unwrap_or_else(|| places(body, level, item));
+    let text_started = std::time::Instant::now();
     let mut printed = normalize::canonical_text(&canonical);
     // The generic parameters go on the first line (the signature).
     if !generics.is_empty() {
@@ -1221,17 +1385,13 @@ fn record(
         }
         found
     };
-    let span = guarded(|| {
-        let lines = body.span.get_lines();
-        SpanInfo {
-            file: body.span.get_filename(),
-            line_start: lines.start_line,
-            line_end: lines.end_line,
-            range: if level == Level::N0 { spans::body_range(body.span) } else { None },
-        }
-    });
     let value = item.is_some_and(|def| matches!(CrateItem(def).kind(), rustc_public::ItemKind::Const | rustc_public::ItemKind::Static));
-    BodyRecord {
+    parts::add(parts::Part::Text, text_started);
+    let _ = &order;
+    // The graph comes from the MIR before the N0 rules (design 60, reading 2).
+    let graph = if level == Level::N0 { parts::timed(parts::Part::Graph, || guarded(|| graph::build(body, item))) } else { None };
+    let text_started = std::time::Instant::now();
+    let found = BodyRecord {
         name,
         value,
         level: level.name(),
@@ -1249,7 +1409,7 @@ fn record(
         loop_free,
         term,
         span,
-        site: if level == Level::N0 { guarded(|| body_site(body)).flatten() } else { None },
+        site,
         target: target.to_string(),
         externals: if level == Level::N0 {
             guarded(|| external_calls(&canonical)).unwrap_or_default()
@@ -1275,16 +1435,17 @@ fn record(
         param_types: Vec::new(),
         const_types: Vec::new(),
         config: printed.config,
-        elements: if level == Level::N0 { guarded(|| spans::elements(&canonical, item, Some((body, &order)))) } else { None },
-        // The graph comes from the MIR before the N0 rules (design 60, reading 2).
-        graph: if level == Level::N0 { guarded(|| graph::build(body, item)) } else { None },
+        elements,
+        graph,
         q: None,
         qx: None,
         cv: Vec::new(),
         sv: Vec::new(),
         inst: Vec::new(),
         dyn_casts: Vec::new(),
-    }
+    };
+    parts::add_time(parts::Part::Text, text_started);
+    found
 }
 
 /// Adds the code that the body can run with no direct call (see `reach.rs`). At n0 only.

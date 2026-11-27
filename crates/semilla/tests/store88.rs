@@ -125,7 +125,9 @@ fn a_warm_step_has_no_new_work_in_its_timing_lines() {
     assert_eq!(code, Some(0), "{first}");
     // The same step again: the session of the repository goes away, the cache stays.
     std::fs::remove_dir_all(repo.join(".semilla")).unwrap();
-    let (code, warm) = step(&repo, "one");
+    // [R93.1-2] Another intent text: the result of the step is not in the store, so the check
+    // runs, with the stored parts of 14f and 14g.
+    let (code, warm) = step(&repo, "one, again");
     assert_eq!(code, Some(0), "{warm}");
     let counts = work(&warm);
     assert_eq!((counts["trees written"], counts["files parsed"], counts["cargo commands run"]), (0, 0, 0), "{warm}");
@@ -160,7 +162,9 @@ fn a_warm_step_takes_the_opaque_inputs_from_the_store() {
     let (code, first) = step(&repo, "one");
     assert_eq!(code, Some(0), "{first}");
     std::fs::remove_dir_all(repo.join(".semilla")).unwrap();
-    let (code, warm) = step(&repo, "one");
+    // [R93.1-2] Another intent text: the result of the step is not in the store, so the check
+    // runs, with the stored parts of 14f and 14g.
+    let (code, warm) = step(&repo, "one, again");
     assert_eq!(code, Some(0), "{warm}");
     let counts = work(&warm);
     assert!(counts["opaque inputs from the store"] >= 1, "{warm}");
@@ -272,4 +276,80 @@ fn a_step_with_no_timing_lines_gives_the_driver_no_file() {
         })
     }
     assert!(!any_timing_file(&dir.path().join("cache")), "a timing file of the driver with no timing lines");
+}
+
+/// The counts of a timing line of a phase: `[timing] total of PHASE (N times, COUNT NAME, ...)`.
+fn phase_counts(stderr: &str, phase: &str) -> std::collections::BTreeMap<String, u64> {
+    let mut out = std::collections::BTreeMap::new();
+    for line in stderr.lines().filter_map(|line| line.strip_prefix(&format!("[timing] total of {phase} ("))) {
+        let inner = line.split("): ").next().unwrap_or_default();
+        for part in inner.split(", ").skip(1) {
+            if let Some((count, name)) = part.split_once(' ') {
+                *out.entry(name.to_string()).or_insert(0) += count.parse::<u64>().unwrap_or(0);
+            }
+        }
+    }
+    out
+}
+
+// [R93.1-2] A step after a step takes the result of the check of the step before from the
+// store: the session result of the two steps checks only the new step. The timing lines count
+// the stored step results (R93.6-1).
+// rule+ R93.1-2
+// rule+ R93.6-1
+#[test]
+fn a_step_after_a_step_takes_the_result_of_the_step_before_from_the_store() {
+    let dir = common::TestDir::new();
+    let repo = repository(dir.path(), OLD, ONE);
+    let (code, first) = step(&repo, "one");
+    assert_eq!(code, Some(0), "{first}");
+    std::fs::write(repo.join("src/lib.rs"), TWO).unwrap();
+    let (code, second) = step(&repo, "two");
+    assert_eq!(code, Some(0), "{second}");
+    let counts = phase_counts(&second, "the stored step results (design 93)");
+    assert_eq!(counts.get("step results from the store"), Some(&1), "{second}");
+    assert_eq!(counts.get("step results computed"), Some(&1), "{second}");
+}
+
+// rule- R93.1-2
+// rule- R93.6-1
+#[test]
+fn the_first_step_computes_its_result() {
+    let dir = common::TestDir::new();
+    let repo = repository(dir.path(), OLD, ONE);
+    let (code, first) = step(&repo, "one");
+    assert_eq!(code, Some(0), "{first}");
+    let counts = phase_counts(&first, "the stored step results (design 93)");
+    assert_eq!(counts.get("step results from the store"), None, "{first}");
+    assert_eq!(counts.get("step results computed"), Some(&1), "{first}");
+}
+
+// [R93.3-1] The driver asks the store before it prints: the build of the new tree of a step
+// after a step takes the record of each body with a known key from the store, and writes only
+// the records that are new. The timing lines count them (R93.6-1).
+// rule+ R93.3-1
+#[test]
+fn a_step_after_a_step_writes_only_the_new_body_records() {
+    let dir = common::TestDir::new();
+    let repo = repository(dir.path(), OLD, ONE);
+    let (code, first) = step(&repo, "one");
+    assert_eq!(code, Some(0), "{first}");
+    std::fs::write(repo.join("src/lib.rs"), TWO).unwrap();
+    let (code, second) = step(&repo, "two");
+    assert_eq!(code, Some(0), "{second}");
+    let counts = phase_counts(&second, "the body records of the store (design 93)");
+    assert!(counts.get("records from the store").is_some_and(|count| *count >= 1), "{second}");
+}
+
+// rule- R93.3-1
+#[test]
+fn a_line_above_each_body_gives_each_body_a_new_record() {
+    let dir = common::TestDir::new();
+    // The new tree has a line above each body: each place changes, so no key is known.
+    let repo = repository(dir.path(), OLD, &format!("// a new first line\n{OLD}"));
+    let (code, first) = step(&repo, "one");
+    assert_eq!(code, Some(0), "{first}");
+    let counts = phase_counts(&first, "the body records of the store (design 93)");
+    assert_eq!(counts.get("records from the store").copied().unwrap_or(0), 0, "{first}");
+    assert!(counts.get("records written").is_some_and(|count| *count >= 2), "{first}");
 }

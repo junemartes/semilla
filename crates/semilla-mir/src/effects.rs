@@ -60,7 +60,14 @@ impl IrEff {
 
 thread_local! {
     /// The summary of each instance that the walk finished (with no open cycle).
-    static MEMO: RefCell<HashMap<Instance, IrEff>> = RefCell::new(HashMap::new());
+    /// [R93.3-3] The summary of an instance at a depth: the depth limit cuts a walk, so a
+    /// summary is a function of the instance and of its depth, not of the bodies before it.
+    /// A memo entry has the instances that its walk visited: it serves a walk only if no
+    /// instance of that walk is open (a cycle of the new walk gives another summary).
+    static MEMO: RefCell<HashMap<(Instance, usize), (IrEff, std::rc::Rc<std::collections::HashSet<Instance>>)>> = RefCell::new(HashMap::new());
+    /// [R93.3-3] The instances that the walks of this call visited, in order (the visited set
+    /// of a memo entry).
+    static VISITED: RefCell<Vec<Instance>> = const { RefCell::new(Vec::new()) };
     /// The answer of `shared_interior` for each type.
     static INTERIOR: RefCell<HashMap<Ty, bool>> = RefCell::new(HashMap::new());
     /// The answer of `mut_inside` for each type.
@@ -82,6 +89,7 @@ const PURE_INTRINSICS: &[&str] = &[
 /// interior mutability for the arguments.
 pub fn of_call(body: &Body, func: &Operand, args: &[Operand]) -> IrEff {
     let mut found = callee(body, func, 1, &mut Vec::new()).0;
+    VISITED.with(|visited| visited.borrow_mut().clear());
     for arg in args {
         let Ok(ty) = arg.ty(body.locals()) else {
             found.join(&IrEff::world("an argument with no type"));
@@ -209,9 +217,15 @@ fn instance_summary(instance: Instance, depth: usize, stack: &mut Vec<Instance>)
         InstanceKind::Item => {}
         _ => return (IrEff::world(format!("a callee with no MIR: `{name}`")), usize::MAX),
     }
-    if let Some(found) = MEMO.with(|memo| memo.borrow().get(&instance).cloned()) {
+    // [R93.3-3] The depth is a part of the key of the memo.
+    let memo_depth = depth;
+    if let Some((found, seen)) = MEMO.with(|memo| memo.borrow().get(&(instance, memo_depth)).cloned())
+        && !stack.iter().any(|open| seen.contains(open))
+    {
+        VISITED.with(|visited| visited.borrow_mut().extend(seen.iter().copied()));
         return (found, usize::MAX);
     }
+    VISITED.with(|visited| visited.borrow_mut().push(instance));
     if let Some(at) = stack.iter().position(|open| *open == instance) {
         // A recursive call: it can run forever. The rest of its summary is the summary of the
         // open instance.
@@ -225,10 +239,12 @@ fn instance_summary(instance: Instance, depth: usize, stack: &mut Vec<Instance>)
     };
     stack.push(instance);
     let at = stack.len() - 1;
+    let start = VISITED.with(|visited| visited.borrow().len()) - 1;
     let (found, low) = body_summary(&body, depth, stack);
     stack.pop();
     if low >= at {
-        MEMO.with(|memo| memo.borrow_mut().insert(instance, found.clone()));
+        let seen: std::collections::HashSet<Instance> = VISITED.with(|visited| visited.borrow()[start..].iter().copied().collect());
+        MEMO.with(|memo| memo.borrow_mut().insert((instance, memo_depth), (found.clone(), std::rc::Rc::new(seen))));
         (found, usize::MAX)
     } else {
         (found, low)
