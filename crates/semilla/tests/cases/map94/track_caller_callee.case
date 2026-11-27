@@ -1,0 +1,61 @@
+note: a callee with `#[track_caller]` is not its code in place: no extract, and a note with the cause
+rule+: R94.5-1
+exit: 1
+must_not_match: ◆ f\d+ extract
+must_match: is no extract: the callee cannot go in at the call: the callee `depot::part` has `#\[track_caller\]`
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: Option<u32>) -> u32 {
+    let s = a.unwrap();
+    s + 1
+}
+=== new src/lib.rs
+pub fn total(a: Option<u32>) -> u32 {
+    let s = part(a);
+    s + 1
+}
+
+#[track_caller]
+fn part(a: Option<u32>) -> u32 {
+    a.unwrap()
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::part` (src/lib.rs:7): an added body: `#[new(depot::part)] fn part_new(a: Option<u32>) -> bool { let new = after::depot::part(a); true }`
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: Option<u32>) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::part`:
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::part` [added · code different]
+      not stated (src/lib.rs:5-9); to state it: --change 'depot::part=TEXT'
+      affected bodies: depot::part
+      control flow: + graph of `depot::part`: 3 points, 2 arrows (semilla expand --step 0)
+      ✗ spotlight: a new item with an attribute that can change the behavior: `track_caller` on `depot::part`; it needs a reason: --reason 'depot::part=…'
+  item `depot::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `a.unwrap()` → `part(a)` at `depot::total/S0/init` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a.unwrap() => part($a)'
+      affected bodies: depot::total
+      control flow: ~ call `Option::<u32>::unwrap` → `part` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: MIR changes
+  cover: each of the 7 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::part (src/lib.rs:7): graph added: 3 points, 2 arrows
+    depot::total (src/lib.rs:1): same structure: 1 changed call target; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  note: `depot::total` → `depot::part` is no extract: the callee cannot go in at the call: the callee `depot::part` has `#[track_caller]`: the caller location is a value that the call gives and the code in place does not (R94.5-1)
+run again: semilla step 'the change' --reason 'depot::part=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::part=the reason of the test'
+◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::part` [added · code different]
+    lines: src/lib.rs:5-9
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `a.unwrap()` → `part(a)` at `depot::total/S0/init` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

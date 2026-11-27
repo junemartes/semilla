@@ -129,7 +129,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   transformations:
   file `src/lib.rs`:
-  ◆ f4 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 2 changed lines of 1 item with equal tokens at a new place [layout · no code]
+  ◆ f4 reorder (Semilla; R94.4-1, the items in another order with equal tokens; the compiled code is the same): layout of `src/lib.rs`: 2 changed lines of 1 item with equal tokens at a new place [layout · no code]
   cover: each of the 40 changed line(s) is in a fact
   control flow: 3 bodies
     depot::Tool::grow (src/lib.rs:34): graph changes: +1 check, +1 panic, 1 changed check, +3 arrows, −1 arrow; MIR changes
@@ -145,5 +145,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     lines: src/lib.rs:24, src/lib.rs:26-33, src/lib.rs:-2-9
 ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics · code different]
     lines: src/lib.rs:12, src/lib.rs:-31
-◆ f4 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 2 changed lines of 1 item with equal tokens at a new place [layout · no code]
+◆ f4 reorder (Semilla; R94.4-1, the items in another order with equal tokens; the compiled code is the same): layout of `src/lib.rs`: 2 changed lines of 1 item with equal tokens at a new place [layout · no code]
     lines: src/lib.rs:25, src/lib.rs:-1

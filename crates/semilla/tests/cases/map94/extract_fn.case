@@ -1,0 +1,54 @@
+note: a region of a body becomes a new private function, and the body calls it: one entry "extract" with the call and the callee
+rule+: R94.1-1
+refactor: yes
+must_match: ◆ f\d+ extract \(Semilla; R94\.1-1
+rule-: R94.1-2
+must_not_match: R94\.1-2
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = a * 3 + b;
+    s + 1
+}
+=== new src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = part(a, b);
+    s + 1
+}
+
+fn part(a: u32, b: u32) -> u32 {
+    a * 3 + b
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::part` (src/lib.rs:6): an added body: `#[new(depot::part)] fn part_new(a: u32, b: u32) -> bool { let new = after::depot::part(a, b); true }`
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::total`:
+  ◆ f1 extract (Semilla; R94.1-1, the MIR of `depot::part` put in at the call is the MIR of the old code (3 element place(s) explained); 2 nodes; one change (R92.6-1)): changed expression `a * 3 + b` → `part(a, b)` at `depot::total/S0/init`; added `depot::part` [semantics · code different]
+      affected bodies: depot::total, depot::part
+      control flow: + call `part` (src/lib.rs:2): return → check `overflow: s + 1`
+      control flow: − check `overflow: a * 3` (src/lib.rs:-2): ok → check `overflow: a * 3 + b`, fail → panic `overflow`
+      control flow: − check `overflow: a * 3 + b` (src/lib.rs:-2): ok → check `overflow: s + 1`, fail → panic `overflow`
+      control flow: … 3 more (semilla expand --step 0)
+      control flow: + graph of `depot::part`: 6 points, 5 arrows (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::part (src/lib.rs:6): graph added: 6 points, 5 arrows
+    depot::total (src/lib.rs:1): graph changes: +1 call, −2 checks, −2 panics, +2 arrows, −5 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 extract (Semilla; R94.1-1, the MIR of `depot::part` put in at the call is the MIR of the old code (3 element place(s) explained); 2 nodes; one change (R92.6-1)): changed expression `a * 3 + b` → `part(a, b)` at `depot::total/S0/init`; added `depot::part` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:5-8, src/lib.rs:-2

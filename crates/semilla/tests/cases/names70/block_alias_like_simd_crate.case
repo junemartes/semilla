@@ -201,7 +201,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   transformations:
   item `shop::Bits::blocks`:
-  ◆ f2 move (Semilla; R90.2-5, the pair check holds; 2 nodes): extracted variable `count` = `self.data.len()` (1 use) at `shop::Bits::blocks/S0` [move · code equal]
+  ◆ f2 extract (Semilla; R94.3-1, equal MIR after the normal form (the copy and move chains of a local); 2 nodes): extracted variable `count` = `self.data.len()` (1 use) at `shop::Bits::blocks/S0` [move · code equal]
       control flow: ~ check `overflow: self.data.len() * SimdBlock::USIZE_COUNT` → `overflow: count * SimdBlock::USIZE_COUNT` (src/lib.rs:-32, src/lib.rs:42)
       equivalence: equivalent (proved by equal MIR)
   item `shop::Bits::get_unchecked`:
@@ -226,7 +226,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     lines: src/lib.rs:17
 ◆ f5 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `words * BITS` → `words * BITS + first` at `shop::Bits::with_capacity_and_blocks/S1/init/args[0]` [semantics · code different]
     lines: src/lib.rs:18, src/lib.rs:-17
-◆ f2 move (Semilla; R90.2-5, the pair check holds; 2 nodes): extracted variable `count` = `self.data.len()` (1 use) at `shop::Bits::blocks/S0` [move · code equal]
+◆ f2 extract (Semilla; R94.3-1, equal MIR after the normal form (the copy and move chains of a local); 2 nodes): extracted variable `count` = `self.data.len()` (1 use) at `shop::Bits::blocks/S0` [move · code equal]
     lines: src/lib.rs:41-42, src/lib.rs:-32
 ◆ f3 same code (Semilla; R90.2-1, equal MIR): `shop::Bits::get_unchecked`: renamed local `subblock` → `index`, 1 edit(s) [rename · code equal]
     lines: src/lib.rs:25, src/lib.rs:-24

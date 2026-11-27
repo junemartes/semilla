@@ -253,6 +253,12 @@ pub enum ClaimKind {
     Moved,
     /// `#[rewrite(A, B)]`: the form `--same 'rewrite A => B'`.
     Rewrite,
+    /// [R94.6-1] `#[extract(before::BODY, into = after::CALLEE)]`: the form `--same 'extract
+    /// BODY CALLEE'`.
+    Extract,
+    /// [R94.6-1] `#[inlined(after::BODY, from = before::CALLEE)]`: the form `--same 'inline
+    /// BODY CALLEE'`. The name is not `inline`: that is an attribute of the language.
+    Inlined,
     /// A claim of a later batch (`pair_loop`, `lemma`, `contract`, `invariant`, `relation`,
     /// `assume`): Semilla shows it and checks nothing yet.
     Later,
@@ -267,6 +273,8 @@ impl ClaimKind {
             ClaimKind::Rename => "rename",
             ClaimKind::Moved => "moved",
             ClaimKind::Rewrite => "rewrite",
+            ClaimKind::Extract => "extract",
+            ClaimKind::Inlined => "inlined",
             ClaimKind::Later => "later",
         }
     }

@@ -29,11 +29,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:5): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
-  real edits:
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
   item `shop::price`:
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `half(x)` → `x / 2` at `shop::price/tail/lhs` [semantics · code different]
-      not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite half($a) => $a / 2'
+  ◆ f1 inline (Semilla; R94.2-1, the MIR of `shop::half` put in at the call is the MIR of the new code (1 element place(s) explained)): changed expression `half(x)` → `x / 2` at `shop::price/tail/lhs` [semantics · code different]
       affected bodies: shop::price
       control flow: − call `half` (src/lib.rs:-6): return → check `overflow: half(x) + 3`
       control flow: ~ check `overflow: half(x) + 3` → `overflow: x / 2 + 3` (src/lib.rs:-6, src/lib.rs:6)
@@ -46,5 +45,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `half(x)` → `x / 2` at `shop::price/tail/lhs` [semantics · code different]
+◆ f1 inline (Semilla; R94.2-1, the MIR of `shop::half` put in at the call is the MIR of the new code (1 element place(s) explained)): changed expression `half(x)` → `x / 2` at `shop::price/tail/lhs` [semantics · code different]
     lines: src/lib.rs:6, src/lib.rs:-6

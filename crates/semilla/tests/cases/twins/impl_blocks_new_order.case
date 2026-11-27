@@ -38,10 +38,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 0 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
   transformations:
   file `src/lib.rs`:
-  ◆ f1 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 8 changed lines of 2 items with equal tokens at a new place [layout · no code]
+  ◆ f1 reorder (Semilla; R94.4-1, the items in another order with equal tokens; the compiled code is the same): layout of `src/lib.rs`: 8 changed lines of 2 items with equal tokens at a new place [layout · no code]
   cover: each of the 8 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 8 changed lines of 2 items with equal tokens at a new place [layout · no code]
+◆ f1 reorder (Semilla; R94.4-1, the items in another order with equal tokens; the compiled code is the same): layout of `src/lib.rs`: 8 changed lines of 2 items with equal tokens at a new place [layout · no code]
     lines: src/lib.rs:3-4, src/lib.rs:8-9, src/lib.rs:-3-4, src/lib.rs:-8-9

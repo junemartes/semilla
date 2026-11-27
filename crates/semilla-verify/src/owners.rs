@@ -203,8 +203,13 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             let changed: [BTreeSet<&crate::MirPlace>; 2] = [diff.changed.iter().map(|(old, _)| old).collect(), diff.changed.iter().map(|(_, new)| new).collect()];
             for (edit, elements) in &own.owns {
                 let entry = report.node_mir.entry(*edit).or_default();
+                // [R94.1-1] The places and the body of each element that the node owns.
+                entry.bodies.insert(body.name.clone());
                 for side in 0..2 {
                     for element in &elements[side] {
+                        if let Some(place) = &element.tokens {
+                            entry.places[side].insert(place.clone());
+                        }
                         if element.tokens.as_ref().is_some_and(|place| changed[side].contains(place)) {
                             entry.paired[side] += 1;
                         } else {
@@ -569,7 +574,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             continue;
         }
         unknown.insert(description.clone(), report.facts.len());
-        report.facts.push(Fact { kind: None, source: Vec::new(), check: String::new(), nodes: Vec::new(), syntax_only: false, not_stated: false, comments: Vec::new(), positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { kind: None, source: Vec::new(), check: String::new(), nodes: Vec::new(), syntax_only: false, not_stated: false, order: None, comments: Vec::new(), positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: body.span.as_ref().map(|(file, _)| file.clone()),
@@ -978,7 +983,7 @@ pub fn source_files(input: &Input, report: &mut StepReport) {
         };
         let anchor = Anchor::item(&name);
         let place = anchor.to_string();
-        report.facts.push(Fact { kind: None, source: Vec::new(), check: String::new(), nodes: Vec::new(), syntax_only: false, not_stated: false, comments: Vec::new(), positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { kind: None, source: Vec::new(), check: String::new(), nodes: Vec::new(), syntax_only: false, not_stated: false, order: None, comments: Vec::new(), positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: Some(file.clone()),

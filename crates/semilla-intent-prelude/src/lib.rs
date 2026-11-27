@@ -17,7 +17,7 @@
 //! in each checked configuration, with no panic outside [`panics`], [`panics_with`],
 //! [`returns`], and [`same_outcome`].
 
-pub use semilla_intent_macros::{assume, change, contract, different, invariant, lemma, loop_relation, moved, new, relation, removed, rename, rewrite, same};
+pub use semilla_intent_macros::{assume, change, contract, different, extract, inlined, invariant, lemma, loop_relation, moved, new, relation, removed, rename, rewrite, same};
 
 /// Gives the intent of the change, for the reviewer. Semilla does not check it.
 #[macro_export]
@@ -93,6 +93,6 @@ pub fn old<T>(value: T) -> T {
 
 /// The prelude: each item of this crate.
 pub mod prelude {
-    pub use crate::{Effects, assume, change, contract, different, effects, invariant, lemma, loop_relation, moved, new, old, panics, panics_with, relation, removed, rename, returns, rewrite, same, same_effects, same_outcome};
+    pub use crate::{Effects, assume, change, contract, different, effects, extract, inlined, invariant, lemma, loop_relation, moved, new, old, panics, panics_with, relation, removed, rename, returns, rewrite, same, same_effects, same_outcome};
     pub use crate::{intent, loop_state};
 }

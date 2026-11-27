@@ -1,0 +1,50 @@
+note: the fields of a `#[repr(C)]` struct in another order: the layout changes, a real edit
+rule+: R94.4-3
+rule-: R94.4-1
+exit: 1
+must_match: ◆ f\d+ reorder, the order can matter \(Semilla; R94\.4-3, a `#\[repr\]` of the type fixes the layout
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+#[repr(C)]
+pub struct Pair {
+    pub a: u32,
+    pub b: u64,
+}
+
+pub fn make(x: u32) -> Pair {
+    Pair { a: x, b: 2 }
+}
+=== new src/lib.rs
+#[repr(C)]
+pub struct Pair {
+    pub b: u64,
+    pub a: u32,
+}
+
+pub fn make(x: u32) -> Pair {
+    Pair { a: x, b: 2 }
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::Pair`:
+  ◆ f1 reorder, the order can matter (Semilla; R94.4-3, a `#[repr]` of the type fixes the layout: the order of the fields is a part of it): member order of `depot::Pair`: `a, b` → `b, a` [declaration · no compare]
+      not stated (src/lib.rs:4, src/lib.rs:-3); to state it: --change 'depot::Pair=TEXT'
+      note: no compare: the MIR bodies do not show each effect of a member order
+      ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`#[repr]`): the code that it makes reads the members in order; it needs a reason: --reason 'depot::Pair=…'
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'depot::Pair=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::Pair=the reason of the test'
+◆ f1 reorder, the order can matter (Semilla; R94.4-3, a `#[repr]` of the type fixes the layout: the order of the fields is a part of it): member order of `depot::Pair`: `a, b` → `b, a` [declaration · no compare]
+    lines: src/lib.rs:4, src/lib.rs:-3

@@ -29,7 +29,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::P`:
-  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `depot::P`: `a, b` → `b, a` [declaration · code different]
+  ◆ f1 reorder, the order can matter (Semilla; R94.4-3, the MIR of 1 body(ies) reads the order of the fields: `<depot::P as std::fmt::Debug>::fmt`): member order of `depot::P`: `a, b` → `b, a` [declaration · code different]
       not stated (src/lib.rs:4, src/lib.rs:-3); to state it: --change 'depot::P=TEXT'
       affected bodies: <depot::P as std::fmt::Debug>::fmt
       through: `depot::P` (1 body)
@@ -44,5 +44,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 run again: semilla step 'the change' --reason 'depot::P=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::P=the reason of the test'
-◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): member order of `depot::P`: `a, b` → `b, a` [declaration · code different]
+◆ f1 reorder, the order can matter (Semilla; R94.4-3, the MIR of 1 body(ies) reads the order of the fields: `<depot::P as std::fmt::Debug>::fmt`): member order of `depot::P`: `a, b` → `b, a` [declaration · code different]
     lines: src/lib.rs:4, src/lib.rs:-3

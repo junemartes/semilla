@@ -42,6 +42,7 @@ pub mod mirmap;
 mod opaque;
 pub mod sites;
 pub mod template;
+pub mod transforms;
 pub use opaque::{KnownTrait, KNOWN_TRAITS};
 mod srcconfig;
 mod uncompiled;
@@ -191,6 +192,55 @@ pub struct MirDiff {
     /// aligned region (design 90). An element that differs and is in no pair is new or
     /// removed code.
     pub changed: Vec<(MirPlace, MirPlace)>,
+    /// [R94.1-1] [R94.2-1] The checks of the candidates of an extract or an inline of the body
+    /// pair (design 94).
+    pub transforms: Vec<MirTransform>,
+    /// [R94.4-2] The new order of the same parts of the body pair, when the change is only a new
+    /// order (design 94).
+    pub reorder: Option<MirReorder>,
+}
+
+/// [R94.1-1] [R94.2-1] The check of one candidate of an extract or an inline (design 94): the
+/// MIR of a callee put in at its call, then the alignment with the other version of the body.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MirTransform {
+    /// True for an inline (the old body calls the callee), false for an extract.
+    pub inline: bool,
+    /// The def path of the callee.
+    pub callee: String,
+    /// The place of the call: in the new body (an extract) or in the old body (an inline).
+    pub call: Option<MirPlace>,
+    /// [R94.5-1] Why the callee cannot go in at the call.
+    pub refused: Option<String>,
+    /// True if the check holds (R94.1-1).
+    pub holds: bool,
+    /// [R94.1-3] True for a tie with a different candidate of the same region.
+    pub tie: bool,
+    /// The count of the element places of the other side that the check explains.
+    pub explained: usize,
+    /// The places of the elements of the callee, and how many are equal after the check.
+    pub callee_places: usize,
+    pub callee_equal: usize,
+    /// The places of the other side that the check explains.
+    pub region: Vec<MirPlace>,
+    /// The token places of the elements of the callee in the text with the callee.
+    pub callee_at: Vec<MirPlace>,
+    /// The elements that differ after the check: old (0) and new (1).
+    pub left: [Vec<MirElement>; 2],
+    /// True if nothing differs after the check.
+    pub equal: bool,
+}
+
+/// [R94.4-2] A new order of the same parts of a body pair (design 94).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MirReorder {
+    /// The count of the pairs of elements whose order changes.
+    pub flips: usize,
+    /// [R94.4-3] The pairs whose order changes and that depend on each other (the old places),
+    /// with the cause.
+    pub dependent: Vec<(Option<MirPlace>, Option<MirPlace>, String)>,
+    /// The old places of the elements whose order changes.
+    pub moved: Vec<MirPlace>,
 }
 
 /// One compile unit of a checked build, from the record of the compiler (batch 5t, part A).
@@ -745,6 +795,8 @@ pub struct StepOutcome {
     pub not_mapped: BTreeSet<String>,
     /// [R87.1-1] The templates of the step that wait for the gate (design 87).
     pub templates: template::Pending,
+    /// [R94.1-1] The transformations of the map of the step (design 94).
+    pub transforms: transforms::Plan,
 }
 
 /// Checks one step with the old protocol: an edit with no claim and no type-level fact is
@@ -2053,7 +2105,7 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     // to `facts`. The report shows each distinct error one time, complete.
     let mut seen = std::collections::BTreeSet::new();
     report.errors.retain(|error| seen.insert(error.clone()));
-    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections, node_pairs: body_maps.pairs, verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new(), templates: Default::default() }
+    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections, node_pairs: body_maps.pairs, verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new(), templates: Default::default(), transforms: Default::default() }
 }
 
 /// Sets the compare result of each fact (design 35, "Decided by Claude").
@@ -3613,7 +3665,7 @@ pub fn verify_changeset_cached(
             }
             Err(error) => {
                 let step_report = StepReport { step: step.index, intent: step.intent.clone(), errors: vec![format!("{error:#}")], ..Default::default() };
-                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new(), node_pairs: BTreeMap::new(), verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new(), templates: Default::default() });
+                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new(), node_pairs: BTreeMap::new(), verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new(), templates: Default::default(), transforms: Default::default() });
             }
         }
     }
@@ -3704,3 +3756,5 @@ mod tests83;
 mod tests90;
 #[cfg(test)]
 mod tests92;
+#[cfg(test)]
+mod tests94;

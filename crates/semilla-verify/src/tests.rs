@@ -7176,7 +7176,7 @@ fn run_elements(before: &str, after: &str, claims: Vec<Claim>, oracle: &ElementB
 }
 
 fn changed_body(name: &str, old: Vec<MirElement>, new: Vec<MirElement>) -> BodyComparison {
-    BodyComparison { graphs: Vec::new(), name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: Some(MirDiff { old, new, other: false, pairs: Vec::new(), changed: Vec::new(), no_symbols: true, own: Vec::new(), evaluated: false }) }
+    BodyComparison { graphs: Vec::new(), name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: Some(MirDiff { transforms: Vec::new(), reorder: None, old, new, other: false, pairs: Vec::new(), changed: Vec::new(), no_symbols: true, own: Vec::new(), evaluated: false }) }
 }
 
 const COUNT_BEFORE: &str = "pub fn f(v: &Vec<u32>) -> usize {\n    let n = v.len();\n    n + 1\n}\n";
@@ -9175,10 +9175,10 @@ fn a_rewrite_claim_with_no_site_is_false() {
         let report = run_agent(AGENT_BASE, &calls, &[claim], &[]);
         assert!(!report.accepted() && agent_fact(&report, "a1").result.contains(cause), "{claim}: {:#?}", report.agent_facts);
     }
-    // The kinds of a later batch get a clear message.
+    // [R94.6-1] A statement `extract` or `inline` with no such pair in the step is false.
     for kind in ["extract", "inline"] {
         let report = run_agent(AGENT_BASE, &calls, &[&format!("{kind} demo::a demo::helper")], &[]);
-        assert!(!report.accepted() && agent_fact(&report, "a1").result.contains(&format!("the kind `{kind}` has no check yet (a later batch adds it)")), "{:#?}", report.agent_facts);
+        assert!(!report.accepted() && agent_fact(&report, "a1").result.contains("(R94.6-1)"), "{:#?}", report.agent_facts);
     }
 }
 

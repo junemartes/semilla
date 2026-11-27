@@ -40,7 +40,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop::both`:
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): moved statement `log_a(x)` from `shop::both/S0/body/S0` to `shop::both/S0/body/S1` [semantics · code different]
+  ◆ f1 reorder, the order can matter (Semilla; R94.4-3, two parts with an effect each (a call, a drop, or a write through a reference): `log_a(x)` and `log_b(x)`): moved statement `log_a(x)` from `shop::both/S0/body/S0` to `shop::both/S0/body/S1` [semantics · code different]
       not stated (src/lib.rs:9, src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::both=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::both
       control flow: − arrow entry (src/lib.rs:-6) → call `log_a` (src/lib.rs:-8)
@@ -53,5 +53,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ! spotlight: unsafe code: shop::both/S0/body/S1
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): moved statement `log_a(x)` from `shop::both/S0/body/S0` to `shop::both/S0/body/S1` [semantics · code different]
+◆ f1 reorder, the order can matter (Semilla; R94.4-3, two parts with an effect each (a call, a drop, or a write through a reference): `log_a(x)` and `log_b(x)`): moved statement `log_a(x)` from `shop::both/S0/body/S0` to `shop::both/S0/body/S1` [semantics · code different]
     lines: src/lib.rs:9, src/lib.rs:-8

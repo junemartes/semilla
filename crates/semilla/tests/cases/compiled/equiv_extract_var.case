@@ -25,7 +25,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
   transformations:
   item `shop::total`:
-  ◆ f1 move (Semilla; R90.2-5, the pair check holds; 2 nodes): extracted variable `sum` = `n * p` (1 use) at `shop::total/S0` [move · code equal]
+  ◆ f1 extract (Semilla; R94.3-1, equal MIR after the normal form (the copy and move chains of a local); 2 nodes): extracted variable `sum` = `n * p` (1 use) at `shop::total/S0` [move · code equal]
       control flow: ~ check `overflow: n * p + 1` → `overflow: sum + 1` (src/lib.rs:-2, src/lib.rs:3)
       equivalence: equivalent (proved by equal MIR)
   cover: each of the 3 changed line(s) is in a fact
@@ -34,5 +34,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 move (Semilla; R90.2-5, the pair check holds; 2 nodes): extracted variable `sum` = `n * p` (1 use) at `shop::total/S0` [move · code equal]
+◆ f1 extract (Semilla; R94.3-1, equal MIR after the normal form (the copy and move chains of a local); 2 nodes): extracted variable `sum` = `n * p` (1 use) at `shop::total/S0` [move · code equal]
     lines: src/lib.rs:2-3, src/lib.rs:-2

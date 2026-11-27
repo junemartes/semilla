@@ -98,6 +98,10 @@ pub fn same_text(claim: &semilla_intent::Claim) -> Option<String> {
         ClaimKind::Rename => format!("rename {} {}", from.name(), to.name()),
         ClaimKind::Moved => format!("move {} {}", from.name(), to.name()),
         ClaimKind::Rewrite => format!("rewrite {} => {}", from.name(), to.name()),
+        // [R94.6-1] `#[extract(before::BODY, into = after::CALLEE)]` and
+        // `#[inlined(after::BODY, from = before::CALLEE)]`.
+        ClaimKind::Extract => format!("extract {} {}", from.name(), to.name()),
+        ClaimKind::Inlined => format!("inline {} {}", from.name(), to.name()),
         _ => return None,
     })
 }
@@ -166,6 +170,15 @@ pub fn option_statement(kind: &str, text: &str) -> Option<String> {
                 "rewrite" => {
                     let (from, to) = rest.split_once(" => ")?;
                     format!("#[rewrite({}, {})]", quoted(from.trim()), quoted(to.trim()))
+                }
+                // [R94.6-1] The short forms of the statements of design 94.
+                "extract" => {
+                    let (body, callee) = rest.trim().split_once(' ')?;
+                    format!("#[extract(before::{}, into = after::{})]", body.trim(), callee.trim())
+                }
+                "inline" => {
+                    let (body, callee) = rest.trim().split_once(' ')?;
+                    format!("#[inlined(after::{}, from = before::{})]", body.trim(), callee.trim())
                 }
                 _ => return None,
             }
@@ -491,7 +504,7 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
                 Item::Claim(claim) => {
                     let options = option_texts(claim);
                     match claim.kind {
-                        ClaimKind::Rename | ClaimKind::Moved | ClaimKind::Rewrite => {
+                        ClaimKind::Rename | ClaimKind::Moved | ClaimKind::Rewrite | ClaimKind::Extract | ClaimKind::Inlined => {
                             let Some(text) = same_text(claim) else { continue };
                             let fact = outcome.report.agent_facts.iter().find(|fact| fact.kind == "same" && fact.options.iter().any(|option| *option == text));
                             // [R77.4-1] A form of `--same` is a hint for the pairing: its check holds or

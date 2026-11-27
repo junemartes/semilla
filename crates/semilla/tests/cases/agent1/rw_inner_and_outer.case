@@ -57,15 +57,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
       places: depot::both/tail/lhs/args[0]/lhs
-      a part of: f1 (1 of 2 places)
+      entries, in the list below: f2
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::both` (src/lib.rs:8): the full compare: `#[same(depot::both)] fn both_same() {}`; a difference: `#[change(depot::both)] fn both_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart, d_before: &before::depot::Cart, d_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::both)] fn both_different() -> bool { … }`
-  changed nodes: 2 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `depot::both`:
-  ◆ f1 replace (a1; R90.2-2, 1 changed MIR element; 2 nodes; one change (R92.6-1)): changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee`; changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code different]
       not stated (src/lib.rs:8, src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::both=TEXT'; if it does not change, --same 'rewrite wrap => wrap2'
-      affected bodies: depot::both
+      affected bodies: depot::both (with 1 other edit of this body)
+      control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: c.total() + 1`
+      control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-8, src/lib.rs:8)
+      control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-8, src/lib.rs:8)
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: MIR changes alone; the body: MIR changes
+  transformations:
+  item `depot::both`:
+  ◆ f2 extract (a1; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained)): changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
+      affected bodies: depot::both (with 1 other edit of this body)
       control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: c.total() + 1`
       control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-8, src/lib.rs:8)
       control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-8, src/lib.rs:8)
@@ -77,5 +86,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (a1; R90.2-2, 1 changed MIR element; 2 nodes; one change (R92.6-1)): changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee`; changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `wrap` → `wrap2` at `depot::both/tail/lhs/callee` [semantics · code different]
+    lines: src/lib.rs:8, src/lib.rs:-8
+◆ f2 extract (a1; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained)): changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:-8

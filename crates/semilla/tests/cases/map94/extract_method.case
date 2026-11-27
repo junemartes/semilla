@@ -1,0 +1,69 @@
+note: a part of a method becomes a new method of the same impl: one entry "extract"
+rule+: R94.1-1
+refactor: yes
+must_match: ◆ f\d+ extract \(Semilla; R94\.1-1, the MIR of `depot::Cart::subtotal`
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Cart {
+    pub items: Vec<u32>,
+    pub fee: u32,
+}
+
+impl Cart {
+    pub fn total(&self) -> u32 {
+        let sum: u32 = self.items.iter().sum();
+        sum + self.fee
+    }
+}
+=== new src/lib.rs
+pub struct Cart {
+    pub items: Vec<u32>,
+    pub fee: u32,
+}
+
+impl Cart {
+    pub fn total(&self) -> u32 {
+        self.subtotal() + self.fee
+    }
+
+    fn subtotal(&self) -> u32 {
+        self.items.iter().sum()
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::Cart::subtotal` (src/lib.rs:11): an added body: `#[new(depot::Cart::subtotal)] fn subtotal_new(this: &after::depot::Cart) -> bool { let new = after::depot::Cart::subtotal(this); true }`
+    MIR changes with no claim: `depot::Cart::total` (src/lib.rs:7): the full compare: `#[same(depot::Cart::total)] fn total_same() {}`; a difference: `#[change(depot::Cart::total)] fn total_change(this_before: &before::depot::Cart, this_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::Cart::total)] fn total_different() -> bool { … }`
+  changed nodes: 3 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::Cart::total`:
+  ◆ f1 extract (Semilla; R94.1-1, the MIR of `depot::Cart::subtotal` put in at the call is the MIR of the old code (3 element place(s) explained); 3 nodes; one change (R92.6-1)): changed expression `sum` → `self.subtotal()` at `depot::Cart::total/tail/lhs`; deleted statement `let sum: u32 = self.items.iter().sum();` at `depot::Cart::total/S0`; added `depot::Cart::subtotal` [semantics · code different]
+      affected bodies: depot::Cart::total, depot::Cart::subtotal
+      control flow: + call `Cart::subtotal` (src/lib.rs:8): return → check `overflow: self.subtotal() + self.fee`
+      control flow: ~ check `overflow: sum + self.fee` → `overflow: self.subtotal() + self.fee` (src/lib.rs:-9, src/lib.rs:8)
+      control flow: + arrow entry (src/lib.rs:7) → call `Cart::subtotal` (src/lib.rs:8)
+      control flow: − call `<Vec<u32> as Deref>::deref` (src/lib.rs:-8): return → call `slice::<impl [u32]>::iter`
+      control flow: − call `slice::<impl [u32]>::iter` (src/lib.rs:-8): return → call `<Iter<'_, u32> as Iterator>::sum::<u32> (trait default)`
+      control flow: − call `<Iter<'_, u32> as Iterator>::sum::<u32> (trait default)` (src/lib.rs:-8): return → check `overflow: sum + self.fee`
+      control flow: … 1 more (semilla expand --step 0)
+      control flow: + graph of `depot::Cart::subtotal`: 5 points, 4 arrows (semilla expand --step 0)
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
+      equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
+  cover: each of the 7 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::Cart::subtotal (src/lib.rs:11): graph added: 5 points, 4 arrows
+    depot::Cart::total (src/lib.rs:7): graph changes: +1 call, −3 calls, 1 changed check, +2 arrows, −4 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 extract (Semilla; R94.1-1, the MIR of `depot::Cart::subtotal` put in at the call is the MIR of the old code (3 element place(s) explained); 3 nodes; one change (R92.6-1)): changed expression `sum` → `self.subtotal()` at `depot::Cart::total/tail/lhs`; deleted statement `let sum: u32 = self.items.iter().sum();` at `depot::Cart::total/S0`; added `depot::Cart::subtotal` [semantics · code different]
+    lines: src/lib.rs:8-12, src/lib.rs:-8-9

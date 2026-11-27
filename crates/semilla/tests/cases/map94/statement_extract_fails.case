@@ -1,0 +1,76 @@
+note: the statement `#[extract]` names a callee whose MIR is not the old code: the statement is false, with the elements that differ
+rule-: R94.6-1
+exit: 1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: ✗ a1 same: extract `depot::total` into `depot::part` \(false: the check of the extract does not hold \(R94\.6-1\)
+must_match: the elements that differ: old `a \* 3`
+must_not_match: ◆ f\d+ extract
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = a * 3 + b;
+    s + 1
+}
+=== new src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = part(a, b);
+    s + 1
+}
+
+fn part(a: u32, b: u32) -> u32 {
+    a ^ b
+}
+=== both .gitignore
+/.semilla/
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[extract(before::depot::total, into = after::depot::part)]
+fn total_into_part() {}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  ✗ fact a1 of the agent is false: `--same 'extract depot::total depot::part'`
+  ✗ the intent claim i1 `#[extract(depot::total, depot::part)] fn total_into_part()` (.semilla/intent/step.rs:3): false: the check of `--same 'extract depot::total depot::part'` fails (fact a1 of the agent: false: the check of the extract does not hold (R94.6-1): the MIR of `depot::part` put in at the call explains 0 element(s); 0 of 1 element place(s) of the callee are equal, and the check needs at least one explained element, half of the callee, and a partner of each element of the callee that differs; the elements that differ: old `a * 3`, old `a * 3`, old `a * 3 + b`, new `s + 1`, new `a ^ b`)
+
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✗ a1 same: extract `depot::total` into `depot::part` (false: the check of the extract does not hold (R94.6-1): the MIR of `depot::part` put in at the call explains 0 element(s); 0 of 1 element place(s) of the callee are equal, and the check needs at least one explained element, half of the callee, and a partner of each element of the callee that differs; the elements that differ: old `a * 3`, old `a * 3`, old `a * 3 + b`, new `s + 1`, new `a ^ b`)
+  intent (1 claim(s); a claim is a proof only if it is proved):
+  ✗ i1 `#[extract(depot::total, depot::part)] fn total_into_part()` (.semilla/intent/step.rs:3): false: the check of `--same 'extract depot::total depot::part'` fails (fact a1 of the agent: false: the check of the extract does not hold (R94.6-1): the MIR of `depot::part` put in at the call explains 0 element(s); 0 of 1 element place(s) of the callee are equal, and the check needs at least one explained element, half of the callee, and a partner of each element of the callee that differs; the elements that differ: old `a * 3`, old `a * 3`, old `a * 3 + b`, new `s + 1`, new `a ^ b`)
+      the input is an exact input of the two versions: correct the claim or the code
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    ✗ false: i1 `#[extract(depot::total, depot::part)] fn total_into_part()`: the check of `--same 'extract depot::total depot::part'` fails (fact a1 of the agent: false: the check of the extract does not hold (R94.6-1): the MIR of `depot::part` put in at the call explains 0 element(s); 0 of 1 element place(s) of the callee are equal, and the check needs at least one explained element, half of the callee, and a partner of each element of the callee that differs; the elements that differ: old `a * 3`, old `a * 3`, old `a * 3 + b`, new `s + 1`, new `a ^ b`)
+    changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+      MIR changes with no claim: `depot::part` (src/lib.rs:6): an added body: `#[new(depot::part)] fn part_new(a: u32, b: u32) -> bool { let new = after::depot::part(a, b); true }`
+      MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::part`:
+  ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::part` [added · code different]
+      not stated (src/lib.rs:5-8); to state it: --change 'depot::part=TEXT'
+      affected bodies: depot::part
+      control flow: + graph of `depot::part`: 2 points, 1 arrow (semilla expand --step 0)
+  item `depot::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `a * 3 + b` → `part(a, b)` at `depot::total/S0/init` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a * 3 + $b => part($a, $b)'
+      affected bodies: depot::total
+      control flow: + call `part` (src/lib.rs:2): return → check `overflow: s + 1`
+      control flow: − check `overflow: a * 3` (src/lib.rs:-2): ok → check `overflow: a * 3 + b`, fail → panic `overflow`
+      control flow: − check `overflow: a * 3 + b` (src/lib.rs:-2): ok → check `overflow: s + 1`, fail → panic `overflow`
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::part (src/lib.rs:6): graph added: 2 points, 1 arrow
+    depot::total (src/lib.rs:1): graph changes: +1 call, −2 checks, −2 panics, +2 arrows, −5 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+no command can succeed without a code change: fix the cause, then run the step again
+=== positions
+none: the runner has no accepted step for this case

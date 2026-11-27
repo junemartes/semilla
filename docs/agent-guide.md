@@ -157,7 +157,13 @@ Each step gives one list of entries (design 90). Each changed node of the syntax
 - One change gives one entry (design 92): two nodes that own one changed MIR element are one entry ("one change (R92.6-1)"), a changed tuple variant and its constructor are one entry, and a forced edit at a use of a changed declaration is a part of its type change. An entry has one kind: a fact with nodes of two kinds splits ("split by kind (R92.7-1)"), and a removed node and an added node of one fact are one `replace`.
 - Each entry line: the number, the kind, the source (`Semilla`, or your fact `aN`), the check (the rule and what holds), the text, the category, and the compare result.
 - A real edit that no fact of yours states has a line below it: `not stated (LINES); to state it: STATEMENT`. The statement is the option of design 54.4 (a `rewrite` for a group of equal edits, with the other entries of the group), the claim template of an added or a removed node, or `--change 'ITEM=TEXT'`. The step passes.
-- Your options are short forms of statements of the intent file, and they give the same entries: `--same 'rename A B'` is `#[rename(before::A, after::B)]`, `--same 'move A B'` is `#[moved(before::A, after::B)]`, `--same 'rewrite FROM => TO'` is `#[rewrite("FROM", "TO")]`, and `--change 'A,B=TEXT'` is `#[change(A, B, reason = "TEXT")]`.
+- Your options are short forms of statements of the intent file, and they give the same entries: `--same 'rename A B'` is `#[rename(before::A, after::B)]`, `--same 'move A B'` is `#[moved(before::A, after::B)]`, `--same 'rewrite FROM => TO'` is `#[rewrite("FROM", "TO")]`, `--same 'extract BODY CALLEE'` is `#[extract(before::BODY, into = after::CALLEE)]`, `--same 'inline BODY CALLEE'` is `#[inlined(after::BODY, from = before::CALLEE)]` (not `inline`: that is an attribute of Rust), and `--change 'A,B=TEXT'` is `#[change(A, B, reason = "TEXT")]`.
+- The transformations of design 94 have their own kinds. They are not real edits:
+  - `extract`: a region of a body becomes a new function (or a method), and the body calls it. Semilla puts the MIR of the callee in at the call and aligns it again with the old body. The nodes at the call and the node of the new callee are one entry. The code that the check does not explain (for example one changed operand) is a real edit of its own: "the code of the extract of `F` that the MIR does not explain: `a * 3` → `a * 4`". An extracted variable (`let x = e; f(x)` from `f(e)`) is an `extract` too.
+  - `inline`: the reverse (a call becomes its code; the old callee can stay).
+  - `reorder`: the same parts in another order: statements of one block, the arms of a `match`, the fields or the variants of a type, the items of a module. The check says "the compiled code is the same" or "the parts are independent".
+  - A transformation whose parts depend on each other has the mark `the order can matter` and its cause after the kind ("two parts that each can panic: `a * 2` and `b * 3`", "a `#[repr]` of the type fixes the layout", "the MIR of 3 body(ies) reads the order of the fields"). It is a real edit.
+  - Semilla finds the candidates alone. Two candidates for one region are a tie: no pair, a note, and the template of each `#[extract]`. Your statement decides a tie. A callee that the check cannot put in at its call (`#[track_caller]`, generic arguments, a recursive callee) gives a note with the cause, and the edits stay real edits. A region that becomes a closure stays real edits (a limit).
 - Semilla pairs a renamed or a moved item from your hints first (`--same 'rename …'`, `#[rename]`, `#[moved]`), then from one map of its matcher. A use that follows a pair (`two(x)` → `dos(x)`, `p.a` → `p.x`) decides the map. A tie (two candidates with an equal score and no such use) gives no pair: the items show as `delete` and `add`, and a note gives the template of each candidate; the source order never decides a pair. The pairs come before the check of the step, and the step runs its check one time with them. A pair that does not pass (for example a move that changes the `cfg` conditions on its path) shows as a `delete` and an `add`, with a template `#[rename(before::OLD, after::NEW)] fn …() {}`; it does not stop the other pairs.
 - `semilla expand --step N` lists each node: `nI STATE [RULE]: CHANGE NODE `AT` (PLACE): KIND in fN`.
 
@@ -171,6 +177,8 @@ You know the intent of the step. Semilla knows the edits. A fact of yours connec
 | `--same 'rename OLD NEW'` | You renamed an item. | Semilla derives the same rename from the syntax tree. Your pair is a candidate: the check is the same. |
 | `--same 'move FROM TO'` | You moved an item to a different module. | Semilla derives the same move. Your pair is a candidate. |
 | `--same 'rewrite FROM => TO'` | One mechanical rewrite at many places. Each side is a Rust expression. A variable (`$a`, `$b`) is in place of one expression. | Each site: the full difference of the edit is the pattern. Semilla checks the form, not the behavior. |
+| `--same 'extract BODY CALLEE'` | A region of the old body `BODY` is the new callee `CALLEE` (or an unchanged function). Write it only for a tie: Semilla finds an extract alone. | The MIR of `CALLEE` put in at its call aligns with the old body. A false statement gives the elements that differ. |
+| `--same 'inline BODY CALLEE'` | The new body `BODY` has the code of the old callee `CALLEE`. | The same check with the trees exchanged. |
 
 ```sh
 semilla step "use the method for the total" \
@@ -304,6 +312,11 @@ fn pair(x: u32) -> bool {
 // It is not a claim, and it explains no body.
 #[rename(before::shop::sum, after::shop::total)]
 fn sum_to_total() {}
+
+// An anchor of the map for an extract (and `#[inlined(after::BODY, from = before::CALLEE)]`
+// for an inline): Semilla checks this pair and looks for no other candidate of the body.
+#[extract(before::shop::Cart::total, into = after::shop::Cart::subtotal)]
+fn total_into_subtotal() {}
 
 // Options: `cfg` (only the matching configurations), `reason` (shown), and
 // `except = [panic_message]` (a panic with another message is the same panic).
@@ -496,7 +509,7 @@ The step compiles the intent crate against the two trees, and its compiled claim
 
 **The budgets.** Each budget counts solver steps, not seconds: the same trees and the same intent files give the same results on each machine and at each load. `claimed: the budget of the step` (a claim) and `not checked (the budget of the step)` (a body) are the same in each run. Only the safety time limit is a time stop, with its own cause: `the safety time limit`.
 
-`#[rename]`, `#[moved]`, and `#[rewrite]` have the checks of `--same`. A `#[change(ITEM)]` claim also states its item for the gap list, as `--change` does.
+`#[rename]`, `#[moved]`, `#[rewrite]`, `#[extract]`, and `#[inlined]` have the checks of `--same`. A `#[change(ITEM)]` claim also states its item for the gap list, as `--change` does.
 
 **The rules of a body.** A call of a version runs the body of that version. A call sees the writes of the earlier calls through a `&mut` place of the claim (design 82); the effects on the world of one call are not inputs of another call. A panic of a call outside `panics(|| …)`, `panics_with(|| …, "…")`, `returns(|| …)`, and `same_outcome(|| …, || …)` makes the claim false. An operation of the claim has the checks of a debug build (an overflow panics). `==` compares the values of integers, `bool`, `char`, tuples, sequences, and `Option` and `Result` of these; on a type of the workspace it calls `PartialEq::eq` of that version. A path can be loose (`shop::Cart::len` for `shop::Cart::<T>::len`); a trait method has its record name as a text: `#[same("<shop::Cart as core::fmt::Debug>::fmt")]`.
 

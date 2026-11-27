@@ -49,7 +49,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   transformations:
   item `shop::cost`:
-  ◆ f1 move (Semilla; R90.2-5, the pair check holds; 2 nodes): inlined variable `t` = `tier(k)` (1 use) at `shop::cost/S0` [move · code equal]
+  ◆ f1 inline (Semilla; R94.3-1, equal MIR after the normal form (the copy and move chains of a local); 2 nodes): inlined variable `t` = `tier(k)` (1 use) at `shop::cost/S0` [move · code equal]
       control flow: ~ check `overflow: n * t` → `overflow: n * tier(k)` (src/lib.rs:-11, src/lib.rs:10)
       equivalence: MIR changes: the same MIR text; a changed callee: `shop::tier`
   cover: each of the 5 changed line(s) is in a fact
@@ -61,5 +61,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 === positions
 ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different]
     lines: src/lib.rs:4, src/lib.rs:-4
-◆ f1 move (Semilla; R90.2-5, the pair check holds; 2 nodes): inlined variable `t` = `tier(k)` (1 use) at `shop::cost/S0` [move · code equal]
+◆ f1 inline (Semilla; R94.3-1, equal MIR after the normal form (the copy and move chains of a local); 2 nodes): inlined variable `t` = `tier(k)` (1 use) at `shop::cost/S0` [move · code equal]
     lines: src/lib.rs:10, src/lib.rs:-10-11

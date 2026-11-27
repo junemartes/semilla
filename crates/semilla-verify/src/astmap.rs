@@ -156,6 +156,21 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
     // projection decides is mapped; a node with no unique answer gets its request (R90.6-1).
     let indices: Vec<usize> = outcome.edits.iter().enumerate().filter(|(_, edit)| is_node(edit)).map(|(index, _)| index).collect();
     let trees = [input.before, input.after];
+    // [R94.1-1] The transformations of the step (design 94): the kinds of their nodes, and
+    // the note and the templates of each tie (R94.1-3), for the gate of R87.1-1.
+    outcome.transforms = crate::transforms::plan(input, outcome);
+    for note in outcome.transforms.notes.clone() {
+        if !outcome.report.notes.contains(&note) {
+            outcome.report.notes.push(note);
+        }
+    }
+    for template in outcome.transforms.templates.clone() {
+        let note = format!("the statement of the candidate: {}", crate::template::note_template(&template));
+        if !outcome.report.notes.contains(&note) {
+            outcome.report.notes.push(note);
+            outcome.templates.notes.push(template);
+        }
+    }
     for place in crate::diffmap::nodes(outcome, trees, &mut map, &indices) {
         let edit = nodes[place];
         map.entries[place].before = side_text(edit, 0, trees);

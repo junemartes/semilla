@@ -116,7 +116,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   transformations:
   file `src/list.rs`:
-  ◆ f2 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/list.rs`: 3 changed lines of 1 item with equal tokens at a new place [layout · no code]
+  ◆ f2 reorder (Semilla; R94.4-1, the items in another order with equal tokens; the compiled code is the same): layout of `src/list.rs`: 3 changed lines of 1 item with equal tokens at a new place [layout · no code]
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body
     depot::list::f3 (src/list.rs:25): same graph (the edit keeps the control flow); MIR changes
@@ -125,5 +125,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 === positions
 ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::list::f3/S0/init` [semantics · code different]
     lines: src/list.rs:25-26, src/list.rs:-30
-◆ f2 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/list.rs`: 3 changed lines of 1 item with equal tokens at a new place [layout · no code]
+◆ f2 reorder (Semilla; R94.4-1, the items in another order with equal tokens; the compiled code is the same): layout of `src/list.rs`: 3 changed lines of 1 item with equal tokens at a new place [layout · no code]
     lines: src/list.rs:30, src/list.rs:-25-26

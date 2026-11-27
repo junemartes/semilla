@@ -1,0 +1,84 @@
+note: the statement `extract` decides the tie of two candidates: Semilla checks the pair that it names
+rule+: R94.6-1
+rule-: R94.1-3
+option: --same
+option: extract depot::total depot::part
+must_match: ✓ a1 same: extract `depot::total` into `depot::part`
+must_match: ◆ f\d+ extract \(a1; R94\.1-1
+must_not_match: a tie of 2 candidates
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    a * 3 + b
+}
+=== new src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    part(a, b).min(piece(a, b))
+}
+
+fn part(a: u32, b: u32) -> u32 {
+    a * 3 + b
+}
+
+fn piece(a: u32, b: u32) -> u32 {
+    a * 3 + b
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: extract `depot::total` into `depot::part` (holds: the MIR of `depot::part` put in at the call explains 1 element place(s) of the old body; 3 element place(s) differ: a real edit of its own (R94.6-1))
+      places: depot::total/tail, depot::part
+      entries, in the list below: f2
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+    MIR changes with no claim: `depot::part` (src/lib.rs:5): an added body: `#[new(depot::part)] fn part_new(a: u32, b: u32) -> bool { let new = after::depot::part(a, b); true }`
+    MIR changes with no claim: `depot::piece` (src/lib.rs:9): an added body: `#[new(depot::piece)] fn piece_new(a: u32, b: u32) -> bool { let new = after::depot::piece(a, b); true }`
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 4 in 4 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::total=TEXT'
+  real edits:
+  item `depot::piece`:
+  ◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::piece` [added · code different]
+      not stated (src/lib.rs:9); to state it: --change 'depot::piece=TEXT'
+      affected bodies: depot::piece
+      control flow: + graph of `depot::piece`: 6 points, 5 arrows (semilla expand --step 0)
+  item `depot::total`:
+  ◆ f1 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `a * 3 + b` at `depot::total/tail` [semantics · code different]
+      not stated; to state it: --change 'depot::total=TEXT' (one statement for 2 places: f1, f5)
+      affected bodies: depot::total (with 1 other edit of this body)
+  ◆ f5 add (Semilla; R94.1-2, 3 MIR element place(s) that differ after the callee is put in at the call): the code of the extract of `depot::part` that the MIR does not explain: new `part(a, b).min(piece(a, b))`, `piece(a, b)`, `a * 3 + b` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:6); to state it: --change 'depot::total=TEXT' (one statement for 2 places: f1, f5)
+      affected bodies: depot::total
+  transformations:
+  item `depot::total`:
+  ◆ f2 extract (a1; R94.1-1, the MIR of `depot::part` put in at the call explains 1 element place(s); 3 element place(s) differ: a real edit of its own (R94.1-2); 2 nodes; one change (R92.6-1)): added statement `part(a, b).min(piece(a, b))` at `depot::total/tail`; added `depot::part` [semantics · code different]
+      affected bodies: depot::total, depot::part
+      control flow: + call `part` (src/lib.rs:2): return → call `piece`
+      control flow: + call `piece` (src/lib.rs:2): return → call `impls::<impl Ord for u32>::min`
+      control flow: + call `impls::<impl Ord for u32>::min` (src/lib.rs:2): return → return
+      control flow: … 1 more (semilla expand --step 0)
+      control flow: + graph of `depot::part`: 6 points, 5 arrows (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 8 changed line(s) is in a fact
+  control flow: 3 bodies
+    depot::part (src/lib.rs:5): graph added: 6 points, 5 arrows
+    depot::piece (src/lib.rs:9): graph added: 6 points, 5 arrows
+    depot::total (src/lib.rs:1): graph changes: +3 calls, −2 checks, −2 panics, +4 arrows, −5 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::piece` [added · code different]
+    lines: src/lib.rs:9
+◆ f1 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `a * 3 + b` at `depot::total/tail` [semantics · code different]
+    no position
+◆ f5 add (Semilla; R94.1-2, 3 MIR element place(s) that differ after the callee is put in at the call): the code of the extract of `depot::part` that the MIR does not explain: new `part(a, b).min(piece(a, b))`, `piece(a, b)`, `a * 3 + b` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:6
+◆ f2 extract (a1; R94.1-1, the MIR of `depot::part` put in at the call explains 1 element place(s); 3 element place(s) differ: a real edit of its own (R94.1-2); 2 nodes; one change (R92.6-1)): added statement `part(a, b).min(piece(a, b))` at `depot::total/tail`; added `depot::part` [semantics · code different]
+    lines: src/lib.rs:2-8

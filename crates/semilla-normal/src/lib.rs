@@ -26,6 +26,7 @@ pub mod index;
 pub mod lazy;
 pub mod paths;
 pub mod sandbox;
+pub mod transform;
 
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -905,8 +906,101 @@ pub fn compare_with(
             results.push(BodyComparison { name: name.clone(), status: BodyStatus::AfterOnly, config: config(name), elements: None, graphs, place: None });
         }
     }
+    // [R94.1-1] [R94.2-1] [R94.4-2] The checks of design 94 for each changed body pair.
+    let started = std::time::Instant::now();
+    transforms(&before, &after, &mut results);
+    TRANSFORM_NANOS.fetch_add(started.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
     results.sort_by(|a, b| (&a.name, &a.place).cmp(&(&b.name, &b.place)));
     results
+}
+
+/// [R94.1-1] The time of the checks of design 94 in this process (the phase of the
+/// transformations).
+pub static TRANSFORM_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The one N0 text of a name on a side, with its element ranges: `None` if the targets of the
+/// name have more than one text or no element data.
+fn one_text<'g>(side: &'g Side, name: &str) -> Option<(&'g str, &'g elements::RecordElements)> {
+    let group = side.group("n0", name)?;
+    let texts: BTreeSet<&String> = group.texts.values().flatten().collect();
+    let [text] = texts.into_iter().collect::<Vec<_>>()[..] else { return None };
+    let target = group.texts.iter().find(|(_, list)| list.contains(text)).map(|(target, _)| target)?;
+    let record = group.elements.get(target)?.first()?.as_deref()?;
+    Some((text.as_str(), record))
+}
+
+/// The def paths of the direct calls of a canonical text: the text between ` {` and `}(`.
+fn called_paths(text: &str) -> BTreeSet<&str> {
+    let mut out = BTreeSet::new();
+    let mut from = 0;
+    while let Some(found) = text[from..].find("}(") {
+        let end = from + found;
+        if let Some(start) = text[..end].rfind(" {") {
+            let path = &text[start + 2..end];
+            if !path.is_empty() && !path.contains([' ', '{', '}', '(', ')']) {
+                out.insert(path);
+            }
+        }
+        from = end + 2;
+    }
+    out
+}
+
+/// [R94.1-1] [R94.2-1] [R94.4-2] The checks of design 94 of each changed body pair with element
+/// data (the source bodies of one name, R61.14-1, get no check): an extract (a call of the new
+/// body to a callee that the step adds or that does not change), an inline (the reverse), and a
+/// new order of the same parts.
+fn transforms(before: &Side, after: &Side, results: &mut [BodyComparison]) {
+    let equal: BTreeSet<String> = results.iter().filter(|result| result.place.is_none() && matches!(result.status, BodyStatus::Equal { .. })).map(|result| result.name.clone()).collect();
+    for result in results.iter_mut() {
+        if result.place.is_some() || !matches!(result.status, BodyStatus::Different { .. }) {
+            continue;
+        }
+        let Some(diff) = result.elements.as_mut() else { continue };
+        if diff.old.is_empty() && diff.new.is_empty() {
+            continue;
+        }
+        let name = result.name.clone();
+        let (Some(old), Some(new)) = (one_text(before, &name), one_text(after, &name)) else { continue };
+        let sides = [transform::Side { name: &name, text: old.0, record: old.1 }, transform::Side { name: &name, text: new.0, record: new.1 }];
+        let mut found: Vec<transform::Transform> = Vec::new();
+        // [R94.5-1] A call with generic arguments of a callee that the step adds or removes: the
+        // check does not put a generic callee in (the text of the callee has its parameters, not
+        // the arguments of the call).
+        for (text, side, kind) in [(new.0, after, transform::Kind::Extract), (old.0, before, transform::Kind::Inline)] {
+            let other = if kind == transform::Kind::Extract { before } else { after };
+            for path in called_paths(text) {
+                let Some((base, _)) = path.split_once("::<") else { continue };
+                if base != name && side.names.contains_key(base) && !other.names.contains_key(base) {
+                    found.push(transform::Transform { kind, callee: base.to_string(), refused: Some("a call with generic arguments: the check puts in no generic callee (the text of the callee has its parameters, not the arguments of the call)".into()), ..Default::default() });
+                }
+            }
+        }
+        // An extract: a callee of the new body that the step adds, or that does not change.
+        for path in called_paths(new.0) {
+            let added = !before.names.contains_key(path);
+            if path == name || !after.names.contains_key(path) || !(added || equal.contains(path)) {
+                continue;
+            }
+            if let Some((text, record)) = one_text(after, path) {
+                found.extend(transform::check([&sides[0], &sides[1]], &transform::Side { name: path, text, record }, transform::Kind::Extract, diff));
+            }
+        }
+        // An inline: a callee of the old body that the step removes, or that does not change.
+        for path in called_paths(old.0) {
+            let removed = !after.names.contains_key(path);
+            if path == name || !before.names.contains_key(path) || !(removed || equal.contains(path)) {
+                continue;
+            }
+            if let Some((text, record)) = one_text(before, path) {
+                found.extend(transform::check([&sides[0], &sides[1]], &transform::Side { name: path, text, record }, transform::Kind::Inline, diff));
+            }
+        }
+        transform::mark_ties(&mut found);
+        found.truncate(transform::MOST_CANDIDATES);
+        diff.transforms = found;
+        diff.reorder = transform::permutation(old, new);
+    }
 }
 
 /// Gives a body of the old tree the name of the body of the new tree when the two names are

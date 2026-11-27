@@ -1,0 +1,49 @@
+note: two match arms whose patterns can both match one value in another order: a real edit, the order can matter
+rule+: R94.4-3
+rule-: R94.4-1
+must_match: ◆ f\d+ reorder, the order can matter \(Semilla; R94\.4-3, the patterns `0 \.\.= 5` and `3` can both match one value
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn name(x: u32) -> u32 {
+    match x {
+        0..=5 => 10,
+        3 => 20,
+        _ => 30,
+    }
+}
+=== new src/lib.rs
+pub fn name(x: u32) -> u32 {
+    match x {
+        3 => 20,
+        0..=5 => 10,
+        _ => 30,
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::name` (src/lib.rs:1): the full compare: `#[same(depot::name)] fn name_same() {}`; a difference: `#[change(depot::name)] fn name_change(x: u32) -> bool { … }` or `#[different(depot::name)] fn name_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::name`:
+  ◆ f1 reorder, the order can matter (Semilla; R94.4-3, the patterns `0 ..= 5` and `3` can both match one value): moved match arm `0..=5 => 10` from `depot::name/S0/arm[0].pat` to `depot::name/S0/arm[1].pat` [semantics · code different]
+      not stated (src/lib.rs:4, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::name=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      affected bodies: depot::name
+      control flow: − arrow entry (src/lib.rs:-1) → branch `0..=5` (src/lib.rs:-3)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::name (src/lib.rs:1): graph changes: +4 arrows, −4 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 reorder, the order can matter (Semilla; R94.4-3, the patterns `0 ..= 5` and `3` can both match one value): moved match arm `0..=5 => 10` from `depot::name/S0/arm[0].pat` to `depot::name/S0/arm[1].pat` [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:-3

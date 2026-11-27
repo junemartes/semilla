@@ -61,17 +61,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       entries, in the list below: f1, f2
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::both` (src/lib.rs:8): the full compare: `#[same(depot::both)] fn both_same() {}`; a difference: `#[change(depot::both)] fn both_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart, d_before: &before::depot::Cart, d_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::both)] fn both_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 2 real edits (2 stated by the agent); 0 not mapped
-  real edits:
+  changed nodes: 2 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
   item `depot::both`:
-  ◆ f1 replace (a1; R90.2-2, 2 changed MIR elements): changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
+  ◆ f1 extract (a1; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained)): changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
       affected bodies: depot::both (with 1 other edit of this body)
       control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: c.total() + 1`
       control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: wrap(c.total() + 1) + d.total()`
       control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-8, src/lib.rs:8)
       control flow: … 5 more (semilla expand --step 0)
       equivalence: MIR changes alone; the body: MIR changes
-  ◆ f2 replace (a1; R90.2-2, 3 changed MIR elements): changed expression `d.total` → `d.total()` at `depot::both/tail/rhs` [semantics · code different]
+  ◆ f2 extract (a1; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained)): changed expression `d.total` → `d.total()` at `depot::both/tail/rhs` [semantics · code different]
       affected bodies: depot::both (with 1 other edit of this body)
       control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: c.total() + 1`
       control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: wrap(c.total() + 1) + d.total()`
@@ -84,7 +84,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (a1; R90.2-2, 2 changed MIR elements): changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
+◆ f1 extract (a1; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained)): changed expression `c.total` → `c.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:-8
-◆ f2 replace (a1; R90.2-2, 3 changed MIR elements): changed expression `d.total` → `d.total()` at `depot::both/tail/rhs` [semantics · code different]
+◆ f2 extract (a1; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained)): changed expression `d.total` → `d.total()` at `depot::both/tail/rhs` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:-8

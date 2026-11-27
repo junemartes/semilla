@@ -1,0 +1,52 @@
+note: the fields of a struct with names and no derive in another order: each body reads the fields by name
+rule+: R94.4-1
+refactor: yes
+must_match: ◆ f\d+ reorder \(Semilla; R94\.4-1, the fields in another order
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Pair {
+    pub a: u32,
+    pub b: u64,
+}
+
+pub fn make(x: u32) -> Pair {
+    Pair { a: x, b: 2 }
+}
+
+pub fn sum(p: &Pair) -> u64 {
+    p.a as u64 + p.b
+}
+=== new src/lib.rs
+pub struct Pair {
+    pub b: u64,
+    pub a: u32,
+}
+
+pub fn make(x: u32) -> Pair {
+    Pair { a: x, b: 2 }
+}
+
+pub fn sum(p: &Pair) -> u64 {
+    p.a as u64 + p.b
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::Pair`:
+  ◆ f1 reorder (Semilla; R94.4-1, the fields in another order; the MIR of each body is equal under the map of the fields by name; the compiled code is the same): member order of `depot::Pair`: `a, b` → `b, a` [declaration · no compare]
+      note: no compare: the MIR bodies do not show each effect of a member order
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 reorder (Semilla; R94.4-1, the fields in another order; the MIR of each body is equal under the map of the fields by name; the compiled code is the same): member order of `depot::Pair`: `a, b` → `b, a` [declaration · no compare]
+    lines: src/lib.rs:3, src/lib.rs:-2
