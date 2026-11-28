@@ -511,14 +511,14 @@ pub fn feature_state(metadata: &serde_json::Value, features: &Features) -> std::
 /// value), so `out` gets a full set of records. The dependencies outside the workspace stay in
 /// the cache of `target_dir`.
 pub fn run_cargo_check(workspace: &Path, level: &str, out: &Path, target_dir: &Path) -> Result<()> {
-    run_check_command(workspace, level, out, target_dir, &new_run(), Mode::Plain, &Configuration::DEV, false).map(|_| ())
+    run_check_command(workspace, level, out, target_dir, &new_run(), Mode::Plain, &Configuration::DEV, false, None).map(|_| ())
 }
 
 /// [`run_cargo_check`] for the test of the trait table: the driver also writes the trait table
 /// of each crate to `out`. The environment of a build is new (batch 5v, part A), so a test
 /// cannot give `SEMILLA_TRAIT_TABLE` to the driver through its own environment.
 pub fn run_cargo_check_with_trait_table(workspace: &Path, level: &str, out: &Path, target_dir: &Path) -> Result<()> {
-    run_check_command(workspace, level, out, target_dir, &new_run(), Mode::Plain, &Configuration::DEV, true).map(|_| ())
+    run_check_command(workspace, level, out, target_dir, &new_run(), Mode::Plain, &Configuration::DEV, true, None).map(|_| ())
 }
 
 /// A new value of `SEMILLA_MIR_RUN`: each build with a new value compiles each crate again.
@@ -643,11 +643,44 @@ pub fn run_cargo_check_delta_config(
     target_dir: &Path,
     config: &Configuration,
 ) -> Result<Built> {
+    run_cargo_check_delta_config_with(workspace, level, out, target_dir, config, None)
+}
+
+/// [R96.2-1] A reader of the messages of cargo while a build runs (design 96). `line` gets each
+/// line of the standard output of cargo when cargo writes it. `finish` comes after each run of
+/// cargo, before Semilla reads the records folder: the reader ends each task that writes in
+/// that folder.
+pub trait UnitListener: Sync {
+    fn line(&self, line: &str);
+    fn finish(&self);
+}
+
+/// [R96.2-1] The record files of the units of one message of cargo: the names of the files that
+/// the driver wrote for the unit of a `compiler-artifact` message, as [`unit_files`] gives them
+/// for the full output. Each other line gives no name. Cargo writes the message of a unit when
+/// the compile of the unit ends (the driver ends with the compiler process), so each file of
+/// the list is complete.
+pub fn message_units(line: &str) -> std::collections::BTreeSet<String> {
+    if !line.starts_with('{') || !line.contains("\"compiler-artifact\"") {
+        return std::collections::BTreeSet::new();
+    }
+    unit_files(line)
+}
+
+/// [`run_cargo_check_delta_config`] with a reader of the messages of cargo (R96.2-1).
+pub fn run_cargo_check_delta_config_with(
+    workspace: &Path,
+    level: &str,
+    out: &Path,
+    target_dir: &Path,
+    config: &Configuration,
+    listener: Option<&dyn UnitListener>,
+) -> Result<Built> {
     let driver = find_driver()?;
     let fingerprint = driver_fingerprint(&driver)?;
     let mut known = read_known(out);
     let save = |known: &std::collections::BTreeSet<String>| std::fs::write(known_file(out), known.iter().map(|name| format!("{name}\n")).collect::<String>());
-    let check = |known: &mut std::collections::BTreeSet<String>| match run_check_command(workspace, level, out, target_dir, &fingerprint, Mode::Json, config, false) {
+    let check = |known: &mut std::collections::BTreeSet<String>| match run_check_command(workspace, level, out, target_dir, &fingerprint, Mode::Json, config, false, listener) {
         Ok(stdout) => Ok(stdout),
         Err(error) => {
             // The units that a failed build compiled have record files too.
@@ -1469,11 +1502,18 @@ fn run_check_command(
     mode: Mode,
     config: &Configuration,
     trait_table: bool,
+    listener: Option<&dyn UnitListener>,
 ) -> Result<String> {
-    match run_check_once(workspace, level, out, target_dir, nonce, mode, config, trait_table, true) {
-        Err(error) if level == "n0" && error.downcast_ref::<FailedBuild>().is_some_and(|failed| failed.text.contains(ICE_TEXT) || failed.stdout.contains(ICE_TEXT)) => {
-            run_check_once(workspace, level, out, target_dir, nonce, mode, config, trait_table, false)
+    // [R96.2-1] The reader ends its tasks after each run: the second run writes the files again.
+    let once = |forms: bool| {
+        let result = run_check_once(workspace, level, out, target_dir, nonce, mode, config, trait_table, forms, listener);
+        if let Some(listener) = listener {
+            listener.finish();
         }
+        result
+    };
+    match once(true) {
+        Err(error) if level == "n0" && error.downcast_ref::<FailedBuild>().is_some_and(|failed| failed.text.contains(ICE_TEXT) || failed.stdout.contains(ICE_TEXT)) => once(false),
         other => other,
     }
 }
@@ -1489,6 +1529,7 @@ fn run_check_once(
     config: &Configuration,
     trait_table: bool,
     forms: bool,
+    listener: Option<&dyn UnitListener>,
 ) -> Result<String> {
     if !matches!(level, "n0" | "n2" | "n3") {
         bail!("unknown level {level:?}: use n0, n2, or n3");
@@ -1563,7 +1604,11 @@ fn run_check_once(
     sandbox.apply(&mut command).map_err(|cause| anyhow::anyhow!("cannot start the sandbox for the check build: {cause}"))?;
     // The build runs to its end. Then Semilla stops each process that the build left.
     let started = std::time::SystemTime::now();
-    let output = crate::sandbox::run_and_stop(&mut command).context("cannot run cargo")?;
+    let output = match listener {
+        Some(listener) => crate::sandbox::run_and_stop_lines(&mut command, &|line: &str| listener.line(line)),
+        None => crate::sandbox::run_and_stop(&mut command),
+    }
+    .context("cannot run cargo")?;
     if let Some(file) = &timing_file {
         let lines = std::fs::read_to_string(file).unwrap_or_default();
         let _ = std::fs::remove_file(file);
@@ -1641,6 +1686,24 @@ mod build_check_tests {
         let end = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(100);
         let lines = "semilla-driver-timing a.lib.1.jsonl 10 20 1 2 3 7 parts=mir:x:2,text,key:1:1\nsemilla-driver-timing b.lib.2.jsonl 10 20 1 2 3 8\n";
         assert_eq!(DriverSplit::of(lines, start, end).parts, vec![("key".to_string(), 1, 1)]);
+    }
+
+    // [R96.2-1] A message of cargo gives the record file of its unit: only the line of a
+    // finished unit (`compiler-artifact`) gives a name, as the full output does.
+    // rule+ R96.2-1
+    // rule- R96.2-1
+    #[test]
+    fn a_message_of_a_finished_unit_gives_its_record_file() {
+        let artifact = serde_json::json!({"reason": "compiler-artifact", "package_id": "path+file:///w/depot#0.1.0", "target": {"kind": ["lib"], "crate_types": ["lib"], "name": "depot"}, "profile": {"test": false}, "filenames": ["/t/debug/deps/libdepot-0a1b.rmeta"], "fresh": false}).to_string();
+        assert_eq!(message_units(&artifact), unit_files(&artifact));
+        assert_eq!(message_units(&artifact).into_iter().collect::<Vec<_>>(), ["depot.lib.0a1b.jsonl"]);
+        // The negative case: a line of another kind, a build script, and a line of no JSON give
+        // no file.
+        let started = serde_json::json!({"reason": "build-script-executed", "package_id": "path+file:///w/depot#0.1.0"}).to_string();
+        let script = serde_json::json!({"reason": "compiler-artifact", "target": {"kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build"}, "profile": {"test": false}, "filenames": ["/t/debug/build/x-1/build_script_build-1"]}).to_string();
+        for line in [started.as_str(), script.as_str(), "   Compiling depot v0.1.0", "{\"reason\":\"compiler-artifact\""] {
+            assert!(message_units(line).is_empty(), "{line}");
+        }
     }
 
     fn words(list: &[&str]) -> Vec<String> {

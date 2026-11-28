@@ -173,6 +173,19 @@ impl<'a> OpaqueBases<'a> {
         stored.slots.push((queries.to_vec(), opaque));
     }
 
+    /// [R96.3-1] Takes the constructions of `other` (the same two workspaces) and its stored
+    /// constructions: a run that has the answers of one of them uses it (R61.15-2).
+    pub(crate) fn adopt<'b>(&self, other: &OpaqueBases<'b>)
+    where
+        'b: 'a,
+    {
+        let made: Vec<(Vec<crate::cfgcond::Query>, crate::opaque::Opaque<'a>)> = std::mem::take(&mut *other.made.borrow_mut());
+        self.made.borrow_mut().extend(made);
+        if let Some(stored) = other.stored.borrow_mut().take() {
+            *self.stored.borrow_mut() = Some(stored);
+        }
+    }
+
     /// True if the opaque inputs are for these two trees (the same two workspaces).
     pub(crate) fn fits(&self, before: &semilla_syntax::Workspace, after: &semilla_syntax::Workspace) -> bool {
         std::ptr::eq(self.sides[0], before) && std::ptr::eq(self.sides[1], after)
@@ -238,6 +251,10 @@ impl crate::OpaqueInputs for Recorder<'_, '_> {
 
     fn body(&self, after: bool, name: &str, span: Option<&(String, usize)>, config: usize, target: &str) {
         self.bodies.borrow_mut()[usize::from(after)].entry(name.to_string()).or_default().add(span, config, target);
+    }
+
+    fn prepare(&self) {
+        let _ = self.opaque();
     }
 }
 
@@ -1122,6 +1139,50 @@ mod tests {
         // Two other workspaces do not fit the opaque inputs of the check.
         let (_other, ws2) = load_source("fa = []\n", source);
         assert!(bases.fits(&ws, &ws) && !bases.fits(&ws2, &ws2));
+    }
+
+    // [R96.3-1] A construction of a guess of the configurations goes to the bases of the check
+    // (`adopt`), and a run uses it only with the same answers of the rule: a guess with other
+    // answers gives a new construction.
+    // rule+ R96.3-1
+    // rule- R96.3-1
+    #[test]
+    fn a_guessed_construction_serves_a_run_only_with_the_same_answers() {
+        use crate::OpaqueInputs;
+        let source = "#[cfg(feature = \"fa\")]\npub fn cut(a: u64) -> u64 {\n    a\n}\npub fn top() -> u64 {\n    1\n}\n";
+        let (_dir, ws) = load_source("fa = []\n", source);
+        let span = Some(("src/lib.rs".to_string(), 2));
+        let types = vec!["cfg demo::cut".to_string()];
+        let answers = |opaque: &dyn OpaqueInputs| [false, true].map(|after| (opaque.callee(after, "demo::cut", span.as_ref(), &types), opaque.layout(after, "demo::cut", span.as_ref(), &types)));
+        let guess = |bases: &OpaqueBases| {
+            let truths = truths(&[&["fa"], &[]]);
+            let _scope = crate::cfgcond::enter(crate::cfgcond::Cover::new(&[(&ws, &truths), (&ws, &truths)]));
+            let _ = bases.get();
+        };
+        // The true configurations are the guess: the run uses the guessed construction.
+        let guessed = OpaqueBases::new(&ws, &ws);
+        guess(&guessed);
+        let bases = OpaqueBases::new(&ws, &ws);
+        bases.adopt(&guessed);
+        assert_eq!(bases.made(), 1);
+        {
+            let truths = truths(&[&["fa"], &[]]);
+            let _scope = crate::cfgcond::enter(crate::cfgcond::Cover::new(&[(&ws, &truths), (&ws, &truths)]));
+            assert_eq!(answers(&Recorder::new(&bases)), answers(&crate::opaque::Opaque::new(&ws, &ws)));
+        }
+        assert_eq!(bases.made(), 1);
+        // The negative case: no true configuration has `fa`, so the answer of its condition is
+        // not the answer of the guess, and the run makes the inputs again.
+        let guessed = OpaqueBases::new(&ws, &ws);
+        guess(&guessed);
+        let other = OpaqueBases::new(&ws, &ws);
+        other.adopt(&guessed);
+        {
+            let truths = truths(&[&[], &[]]);
+            let _scope = crate::cfgcond::enter(crate::cfgcond::Cover::new(&[(&ws, &truths), (&ws, &truths)]));
+            assert_eq!(answers(&Recorder::new(&other)), answers(&crate::opaque::Opaque::new(&ws, &ws)));
+        }
+        assert_eq!(other.made(), 2);
     }
 
     /// A store of the entries in memory, with the count of the reads that found an entry.

@@ -578,6 +578,14 @@ pub trait BodyOracle {
         Ok(Default::default())
     }
 
+    /// [R96.3-1] A guess of [`BodyOracle::truths`] while the builds of the step run (design 96):
+    /// the truths of the tree before the step on the two sides. The check makes the opaque
+    /// inputs with the guess, and uses them only if each answer of the rule is the same with
+    /// the true configurations (R61.15-2). `None`: no guess (no build runs).
+    fn truths_guess(&self, _step: &Step) -> Option<[Vec<ConfigTruth>; 2]> {
+        None
+    }
+
     /// The def path of each `#[test]` function in the tree before the step and in the tree
     /// after it (batch 6a, B2). `None`: the oracle does not know the tests.
     fn tests(&self, _step: &Step) -> anyhow::Result<Option<[BTreeSet<String>; 2]>> {
@@ -770,6 +778,10 @@ pub trait OpaqueInputs {
     /// (its index in the list of `BodyOracle::truths`) has a record of the body `name` in the
     /// unit `target`. The caller gives each N0 record of the two trees.
     fn body(&self, _after: bool, _name: &str, _span: Option<&(String, usize)>, _config: usize, _target: &str) {}
+
+    /// [R96.3-1] Makes the opaque inputs now, before the first body (design 96): the oracle
+    /// reads the records in another thread at the same time.
+    fn prepare(&self) {}
 }
 
 /// The result of an SMT check on a condition.
@@ -876,6 +888,25 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
 /// Checks one step. With `derive_edits` (design 24.2), each edit with no claim gets a derived fact,
 /// so no edit is uncovered, and a step with no identity claim can get a derived identity.
 pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool) -> StepOutcome {
+    // [R96.3-1] While the builds of the step run, the opaque inputs are made with a guess of the
+    // configurations (design 96): the construction reads the two workspaces and the answers of
+    // the rule, not the records. A run of the check uses a guessed construction only if each
+    // answer of the rule is the same with the true configurations (R61.15-2); else it makes
+    // the inputs again.
+    let guessed = joint::OpaqueBases::new(input.before, input.after).with_store(bodies.phase_store(input.step));
+    if let Some(guess) = bodies.truths_guess(input.step) {
+        semilla_core::tasks::delay("the guess of the opaque inputs");
+        let _span = semilla_core::tasks::span("the guess of the opaque inputs");
+        let cover = cfgcond::Cover::cached(&[(input.before, &guess[0]), (input.after, &guess[1])]);
+        // The joint rule runs the strict mode when the cover has an atom (`Joint::settle`). In
+        // that mode each answer is "not covered", so the answers do not depend on the guess.
+        let strict = !cover.atoms().is_empty();
+        let _scope = cfgcond::enter(cover);
+        let _ = cfgcond::with_mode(&cfgcond::Mode::Plain, || guessed.get());
+        if strict {
+            let _ = cfgcond::with_mode(&cfgcond::Mode::Strict, || guessed.get());
+        }
+    }
     // Design 70: the name records of the two trees. Each rule that needs a name, an identity,
     // a visibility, a `cfg` state, or an `unsafe` state reads them from the workspace.
     let names_gap = match bodies.names(input.step) {
@@ -892,13 +923,13 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         // No data and no cause: the workspaces keep their state (a virtual crate has none).
         NameState::None => None,
     };
-    let mut outcome = verify_step_records(input, bodies, exprs, derive_edits);
+    let mut outcome = verify_step_records(input, bodies, exprs, derive_edits, &guessed);
     outcome.report.names_gap = names_gap;
     outcome
 }
 
 /// [`verify_step_with`] after the name records are in the two workspaces.
-fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool) -> StepOutcome {
+fn verify_step_records<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool, guessed: &joint::OpaqueBases<'a>) -> StepOutcome {
     // Design 38.3: an item that gets a twin keeps its key for the twin with its text.
     let twins = semilla_core::timing::phase("the identity pairs of the trees", || identity::twin_keys(input.before, input.after));
     let input = match &twins {
@@ -953,6 +984,10 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
     let input = &StepInput { step: &step, before: input.before, after: input.after };
     // The opaque inputs of each check of this step, also of the rename search (R61.15-2).
     let bases = joint::OpaqueBases::new(input.before, input.after).with_store(bodies.phase_store(input.step));
+    // [R96.3-1] The guessed constructions are for these two workspaces only.
+    if guessed.fits(input.before, input.after) {
+        bases.adopt(guessed);
+    }
     if !derive_edits || input.step.claims.iter().any(is_identity) {
         let mut plain = semilla_core::timing::phase(CORE_PHASE, || verify_core(input, bodies, exprs, derive_edits, false, &bases));
         if derive_edits {
@@ -1401,9 +1436,6 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     let raw: std::cell::RefCell<Vec<(String, BodyStatus)>> = std::cell::RefCell::new(Vec::new());
     // The name of a compiled body has no twin number (design 37.4).
     // Design 38.10: a twin in a file that no checked unit reads gives no compiled body.
-    let read_files: Vec<BTreeSet<String>> = bodies.truths(step).unwrap_or_default().iter().map(|side| side.iter().filter(|config| config.known).flat_map(|config| config.units.iter().flat_map(|unit| unit.files.iter().cloned())).collect()).collect();
-    let read = |side: usize| read_files.get(side).filter(|files| !files.is_empty());
-    let body_renames = checks::body_renames_read(&renames.items, input.before, input.after, [read(0), read(1)]);
     // The opaque inputs of the runs of this check (R61.15-2): those of the step, if they are
     // for the two trees of this input.
     let own;
@@ -1413,6 +1445,9 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
         own = joint::OpaqueBases::new(input.before, input.after).with_store(bodies.phase_store(input.step));
         &own
     };
+    let read_files: Vec<BTreeSet<String>> = bodies.truths(step).unwrap_or_default().iter().map(|side| side.iter().filter(|config| config.known).flat_map(|config| config.units.iter().flat_map(|unit| unit.files.iter().cloned())).collect()).collect();
+    let read = |side: usize| read_files.get(side).filter(|files| !files.is_empty());
+    let body_renames = checks::body_renames_read(&renames.items, input.before, input.after, [read(0), read(1)]);
     let settled = loop {
         let truths = bodies.truths(step).unwrap_or_default();
         let cover = cfgcond::Cover::cached(&[(input.before, &truths[0]), (input.after, &truths[1])]);

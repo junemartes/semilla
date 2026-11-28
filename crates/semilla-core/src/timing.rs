@@ -53,11 +53,15 @@ pub fn count(phase: &'static str, name: &'static str, count: u64) {
     *totals().entry(phase).or_default().counts.entry(name).or_default() += count;
 }
 
-/// Runs `work` as one run of a phase.
+/// Runs `work` as one run of a phase. [R96.7-1] A run of 20 ms or more is on the time line of
+/// the tasks.
 pub fn phase<R>(name: &'static str, work: impl FnOnce() -> R) -> R {
     let started = Instant::now();
     let result = work();
     add(name, started);
+    if enabled() && started.elapsed().as_millis() >= 20 {
+        crate::tasks::add_run(name, started);
+    }
     result
 }
 

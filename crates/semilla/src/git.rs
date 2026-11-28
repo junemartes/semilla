@@ -161,6 +161,7 @@ impl Repo {
     /// commit gets. This command is for the agent (`step`). Each check reads the tree as raw
     /// blobs, so a filter cannot hide a change from a result.
     pub fn write_tree(&self) -> Result<String> {
+        let _span = semilla_core::tasks::span("the tree of the working files");
         let index = self.private_path("index");
         let _ = std::fs::remove_file(&index);
         let env = [("GIT_INDEX_FILE", index.as_path())];

@@ -103,6 +103,10 @@ pub struct Added {
     /// folder and the time of its `.complete` file, in the order of the checked configurations
     /// and of the trees). A folder that a build makes again gives a new key.
     expansions: BTreeMap<Vec<Option<crate::recstore::FolderKey>>, Option<std::sync::Arc<[Vec<semilla_verify::expand::ExpansionUnit>; 2]>>>,
+    /// [R96.1-2] One task at a time for each key of a shared result (the builds of a step, the
+    /// records of a configuration): a second reader waits for the first one, then reads the
+    /// result in memory.
+    waits: std::sync::Arc<semilla_core::tasks::Keyed<String, ()>>,
 }
 
 /// The key of a record set: the two trees of a step, and the configuration.
@@ -804,7 +808,12 @@ impl NormalOracle {
         let started = std::time::Instant::now();
         self.repo.checkout_build(&build, tree)?;
         let keys = base.join(format!("{name}-records.bodies"));
-        let built = match self.build_with_bodies(&build, level, &records, &target, &keys, config) {
+        // [R96.5-1] While the build runs, the tasks of Semilla use a limited count of threads.
+        let building = semilla_core::tasks::Building::start();
+        let span = semilla_core::tasks::span("a build");
+        let built = self.build_with_bodies(&build, level, &records, &target, &keys, config);
+        drop((building, span));
+        let built = match built {
             Ok(built) => built,
             Err(error) => {
                 let text = format!("{error:#}");
@@ -828,6 +837,8 @@ impl NormalOracle {
         // the build decides the name: each hidden character becomes an escape.
         for file in &built.records {
             store.put_file(&cache, file, &records.join(file))?;
+            // [R96.2-1] The index of a unit task is the index of the copy.
+            crate::recstore::index_for_copy(&records.join(file), &cache.join(file));
         }
         // [R93.4-1] The pointer list of the folder: the key of each body record of its files.
         if level == "n0" {
@@ -870,11 +881,20 @@ impl NormalOracle {
         std::fs::create_dir_all(target.join("tmp"))?;
         std::fs::write(&file, semilla_core::timing::phase(crate::recstore::BODY_STORE_PHASE, || crate::recstore::known_bodies(&db)))?;
         semilla_normal::cargo::set_known_file(target, Some(&file));
-        let built = semilla_normal::run_cargo_check_delta_config(build, level, records, target, config);
+        // [R96.2-1] The task of each unit starts at the message of the unit, while cargo builds
+        // the other units.
+        let (built, missing) = UnitWork::run(&db, records, keys, |work| semilla_normal::cargo::run_cargo_check_delta_config_with(build, level, records, target, config, Some(work)));
         semilla_normal::cargo::set_known_file(target, None);
         let _ = std::fs::remove_file(&file);
         let built = built?;
-        let resolved: Result<()> = semilla_core::timing::phase(crate::recstore::BODY_STORE_PHASE, || built.records.iter().try_for_each(|name| crate::recstore::resolve_bodies(&db, &records.join(name), &keys.join(name))));
+        // A file that a unit task resolved, with no change after it, is resolved. A pointer whose
+        // record the store does not have in a unit task gives the new build of R93.3-1.
+        let resolved: Result<()> = match missing {
+            Some(pointer) => Err(crate::recstore::MissingBody(pointer).into()),
+            None => semilla_core::timing::phase(crate::recstore::BODY_STORE_PHASE, || {
+                built.records.iter().filter(|name| !crate::recstore::resolved_by_task(&records.join(name))).try_for_each(|name| crate::recstore::resolve_bodies(&db, &records.join(name), &keys.join(name)))
+            }),
+        };
         match resolved {
             Ok(()) => Ok(built),
             Err(error) if error.downcast_ref::<crate::recstore::MissingBody>().is_some() => {
@@ -980,6 +1000,13 @@ impl NormalOracle {
     /// The records of the two trees of a step in one configuration, from memory or from
     /// [`BodyCache::levels`] (design 37.20).
     fn sides(&self, step: &Step, features: &Configuration) -> Result<std::sync::Arc<Sides>> {
+        // [R96.1-2] A second reader of the record set waits for the read of the first one.
+        let waits = self.added.lock().unwrap_or_else(|error| error.into_inner()).waits.clone();
+        waits.alone(&format!("sides {} {} {features:?}", step.tree_before, step.tree_after), || self.sides_now(step, features))
+    }
+
+    /// The work of [`NormalOracle::sides`].
+    fn sides_now(&self, step: &Step, features: &Configuration) -> Result<std::sync::Arc<Sides>> {
         let key: SidesKey = (step.tree_before.clone(), step.tree_after.clone(), features.clone());
         let known = self.added.lock().unwrap_or_else(|error| error.into_inner()).sides.get(&key).cloned();
         if let Some(sides) = known {
@@ -1006,6 +1033,60 @@ impl NormalOracle {
         }
         std::thread::scope(|scope| {
             for config in missing {
+                scope.spawn(move || {
+                    let _ = self.sides(step, config);
+                });
+            }
+        });
+    }
+
+    /// [R96.1-1] The task of the builds of a step (design 96). It starts with the check of the
+    /// step, and it runs while the check loads and compares the two syntax trees. It runs the
+    /// builds of the step (`checked`, the same work and the same memo as the check), then it
+    /// reads the records of each checked configuration, then it makes the pair of the intent
+    /// check (R96.4-1) when the step has intent files and the two trees have the build of
+    /// `dev`: the AST pass of such a step reads the compile of its intent files (R79.2-1). A
+    /// step with no intent file makes the pair only in its gate, when the gate has templates,
+    /// so that no build runs that the step does not read. A failure ends the task: the check
+    /// asks again and gets the error.
+    pub(crate) fn start_step(&self, step: &Step) {
+        semilla_core::tasks::delay("the builds of a step");
+        let checked = {
+            let _span = semilla_core::tasks::span("the builds of a step");
+            match self.checked(step) {
+                Ok(checked) => checked,
+                Err(_) => return,
+            }
+        };
+        let missing: Vec<Configuration> = checked.iter().filter(|config| !self.has_sides(step, config)).cloned().collect();
+        if !missing.is_empty() && missing.len() <= MOST_SIDES {
+            semilla_core::tasks::delay("read the records of a step");
+            let _span = semilla_core::tasks::span("read the records of a step");
+            self.read_each_side(step, &missing);
+        }
+        let dev = Configuration::DEV;
+        let built = |tree: &str| crate::git::is_empty_tree(tree) || self.cache_folder(tree, "n0", &dev).is_ok_and(|(_, cache, _, _)| crate::recstore::store().is_complete(&cache));
+        if !step.agent.intent.is_empty() && built(&step.tree_before) && built(&step.tree_after) {
+            semilla_core::tasks::delay("the pair of the intent check");
+            let _span = semilla_core::tasks::span("the pair of the intent check");
+            let _ = crate::intentcrate::shared_pair(self, &step.tree_before, &step.tree_after);
+        }
+    }
+
+    /// True if the record set of a configuration of the step is in memory.
+    fn has_sides(&self, step: &Step, config: &Configuration) -> bool {
+        self.added.lock().unwrap_or_else(|error| error.into_inner()).sides.contains_key(&(step.tree_before.clone(), step.tree_after.clone(), config.clone()))
+    }
+
+    /// [R96.3-1] Reads the record set of each configuration (one thread for each one if there
+    /// are two or more). An error stays for the caller that asks for the record set.
+    fn read_each_side(&self, step: &Step, configs: &[Configuration]) {
+        if let [config] = configs {
+            let _ = self.sides(step, config);
+            return;
+        }
+        std::thread::scope(|scope| {
+            for config in configs {
                 scope.spawn(move || {
                     let _ = self.sides(step, config);
                 });
@@ -1076,6 +1157,92 @@ impl NormalOracle {
         Ok(SetState { config: features.clone(), renames: renames.clone(), sides, before_marks, after_marks, comparisons: Default::default(), done: None })
     }
 
+}
+
+/// [R96.2-1] The unit tasks of one build (design 96): the reader of the messages of cargo gives
+/// each record file of a finished unit to a pool of [`semilla_core::tasks::limit`] threads. A
+/// thread resolves the pointer lines of the file and makes its index. `finish` waits for each
+/// given file, so no task writes in the records folder when cargo ends.
+pub(crate) struct UnitWork<'a> {
+    db: &'a crate::recstore::Db,
+    records: &'a std::path::Path,
+    keys: &'a std::path::Path,
+    queue: std::sync::Mutex<Option<std::sync::mpsc::Sender<String>>>,
+    /// The count of the given files with no end yet.
+    open: std::sync::Mutex<usize>,
+    ended: std::sync::Condvar,
+    /// The first pointer of a unit task whose record the store does not have.
+    missing: std::sync::Mutex<Option<String>>,
+}
+
+impl UnitWork<'_> {
+    /// Runs `build` with the unit tasks. The result is the result of `build` and the first
+    /// missing pointer of a task.
+    pub(crate) fn run<T>(db: &crate::recstore::Db, records: &std::path::Path, keys: &std::path::Path, build: impl FnOnce(&UnitWork) -> T) -> (T, Option<String>) {
+        crate::recstore::forget_unit_tasks(records);
+        let (sender, receiver) = std::sync::mpsc::channel::<String>();
+        let receiver = std::sync::Mutex::new(receiver);
+        let work = UnitWork { db, records, keys, queue: std::sync::Mutex::new(Some(sender)), open: std::sync::Mutex::new(0), ended: std::sync::Condvar::new(), missing: std::sync::Mutex::new(None) };
+        let built = std::thread::scope(|scope| {
+            for _ in 0..semilla_core::tasks::limit() {
+                scope.spawn(|| {
+                    loop {
+                        let next = receiver.lock().unwrap_or_else(|error| error.into_inner()).recv();
+                        let Ok(name) = next else { break };
+                        work.one(&name);
+                    }
+                });
+            }
+            let built = build(&work);
+            // The end of the queue ends the threads.
+            *work.queue.lock().unwrap_or_else(|error| error.into_inner()) = None;
+            built
+        });
+        let missing = work.missing.into_inner().unwrap_or_else(|error| error.into_inner());
+        (built, missing)
+    }
+
+    /// The task of one record file.
+    fn one(&self, name: &str) {
+        semilla_core::tasks::delay("a unit task");
+        let span = semilla_core::tasks::span("a unit task");
+        let done = crate::recstore::unit_task(self.db, &self.records.join(name), &self.keys.join(name));
+        drop(span);
+        if let Err(error) = done {
+            // Another error stays for the end of the build: the file is not resolved, so the
+            // end resolves it again and gives the error.
+            if let Some(missing) = error.downcast_ref::<crate::recstore::MissingBody>() {
+                self.missing.lock().unwrap_or_else(|error| error.into_inner()).get_or_insert_with(|| missing.0.clone());
+            }
+        }
+        let mut open = self.open.lock().unwrap_or_else(|error| error.into_inner());
+        *open = open.saturating_sub(1);
+        self.ended.notify_all();
+    }
+}
+
+impl semilla_normal::cargo::UnitListener for UnitWork<'_> {
+    fn line(&self, line: &str) {
+        for name in semilla_normal::cargo::message_units(line) {
+            if !self.records.join(&name).is_file() {
+                continue;
+            }
+            let queue = self.queue.lock().unwrap_or_else(|error| error.into_inner());
+            let Some(queue) = queue.as_ref() else { return };
+            *self.open.lock().unwrap_or_else(|error| error.into_inner()) += 1;
+            if queue.send(name).is_err() {
+                let mut open = self.open.lock().unwrap_or_else(|error| error.into_inner());
+                *open = open.saturating_sub(1);
+            }
+        }
+    }
+
+    fn finish(&self) {
+        let mut open = self.open.lock().unwrap_or_else(|error| error.into_inner());
+        while *open > 0 {
+            open = self.ended.wait(open).unwrap_or_else(|error| error.into_inner());
+        }
+    }
 }
 
 /// [R91.5-1] The timing line of the split of one build: the compiles of the member crates (the
@@ -2259,7 +2426,27 @@ impl BodyOracle for NormalOracle {
 
     fn compare_with(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String], opaque: &dyn semilla_verify::OpaqueInputs) -> Result<Vec<BodyComparison>> {
         let checked = self.checked(step)?;
-        self.read_sides(step, &checked);
+        // [R96.3-1] The records of the configurations that are not in memory are read in a task,
+        // and this thread makes the opaque inputs at the same time: the construction reads the
+        // two workspaces and the answers of the rule of this thread, not the records. An error
+        // of the read stays for the compare below, which reads the record set again.
+        let missing: Vec<Configuration> = checked.iter().filter(|config| !self.has_sides(step, config)).cloned().collect();
+        if missing.is_empty() || missing.len() > MOST_SIDES {
+            self.read_sides(step, &checked);
+        } else {
+            std::thread::scope(|scope| {
+                let reader = scope.spawn(|| {
+                    semilla_core::tasks::delay("read the records of a step");
+                    let _span = semilla_core::tasks::span("read the records of a step");
+                    self.read_each_side(step, &missing);
+                });
+                {
+                    let _span = semilla_core::tasks::span("the construction of the opaque inputs");
+                    opaque.prepare();
+                }
+                let _ = reader.join();
+            });
+        }
         // N0 for each configuration, with the rename and move map (N1). Design 35.4: this is the
         // compare of a fact. The levels N2, N3, and N4 do not run.
         let mut states = Vec::new();
@@ -2323,6 +2510,25 @@ impl BodyOracle for NormalOracle {
     fn truths(&self, step: &Step) -> Result<[Vec<semilla_verify::ConfigTruth>; 2]> {
         let checked = self.checked(step)?;
         Ok([&step.tree_before, &step.tree_after].map(|tree| checked.iter().map(|config| self.truth(tree, config)).collect()))
+    }
+
+    /// [R96.3-1] The truths of the tree before the step on the two sides, while the tree after
+    /// the step builds: the configurations of the list, each built before the step. `None`: no
+    /// build of the tree after the step is necessary, or the tree before the step builds too.
+    fn truths_guess(&self, step: &Step) -> Option<[Vec<semilla_verify::ConfigTruth>; 2]> {
+        let configs: Vec<Configuration> = match self.list_of(step).ok()? {
+            None => self.configurations_with(&step.tree_before, &step.tree_after, &[]).ok()?.0,
+            Some(list) => self.configurations_of(&step.tree_before, &step.tree_after, &list).0,
+        }
+        .into_iter()
+        .map(|(config, _)| config)
+        .collect();
+        let complete = |tree: &str, config: &Configuration| crate::git::is_empty_tree(tree) || self.cache_folder(tree, "n0", config).is_ok_and(|(_, cache, _, _)| crate::recstore::store().is_complete(&cache));
+        if configs.is_empty() || configs.iter().all(|config| complete(&step.tree_after, config)) || !configs.iter().all(|config| complete(&step.tree_before, config)) {
+            return None;
+        }
+        let before: Vec<semilla_verify::ConfigTruth> = configs.iter().map(|config| self.truth(&step.tree_before, config)).collect();
+        Some([before.clone(), before])
     }
 
     fn full_list(&self, step: &Step) -> bool {
@@ -2492,6 +2698,14 @@ impl NormalOracle {
     /// that builds before the step. The call builds the N0 records, and keeps the list for the
     /// output.
     fn checked(&self, step: &Step) -> Result<Vec<Configuration>> {
+        // [R96.1-2] The builds of a step run one time: a second reader (the check of the step
+        // and the task of its builds) waits for the first one, then takes the memo.
+        let waits = self.added.lock().unwrap_or_else(|error| error.into_inner()).waits.clone();
+        waits.alone(&format!("checked {} {}", step.tree_before, step.tree_after), || self.checked_now(step))
+    }
+
+    /// The work of [`NormalOracle::checked`].
+    fn checked_now(&self, step: &Step) -> Result<Vec<Configuration>> {
         let key = (step.tree_before.clone(), step.tree_after.clone());
         // [R85.1-1] The list of the step (design 85). With a list that is not the full list,
         // Semilla adds no configuration and builds no configuration of the hint (R85.5-1).
@@ -2651,6 +2865,33 @@ pub fn solver_path(repo: &Repo) -> Option<std::path::PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    // [R96.2-1] A unit task starts only for the record files that a message of a finished unit
+    // names: the other files of the records folder get no task, and `finish` waits for each
+    // given file.
+    // rule+ R96.2-1
+    // rule- R96.2-1
+    #[test]
+    fn a_unit_task_starts_only_for_the_files_of_a_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::recstore::open_database(dir.path()).unwrap();
+        let records = dir.path().join("n0-records");
+        let keys = dir.path().join("n0-records.bodies");
+        std::fs::create_dir_all(&records).unwrap();
+        let unit = |name: &str| format!("{{\"unit\":{{\"target\":\"{name}\",\"cfg\":[],\"files\":[]}}}}\n{{\"name\":\"k::a\",\"level\":\"n0\",\"text\":\"fn a() {{}}\"}}\n");
+        std::fs::write(records.join("depot.lib.0a1b.jsonl"), unit("depot.lib.0a1b")).unwrap();
+        std::fs::write(records.join("other.lib.9f9f.jsonl"), unit("other.lib.9f9f")).unwrap();
+        let message = serde_json::json!({"reason": "compiler-artifact", "package_id": "path+file:///w/depot#0.1.0", "target": {"kind": ["lib"], "crate_types": ["lib"], "name": "depot"}, "profile": {"test": false}, "filenames": ["/t/debug/deps/libdepot-0a1b.rmeta"], "fresh": false}).to_string();
+        let (done, missing) = UnitWork::run(&db, &records, &keys, |work| {
+            use semilla_normal::cargo::UnitListener;
+            work.line("   Compiling depot v0.1.0");
+            work.line(&message);
+            work.finish();
+            crate::recstore::resolved_by_task(&records.join("depot.lib.0a1b.jsonl"))
+        });
+        assert!(done && missing.is_none());
+        assert!(!crate::recstore::resolved_by_task(&records.join("other.lib.9f9f.jsonl")));
+    }
+
     use super::*;
 
     // Batch 7c, part 6.1 (design 37.20): the data of a record set is the data that each compare

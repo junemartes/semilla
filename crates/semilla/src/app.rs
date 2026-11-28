@@ -139,6 +139,13 @@ pub struct App {
     /// [R85.2-1] The list of the build configurations of a new step of this command (design 85):
     /// the entries of the options. Empty: no option, so the step has the default list.
     pub new_list: Vec<String>,
+    /// [R96.9-1] The change set whose result `semilla step` stores after its output (design 96).
+    pub(crate) deferred: Option<ChangeSet>,
+    /// [R96.10-1] The oracle of the checks of this command, by the build code state, the mode,
+    /// and the state "after the commit": a second check of a step (a derived identity, a
+    /// `--reason` with two `=`) reads the builds, the records, and the compares of the first one
+    /// from its memos.
+    oracle: Option<(String, std::sync::Arc<NormalOracle>)>,
 }
 
 /// Gives no body data for the steps that the command does not check (`--no-build-code`): these
@@ -176,6 +183,10 @@ impl semilla_verify::BodyOracle for Guard<'_> {
 
     fn truths(&self, step: &Step) -> Result<[Vec<semilla_verify::ConfigTruth>; 2]> {
         if self.off(step) { Ok(Default::default()) } else { self.inner.truths(step) }
+    }
+
+    fn truths_guess(&self, step: &Step) -> Option<[Vec<semilla_verify::ConfigTruth>; 2]> {
+        if self.off(step) { None } else { self.inner.truths_guess(step) }
     }
 
     fn tests(&self, step: &Step) -> Result<Option<[std::collections::BTreeSet<String>; 2]>> {
@@ -255,6 +266,17 @@ impl semilla_verify::BodyOracle for Guard<'_> {
 /// Puts the mark on each node of the change tree with the result `code equal` whose step used
 /// changed build code (design 28, invariant I6). The count of a parent node says how many of its
 /// `code equal` nodes have the mark. Returns that count.
+/// [R96.10-1] The value of the slot if it has the key, else a new value from `make` (the slot
+/// keeps it with the key).
+fn reuse<T>(slot: &mut Option<(String, std::sync::Arc<T>)>, key: String, make: impl FnOnce() -> T) -> std::sync::Arc<T> {
+    if let Some((_, value)) = slot.as_ref().filter(|(known, _)| *known == key) {
+        return value.clone();
+    }
+    let made = std::sync::Arc::new(make());
+    *slot = Some((key, made.clone()));
+    made
+}
+
 fn mark_tree(node: &mut TreeNode, note: &semilla_core::report::BuildCodeNote, lone: Option<usize>) -> usize {
     let marked: usize = node.children.iter_mut().map(|child| mark_tree(child, note, lone)).sum();
     let mark = if node.steps.is_empty() { lone.and_then(|step| note.mark_of(step)) } else { node.steps.iter().filter_map(|step| note.mark_of(*step)).min() };
@@ -700,6 +722,12 @@ impl StoredSteps {
         Some(crate::recstore::step_key(&step.tree_before, &step.tree_after, &text))
     }
 
+    /// [R96.1-1] True if the store has a result of the step (no read of the result).
+    fn has(&self, step: &Step) -> bool {
+        let Some(key) = self.key(step) else { return false };
+        self.db.get(crate::recstore::Kind::Step, &key, crate::recstore::STEP_FORMAT, |_| Some(())).is_some()
+    }
+
     fn get(&mut self, step: &Step) -> Option<StepOutcome> {
         let key = self.key(step)?;
         let started = std::time::Instant::now();
@@ -738,6 +766,12 @@ impl StoredSteps {
 }
 
 impl StepMemo {
+    /// [R96.1-1] True if the memo or the store has the result of the step. The check reads no
+    /// result and counts nothing.
+    fn has(&self, step: &Step) -> bool {
+        self.results.contains_key(&self.key(step)) || self.stored.as_ref().is_some_and(|stored| stored.has(step))
+    }
+
     fn key(&self, step: &Step) -> String {
         // The result of the build check (design 53) is not an input of the step check. The
         // record gets it after the check, and the stored step must find the result of the check.
@@ -831,7 +865,7 @@ impl App {
             std::fs::create_dir_all(repo.state_dir())?;
             std::fs::write(&ignore, "*\n")?;
         }
-        Ok(App { repo, workspaces: BTreeMap::new(), step_memo: BTreeMap::new(), config_log: Default::default(), no_bodies: std::env::var_os("SEMILLA_NO_BODIES").is_some(), mode: Mode::default(), trusted_bases: Default::default() , new_list: Vec::new() })
+        Ok(App { repo, workspaces: BTreeMap::new(), step_memo: BTreeMap::new(), config_log: Default::default(), no_bodies: std::env::var_os("SEMILLA_NO_BODIES").is_some(), mode: Mode::default(), trusted_bases: Default::default() , new_list: Vec::new(), deferred: None, oracle: None })
     }
 
     /// The review state of the reviewer (the decisions in the UI). It is in the cache folder of
@@ -968,6 +1002,7 @@ impl App {
     /// tree with changed build code.
     pub fn build_code(&mut self, set: &ChangeSet) -> Result<BuildCode> {
         let started = std::time::Instant::now();
+        let _span = semilla_core::tasks::span("the build code test");
         let base = set.base_tree.clone();
         let mut code = BuildCode { base: base.clone(), ..Default::default() };
         let trusted = self.base_is_trusted(&base);
@@ -2384,8 +2419,20 @@ impl App {
         let note = code.note(self.mode.runs_build_code());
         let skip: BTreeSet<usize> = note.as_ref().map(|note| note.not_checked()).unwrap_or_default().into_iter().collect();
         let log = self.config_log.clone();
-        let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone(), added: Default::default(), after_commit: set.after_commit.is_some() }) };
-        let bodies = Guard { inner: inner.as_ref(), skip: &skip, code };
+        // [R96.10-1] One oracle for the checks of a command with the same build code state, mode,
+        // and state "after the commit": each memo of the oracle is a function of its key.
+        let oracle_key = format!("{code:?} {:?} {}", self.mode, set.after_commit.is_some());
+        let normal: Option<std::sync::Arc<NormalOracle>> = if self.no_bodies {
+            None
+        } else {
+            let (repo, mode, after_commit) = (self.repo.clone(), self.mode, set.after_commit.is_some());
+            Some(reuse(&mut self.oracle, oracle_key, || NormalOracle { repo, code: code.clone(), mode, log: log.clone(), added: Default::default(), after_commit }))
+        };
+        let inner: &dyn semilla_verify::BodyOracle = match &normal {
+            Some(normal) => normal.as_ref(),
+            None => &semilla_verify::NoOracle,
+        };
+        let bodies = Guard { inner, skip: &skip, code };
         // [R85.2-2] A feature of the list that no tree of a step has is an error of the command.
         if !self.no_bodies {
             let oracle = NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: Default::default(), added: Default::default(), after_commit: false };
@@ -2397,16 +2444,34 @@ impl App {
         // an intent file starts the solver. A plain negation keeps its effect by the syntax.
         let exprs = semilla_verify::NoOracle;
         let trees: BTreeSet<String> = set.steps.iter().flat_map(|s| [s.tree_before.clone(), s.tree_after.clone()]).collect();
-        for tree in &trees {
-            self.workspace(tree)?;
-        }
-        let cache = self.workspaces.clone();
-        let mut load = |tree: &str| cache.get(tree).cloned().with_context(|| format!("no workspace for tree {tree}"));
-        let started = std::time::Instant::now();
         // The key of a step result has each input of the step check that is not in the step.
         let stored = self.stored_steps(set, &skip, code, &log);
         let mut memo = StepMemo { results: std::mem::take(&mut self.step_memo), inputs: format!("{:?} {} {skip:?} {code:?} {}", self.mode, self.no_bodies, set.after_commit.is_some()), stored };
-        let (mut report, mut outcomes) = semilla_verify::verify_changeset_cached(set, &mut load, &bodies, &exprs, Options { require_groups, derive_edits: true }, &mut memo);
+        // [R96.1-1] The task of the builds of each step with no result in the memo starts now
+        // (design 96): the builds read only the trees, so they run while this thread loads the
+        // two syntax trees and checks the syntax of the step.
+        let to_build: Vec<&Step> = match &normal {
+            Some(_) => set.steps.iter().filter(|step| !step.syntax_only && !skip.contains(&step.index) && !memo.has(step)).collect(),
+            None => Vec::new(),
+        };
+        let (mut report, mut outcomes, started, cache) = std::thread::scope(|scope| -> Result<_> {
+            if let (Some(normal), false) = (&normal, to_build.is_empty()) {
+                scope.spawn(move || {
+                    for step in to_build {
+                        normal.start_step(step);
+                    }
+                });
+            }
+            for tree in &trees {
+                let _span = semilla_core::tasks::span("the load of a syntax tree");
+                self.workspace(tree)?;
+            }
+            let cache = self.workspaces.clone();
+            let mut load = |tree: &str| cache.get(tree).cloned().with_context(|| format!("no workspace for tree {tree}"));
+            let started = std::time::Instant::now();
+            let (report, outcomes) = semilla_verify::verify_changeset_cached(set, &mut load, &bodies, &exprs, Options { require_groups, derive_edits: true }, &mut memo);
+            Ok((report, outcomes, started, cache))
+        })?;
         self.step_memo = memo.results;
         // Design 67, part D: a later step that changes a body that a claim of an earlier step
         // reads checks that claim again.
@@ -2852,6 +2917,21 @@ impl App {
     /// Checks the session change set and stores the result and the review data (design 37.21).
     /// The step calls it for a change set of one step: the step result of this process serves
     /// the check, so `semilla review` and `semilla status` do not check the step again.
+    /// [R96.9-1] The store write of the result of the change set of a stored step, after the
+    /// output of the step (design 96). A failure queues the background check, as before.
+    pub fn finish_deferred(&mut self) -> Result<()> {
+        let Some(set) = self.deferred.take() else { return Ok(()) };
+        let _span = semilla_core::tasks::span("the store of the result of the change set");
+        // The check of the change set takes the step results from the memo: the memos of the
+        // oracle of the step (the record sets, the compares) go first, so that they do not add
+        // to the peak of the memory of the store write (the review data).
+        self.oracle = None;
+        if self.store_session_result(&set).is_err() {
+            self.queue_session(&set)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn store_session_result(&mut self, set: &ChangeSet) -> Result<()> {
         let (report, text, _) = self.review_parts(set, None)?;
         let stored = crate::background::StoredReport { key: "session".into(), tree: String::new(), hash: crate::background::changeset_hash(set), tools: self.tools_key(), report, text };
@@ -3291,6 +3371,28 @@ fn no_note(commit: &str, error: anyhow::Error) -> anyhow::Error {
 
 #[cfg(test)]
 mod store_tests {
+    // [R96.10-1] One oracle for the checks of a command: a second check with the same build code
+    // state, mode, and state "after the commit" reads the memos of the first one.
+    // rule+ R96.10-1
+    #[test]
+    fn a_second_check_with_the_same_key_gets_the_same_oracle() {
+        let mut slot = None;
+        let one = super::reuse(&mut slot, "code mode".to_string(), || 1u32);
+        let two = super::reuse(&mut slot, "code mode".to_string(), || 2u32);
+        assert!(std::sync::Arc::ptr_eq(&one, &two) && *two == 1);
+    }
+
+    // [R96.10-1] The negative case: another key gets a new oracle, and the slot keeps it.
+    // rule- R96.10-1
+    #[test]
+    fn a_check_with_another_key_gets_a_new_oracle() {
+        let mut slot = None;
+        let one = super::reuse(&mut slot, "code mode".to_string(), || 1u32);
+        let other = super::reuse(&mut slot, "other code".to_string(), || 2u32);
+        assert!(!std::sync::Arc::ptr_eq(&one, &other) && *other == 2);
+        assert_eq!(*super::reuse(&mut slot, "other code".to_string(), || 3u32), 2);
+    }
+
     // [R88.5-1] The key of the stored syntax data has the tree, the output of `cargo metadata`,
     // and the identity of the binary: a workspace that another binary stored is not read.
     // rule- R88.5-1

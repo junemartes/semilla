@@ -102,7 +102,7 @@ impl NormalOracle {
     fn gate_errors(&self, step: &Step, asks: &[Ask], choice: &[usize], live: &[usize]) -> Option<(BTreeMap<usize, String>, Option<crate::intentcrate::Check>)> {
         let texts: Vec<&str> = live.iter().map(|at| asks[*at].forms[choice[*at]].as_str()).collect();
         let sources = vec![Source { path: FILE.into(), text: file_text(&texts) }];
-        let check = match crate::intentcrate::check(self, &step.tree_before, &step.tree_after, &sources) {
+        let check = match crate::intentcrate::check_shared(self, &step.tree_before, &step.tree_after, &sources) {
             Ok(check) => check,
             Err(error) => {
                 // [R87.1-1] The check stops before the templates (for example the facade of a tree

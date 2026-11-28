@@ -89,6 +89,8 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
             };
             let request = crate::onestep::StepRequest { intent: text("intent").context("`intent` is required")?.to_string(), group: text("group").map(str::to_string), claims: strings("claims"), same: strings("same"), change: strings("change"), intent_files: app.read_intent_files(&strings("intent").iter().map(std::path::PathBuf::from).collect::<Vec<_>>())?, tags: strings("tags"), reasons, tree: args.get("tree").and_then(Value::as_bool).unwrap_or(false), fast: args.get("fast").and_then(Value::as_bool).unwrap_or(false) , configurations: app.new_list.clone() };
             let (text, stored) = app.step_once(&request)?;
+            // [R96.9-1] The answer of the tool has the text: the store write comes first here.
+            app.finish_deferred()?;
             if !stored {
                 anyhow::bail!("{text}");
             }
