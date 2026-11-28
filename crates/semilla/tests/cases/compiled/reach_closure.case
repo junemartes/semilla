@@ -49,12 +49,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     changed bodies: 0 equal MIR, 0 explained by claims, 0 MIR changes with no claim, 2 MIR changes that the claims on the item do not explain
       not explained by its claims: `shop::big` (src/lib.rs:1): MIR changes: the same MIR text; a changed callee: `shop::big::{closure#0}`
       not explained by its claims: `shop::big::{closure#0} |x| *x >= 9` (src/lib.rs:2): MIR changes
-  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::big`:
   ◆ f1 replace (i1; R90.2-2, 1 changed MIR element): changed operator `*x > 9` → `*x >= 9` at `shop::big/tail/args[0]/body` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::big=TEXT'; if it does not change, --same 'rewrite $a > 9 => $a >= 9'
       affected bodies: shop::big
+      graph: same graph (the edit keeps the control flow)
       equivalence: `shop::big`: MIR changes: the same MIR text; a changed callee: `shop::big::{closure#0}`
       equivalence: `shop::big::{closure#0} |x| *x >= 9`: MIR changes
   cover: each of the 2 changed line(s) is in a fact

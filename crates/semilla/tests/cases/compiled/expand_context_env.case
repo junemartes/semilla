@@ -37,20 +37,28 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 0 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::about` (src/lib.rs:9): the full compare: `#[same(shop::about)] fn about_same() {}`; a difference: `#[change(shop::about)] fn about_change() -> bool { … }` or `#[different(shop::about)] fn about_different() -> bool { … }`
+    MIR changes with no claim: `shop::home` (src/lib.rs:13): the full compare: `#[same(shop::home)] fn home_same() {}`; a difference: `#[change(shop::home)] fn home_change() -> bool { … }` or `#[different(shop::home)] fn home_different() -> bool { … }`
+  changed nodes: 0 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   file `Cargo.toml`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): Cargo.toml: package.description "a shop" → "a small shop" [manifest · code different]
       not stated (Cargo.toml:5-6, Cargo.toml:-5); to state it: --change 'Cargo.toml=TEXT'
       affected bodies: shop::about, shop::home
+      graph: same graph (the edit keeps the control flow)
       note: this body uses `env!("CARGO_PKG_DESCRIPTION")`, which Semilla did not check (`shop::about`); this body uses `option_env!("CARGO_PKG_HOMEPAGE")`, which Semilla did not check (`shop::home`) (the same line for f2)
       ✗ spotlight: a build input: the MIR of 2 bodies changed with no edit of their text, and this change can reach their crates. The bodies have one of these causes: `Cargo.toml: package.description "a shop" → "a small shop"`, `Cargo.toml: package.homepage added ("https://shop.example")` (the same text for f1, f2); it needs a reason: --reason 'Cargo.toml:package.description=…'
   ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): Cargo.toml: package.homepage added ("https://shop.example") [manifest · code different]
       not stated (Cargo.toml:5-6, Cargo.toml:-5); to state it: --change 'Cargo.toml=TEXT'
       affected bodies: shop::about, shop::home
+      graph: same graph (the edit keeps the control flow)
       note: the same line as f1
       ✗ spotlight: a build input: the same text as f1; it needs a reason: --reason 'Cargo.toml:package.homepage=…'
   cover: each of the 3 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::about (src/lib.rs:9): same graph; no edit in the body; MIR changes; the expansion of `env!("CARGO_PKG_DESCRIPTION")` from `about!()` changes (semilla expand src/lib.rs:10 --step 0)
+    shop::home (src/lib.rs:13): same graph; no edit in the body; MIR changes; the expansion of `option_env!("CARGO_PKG_HOMEPAGE")` from `home!()` changes (semilla expand src/lib.rs:14 --step 0)
   expansions: 2 changed
     `env!("CARGO_PKG_DESCRIPTION")` from `about!()` at `shop::about/tail` (src/lib.rs:10): expansion changed: `macro env` (crate core): only the context of the call changes: the environment variable `CARGO_PKG_DESCRIPTION` (`env!("CARGO_PKG_DESCRIPTION")`); changed code `shop` → `small shop`; the context of the call changes
     `option_env!("CARGO_PKG_HOMEPAGE")` from `home!()` at `shop::home/tail` (src/lib.rs:14): expansion changed: `macro option_env` (crate core): only the context of the call changes: the environment variable `CARGO_PKG_HOMEPAGE` (`option_env!("CARGO_PKG_HOMEPAGE")`); changed code `` → `https://shop.example`; the context of the call changes

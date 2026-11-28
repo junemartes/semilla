@@ -42,13 +42,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:9): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::total`:
   ◆ f1 reorder, the order can matter (Semilla; R94.4-3, two parts that each can panic: `f(a)` and `g(b)`): moved statement `let x = f(a);` from `depot::total/S0` to `depot::total/S1` [semantics · code different]
       not stated (src/lib.rs:11, src/lib.rs:-10); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::total
-      control flow: − arrow entry (src/lib.rs:-9) → call `f` (src/lib.rs:-10)
+      graph: +3 arrows, −3 arrows
+      control flow: + arrow entry (src/lib.rs:9) → call `g` (src/lib.rs:10)
+      control flow: + arrow call `g` (src/lib.rs:10) → call `f` (src/lib.rs:11) (return)
+      control flow: + arrow call `f` (src/lib.rs:11) → return (src/lib.rs:13) (return)
+      control flow: … 3 more (semilla expand --step 0)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

@@ -32,14 +32,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::part` (src/lib.rs:6): an added body: `#[new(depot::part)] fn part_new(a: u32) -> bool { let new = after::depot::part(a); true }`
     MIR changes with no claim: `depot::total` (src/lib.rs:2): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 4 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 4 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 12 in entries (0 implicit, 12 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::total`:
   ◆ f1 extract (Semilla; R95.5-2, a part of the extract of `depot::part` (R95.5-2); 4 nodes; one change (R92.6-1)): deleted statement `a = a.wrapping_add(1)` at `depot::total/S0`; added statement `part(a)` at `depot::total/tail`; deleted statement `a.wrapping_mul(2)` at `depot::total/tail`; added `depot::part` [semantics · code different]
       affected bodies: depot::total, depot::part
-      control flow: ~ call `num::<impl u32>::wrapping_add` → `part` (src/lib.rs:-3, src/lib.rs:3)
-      control flow: + arrow call `part` (src/lib.rs:3) → return (src/lib.rs:4) (return)
-      control flow: + graph of `depot::part`: 4 points, 3 arrows (semilla expand --step 0)
+      graph: no change after the check: the check of the extract explains 12 graph change(s)
       equivalence: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies

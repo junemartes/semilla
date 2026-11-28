@@ -25,17 +25,22 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 1 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::f` (src/lib.rs:6): the full compare: `#[same(depot::f)] fn f_same() {}`; a difference: `#[change(depot::f)] fn f_change() -> bool { … }` or `#[different(depot::f)] fn f_different() -> bool { … }`
+  changed nodes: 1 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   compiled code that changes with no edit:
   item `depot::f`:
   ◆ f2 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::f` changes with no edit at its place: `here!()` [indirect · code different]
       affected bodies: depot::f
+      graph: same graph (the edit keeps the control flow)
       note: lines 6
       ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'depot::f=…'
   syntax only:
   item `depot::f`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added docs `/// Doc.` [docs · no code]
   cover: each of the 1 changed line(s) is in a fact
+  control flow: 1 body
+    depot::f (src/lib.rs:6): same graph; no edit in the body; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'depot::f=<why>'
 === positions

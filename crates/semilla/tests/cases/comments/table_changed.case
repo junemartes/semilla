@@ -44,14 +44,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::a` (src/lib.rs:5): the full compare: `#[same(shop::a)] fn a_same() {}`; a difference: `#[change(shop::a)] fn a_change() -> bool { … }` or `#[different(shop::a)] fn a_different() -> bool { … }`
     MIR changes with no claim: `shop::d` (src/lib.rs:9): the full compare: `#[same(shop::d)] fn d_same() {}`; a difference: `#[change(shop::d)] fn d_change() -> bool { … }` or `#[different(shop::d)] fn d_different() -> bool { … }`
     MIR changes with no claim: `shop::e` (src/lib.rs:11): the full compare: `#[same(shop::e)] fn e_same() {}`; a difference: `#[change(shop::e)] fn e_change(x: u32) -> bool { … }` or `#[different(shop::e)] fn e_different() -> bool { … }`
-  changed nodes: 7 in 6 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 7 in 6 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::a`:
   ◆ f4 add (Semilla; R90.2-3, 2 new MIR elements): added `let` `let _: BTreeSet<u32> = BTreeSet::new();` at `shop::a/S0` [semantics · code different]
       not stated (src/lib.rs:5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::a=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::a
+      graph: +1 call (`BTreeSet::<u32>::new`), +2 arrows, −1 arrow
       control flow: + call `BTreeSet::<u32>::new` (src/lib.rs:5): return → call `BTreeMap::<u32, u32>::new`
       control flow: + arrow entry (src/lib.rs:5) → call `BTreeSet::<u32>::new` (src/lib.rs:5)
+      control flow: − arrow entry (src/lib.rs:-4) → call `BTreeMap::<u32, u32>::new` (src/lib.rs:-4)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes (the same line for f1)
       docs of `shop::a`, no edit in this step (src/lib.rs:3): `/// A: is not inline.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
@@ -59,12 +61,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `"ten"` → `"five"` at `shop::d/tail` [semantics · code different]
       not stated (src/lib.rs:9, src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::d=TEXT'; if it does not change, --same 'rewrite "ten" => "five"'
       affected bodies: shop::d
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
       docs of `shop::d`, no edit in this step (src/lib.rs:8): `/// D: says "ten".`
   item `shop::e`:
   ◆ f6 replace (Semilla; R90.2-2, 8 changed MIR elements): replace macro input `println!("{}", x);` → `println!("{} {}", x, x);` at `shop::e/S0` [macro · code different]
       not stated (src/lib.rs:11, src/lib.rs:-10); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::e=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::e
+      graph: same structure: 1 changed `construct` point (`{}`, implicit)
       control flow: ~ construct `{}` (src/lib.rs:-10, src/lib.rs:11): callees −`Arguments::<'_>::new::<4, 1>` +`Arguments::<'_>::new::<7, 2>`
       equivalence: MIR changes
       expansion: `println!("{} {}", x, x)` at `shop::e/S0` (src/lib.rs:11): expansion changed: replace macro input `format_args!("{0}\n", x)` → `format_args!("{0} {1}\n", x, x)` at `expansion/S0/body/S0/args[0]` [macro]
@@ -72,7 +76,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   syntax only:
   item `shop::a`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `shop::a`: added `#[inline]` [attribute · code equal]
-      control flow: − arrow entry (src/lib.rs:-4) → call `BTreeMap::<u32, u32>::new` (src/lib.rs:-4)
       equivalence: the same line as f4
   item `shop::b`:
   ◆ f2 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): visibility of `shop::b`: `private` → `pub` (the public API changes: a different crate can now use the item) [visibility · code equal]

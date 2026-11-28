@@ -64,20 +64,26 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
       MIR changes with no claim: `shop::Cart::total` (src/lib.rs:7): the full compare: `#[same(shop::Cart::total)] fn total_same() {}`; a difference: `#[change(shop::Cart::total)] fn total_change(this_before: &before::shop::Cart, this_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::Cart::total)] fn total_different() -> bool { … }`
       MIR changes with no claim: `shop::Cart::twice` (src/lib.rs:11): the full compare: `#[same(shop::Cart::twice)] fn twice_same() {}`; a difference: `#[change(shop::Cart::twice)] fn twice_change(this_before: &before::shop::Cart, this_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::Cart::twice)] fn twice_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 2 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 2 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 10 in entries (2 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::Cart::total`:
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): 2 site(s): changed expression `self.items.len()` → `self.count` [semantics · code different]
       not stated (src/lib.rs:8, src/lib.rs:12, src/lib.rs:-8, src/lib.rs:-12); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::twice=TEXT'; if it does not change, --same 'rewrite $a.items.len() => $a.count'
       in: shop::Cart::total, shop::Cart::twice
       affected bodies: shop::Cart::total, shop::Cart::twice
-      control flow: − call `Vec::<u32>::len` (src/lib.rs:-8): return → check `overflow: self.items.len() + 1`
-      control flow: ~ check `overflow: self.items.len() + 1` → `overflow: self.count + 1` (src/lib.rs:-8, src/lib.rs:8)
-      control flow: + arrow entry (src/lib.rs:7) → check `overflow: self.count + 1` (src/lib.rs:8)
-      control flow: … 5 more (semilla expand --step 0)
+      graph: −1 call (`Vec::<u32>::len`), 1 changed check (`overflow: self.items.len() * 2` → `overflow: self.count * 2`, implicit), +1 arrow, −2 arrows
+      control flow: − call `Vec::<u32>::len` (src/lib.rs:-12): return → check `overflow: self.items.len() * 2`
+      control flow: ~ check `overflow: self.items.len() * 2` → `overflow: self.count * 2` (src/lib.rs:-12, src/lib.rs:12)
+      control flow: + arrow entry (src/lib.rs:11) → check `overflow: self.count * 2` (src/lib.rs:12)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: `shop::Cart::total`: MIR changes
       equivalence: `shop::Cart::twice`: MIR changes
   ◆ f2 replace (a1; R97.3-1, the closure pair of `fn count` fits 1 site(s): `shop::Cart::total` (src/lib.rs:8); at the first site the parameter `c` binds to `self`; a real edit that the statement states (statement 1)): changed expression `shop::Cart::total/tail/lhs`: `self . items . len ()` → `self . count` [semantics · code different]
+      graph: −1 call (`Vec::<u32>::len`), 1 changed check (`overflow: self.items.len() + 1` → `overflow: self.count + 1`, implicit), +1 arrow, −2 arrows
+      control flow: − call `Vec::<u32>::len` (src/lib.rs:-8): return → check `overflow: self.items.len() + 1`
+      control flow: ~ check `overflow: self.items.len() + 1` → `overflow: self.count + 1` (src/lib.rs:-8, src/lib.rs:8)
+      control flow: + arrow entry (src/lib.rs:7) → check `overflow: self.count + 1` (src/lib.rs:8)
+      control flow: … 1 more (semilla expand --step 0)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
     shop::Cart::total (src/lib.rs:7): graph changes: −1 call, 1 changed check, +1 arrow, −2 arrows; MIR changes

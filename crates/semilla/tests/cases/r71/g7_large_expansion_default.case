@@ -153,13 +153,17 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::mix` (src/lib.rs:67): the full compare: `#[same(shop::mix)] fn mix_same() {}`; a difference: `#[change(shop::mix)] fn mix_change(v: u64) -> bool { … }` or `#[different(shop::mix)] fn mix_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   syntax only:
   item `shop::x12!`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `x12`: `macro_rules! x12 { ($e:expr) => { x11!($e) ^ x11!($e) }; }` → `macro_rules! x12 { ($e:expr) => { x11!($e) | x11!($e) }; }` [declaration · code different]
       affected bodies: shop::mix
       expansion: `x12!(v)` at `shop::mix/tail` (src/lib.rs:68): expansion changed: the text is too large for the fact rules (over 50 kB): `^ (v.wrapping_add·2048(1) ^ v.wrapping_add·2049(1) ^` → `| v.wrapping_add·2048(1) ^ v.wrapping_add·2049(1) ^` (line 1026), `(v.wrapping_add·4094(1) ^ v.wrapping_add·4095(1))))))))))))` → `(v.wrapping_add·4094(1) ^ v.wrapping_add·4095(1)))))))))))` (line 2051) (a large text: 2052 → 2051 lines, 191.5 kB → 191.4 kB; 2 changed parts; the full text: semilla expand src/lib.rs:68 --step 0)
   cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::mix (src/lib.rs:67): same graph; no edit in the body; MIR changes; the expansion of `x12!(v)` changes (semilla expand src/lib.rs:68 --step 0)
   expansions: 1 changed
     `x12!(v)` at `shop::mix/tail` (src/lib.rs:68): expansion changed: `macro_rules! x12` (src/lib.rs:61): the text is too large for the fact rules (over 50 kB): `^ (v.wrapping_add·2048(1) ^ v.wrapping_add·2049(1) ^` → `| v.wrapping_add·2048(1) ^ v.wrapping_add·2049(1) ^` (line 1026), `(v.wrapping_add·4094(1) ^ v.wrapping_add·4095(1))))))))))))` → `(v.wrapping_add·4094(1) ^ v.wrapping_add·4095(1)))))))))))` (line 2051) (a large text: 2052 → 2051 lines, 191.5 kB → 191.4 kB; 2 changed parts; the full text: semilla expand src/lib.rs:68 --step 0); from `macro_rules! x12` (src/lib.rs:61)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

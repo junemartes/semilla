@@ -46,11 +46,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       entries, in the list below: f1
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `<shop::Dog as shop::Speak>::name` (src/lib.rs:10): an added body: `#[new(<shop::Dog as shop::Speak>::name)] fn name_new() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 3 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::<Dog as Speak>::name`:
   ◆ f1 add (a1; R90.2-3, a body of the new MIR only): `shop::<Dog as Speak>::name` now overrides the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 1 }` → `fn name(&self) -> u32 { 2 }` [semantics · code different]
       affected bodies: shop::<Dog as Speak>::name
+      graph: +1 body, +1 return, +1 arrow
       control flow: + graph of `<shop::Dog as shop::Speak>::name`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body

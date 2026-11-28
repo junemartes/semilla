@@ -58,12 +58,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✗ a1 same: extract `limit` into `cap` (false: the check of the extract does not hold (R94.6-1): the step has no changed body `limit` with a call of `cap` that the check can read)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::limit` (src/lib.rs:11): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::limit`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `20` at `depot::limit/tail` [semantics · code different]
       not stated (src/lib.rs:11, src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 20'
       affected bodies: depot::limit
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

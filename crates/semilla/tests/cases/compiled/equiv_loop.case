@@ -27,12 +27,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::sum` (src/lib.rs:1): the full compare: `#[same(shop::sum)] fn sum_same() {}`; a difference: `#[change(shop::sum)] fn sum_change(n: u32) -> bool { … }` or `#[different(shop::sum)] fn sum_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (6 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::sum`:
   ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `i` → `i * 1` at `shop::sum/S2/body/S0/rhs/args[0]` [semantics · code different]
       not stated (src/lib.rs:4, src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::sum=TEXT'; if it does not change, --same 'rewrite i => i * 1'
       affected bodies: shop::sum
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: i * 1` (src/lib.rs:4): ok → call `num::<impl u32>::wrapping_add`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:4)
       control flow: + arrow branch `i < n` (src/lib.rs:4) → check `overflow: i * 1` (src/lib.rs:4) (true)

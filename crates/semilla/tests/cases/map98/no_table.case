@@ -1,0 +1,53 @@
+note: the library and its test build have two different texts of the body, so the body pair has two element tables: each pair of graphs takes the table that fits it (R98.1-2)
+rule+: R98.1-2
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn level(x: u32) -> u32 {
+    x + 1
+}
+=== new src/lib.rs
+pub fn level(x: u32) -> u32 {
+    if cfg!(test) { x } else { x + 2 }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::level` (src/lib.rs:1): the full compare: `#[same(depot::level)] fn level_same() {}`; a difference: `#[change(depot::level)] fn level_change(x: u32) -> bool { … }` or `#[different(depot::level)] fn level_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (1 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::level`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `x + 1` (an inner statement of the added `if cfg!(▫)`, except: `x + 1` → `x + 2`) at `depot::level/tail` [semantics · code different]
+      not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::level=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
+      affected bodies: depot::level (with 1 other edit of this body)
+      graph: same structure: 1 changed check (`overflow: x + 1` → `overflow: x + 2`, implicit)
+      control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: MIR changes
+  ◆ f2 add (Semilla; R90.2-3, 3 new MIR elements): added `if` `if cfg!(test) { x } else { x + 2 }` (inner statements: 1 with a change in a deleted statement; 1 not in a deleted statement: `x`) at `depot::level/S0` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::level=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
+      affected bodies: depot::level (with 1 other edit of this body)
+      graph: +1 branch (`cfg!(test)`), +3 arrows, −1 arrow
+      control flow: + branch `cfg!(test)` (src/lib.rs:2): false → check `overflow: x + 2`, true → return
+      control flow: + arrow entry (src/lib.rs:1) → branch `cfg!(test)` (src/lib.rs:2)
+      control flow: − arrow entry (src/lib.rs:-1) → check `overflow: x + 1` (src/lib.rs:-2)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::level (src/lib.rs:1): graph changes: +1 branch, 1 changed check, +3 arrows, −1 arrow; MIR changes
+  expansions: 2 added
+    2 calls: expansion added: `macro cfg` (crate core): 1 line(s) of code; the step adds the call or its input: `depot::level/S0/cond`, `depot::level/S0/cond` (semilla expand --step 0)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  note: `▫` is in place of a child of the node (a condition, a block, an argument). It is not a cut: each edit in the child has its own fact.
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `x + 1` (an inner statement of the added `if cfg!(▫)`, except: `x + 1` → `x + 2`) at `depot::level/tail` [semantics · code different]
+    lines: src/lib.rs:-2
+◆ f2 add (Semilla; R90.2-3, 3 new MIR elements): added `if` `if cfg!(test) { x } else { x + 2 }` (inner statements: 1 with a change in a deleted statement; 1 not in a deleted statement: `x`) at `depot::level/S0` [semantics · code different]
+    lines: src/lib.rs:2

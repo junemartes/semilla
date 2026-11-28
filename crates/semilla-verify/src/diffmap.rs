@@ -449,9 +449,10 @@ pub(crate) fn shape(outcome: &mut StepOutcome, trees: [&Workspace; 2], map: &mut
         }
     }
     // [R94.1-2] The code that a transformation does not explain: a real edit of its own.
-    for left in outcome.transforms.left.clone() {
+    for (at, left) in outcome.transforms.left.clone().into_iter().enumerate() {
         let fact = crate::transforms::left_fact(trees, &left, next_id);
         next_id += 1;
+        outcome.transforms.left[at].fact = fact.id.clone();
         outcome.report.facts.push(fact);
     }
     // The entry of each node after the changes.

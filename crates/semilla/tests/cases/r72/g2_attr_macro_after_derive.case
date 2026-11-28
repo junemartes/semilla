@@ -47,7 +47,9 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `<shop::Item as std::fmt::Debug>::fmt` (shop/src/lib.rs:1): no template: the check of the intent files stops before the templates: the compile of the facade `before` failed (error[E0463]: can't find crate for `depot` which `shop` depends on)
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   syntax only:
   item `shop::Item`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `shop::Item`: `#[depot::tag] #[derive(Debug, Clone)]` → `#[derive(Debug, Clone)] #[depot::tag]` [attribute · code different]
@@ -56,6 +58,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: derived `Clone` of `shop::Item`: expansion changed: attributes of `shop::impl <Item as ::core::clone::Clone>`: removed `#[allow(dead_code)]` [attribute]
       ✗ spotlight: an attribute macro moves across a derive (`#[depot::tag]`, `#[derive(Debug,Clone)]`): the macro gets the item before the derive or after it, so the input of the derive can change; it needs a reason: --reason 'shop::Item=…'
   cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    <shop::Item as std::fmt::Debug>::fmt (shop/src/lib.rs:1): same graph; no edit in the body; MIR changes; the expansion of derive `Debug` changes (semilla expand shop/src/lib.rs:1 --step 0)
   expansions: 2 changed, 2 equal
     derive `Debug` at `shop::Item` (shop/src/lib.rs:1): expansion changed: `derive Debug` (crate core): attributes of `shop::impl <Item as ::core::fmt::Debug>`: removed `#[allow(dead_code)]` [attribute]; the input of the call changes
     derive `Clone` at `shop::Item` (shop/src/lib.rs:1): expansion changed: `derive Clone` (crate core): attributes of `shop::impl <Item as ::core::clone::Clone>`: removed `#[allow(dead_code)]` [attribute]; the input of the call changes

@@ -1,0 +1,50 @@
+note: a new closure before an old closure: the compare pairs the nested bodies again (R72.1-1), and the pair has its element table, so its points pair through the alignment
+rule+: R98.1-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(v: &[u32]) -> u32 {
+    v.iter().map(|x| x * 2).sum()
+}
+=== new src/lib.rs
+pub fn total(v: &[u32]) -> u32 {
+    v.iter().filter(|x| **x > 1).map(|x| if *x > 5 { x * 2 } else { 0 }).sum()
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(v: &[u32]) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+    MIR changes with no claim: `depot::total::{closure#0} |x| **x > 1` (src/lib.rs:2): the template of `depot::total` covers its item `depot::total`
+    MIR changes with no claim: `depot::total::{closure#1} |x| if *x > 5 { x * 2 } else { 0 }` (src/lib.rs:2): the template of `depot::total` covers its item `depot::total`
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 14 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements; 2 nodes; one change (R92.6-1)): changed expression `v.iter()` → `v.iter().filter(|x| **x > 1)` at `depot::total/tail/recv/recv`; changed if: `x * 2` → `if *x > 5 { x * 2 } else { 0 }` at `depot::total/tail/recv/args[0]/body` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a.iter() => $a.iter().filter(|x| **x > 1)' --same 'rewrite $a * 2 => if *$a > 5 { $a * 2 } else { 0 }' (one statement for 2 places: f1)
+      affected bodies: depot::total
+      graph: +1 call (`<Iter<'_, u32> as Iterator>::filter::<{closure#0}> (trait default)`), +1 body, +1 return, +1 branch (`*x > 5`), 2 changed call targets, +6 arrows, −2 arrows
+      control flow: + call `<Iter<'_, u32> as Iterator>::filter::<{closure#0}> (trait default)` (src/lib.rs:2): return → call `<Filter<Iter<'_, u32>, {closure#0}> as Iterator>::map::<u32, {closure#1}> (trait default)`
+      control flow: ~ call `<Iter<'_, u32> as Iterator>::map::<u32, {closure#1}> (trait default)` → `<Filter<Iter<'_, u32>, {closure#0}> as Iterator>::map::<u32, {closure#1}> (trait default)` (src/lib.rs:-2, src/lib.rs:2)
+      control flow: ~ call `<Map<Iter<'_, u32>, {closure#1}> as Iterator>::sum::<u32> (trait default)` → `<Map<Filter<Iter<'_, u32>, {closure#0}>, {closure#1}> as Iterator>::sum::<u32> (trait default)` (src/lib.rs:-2, src/lib.rs:2)
+      control flow: … 5 more (semilla expand --step 0)
+      control flow: + graph of `depot::total::{closure#0} |x| **x > 1`: 2 points, 1 arrow (semilla expand --step 0)
+      equivalence: `depot::total`: MIR changes alone; the body: MIR changes
+      equivalence: `depot::total::{closure#1} |x| if *x > 5 { x * 2 } else { 0 }`: MIR changes alone; the body: MIR changes
+      equivalence: `depot::total`: MIR changes alone: the same MIR text; a changed callee: `depot::total::{closure#0}`; the body: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 3 bodies
+    depot::total (src/lib.rs:1): graph changes: +1 call, 2 changed call targets, +2 arrows, −1 arrow; MIR changes
+    depot::total::{closure#0} |x| **x > 1 (src/lib.rs:2): graph added: 2 points, 1 arrow
+    depot::total::{closure#1} |x| if *x > 5 { x * 2 } else { 0 } (src/lib.rs:2): graph changes: +1 branch, +3 arrows, −1 arrow; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements; 2 nodes; one change (R92.6-1)): changed expression `v.iter()` → `v.iter().filter(|x| **x > 1)` at `depot::total/tail/recv/recv`; changed if: `x * 2` → `if *x > 5 { x * 2 } else { 0 }` at `depot::total/tail/recv/args[0]/body` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

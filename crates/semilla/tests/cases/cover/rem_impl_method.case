@@ -39,12 +39,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::Tool::b` (src/lib.rs:11): a removed body: `#[removed(depot::Tool::b)] fn b_removed(this: &before::depot::Tool) -> bool { let old = before::depot::Tool::b(this); true }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 3 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::Tool::b`:
   ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::Tool::b` (the public API changes: a different crate can no longer use the item) [removed · code different]
       not stated (src/lib.rs:-8-11); to state it: --change 'depot::Tool::b=TEXT'
       affected bodies: depot::Tool::b
+      graph: −1 body, −1 return, −1 arrow
       control flow: − graph of `depot::Tool::b`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 4 changed line(s) is in a fact

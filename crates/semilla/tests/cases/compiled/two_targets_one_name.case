@@ -77,14 +77,16 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `probe::hash` (benches/probe.rs:1): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop (bench "probe")::hash`:
   ◆ f1 add (Semilla; R90.2-3, 4 new MIR elements): added early exit `if x == 0 { return 1; }` at `shop (bench "probe")::hash/S0` [semantics · code different]
       not stated (benches/probe.rs:2-4); to state it: --change 'shop (bench "probe")::hash=TEXT'
       affected bodies: shop (bench "probe")::hash
+      graph: +1 branch (`x == 0`), +3 arrows, −1 arrow
       control flow: + branch `x == 0` (benches/probe.rs:2): false → call `num::<impl u64>::wrapping_mul`, true → return
       control flow: + arrow entry (benches/probe.rs:1) → branch `x == 0` (benches/probe.rs:2)
+      control flow: − arrow entry (benches/probe.rs:-1) → call `num::<impl u64>::wrapping_mul` (benches/probe.rs:-2)
       equivalence: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body

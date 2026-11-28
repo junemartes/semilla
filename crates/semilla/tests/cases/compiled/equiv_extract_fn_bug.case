@@ -30,22 +30,22 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::cost` (src/lib.rs:5): the full compare: `#[same(shop::cost)] fn cost_same() {}`; a difference: `#[change(shop::cost)] fn cost_change(w: u32) -> bool { … }` or `#[different(shop::cost)] fn cost_different() -> bool { … }`
     MIR changes with no claim: `shop::ship` (src/lib.rs:1): an added body: `#[new(shop::ship)] fn ship_new(w: u32) -> bool { let new = after::shop::ship(w); true }`
-  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 13 in entries (0 implicit, 6 explained by the check of a transformation), 0 in the section of R92.4-1
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::cost=TEXT'
   real edits:
   item `shop::cost`:
   ◆ f2 replace (Semilla; R94.1-2, 2 MIR element place(s) that differ after the callee is put in at the call): the code of the extract of `shop::ship` that the MIR does not explain: `w > 10` → `w > 20` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: --change 'shop::cost=TEXT' (one statement for 2 places: f1, f2)
       affected bodies: shop::cost
+      graph: +1 branch (`w > 20`), −1 branch (`w > 10`), +2 arrows, −3 arrows
+      control flow: − branch `w > 10` (src/lib.rs:-2): false → check `overflow: base + 1`, true → check `overflow: base + 1`
+      control flow: − arrow entry (src/lib.rs:-1) → branch `w > 10` (src/lib.rs:-2)
+      control flow: + branch `w > 20` (src/lib.rs:2): false → return, true → return
   transformations:
   item `shop::cost`:
   ◆ f1 extract (Semilla; R94.1-1, the MIR of `shop::ship` put in at the call explains 3 element place(s); 2 element place(s) differ: a real edit of its own (R94.1-2); 2 nodes; one change (R92.6-1)): changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `shop::cost/S0/init`; added `shop::ship` [semantics · code different]
       affected bodies: shop::cost, shop::ship
-      control flow: + call `ship` (src/lib.rs:6): return → check `overflow: base + 1`
-      control flow: − branch `w > 10` (src/lib.rs:-2): false → check `overflow: base + 1`, true → check `overflow: base + 1`
-      control flow: + arrow entry (src/lib.rs:5) → call `ship` (src/lib.rs:6)
-      control flow: … 1 more (semilla expand --step 0)
-      control flow: + graph of `shop::ship`: 3 points, 3 arrows (semilla expand --step 0)
+      graph: no change after the check: the check of the extract explains 6 graph change(s)
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies

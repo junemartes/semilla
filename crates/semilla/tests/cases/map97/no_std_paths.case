@@ -42,12 +42,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
     changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
       MIR changes with no claim: `shop::f` (src/lib.rs:2): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(r: core::ops::Range<usize>) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 4 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::f`:
   ◆ f1 replace (a1; R97.3-1, the closure pair of `fn end` fits 1 site(s): `shop::f` (src/lib.rs:3); at the first site the parameter `r` binds to `r`; a real edit that the statement states (statement 1)): changed field: `r.len()` → `r.end` at `shop::f/tail` [semantics · code different]
       affected bodies: shop::f
+      graph: −1 call (`<Range<usize> as ExactSizeIterator>::len (trait default)`), +1 arrow, −2 arrows
       control flow: − call `<Range<usize> as ExactSizeIterator>::len (trait default)` (src/lib.rs:-3): return → return
+      control flow: + arrow entry (src/lib.rs:2) → return (src/lib.rs:4)
       control flow: − arrow entry (src/lib.rs:-2) → call `<Range<usize> as ExactSizeIterator>::len (trait default)` (src/lib.rs:-3)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact

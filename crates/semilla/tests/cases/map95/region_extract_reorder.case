@@ -35,17 +35,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::part` (src/lib.rs:8): an added body: `#[new(depot::part)] fn part_new(x: u32, y: u32) -> bool { let new = after::depot::part(x, y); true }`
     MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 3 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit, 6 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::total`:
   ◆ f1 reorder (Semilla; R95.1-1, the statements in another order; the parts are independent (1 pair(s) of MIR elements change order); the check reads the region: the other edits of the body are real edits): moved statement `let x = a ^ 2;` from `depot::total/S0` to `depot::total/S1` [semantics · code different]
       affected bodies: depot::total (with 1 other edit of this body)
-      control flow: ~ call `num::<impl u32>::wrapping_mul` → `part` (src/lib.rs:-4, src/lib.rs:4)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   ◆ f2 extract (Semilla; R94.1-1, the MIR of `depot::part` put in at the call is the MIR of the old code (2 element place(s) explained); 2 nodes; one change (R92.6-1)): changed expression `x.wrapping_mul(3) ^ y` → `part(x, y)` at `depot::total/S2/init`; added `depot::part` [semantics · code different]
       affected bodies: depot::total, depot::part
-      control flow: ~ call `num::<impl u32>::wrapping_mul` → `part` (src/lib.rs:-4, src/lib.rs:4)
-      control flow: + graph of `depot::part`: 3 points, 2 arrows (semilla expand --step 0)
+      graph: no change after the check: the check of the extract explains 6 graph change(s)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   cover: each of the 8 changed line(s) is in a fact
   control flow: 2 bodies

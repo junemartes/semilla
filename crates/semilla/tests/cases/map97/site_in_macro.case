@@ -65,7 +65,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     ✗ false: i1 `#[rewrite()] fn count()`: the check of `--same 'rewrite fn count in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the check refuses 1 place(s): `shop::total` (src/lib.rs:8): the old code is a part of a macro expansion (R97.2-7): no site)
     changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
       MIR changes with no claim: `shop::total` (src/lib.rs:12): the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(c_before: &before::shop::Cart, c_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 4 in the section of R92.4-1
+  compiled code that changes with no edit:
+  body `shop::total` (src/lib.rs:12): graph: −1 call (`Vec::<u32>::len`), +1 arrow, −2 arrows (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
+      control flow: − call `Vec::<u32>::len` (src/lib.rs:-13): return → check `overflow: size!(c) + 1`
+      control flow: + arrow entry (src/lib.rs:12) → check `overflow: size!(c) + 1` (src/lib.rs:13)
+      control flow: − arrow entry (src/lib.rs:-12) → call `Vec::<u32>::len` (src/lib.rs:-13)
   syntax only:
   item `shop::size!`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `size`: `macro_rules! size { ($c:expr) => { $c.items.len() }; }` → `macro_rules! size { ($c:expr) => { $c.count }; }` [declaration · code different]

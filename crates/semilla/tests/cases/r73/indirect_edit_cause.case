@@ -41,18 +41,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::price` (src/lib.rs:5): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(n: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
     MIR changes with no claim: `shop::scale` (no place): no result of the equivalence check; the full compare: `#[same(shop::scale)] fn scale_same() {}`; a difference: `#[change(shop::scale)] fn scale_change() -> bool { … }` or `#[different(shop::scale)] fn scale_different() -> bool { … }`
     equal MIR: `shop::price::{closure#0} |i| i + s` (src/lib.rs:9)
-  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 1 in the section of R92.4-1
   real edits:
   item `shop::price`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `n as u16` → `n` at `shop::price/S0/init` [semantics · code different]
       not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite $a as u16 => n'
       affected bodies: shop::price
+      graph: no graph change of its own
       equivalence: `shop::price`: MIR changes
       equivalence: `shop::price::{closure#0} |i| i + s`: equivalent (proved by equal MIR)
   compiled code that changes with no edit:
   item `shop::price`:
   ◆ f2 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::price` changes with no edit at its place: `scale(k)` [indirect · code different]
       affected bodies: shop::price
+      graph: same structure: 1 changed call target (`scale::<u16>` → `scale::<u32>`, implicit)
+      control flow: ~ call `scale::<u16>` → `scale::<u32>` (src/lib.rs:-8, src/lib.rs:8)
       note: lines 8; the cause: the edit of this body at src/lib.rs:6 (the step changes no other input of the body)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 3 bodies

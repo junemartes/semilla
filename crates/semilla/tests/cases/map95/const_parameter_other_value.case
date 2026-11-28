@@ -29,23 +29,25 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::scaled` (src/lib.rs:5): an added body: no template: error[E0284]: type annotations needed
     MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(x: usize) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
     MIR changes with no claim: `depot::scaled` (no place): no result of the equivalence check; the template of `depot::scaled` covers its item `depot::scaled`
-  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::scaled`:
   ◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::scaled` [added · code different]
       not stated (src/lib.rs:3-6); to state it: --change 'depot::scaled=TEXT'
       affected bodies: depot::scaled
+      graph: +1 body, +1 call (`num::<impl usize>::wrapping_mul`), +1 return, +2 arrows
       control flow: + graph of `depot::scaled`: 3 points, 2 arrows (semilla expand --step 0)
   item `depot::total`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `x.wrapping_mul(4)` at `depot::total/tail` [semantics · code different]
       not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: depot::total (with 1 other edit of this body)
+      graph: same structure: 1 changed call target (`num::<impl usize>::wrapping_mul` → `scaled::<3>`)
       control flow: ~ call `num::<impl usize>::wrapping_mul` → `scaled::<3>` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: MIR changes
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `scaled::<3>(x)` at `depot::total/tail` [semantics · code different]
       not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: depot::total (with 1 other edit of this body)
-      control flow: ~ call `num::<impl usize>::wrapping_mul` → `scaled::<3>` (src/lib.rs:-2, src/lib.rs:2)
+      graph: no graph change of its own
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 3 bodies

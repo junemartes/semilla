@@ -23,14 +23,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::apply` (src/lib.rs:1): the full compare: `#[same(depot::apply)] fn apply_same() {}`; a difference: `#[change(depot::apply)] fn apply_change(v: u32) -> bool { … }` or `#[different(depot::apply)] fn apply_different() -> bool { … }`
     MIR changes with no claim: `depot::apply::{closure#0} |x: u32| x ^ 1` (src/lib.rs:2): the template of `depot::apply` covers its item `depot::apply`
-  changed nodes: 3 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 7 in entries (0 implicit, 7 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::apply`:
   ◆ f1 extract (Semilla; R95.6-1, a part of the extract of `depot::apply::{closure#0}` (R95.6-1); 3 nodes; one change (R92.6-1)): deleted statement `v ^ 1` at `depot::apply/tail`; added `let` `let f = |x: u32| x ^ 1;` at `depot::apply/S0`; added statement `f(v)` at `depot::apply/tail` [semantics · code different]
       affected bodies: depot::apply (with 1 other edit of this body)
-      control flow: + graph of `depot::apply::{closure#0} |x: u32| x ^ 1`: 2 points, 1 arrow (semilla expand --step 0)
-      control flow: + call `f` [closure] (src/lib.rs:3): return → return
-      control flow: + arrow entry (src/lib.rs:1) → call `f` [closure] (src/lib.rs:3)
+      graph: no change after the check: the check of the extract explains 7 graph change(s)
       equivalence: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies

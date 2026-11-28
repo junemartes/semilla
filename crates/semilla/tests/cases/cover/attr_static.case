@@ -30,7 +30,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::NAME` (src/lib.rs:7)
-  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::NAME`:
   ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): type of `depot::NAME`: `static NAME: &str = "depot";` → `#[cfg(all())] static NAME: &str = "depot";` (the public API can change: a different crate can use the item) [declaration · code equal]

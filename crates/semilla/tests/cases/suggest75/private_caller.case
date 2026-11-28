@@ -52,12 +52,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     ✗ false: i2 `#[same(depot::caller)] fn same_1()`: for x = 1: before returns 3, after returns 4 (suggested test `semilla_test_caller_6ebe60`)
     changed bodies: 0 equal MIR, 0 explained by claims, 0 MIR changes with no claim, 1 MIR changes that the claims on the item do not explain
       not explained by its claims: `depot::step` (src/lib.rs:1): MIR changes
-  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::step`:
   ◆ f1 replace (i1; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `depot::step/tail/rhs` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::step=TEXT'; if it does not change, --same 'rewrite 2 => 3'
       affected bodies: depot::step
+      graph: same structure: 1 changed check (`overflow: x * 2` → `overflow: x * 3`, implicit)
       control flow: ~ check `overflow: x * 2` → `overflow: x * 3` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact

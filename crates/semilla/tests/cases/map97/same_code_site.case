@@ -43,12 +43,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
     changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
       MIR changes with no claim: `shop::f` (src/lib.rs:1): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(a: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::f`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `shop::f/tail/args[0]` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::f=TEXT'; if it does not change, --same 'rewrite 2 => 3'
       affected bodies: shop::f
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes alone; the body: MIR changes
   transformations:
   item `shop::f`:

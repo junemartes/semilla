@@ -97,12 +97,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::Tool::grow` (src/lib.rs:34): the full compare: `#[same(depot::Tool::grow)] fn grow_same() {}`; a difference: `#[change(depot::Tool::grow)] fn grow_change(mut this_before: before::depot::Tool, mut this_after: after::depot::Tool, by: u32) -> bool { … }` or `#[different(depot::Tool::grow)] fn grow_different() -> bool { … }`
-  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 7 in entries (7 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::Tool::grow`:
   ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics · code different]
       not stated (src/lib.rs:24, src/lib.rs:26-27, src/lib.rs:32-42, src/lib.rs:-2-3, src/lib.rs:-8-19); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::Tool::grow=TEXT'; if it does not change, --same 'rewrite by => by + 1'
       affected bodies: depot::Tool::grow
+      graph: +1 overflow check (implicit), +1 panic (implicit), 1 changed check (`overflow: self.n += by` → `overflow: self.n += by + 1`, implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: by + 1` (src/lib.rs:38): ok → check `overflow: self.n += by + 1`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:38)
       control flow: ~ check `overflow: self.n += by` → `overflow: self.n += by + 1` (src/lib.rs:-14, src/lib.rs:38)

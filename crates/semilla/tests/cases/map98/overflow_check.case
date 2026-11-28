@@ -1,0 +1,52 @@
+note: a new addition adds an overflow check and its panic: implicit changes; the branch of the same entry is not implicit
+rule+: R98.3-1
+rule-: R98.3-1
+must_match: \+1 branch \(`a > b`\)
+must_match: \+1 overflow check \(implicit\)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    a
+}
+=== new src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    if a > b { a + b } else { a }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 9 in entries (4 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::total`:
+  ◆ f2 add (Semilla; R90.2-3, 5 new MIR elements): added `if` `if a > b { a + b } else { a }` (inner statements: 1 moved to a different place; 1 not in a deleted statement: `a + b`) at `depot::total/S0` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f1)
+      affected bodies: depot::total
+      graph: +1 branch (`a > b`), +1 overflow check (implicit), +1 panic (implicit), +5 arrows (2 implicit), −1 arrow
+      control flow: + branch `a > b` (src/lib.rs:2): false → return, true → check `overflow: a + b`
+      control flow: + check `overflow: a + b` (src/lib.rs:2): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:2)
+      control flow: … 2 more (semilla expand --step 0)
+      equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
+  transformations:
+  item `depot::total`:
+  ◆ f1 same code (Semilla; R90.2-1, equal MIR): moved statement `a` from `depot::total/tail` to `depot::total/S0/else/tail` [semantics · code equal]
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:1): graph changes: +1 branch, +1 check, +1 panic, +5 arrows, −1 arrow; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 add (Semilla; R90.2-3, 5 new MIR elements): added `if` `if a > b { a + b } else { a }` (inner statements: 1 moved to a different place; 1 not in a deleted statement: `a + b`) at `depot::total/S0` [semantics · code different]
+    lines: src/lib.rs:2
+◆ f1 same code (Semilla; R90.2-1, equal MIR): moved statement `a` from `depot::total/tail` to `depot::total/S0/else/tail` [semantics · code equal]
+    lines: src/lib.rs:2, src/lib.rs:-2

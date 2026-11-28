@@ -1,5 +1,5 @@
-note: a rename of a local in a condition keeps the graph: the changed text is a rename, and the body is `same graph`
-rule+: R60.3-8
+note: a rename of a local in a condition: the changed text is a changed point with equal MIR elements (R98.6-2), and the check of the same-code entry explains it (R98.6-1)
+rule+: R98.6-2
 === both Cargo.toml
 [package]
 name = "depot"
@@ -23,14 +23,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::tax` (src/lib.rs:1)
-  changed nodes: 4 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 4 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (0 implicit, 1 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::tax`:
   ◆ f1 same code (Semilla; R90.2-1, equal MIR; 4 nodes): `depot::tax`: renamed local `w` → `level`, 4 edit(s) [rename · code equal]
+      graph: no change after the check: the equal MIR at `n0` explains 1 graph change(s)
       equivalence: equivalent (proved by equal MIR)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    depot::tax (src/lib.rs:1): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
+    depot::tax (src/lib.rs:1): same structure: 1 changed condition; equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

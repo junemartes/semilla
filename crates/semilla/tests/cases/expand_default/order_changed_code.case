@@ -66,15 +66,17 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `<shop::Item as std::fmt::Debug>::fmt` (shop/src/lib.rs:1): no template: the check of the intent files stops before the templates: the compile of the facade `before` failed (error[E0463]: can't find crate for `depot` which `shop` depends on)
     MIR changes with no claim: `dyn std::fmt::Debug` (no place): no result of the equivalence check; no template: `dyn std::fmt::Debug` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
-  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::Item`:
   ◆ f1 reorder, the order can matter (Semilla; R94.4-3, the MIR of 1 body(ies) reads the order of the fields: `<shop::Item as std::fmt::Debug>::fmt`): member order of `shop::Item`: `a, b` → `b, a` [declaration · code different]
       not stated (shop/src/lib.rs:4, shop/src/lib.rs:-3); to state it: --change 'shop::Item=TEXT'
       affected bodies: <shop::Item as std::fmt::Debug>::fmt
       through: `shop::Item` (1 body)
+      graph: same graph (the edit keeps the control flow)
       expansion: derived `Debug` of `shop::Item`: expansion changed: changed literal `"a"` → `"b"` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[2]` [semantics]; changed expression `self.a` → `self.b` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[3]/operand` [semantics]; changed lite… (113 characters more; `semilla expand f1 --step 0` shows the full line) ….b` → `self.a` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[5]/operand/operand` [semantics]
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Marker`, `Debug`): the code that it makes reads the members in order; it needs a reason: --reason 'shop::Item=…'
   item `shop::Packed`:
@@ -83,7 +85,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       note: no compare: the MIR bodies do not show each effect of a member order
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Marker`): the code that it makes reads the members in order; it needs a reason: --reason 'shop::Packed=…'
   cover: each of the 4 changed line(s) is in a fact
-  control flow: 1 body
+  control flow: 2 bodies
+    <shop::Item as std::fmt::Debug>::fmt (shop/src/lib.rs:1): same graph; no edit in the body; MIR changes; the expansion of derive `Debug` changes (semilla expand shop/src/lib.rs:1 --step 0)
     dyn std::fmt::Debug (no place): the candidates of a call through `dyn std::fmt::Debug`: +`&u8`, +`u32`, −`&u32`, −`u8`
   expansions: 1 changed, 3 equal
     derive `Debug` at `shop::Item` (shop/src/lib.rs:1): expansion changed: `derive Debug` (crate core): changed literal `"a"` → `"b"` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[2]` [semantics]; changed expression `self.a` → `self.b` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[3]… (179 characters more; `semilla expand --step 0` shows the full line) …as ::core::fmt::Debug>::fmt/tail/args[5]/operand/operand` [semantics]; the input of the call changes

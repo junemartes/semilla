@@ -30,12 +30,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::new_tax` (src/lib.rs:5): no template: the step pairs `shop::old_tax` with `shop::new_tax` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
-  changed nodes: 4 in 6 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 4 in 6 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (6 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::new_tax`:
   ◆ f5 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `x / 10` → `x / 5 + y` at `shop::new_tax/tail` [semantics · code different]
       not stated (src/lib.rs:5, src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::new_tax=TEXT'; if it does not change, --same 'rewrite $a / 10 => $a / 5 + y'
       affected bodies: shop::new_tax (with 1 other edit of this body)
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: x / 5 + y` (src/lib.rs:5): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:5)
       control flow: + arrow entry (src/lib.rs:5) → check `overflow: x / 5 + y` (src/lib.rs:5)
@@ -46,9 +47,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `shop::new_tax` added: `y: u32` (the public API can change: a different crate can use the item) [declaration · code different]
       not stated (src/lib.rs:5); to state it: --change 'shop::new_tax=TEXT'
       affected bodies: shop::new_tax (with 1 other edit of this body)
-      control flow: + check `overflow: x / 5 + y` (src/lib.rs:5): ok → return, fail → panic `overflow`
-      control flow: + panic `overflow` (src/lib.rs:5)
-      control flow: + arrow entry (src/lib.rs:5) → check `overflow: x / 5 + y` (src/lib.rs:5)
+      graph: no graph change of its own
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
       ! public API: the compare does not cover the code of a different crate
   compiled code that changes with no edit:

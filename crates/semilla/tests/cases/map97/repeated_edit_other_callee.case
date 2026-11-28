@@ -43,12 +43,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::first` (src/lib.rs:6): the full compare: `#[same(shop::first)] fn first_same() {}`; a difference: `#[change(shop::first)] fn first_change(c_before: &before::shop::Cart, c_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::first)] fn first_different() -> bool { … }`
     MIR changes with no claim: `shop::second` (src/lib.rs:10): the full compare: `#[same(shop::second)] fn second_same() {}`; a difference: `#[change(shop::second)] fn second_change(other_before: &before::shop::Cart, other_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::second)] fn second_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 10 in entries (2 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::first`:
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `c.items.len()` → `c.count` at `shop::first/tail/lhs` [semantics · code different]
       not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::first=TEXT'; if it does not change, --same 'rewrite $a.items.len() => $a.count'
       affected bodies: shop::first
+      graph: −1 call (`Vec::<u32>::len`), 1 changed check (`overflow: c.items.len() + 1` → `overflow: c.count + 1`, implicit), +1 arrow, −2 arrows
       control flow: − call `Vec::<u32>::len` (src/lib.rs:-7): return → check `overflow: c.items.len() + 1`
       control flow: ~ check `overflow: c.items.len() + 1` → `overflow: c.count + 1` (src/lib.rs:-7, src/lib.rs:7)
       control flow: + arrow entry (src/lib.rs:6) → check `overflow: c.count + 1` (src/lib.rs:7)
@@ -58,6 +59,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `other.items.capacity()` → `other.count` at `shop::second/tail/lhs` [semantics · code different]
       not stated (src/lib.rs:11, src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::second=TEXT'; if it does not change, --same 'rewrite $a.items.capacity() => $a.count'
       affected bodies: shop::second
+      graph: −1 call (`Vec::<u32>::capacity`), 1 changed check (`overflow: other.items.capacity() * 2` → `overflow: other.count * 2`, implicit), +1 arrow, −2 arrows
       control flow: − call `Vec::<u32>::capacity` (src/lib.rs:-11): return → check `overflow: other.items.capacity() * 2`
       control flow: ~ check `overflow: other.items.capacity() * 2` → `overflow: other.count * 2` (src/lib.rs:-11, src/lib.rs:11)
       control flow: + arrow entry (src/lib.rs:10) → check `overflow: other.count * 2` (src/lib.rs:11)

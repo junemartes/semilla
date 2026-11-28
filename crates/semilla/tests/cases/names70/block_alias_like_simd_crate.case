@@ -169,12 +169,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::Bits::with_capacity_and_blocks` (src/lib.rs:15): the full compare: `#[same(shop::Bits::with_capacity_and_blocks)] fn with_capacity_and_blocks_same() {}`; a difference: `#[change(shop::Bits::with_capacity_and_blocks)] fn with_capacity_and_blocks_change() -> bool { … }` or `#[different(shop::Bits::with_capacity_and_blocks)] fn with_capacity_and_blocks_different() -> bool { … }`
     equal MIR: `shop::Bits::blocks` (src/lib.rs:40)
     equal MIR: `shop::Bits::get_unchecked` (src/lib.rs:24)
-  changed nodes: 8 in 6 entries; 4 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 8 in 6 entries; 4 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 34 in entries (13 implicit, 3 explained by the check of a transformation), 0 in the section of R92.4-1
   real edits:
   item `shop::Bits::first_block`:
   ◆ f6 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::Bits::first_block` (the public API changes: a different crate can now use the item) [added · code different]
       not stated (src/lib.rs:32-39); to state it: --change 'shop::Bits::first_block=TEXT'
       affected bodies: shop::Bits::first_block
+      graph: +1 body, +6 calls, +2 branches, +1 return, +1 bounds check (implicit), +1 panic (implicit), +13 arrows (2 implicit)
       control flow: + graph of `shop::Bits::first_block`: 12 points, 13 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
       ! unsafe code: the changed body has an `unsafe` block
@@ -187,13 +188,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
           | /// `subblock` is in bounds.
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   item `shop::Bits::with_capacity_and_blocks`:
-  ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): added `let` `let first: Block = 0;` at `shop::Bits::with_capacity_and_blocks/S1` [semantics · code different]
+  ◆ f4 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let first: Block = 0;` at `shop::Bits::with_capacity_and_blocks/S1` [semantics · code different]
       not stated (src/lib.rs:17); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Bits::with_capacity_and_blocks=TEXT'; if it does not change, --same 'rewrite $a * $b => $a * $b + first', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f4, f5)
       affected bodies: shop::Bits::with_capacity_and_blocks (with 1 other edit of this body)
+      graph: no graph change of its own
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
-  ◆ f5 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `words * BITS` → `words * BITS + first` at `shop::Bits::with_capacity_and_blocks/S1/init/args[0]` [semantics · code different]
+  ◆ f5 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `words * BITS` → `words * BITS + first` at `shop::Bits::with_capacity_and_blocks/S1/init/args[0]` [semantics · code different]
       not stated (src/lib.rs:18, src/lib.rs:-17); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Bits::with_capacity_and_blocks=TEXT'; if it does not change, --same 'rewrite $a * $b => $a * $b + first', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f4, f5)
       affected bodies: shop::Bits::with_capacity_and_blocks (with 1 other edit of this body)
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: words * BITS + first` (src/lib.rs:18): ok → call `impls::<impl Ord for usize>::min`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:18)
       control flow: + arrow check `overflow: words * BITS` (src/lib.rs:18) → check `overflow: words * BITS + first` (src/lib.rs:18) (ok)
@@ -202,16 +205,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   transformations:
   item `shop::Bits::blocks`:
   ◆ f2 extract (Semilla; R94.3-1, equal MIR after the normal form (the copy and move chains of a local); 2 nodes): extracted variable `count` = `self.data.len()` (1 use) at `shop::Bits::blocks/S0` [move · code equal]
-      control flow: ~ check `overflow: self.data.len() * SimdBlock::USIZE_COUNT` → `overflow: count * SimdBlock::USIZE_COUNT` (src/lib.rs:-32, src/lib.rs:42)
+      graph: no change after the check: the equal MIR at `n0` explains 1 graph change(s)
       equivalence: equivalent (proved by equal MIR)
   item `shop::Bits::get_unchecked`:
   ◆ f3 same code (Semilla; R90.2-1, equal MIR): `shop::Bits::get_unchecked`: renamed local `subblock` → `index`, 1 edit(s) [rename · code equal]
+      graph: no change after the check: the equal MIR at `n0` explains 2 graph change(s)
       equivalence: no result alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
   cover: each of the 18 changed line(s) is in a fact
   control flow: 4 bodies
     shop::Bits::blocks (src/lib.rs:40): same structure: 1 changed check; equivalent (proved by equal MIR)
     shop::Bits::first_block (src/lib.rs:32): graph added: 12 points, 13 arrows
-    shop::Bits::get_unchecked (src/lib.rs:24): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
+    shop::Bits::get_unchecked (src/lib.rs:24): same structure: 2 changed checks; equivalent (proved by equal MIR)
     shop::Bits::with_capacity_and_blocks (src/lib.rs:15): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
@@ -222,9 +226,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     lines: src/lib.rs:32-39
 ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): parameter `subblock` of `shop::Bits::get_unchecked` renamed to `index`: `usize` [rename · code equal]
     lines: src/lib.rs:24, src/lib.rs:-23
-◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): added `let` `let first: Block = 0;` at `shop::Bits::with_capacity_and_blocks/S1` [semantics · code different]
+◆ f4 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let first: Block = 0;` at `shop::Bits::with_capacity_and_blocks/S1` [semantics · code different]
     lines: src/lib.rs:17
-◆ f5 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `words * BITS` → `words * BITS + first` at `shop::Bits::with_capacity_and_blocks/S1/init/args[0]` [semantics · code different]
+◆ f5 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `words * BITS` → `words * BITS + first` at `shop::Bits::with_capacity_and_blocks/S1/init/args[0]` [semantics · code different]
     lines: src/lib.rs:18, src/lib.rs:-17
 ◆ f2 extract (Semilla; R94.3-1, equal MIR after the normal form (the copy and move chains of a local); 2 nodes): extracted variable `count` = `self.data.len()` (1 use) at `shop::Bits::blocks/S0` [move · code equal]
     lines: src/lib.rs:41-42, src/lib.rs:-32

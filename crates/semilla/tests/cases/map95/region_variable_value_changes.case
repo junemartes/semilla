@@ -35,7 +35,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:7): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::K=TEXT'
   real edits:
   item `depot::K`:
@@ -43,10 +43,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       not stated (src/lib.rs:1, src/lib.rs:-1); to state it: --change 'depot::K=TEXT'
       affected bodies: depot::total
       through: `depot::K` (1 body)
+      graph: same graph (the edit keeps the control flow)
   item `depot::total`:
   ◆ f2 replace (Semilla; R94.3-2, an extracted variable: the MIR is not equal after the normal form, and it is not a new order of the same parts; 2 nodes): extracted variable `s` = `a.wrapping_mul(K) ^ b` (1 use) at `depot::total/S0` [move · code different]
       not stated (src/lib.rs:8-9, src/lib.rs:-8); to state it: --change 'depot::total=TEXT'
       ! the compiled code changes: depot::total
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   cover: each of the 5 changed line(s) is in a fact
   control flow: 1 body

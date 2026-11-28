@@ -27,14 +27,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::total` (src/lib.rs:1)
-  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit, 1 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::total`:
   ◆ f1 same code (Semilla; R90.2-1, equal MIR; 2 nodes): `depot::total`: renamed local `sum` → `both`, 2 edit(s) [rename · code equal]
+      graph: no change after the check: the equal MIR at `n0` explains 1 graph change(s)
       equivalence: equivalent (proved by equal MIR)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    depot::total (src/lib.rs:1): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
+    depot::total (src/lib.rs:1): same structure: 1 changed check; equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

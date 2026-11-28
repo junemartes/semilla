@@ -35,26 +35,30 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::part` (src/lib.rs:7): an added body: `#[new(depot::part)] fn part_new(a: u32, s: String) -> bool { let new = after::depot::part(a, s); true }`
     MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, s: String) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 18 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::part`:
   ◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::part` [added · code different]
       not stated (src/lib.rs:6-12); to state it: --change 'depot::part=TEXT'
       affected bodies: depot::part
+      graph: +1 body, +1 branch (`a > 9`), +1 call (`String::len`), +1 return, +4 arrows
       control flow: + graph of `depot::part`: 4 points, 4 arrows (semilla expand --step 0)
   item `depot::total`:
   ◆ f1 replace (Semilla; R90.2-2, 8 changed MIR elements): changed call: `if a > 9 { 0 } else { s.len() }` → `part(a, s)` at `depot::total/S0/init` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite if $a > 9 { 0 } else { $b.len() } => part($a, $b)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: depot::total (with 1 other edit of this body)
+      graph: −1 branch (`a > 9`), 1 changed call target (`String::len` → `part`), +1 arrow, −3 arrows
       control flow: − branch `a > 9` (src/lib.rs:-2): false → call `String::len`, true → call `num::<impl usize>::wrapping_add`
       control flow: ~ call `String::len` → `part` (src/lib.rs:-2, src/lib.rs:2)
       control flow: + arrow entry (src/lib.rs:1) → call `part` (src/lib.rs:2)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
-  ◆ f2 delete (Semilla; R90.2-3, 4 removed MIR elements): deleted statement `drop(s)` at `depot::total/S2` [semantics · code different]
+  ◆ f2 delete (Semilla; R90.2-3, 5 removed MIR elements): deleted statement `drop(s)` at `depot::total/S2` [semantics · code different]
       not stated (src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite if $a > 9 { 0 } else { $b.len() } => part($a, $b)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: depot::total (with 1 other edit of this body)
+      graph: −1 call (`drop::<String>`), +1 arrow, −2 arrows
       control flow: − call `drop::<String>` (src/lib.rs:-4): return → return
+      control flow: + arrow call `num::<impl usize>::wrapping_add` (src/lib.rs:3) → return (src/lib.rs:5) (return)
       control flow: − arrow call `num::<impl usize>::wrapping_add` (src/lib.rs:-3) → call `drop::<String>` (src/lib.rs:-4) (return)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
   cover: each of the 10 changed line(s) is in a fact
@@ -68,5 +72,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     lines: src/lib.rs:6-12
 ◆ f1 replace (Semilla; R90.2-2, 8 changed MIR elements): changed call: `if a > 9 { 0 } else { s.len() }` → `part(a, s)` at `depot::total/S0/init` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2
-◆ f2 delete (Semilla; R90.2-3, 4 removed MIR elements): deleted statement `drop(s)` at `depot::total/S2` [semantics · code different]
+◆ f2 delete (Semilla; R90.2-3, 5 removed MIR elements): deleted statement `drop(s)` at `depot::total/S2` [semantics · code different]
     lines: src/lib.rs:-4

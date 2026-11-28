@@ -27,17 +27,19 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::read` (src/lib.rs:2): the full compare: `#[same(depot::read)] fn read_same() {}`; a difference: `#[change(depot::read)] fn read_change() -> bool { … }` or `#[different(depot::read)] fn read_different() -> bool { … }`
-  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::read`:
   ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed literal `1` → `2` at `depot::read/S0/body/tail/args[0]` [semantics · code different]
       not stated (src/lib.rs:4, src/lib.rs:-5-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::read=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: depot::read (with 1 other edit of this body)
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes alone; the body: MIR changes
       ! unsafe code: the changed body has an `unsafe` block
   ◆ f1 replace (Semilla; R94.3-2, an extracted variable: the MIR is not equal after the normal form, and it is not a new order of the same parts; 2 nodes): extracted variable `n` = `check(p)` (1 use) at `depot::read/S0` [move · code different]
       not stated (src/lib.rs:3-4, src/lib.rs:-3-4); to state it: --change 'depot::read=TEXT'
       ! the compiled code changes: depot::read (with 1 other edit of this body)
+      graph: same graph (the edit keeps the control flow)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
       ! unsafe code: the changed body has an `unsafe` block
   cover: each of the 6 changed line(s) is in a fact

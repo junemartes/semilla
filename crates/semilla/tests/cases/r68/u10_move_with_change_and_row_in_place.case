@@ -43,25 +43,29 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::build` (src/lib.rs:8): the full compare: `#[same(shop::build)] fn build_same() {}`; a difference: `#[change(shop::build)] fn build_change(mut out_before: Vec<(u32, &str)>, mut out_after: Vec<(u32, &str)>) -> bool { … }` or `#[different(shop::build)] fn build_different() -> bool { … }`
     MIR changes with no claim: `shop::f` (src/lib.rs:1): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
-  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 13 in entries (13 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::build`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `"two"` → `"deux"` at `shop::build/S1/args[0]/elems[1]` [semantics · code different]
       not stated (src/lib.rs:10, src/lib.rs:-10); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::build=TEXT'; if it does not change, --same 'rewrite "two" => "deux"'
       affected bodies: shop::build
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   item `shop::f`:
   ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements; 2 nodes; one change (R92.6-1)): moved statement `let p = a + 1;` from `shop::f/S0` to `shop::f/S2` (a pair by similarity (0.86)); changed literal `1` → `2` at `shop::f/S2/init/rhs` [semantics · code different]
       not stated (src/lib.rs:4, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::f=TEXT'; if it does not change, --same 'rewrite 1 => 2', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1)
       affected bodies: shop::f
-      control flow: ~ check `overflow: a + 1` → `overflow: a + 2` (src/lib.rs:-2, src/lib.rs:4)
-      control flow: − arrow entry (src/lib.rs:-1) → check `overflow: a + 1` (src/lib.rs:-2)
+      graph: +1 overflow check (implicit), +1 panic (implicit), −1 overflow check (implicit), −1 panic (implicit), 1 changed check (`overflow: a + 1` → `overflow: b + 2`, implicit), +4 arrows (implicit), −4 arrows (implicit)
+      control flow: + check `overflow: a + 2` (src/lib.rs:4): ok → check `overflow: p + q`, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:4)
+      control flow: − check `overflow: b + 2` (src/lib.rs:-3): ok → check `overflow: a * b`, fail → panic `overflow`
+      control flow: … 6 more (semilla expand --step 0)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
       equivalence: MIR changes alone; the body: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
     shop::build (src/lib.rs:8): same graph (the edit keeps the control flow); MIR changes
-    shop::f (src/lib.rs:1): graph changes: 1 changed check, +3 arrows, −3 arrows; MIR changes
+    shop::f (src/lib.rs:1): graph changes: +1 check, +1 panic, −1 check, −1 panic, 1 changed check, +4 arrows, −4 arrows; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -45,23 +45,27 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::price` (src/lib.rs:7): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(n: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
     MIR changes with no claim: `shop::scale` (no place): no result of the equivalence check; the full compare: `#[same(shop::scale)] fn scale_same() {}`; a difference: `#[change(shop::scale)] fn scale_change() -> bool { … }` or `#[different(shop::scale)] fn scale_different() -> bool { … }`
     equal MIR: `shop::price::{closure#0} |i| i + s` (src/lib.rs:11)
-  changed nodes: 2 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 1 in the section of R92.4-1
   real edits:
   item `shop::base!`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed macro `base`: `macro_rules! base { () => { 7 } }` → `macro_rules! base { () => { 8 } }` [declaration · code different]
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed macro `base`: `macro_rules! base { () => { 7 } }` → `macro_rules! base { () => { 8 } }` [declaration · code different]
       not stated (src/lib.rs:1, src/lib.rs:-1); to state it: --change 'shop::base!=TEXT'
       affected bodies: shop::price
+      graph: no graph change of its own
       expansion: `base!()` at `shop::price/S1/init` (src/lib.rs:9): expansion changed: changed literal `7` → `8` at `expansion` [semantics]
   item `shop::price`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `n as u16` → `n` at `shop::price/S0/init` [semantics · code different]
       not stated (src/lib.rs:8, src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite $a as u16 => n'
       affected bodies: shop::price
+      graph: no graph change of its own
       equivalence: `shop::price`: MIR changes
       equivalence: `shop::price::{closure#0} |i| i + s`: equivalent (proved by equal MIR)
   compiled code that changes with no edit:
   item `shop::price`:
   ◆ f3 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::price` changes with no edit at its place: `scale(k)` [indirect · code different]
       affected bodies: shop::price
+      graph: same structure: 1 changed call target (`scale::<u16>` → `scale::<u32>`, implicit)
+      control flow: ~ call `scale::<u16>` → `scale::<u32>` (src/lib.rs:-10, src/lib.rs:10)
       note: lines 10
   cover: each of the 4 changed line(s) is in a fact
   control flow: 3 bodies
@@ -73,7 +77,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed macro `base`: `macro_rules! base { () => { 7 } }` → `macro_rules! base { () => { 8 } }` [declaration · code different]
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed macro `base`: `macro_rules! base { () => { 7 } }` → `macro_rules! base { () => { 8 } }` [declaration · code different]
     lines: src/lib.rs:1, src/lib.rs:-1
 ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `n as u16` → `n` at `shop::price/S0/init` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:-8

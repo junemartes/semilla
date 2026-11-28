@@ -50,26 +50,28 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
       MIR changes with no claim: `depot::part` (src/lib.rs:6): an added body: `#[new(depot::part)] fn part_new(a: u32, b: u32) -> bool { let new = after::depot::part(a, b); true }`
       MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 18 in entries (12 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::part`:
   ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::part` [added · code different]
       not stated (src/lib.rs:5-8); to state it: --change 'depot::part=TEXT'
       affected bodies: depot::part
+      graph: +1 body, +1 return, +1 arrow
       control flow: + graph of `depot::part`: 2 points, 1 arrow (semilla expand --step 0)
   item `depot::total`:
-  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `a * 3 + b` → `part(a, b)` at `depot::total/S0/init` [semantics · code different]
+  ◆ f1 replace (Semilla; R90.2-2, 6 changed MIR elements): changed expression `a * 3 + b` → `part(a, b)` at `depot::total/S0/init` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a * 3 + $b => part($a, $b)'
       affected bodies: depot::total
+      graph: +1 call (`part`), −2 overflow checks (implicit), −2 panics (implicit), 1 changed check (`overflow: a * 3 + b` → `overflow: s + 1`, implicit), +3 arrows (1 implicit), −6 arrows (implicit)
       control flow: + call `part` (src/lib.rs:2): return → check `overflow: s + 1`
       control flow: − check `overflow: a * 3` (src/lib.rs:-2): ok → check `overflow: a * 3 + b`, fail → panic `overflow`
-      control flow: − check `overflow: a * 3 + b` (src/lib.rs:-2): ok → check `overflow: s + 1`, fail → panic `overflow`
-      control flow: … 3 more (semilla expand --step 0)
+      control flow: − panic `overflow` (src/lib.rs:-2)
+      control flow: … 7 more (semilla expand --step 0)
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
     depot::part (src/lib.rs:6): graph added: 2 points, 1 arrow
-    depot::total (src/lib.rs:1): graph changes: +1 call, −2 checks, −2 panics, +2 arrows, −5 arrows; MIR changes
+    depot::total (src/lib.rs:1): graph changes: +1 call, −2 checks, −2 panics, 1 changed check, +3 arrows, −6 arrows; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 no command can succeed without a code change: fix the cause, then run the step again
 === positions

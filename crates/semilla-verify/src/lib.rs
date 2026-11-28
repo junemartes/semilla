@@ -24,6 +24,8 @@ pub mod facts;
 pub mod files;
 pub mod inputs;
 pub mod flow;
+pub mod flowalign;
+pub mod flowmap;
 pub mod hints;
 pub mod identity;
 pub mod intent;
@@ -205,6 +207,32 @@ pub struct MirDiff {
     /// result has it (R93.1-1); the output form does not.
     #[serde(default, skip_serializing_if = "semilla_core::stored::output_only", serialize_with = "shared_table::serialize", deserialize_with = "shared_table::deserialize")]
     pub table: Option<std::sync::Arc<MirTable>>,
+    /// [R98.1-2] Each distinct element table of the targets and the checked configurations of the
+    /// body pair (design 98): each pair of graphs takes the table that fits it, also when two
+    /// configurations give two tables (then `table` is `None`). The stored form has them, as
+    /// `table`.
+    #[serde(default, skip_serializing_if = "graph_tables_skip", serialize_with = "shared_tables::serialize", deserialize_with = "shared_tables::deserialize")]
+    pub graph_tables: Vec<std::sync::Arc<MirTable>>,
+}
+
+/// True if the list of the tables of the graph compare is not in the serde form: the output form,
+/// or an empty list.
+fn graph_tables_skip(list: &[std::sync::Arc<MirTable>]) -> bool {
+    list.is_empty() || semilla_core::stored::output_only(&())
+}
+
+/// [R98.1-2] The serde form of a list of shared tables: the values of the tables.
+mod shared_tables {
+    use super::MirTable;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &[std::sync::Arc<MirTable>], writer: S) -> Result<S::Ok, S::Error> {
+        value.iter().map(|table| table.as_ref()).collect::<Vec<_>>().serialize(writer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(reader: D) -> Result<Vec<std::sync::Arc<MirTable>>, D::Error> {
+        Ok(Vec::<MirTable>::deserialize(reader)?.into_iter().map(std::sync::Arc::new).collect())
+    }
 }
 
 /// [R97.2-1] The serde form of a shared table: the value of the table.
@@ -869,6 +897,10 @@ pub struct StepOutcome {
     pub templates: template::Pending,
     /// [R94.1-1] The transformations of the map of the step (design 94).
     pub transforms: transforms::Plan,
+    /// [R98.2-1] The graph changes of each body, from the graph compare to the map of design 98
+    /// (`flowmap::apply`). Data of the check only: the report has the result.
+    #[serde(skip)]
+    pub flow_changes: Vec<flow::BodyChanges>,
 }
 
 impl StepOutcome {
@@ -1008,6 +1040,8 @@ fn verify_step_records<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, e
         intent::apply(input, bodies, &mut plain);
         tags::apply(input, &mut plain);
         diffmap::entries(&mut plain, [input.before, input.after]);
+        // [R98.2-1] Each graph change goes to one entry of the complete map (design 98).
+        semilla_core::timing::phase(flowmap::PHASE, || flowmap::apply(input, &mut plain));
         semilla_core::timing::phase("the comments of the facts", || comments::apply(input, &mut plain));
         return plain;
     }
@@ -1037,6 +1071,8 @@ fn verify_step_records<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, e
     intent::apply(input, bodies, &mut outcome);
     tags::apply(input, &mut outcome);
     diffmap::entries(&mut outcome, [input.before, input.after]);
+    // [R98.2-1] Each graph change goes to one entry of the complete map (design 98).
+    semilla_core::timing::phase(flowmap::PHASE, || flowmap::apply(input, &mut outcome));
     semilla_core::timing::phase("the comments of the facts", || comments::apply(input, &mut outcome));
     outcome
 }
@@ -2208,7 +2244,7 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     // to `facts`. The report shows each distinct error one time, complete.
     let mut seen = std::collections::BTreeSet::new();
     report.errors.retain(|error| seen.insert(error.clone()));
-    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections, node_pairs: body_maps.pairs, verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new(), templates: Default::default(), transforms: Default::default() }
+    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections, node_pairs: body_maps.pairs, verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new(), templates: Default::default(), transforms: Default::default(), flow_changes: Vec::new() }
 }
 
 /// Sets the compare result of each fact (design 35, "Decided by Claude").
@@ -3768,7 +3804,7 @@ pub fn verify_changeset_cached(
             }
             Err(error) => {
                 let step_report = StepReport { step: step.index, intent: step.intent.clone(), errors: vec![format!("{error:#}")], ..Default::default() };
-                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new(), node_pairs: BTreeMap::new(), verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new(), templates: Default::default(), transforms: Default::default() });
+                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new(), node_pairs: BTreeMap::new(), verdicts: BTreeMap::new(), intent_answers: None, explained: BTreeSet::new(), not_mapped: BTreeSet::new(), templates: Default::default(), transforms: Default::default(), flow_changes: Vec::new() });
             }
         }
     }
@@ -3861,3 +3897,5 @@ mod tests90;
 mod tests92;
 #[cfg(test)]
 mod tests94;
+#[cfg(test)]
+mod tests98;

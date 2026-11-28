@@ -48,12 +48,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `list::first` (tests/list.rs:4): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot (test "list")::first`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot (test "list")::first/tail/index` [semantics · code different]
       not stated (tests/list.rs:4, tests/list.rs:-4); to state it: --change 'depot (test "list")::first=TEXT'
       affected bodies: depot (test "list")::first
+      graph: same structure: 1 changed check (`bounds: v[0]` → `bounds: v[1]`, implicit)
       control flow: ~ check `bounds: v[0]` → `bounds: v[1]` (tests/list.rs:-4, tests/list.rs:4)
       equivalence: MIR changes
       docs of `depot (test "list")::first`, no edit in this step (tests/list.rs:3): `/// The first element.`

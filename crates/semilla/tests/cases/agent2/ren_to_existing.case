@@ -120,11 +120,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       Semilla sees: f1 changed path `wrap` → `wrap2` at `depot::a/tail/callee` [semantics]
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::a` (src/lib.rs:30): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (0 implicit, 1 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::a`:
   ◆ f1 same code (Semilla; R90.2-1, equal MIR): changed path `wrap` → `wrap2` at `depot::a/tail/callee` [semantics · code equal]
-      control flow: ~ call `wrap` → `wrap2` (src/lib.rs:-30, src/lib.rs:30)
+      graph: no change after the check: the equal MIR of the node (same code) explains 1 graph change(s)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

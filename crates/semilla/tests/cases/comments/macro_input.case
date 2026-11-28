@@ -39,12 +39,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::parts` (src/lib.rs:2): the full compare: `#[same(shop::parts)] fn parts_same() {}`; a difference: `#[change(shop::parts)] fn parts_change(x: u32) -> bool { … }` or `#[different(shop::parts)] fn parts_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::parts`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::parts/tail/args[1]/rhs` [semantics · code different]
       not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::parts=TEXT'; if it does not change, --same 'rewrite 10 => 5'
       affected bodies: shop::parts
+      graph: same structure: 1 changed panic call (`vec![ // The base is first. x, // base // The tax is 10 percent. x / 10, // ten ]` → `vec![ // The base is first. x, // base // The tax is 10 percent. x / 5, // ten ]`, implicit)
       control flow: ~ panic `vec![ // The base is first. x, // base // The tax is 10 percent. x / 10, // ten ]` → `vec![ // The base is first. x, // base // The tax is 10 percent. x / 5, // ten ]` (src/lib.rs:-3, src/lib.rs:3)
       equivalence: MIR changes
       expansion: `vec![ // The base is first. x, // base // The tax is 10 percent. x / 5, // ten ]` at `shop::parts/tail` (src/lib.rs:3): expansion changed: changed literal `10` → `5` at `expansion/args[0]/args[1]/elems[1]/rhs` [semantics]

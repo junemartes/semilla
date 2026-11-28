@@ -40,13 +40,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `<shop::Dog as shop::Speak>::name` (src/lib.rs:10): a removed body: `#[removed(<shop::Dog as shop::Speak>::name)] fn name_removed() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 3 in entries (0 implicit), 0 in the section of R92.4-1
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::<Dog as Speak>::name=TEXT'
   real edits:
   item `shop::<Dog as Speak>::name`:
   ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 1 }` [semantics · code different]
       not stated (src/lib.rs:9, src/lib.rs:-9-13); to state it: --change 'shop::<Dog as Speak>::name=TEXT'
       affected bodies: shop::<Dog as Speak>::name
+      graph: −1 body, −1 return, −1 arrow
       control flow: − graph of `<shop::Dog as shop::Speak>::name`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body

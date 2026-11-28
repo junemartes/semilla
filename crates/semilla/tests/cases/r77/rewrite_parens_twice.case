@@ -28,19 +28,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       entries, in the list below: f1
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::g` (src/lib.rs:1): the full compare: `#[same(shop::g)] fn g_same() {}`; a difference: `#[change(shop::g)] fn g_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::g)] fn g_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::g`:
   ◆ f1 replace (a1; R90.2-2, 1 changed MIR element): changed call: `(a + b).min(a + b)` → `std::cmp::min(a + b, a + b)` at `shop::g/tail` [semantics · code different]
       affected bodies: shop::g
+      graph: same structure: 1 changed call target (`impls::<impl Ord for u32>::min` → `min::<u32>`)
       control flow: ~ call `impls::<impl Ord for u32>::min` → `min::<u32>` (src/lib.rs:-2, src/lib.rs:2)
-      control flow: + arrow entry (src/lib.rs:1) → check `overflow: a + b` (src/lib.rs:2)
-      control flow: + arrow check `overflow: a + b` (src/lib.rs:2) → check `overflow: a + b` (src/lib.rs:2) (ok)
-      control flow: … 4 more (semilla expand --step 0)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::g (src/lib.rs:1): graph changes: 1 changed call target, +3 arrows, −3 arrows; MIR changes
+    shop::g (src/lib.rs:1): same structure: 1 changed call target; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

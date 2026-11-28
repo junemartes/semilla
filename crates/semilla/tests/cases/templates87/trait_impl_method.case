@@ -20,12 +20,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `<depot::Bag as depot::Weigh>::weigh` (src/lib.rs:3): the full compare: `#[same(<depot::Bag as depot::Weigh>::weigh)] fn weigh_same() {}`; a difference: `#[change(<depot::Bag as depot::Weigh>::weigh)] fn weigh_change() -> bool { … }` or `#[different(<depot::Bag as depot::Weigh>::weigh)] fn weigh_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (6 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::<Bag as Weigh>::weigh`:
   ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.n` → `self.n + 1` at `depot::<Bag as Weigh>::weigh/tail` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::<Bag as Weigh>::weigh=TEXT'; if it does not change, --same 'rewrite $a.n => $a.n + 1'
       affected bodies: depot::<Bag as Weigh>::weigh
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: self.n + 1` (src/lib.rs:3): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:3)
       control flow: + arrow entry (src/lib.rs:3) → check `overflow: self.n + 1` (src/lib.rs:3)

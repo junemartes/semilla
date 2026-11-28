@@ -24,19 +24,22 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `<depot::P as std::fmt::Debug>::fmt` (src/lib.rs:1): the full compare: `#[same(<depot::P as core::fmt::Debug>::fmt)] fn fmt_same() {}`; a difference: `#[change(<depot::P as core::fmt::Debug>::fmt)] fn fmt_change() -> bool { … }` or `#[different(<depot::P as core::fmt::Debug>::fmt)] fn fmt_different() -> bool { … }`
     MIR changes with no claim: `dyn std::fmt::Debug` (no place): no result of the equivalence check; no template: `dyn std::fmt::Debug` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::P`:
   ◆ f1 reorder, the order can matter (Semilla; R94.4-3, the MIR of 1 body(ies) reads the order of the fields: `<depot::P as std::fmt::Debug>::fmt`): member order of `depot::P`: `a, b` → `b, a` [declaration · code different]
       not stated (src/lib.rs:4, src/lib.rs:-3); to state it: --change 'depot::P=TEXT'
       affected bodies: <depot::P as std::fmt::Debug>::fmt
       through: `depot::P` (1 body)
+      graph: same graph (the edit keeps the control flow)
       expansion: derived `Debug` of `depot::P`: expansion changed: changed literal `"a"` → `"b"` at `depot::<P as ::core::fmt::Debug>::fmt/tail/args[2]` [semantics]; changed expression `self.a` → `self.b` at `depot::<P as ::core::fmt::Debug>::fmt/tail/args[3]/operand` [semantics]; changed literal `"… (103 characters more; `semilla expand f1 --step 0` shows the full line) …lf.b` → `self.a` at `depot::<P as ::core::fmt::Debug>::fmt/tail/args[5]/operand/operand` [semantics]
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`Debug`): the code that it makes reads the members in order; it needs a reason: --reason 'depot::P=…'
   cover: each of the 2 changed line(s) is in a fact
-  control flow: 1 body
+  control flow: 2 bodies
+    <depot::P as std::fmt::Debug>::fmt (src/lib.rs:1): same graph; no edit in the body; MIR changes; the expansion of derive `Debug` changes (semilla expand src/lib.rs:1 --step 0)
     dyn std::fmt::Debug (no place): the candidates of a call through `dyn std::fmt::Debug`: +`&u8`, +`u32`, −`&u32`, −`u8`
   expansions: 1 changed
     derive `Debug` at `depot::P` (src/lib.rs:1): expansion changed: `derive Debug` (crate core): changed literal `"a"` → `"b"` at `depot::<P as ::core::fmt::Debug>::fmt/tail/args[2]` [semantics]; changed expression `self.a` → `self.b` at `depot::<P as ::core::fmt::Debug>::fmt/tail/args[3]/operand` [… (164 characters more; `semilla expand --step 0` shows the full line) …as ::core::fmt::Debug>::fmt/tail/args[5]/operand/operand` [semantics]; the input of the call changes

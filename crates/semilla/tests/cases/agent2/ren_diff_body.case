@@ -115,14 +115,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✓ a1 same: rename limit cap (holds: Semilla derives the rename from the syntax tree)
       places: depot::limit, depot::cap
       entries, in the list below: f1, f3
-  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::cap` (src/lib.rs:25): no template: the step pairs `depot::limit` with `depot::cap` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
-  changed nodes: 1 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
+    MIR changes with no claim: `depot::uses_limit` (src/lib.rs:26): the same MIR text; a changed callee: `depot::cap`; the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
+  changed nodes: 1 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 1 in the section of R92.4-1
   real edits:
   item `depot::cap`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `77` at `depot::cap/tail` [semantics · code different]
       not stated (src/lib.rs:25, src/lib.rs:-25); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::cap=TEXT'; if it does not change, --same 'rewrite 10 => 77'
       affected bodies: depot::cap
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   compiled code that changes with no edit:
   item `depot::cap`:
@@ -131,8 +133,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   item `depot::limit`:
   ◆ f1 rename (a1; R90.2-5, the pair check holds): renamed `depot::limit` → `depot::cap` [rename · code equal]
   cover: each of the 4 changed line(s) is in a fact
-  control flow: 1 body
+  control flow: 2 bodies
     depot::cap (src/lib.rs:25): same graph (the edit keeps the control flow); MIR changes
+    depot::uses_limit (src/lib.rs:26): same structure: 1 changed check; no edit in the body; MIR changes (the same MIR text; a changed callee: `depot::cap`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

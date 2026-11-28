@@ -1,0 +1,44 @@
+note: a new index adds a bounds check and its panic: implicit changes in the entry of the expression of the index
+rule+: R98.3-1
+must_match: \+1 bounds check \(implicit\)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn first(v: &[u32]) -> u32 {
+    v.len() as u32
+}
+=== new src/lib.rs
+pub fn first(v: &[u32]) -> u32 {
+    v.len() as u32 + v[0]
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::first` (src/lib.rs:1): the full compare: `#[same(depot::first)] fn first_same() {}`; a difference: `#[change(depot::first)] fn first_change(v: &[u32]) -> bool { … }` or `#[different(depot::first)] fn first_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 10 in entries (10 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::first`:
+  ◆ f1 replace (Semilla; R90.2-2, 6 changed MIR elements): changed expression `v.len() as u32` → `v.len() as u32 + v[0]` at `depot::first/tail` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::first=TEXT'; if it does not change, --same 'rewrite $a as u32 => $a as u32 + v[0]'
+      affected bodies: depot::first
+      graph: +1 bounds check (implicit), +1 overflow check (implicit), +2 panics (implicit), +5 arrows (implicit), −1 arrow (implicit)
+      control flow: + check `bounds: v[0]` (src/lib.rs:2): ok → check `overflow: v.len() as u32 + v[0]`, fail → panic `bounds`
+      control flow: + check `overflow: v.len() as u32 + v[0]` (src/lib.rs:2): ok → return, fail → panic `overflow`
+      control flow: + panic `bounds` (src/lib.rs:2)
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::first (src/lib.rs:1): graph changes: +2 checks, +2 panics, +5 arrows, −1 arrow; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 6 changed MIR elements): changed expression `v.len() as u32` → `v.len() as u32 + v[0]` at `depot::first/tail` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

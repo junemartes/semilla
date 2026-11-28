@@ -21,12 +21,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::add` (src/lib.rs:1): the full compare: `#[same(depot::add)] fn add_same() {}`; a difference: `#[change(depot::add)] fn add_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::add)] fn add_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 8 in entries (5 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::add`:
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `a + b` → `a.wrapping_add(b)` at `depot::add/tail` [semantics · code different]
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed method_call: `a + b` → `a.wrapping_add(b)` at `depot::add/tail` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::add=TEXT'; if it does not change, --same 'rewrite $a + $b => $a.wrapping_add($b)'
       affected bodies: depot::add
+      graph: +1 call (`num::<impl u32>::wrapping_add`), −1 overflow check (implicit), −1 panic (implicit), +2 arrows, −3 arrows (implicit)
       control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:2): return → return
       control flow: − check `overflow: a + b` (src/lib.rs:-2): ok → return, fail → panic `overflow`
       control flow: − panic `overflow` (src/lib.rs:-2)
@@ -38,5 +39,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `a + b` → `a.wrapping_add(b)` at `depot::add/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed method_call: `a + b` → `a.wrapping_add(b)` at `depot::add/tail` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

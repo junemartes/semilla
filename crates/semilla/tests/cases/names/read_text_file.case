@@ -20,14 +20,19 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::notes` (src/lib.rs:1): the full compare: `#[same(shop::notes)] fn notes_same() {}`; a difference: `#[change(shop::notes)] fn notes_change() -> bool { … }` or `#[different(shop::notes)] fn notes_different() -> bool { … }`
+  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   file `notes.txt`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): notes.txt: changed [file · code different]
       not stated (notes.txt:1, notes.txt:-1); to state it: --change 'notes.txt=TEXT'
       affected bodies: shop::notes
+      graph: same graph (the edit keeps the control flow)
       expansion: `include_str!("../notes.txt")` at `shop::notes/tail` (src/lib.rs:2): expansion changed: only the context of the call changes: the file `notes.txt` (`include_str!("../notes.txt")`); changed code `nine` → `ten`
   cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::notes (src/lib.rs:1): same graph; no edit in the body; MIR changes; the expansion of `include_str!("../notes.txt")` changes (semilla expand src/lib.rs:2 --step 0)
   expansions: 1 changed
     `include_str!("../notes.txt")` at `shop::notes/tail` (src/lib.rs:2): expansion changed: `macro include_str` (crate core): only the context of the call changes: the file `notes.txt` (`include_str!("../notes.txt")`); changed code `nine` → `ten`; the code of the call reads `notes.txt`, which the step changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

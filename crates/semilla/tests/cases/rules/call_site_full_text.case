@@ -57,15 +57,17 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `depot::both` (src/lib.rs:8): the full compare: `#[same(depot::both)] fn both_same() {}`; a difference: `#[change(depot::both)] fn both_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart, d_before: &before::depot::Cart, d_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::both)] fn both_different() -> bool { … }`
     MIR changes with no claim: `depot::uses_limit` (src/lib.rs:12): the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
-  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+    MIR changes with no claim: `depot::wrap` (src/lib.rs:9): the signature changes (`fn wrap (x : u32) -> u32` → `fn wrap (x : u32 , by : u32) -> u32`): `#[same(depot::wrap)] fn wrap(x: u32, by: u32) -> bool { after::depot::wrap(x, by) == before::depot::wrap(x) }`; a difference: `#[change(depot::wrap)] fn wrap_change() -> bool { … }` or `#[different(depot::wrap)] fn wrap_different() -> bool { … }`
+  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 15 in entries (11 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::uses_limit`:
   ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): added operand `+ 1` at `depot::uses_limit/tail` [semantics · code different]
       not stated (src/lib.rs:12, src/lib.rs:-12); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::uses_limit=TEXT'; if it does not change, --same 'rewrite $a + $a => $a + $a + 1'
       affected bodies: depot::uses_limit
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: limit() + limit() + 1` (src/lib.rs:12): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:12)
       control flow: + arrow check `overflow: limit() + limit()` (src/lib.rs:12) → check `overflow: limit() + limit() + 1` (src/lib.rs:12) (ok)
@@ -76,16 +78,19 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       not stated (src/lib.rs:8-9, src/lib.rs:-8-9); to state it: --change 'depot::wrap=TEXT'
       1 site(s): add the argument `limit () * 3` (in depot::both)
       affected bodies: depot::both, depot::wrap
+      graph: +1 call (`limit`), +1 overflow check (implicit), +1 panic (implicit), 1 changed check (`overflow: wrap(c.total + 1) + d.total` → `overflow: wrap(c.total + 1, limit() * 3) + d.total`, implicit), +4 arrows (2 implicit), −1 arrow
       control flow: + call `limit` (src/lib.rs:8): return → check `overflow: limit() * 3`
       control flow: + check `overflow: limit() * 3` (src/lib.rs:8): ok → call `wrap`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:8)
       control flow: … 3 more (semilla expand --step 0)
-      equivalence: MIR changes
+      equivalence: `depot::both`: MIR changes
+      equivalence: `depot::wrap`: MIR changes
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 6 changed line(s) is in a fact
-  control flow: 2 bodies
+  control flow: 3 bodies
     depot::both (src/lib.rs:8): graph changes: +1 call, +1 check, +1 panic, 1 changed check, +4 arrows, −1 arrow; MIR changes
     depot::uses_limit (src/lib.rs:12): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow; MIR changes
+    depot::wrap (src/lib.rs:9): same graph; no edit in the body; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

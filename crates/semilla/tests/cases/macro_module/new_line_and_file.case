@@ -38,12 +38,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::extra::more` (src/extra.rs:1): an added body: `#[new(depot::extra::more)] fn more_new() -> bool { let new = after::depot::extra::more(); true }`
-  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 3 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::extra::more`:
   ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::extra::more` [added · code different]
       not stated (src/extra.rs:1-3); to state it: --change 'depot::extra::more=TEXT'
       affected bodies: depot::extra::more
+      graph: +1 body, +1 return, +1 arrow
       control flow: + graph of `depot::extra::more`: 2 points, 1 arrow (semilla expand --step 0)
   syntax only:
   item `depot::pick!#0`:

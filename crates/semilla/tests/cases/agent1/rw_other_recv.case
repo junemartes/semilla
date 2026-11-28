@@ -63,12 +63,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
           a fact that holds: `--same 'rewrite c.total => d.total()'` (1 site(s))
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::both` (src/lib.rs:8): the full compare: `#[same(depot::both)] fn both_same() {}`; a difference: `#[change(depot::both)] fn both_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart, d_before: &before::depot::Cart, d_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::both)] fn both_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (2 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::both`:
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `c.total` → `d.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics · code different]
       not stated (src/lib.rs:8, src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::both=TEXT'; if it does not change, --same 'rewrite c.total => d.total()'
       affected bodies: depot::both
+      graph: +1 call (`Cart::total`), 2 changed checks (implicit), +2 arrows, −1 arrow
       control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: d.total() + 1`
       control flow: ~ check `overflow: c.total + 1` → `overflow: d.total() + 1` (src/lib.rs:-8, src/lib.rs:8)
       control flow: ~ check `overflow: wrap(c.total + 1) + d.total` → `overflow: wrap(d.total() + 1) + d.total` (src/lib.rs:-8, src/lib.rs:8)

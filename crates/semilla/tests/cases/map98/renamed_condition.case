@@ -1,0 +1,42 @@
+note: a renamed local in a condition changes the text of the branch, and its MIR elements are equal: the changed text is a changed point (R98.6-2), and the equal MIR of the body explains it (R98.6-1)
+rule+: R98.6-2
+rule+: R98.1-2
+refactor: yes
+must_match: graph: no change after the check: the equal MIR at `n0` explains 1 graph change
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn tax(w: u32) -> u32 {
+    let w2 = w ^ 5;
+    if w2 > 3 { w2 / 2 } else { w2 }
+}
+=== new src/lib.rs
+pub fn tax(w: u32) -> u32 {
+    let level = w ^ 5;
+    if level > 3 { level / 2 } else { level }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
+    equal MIR: `depot::tax` (src/lib.rs:1)
+  changed nodes: 4 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (0 implicit, 1 explained by the check of a transformation), 0 in the section of R92.4-1
+  transformations:
+  item `depot::tax`:
+  ◆ f1 same code (Semilla; R90.2-1, equal MIR; 4 nodes): `depot::tax`: renamed local `w2` → `level`, 4 edit(s) [rename · code equal]
+      graph: no change after the check: the equal MIR at `n0` explains 1 graph change(s)
+      equivalence: equivalent (proved by equal MIR)
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    depot::tax (src/lib.rs:1): same structure: 1 changed condition; equivalent (proved by equal MIR)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 same code (Semilla; R90.2-1, equal MIR; 4 nodes): `depot::tax`: renamed local `w2` → `level`, 4 edit(s) [rename · code equal]
+    lines: src/lib.rs:2-3, src/lib.rs:-2-3

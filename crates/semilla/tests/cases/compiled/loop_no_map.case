@@ -34,21 +34,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::steps` (src/lib.rs:1): the full compare: `#[same(shop::steps)] fn steps_same() {}`; a difference: `#[change(shop::steps)] fn steps_change(n: u32) -> bool { … }` or `#[different(shop::steps)] fn steps_different() -> bool { … }`
-  changed nodes: 4 in 4 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 4 in 4 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 2 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::steps`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `0` → `n` at `shop::steps/S0/init` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::steps=TEXT'; if it does not change, --same 'rewrite 0 => n' --same 'rewrite i < n => left > 0', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f2, f3, f4)
       affected bodies: shop::steps (with 2 other edits of this body)
+      graph: no graph change of its own
       equivalence: MIR changes alone; the body: MIR changes
   ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): change condition `i < n` → `left > 0` at `shop::steps/S2/cond` [semantics · code different]
       not stated (src/lib.rs:4, src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::steps=TEXT'; if it does not change, --same 'rewrite 0 => n' --same 'rewrite i < n => left > 0', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f2, f3, f4)
       affected bodies: shop::steps (with 2 other edits of this body)
+      graph: same structure: 1 changed condition (`i < n` → `left > 0`)
       control flow: ~ branch `i < n` → `left > 0` (src/lib.rs:-4, src/lib.rs:4)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `i += 1` → `left -= 1` at `shop::steps/S2/body/S1` [semantics · code different]
       not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::steps=TEXT'; if it does not change, --same 'rewrite 0 => n' --same 'rewrite i < n => left > 0', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f2, f3, f4)
       affected bodies: shop::steps (with 2 other edits of this body)
+      graph: same structure: 1 changed check (`overflow: i += 1` → `overflow: left -= 1`, implicit)
       control flow: ~ check `overflow: i += 1` → `overflow: left -= 1` (src/lib.rs:-6, src/lib.rs:6)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   transformations:

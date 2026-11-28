@@ -39,18 +39,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::twice` (src/lib.rs:4): the full compare: `#[same(shop::twice)] fn twice_same() {}`; a difference: `#[change(shop::twice)] fn twice_change(a: u32) -> bool { … }` or `#[different(shop::twice)] fn twice_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 4 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::twice`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `double!(a)` at `shop::twice/tail` [semantics · code different]
       not stated (src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::twice=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: shop::twice (with 1 other edit of this body)
+      graph: no graph change of its own
       equivalence: MIR changes
   ◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added statement `double!(a).wrapping_add(0)` at `shop::twice/tail` [semantics · code different]
       not stated (src/lib.rs:5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::twice=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: shop::twice (with 1 other edit of this body)
+      graph: +1 call (`num::<impl u32>::wrapping_add`), +2 arrows, −1 arrow
       control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:5): return → return
       control flow: + arrow call `num::<impl u32>::wrapping_mul` (src/lib.rs:5) → call `num::<impl u32>::wrapping_add` (src/lib.rs:5) (return)
+      control flow: − arrow call `num::<impl u32>::wrapping_mul` (src/lib.rs:-5) → return (src/lib.rs:-6) (return)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

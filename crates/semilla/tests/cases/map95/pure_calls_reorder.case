@@ -43,12 +43,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:9): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit, 6 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::total`:
   ◆ f1 reorder (Semilla; R95.2-1, the statements in another order; the parts are independent (1 pair(s) of MIR elements change order; the effect summary of 2 call(s) has no effect (R95.2-1))): moved statement `let x = f(a);` from `depot::total/S0` to `depot::total/S1` [semantics · code different]
       affected bodies: depot::total
-      control flow: − arrow entry (src/lib.rs:-9) → call `f` (src/lib.rs:-10)
+      graph: no change after the check: the check of the new order explains 6 graph change(s)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

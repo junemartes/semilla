@@ -24,25 +24,27 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::pad` (src/lib.rs:1): the full compare: `#[same(depot::pad)] fn pad_same() {}`; a difference: `#[change(depot::pad)] fn pad_change(mut f_before: Vec<u32>, mut f_after: Vec<u32>, a: u32, b: u32) -> bool { … }` or `#[different(depot::pad)] fn pad_different() -> bool { … }`
-  changed nodes: 4 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 4 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (6 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::pad`:
   ◆ f1 add (Semilla; R90.2-3, 2 new MIR elements): added `let` `let c = a + b;` at `depot::pad/S0` [semantics · code different]
       not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pad=TEXT'; if it does not change, --same 'rewrite 0 => 1' --same 'rewrite 1 => 2' --same 'rewrite a => c', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 4 places: f1, f2, f4)
       affected bodies: depot::pad (with 3 other edits of this body)
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: a + b` (src/lib.rs:2): ok → call `Vec::<u32>::splice::<Range<usize>, [u32; 2]>`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:2)
       control flow: + arrow entry (src/lib.rs:1) → check `overflow: a + b` (src/lib.rs:2)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: no result alone (the body has 4 edits; an edit of the fact adds or removes a node); the body: MIR changes
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes; one change (R92.6-1)): changed literal `0` → `1` at `depot::pad/S0/args[0]/start`; changed literal `1` → `2` at `depot::pad/S0/args[0]/end` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:-2-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pad=TEXT'; if it does not change, --same 'rewrite 0 => 1' --same 'rewrite 1 => 2' --same 'rewrite a => c', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 4 places: f1, f2, f4)
       affected bodies: depot::pad (with 2 other edits of this body)
-      control flow: − arrow entry (src/lib.rs:-1) → call `Vec::<u32>::splice::<Range<usize>, [u32; 2]>` (src/lib.rs:-2)
+      graph: no graph change of its own
       equivalence: MIR changes alone; the body: MIR changes
   ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `a` → `c` at `depot::pad/S0/args[1]/elems[0]` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:-4-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::pad=TEXT'; if it does not change, --same 'rewrite 0 => 1' --same 'rewrite 1 => 2' --same 'rewrite a => c', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 4 places: f1, f2, f4)
       affected bodies: depot::pad (with 3 other edits of this body)
-      control flow: − arrow entry (src/lib.rs:-1) → call `Vec::<u32>::splice::<Range<usize>, [u32; 2]>` (src/lib.rs:-2)
+      graph: no graph change of its own
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body

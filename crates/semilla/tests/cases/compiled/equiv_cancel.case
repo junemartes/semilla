@@ -23,12 +23,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::mask` (src/lib.rs:1): the full compare: `#[same(shop::mask)] fn mask_same() {}`; a difference: `#[change(shop::mask)] fn mask_change(x: u32) -> bool { … }` or `#[different(shop::mask)] fn mask_different() -> bool { … }`
-  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::mask`:
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes; one change (R92.6-1)): changed literal `5` → `6` at `shop::mask/tail/lhs/rhs`; changed literal `3` → `0` at `shop::mask/tail/rhs` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::mask=TEXT'; if it does not change, --same 'rewrite 5 => 6' --same 'rewrite 3 => 0' (one statement for 2 places: f1)
       affected bodies: shop::mask
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes alone; the body: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

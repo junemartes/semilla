@@ -1,0 +1,53 @@
+note: an `async fn` (a coroutine body, design 76) follows the same rules: the new branch of its body is in the entry of the `if`
+rule+: R98.2-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub async fn level(x: u32) -> u32 {
+    x
+}
+=== new src/lib.rs
+pub async fn level(x: u32) -> u32 {
+    if x > 7 { 7 } else { x }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::level` (src/lib.rs:1): the same MIR text; a changed callee: `depot::level::{closure#0}`; the full compare: `#[same(depot::level)] fn level_same() {}`; a difference: `#[change(depot::level)] fn level_change(x: u32) -> bool { … }` or `#[different(depot::level)] fn level_different() -> bool { … }`
+    MIR changes with no claim: `depot::level::{closure#0} { if x > 7 { 7 } else { x } }` (src/lib.rs:1): the template of `depot::level` covers its item `depot::level`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::level`:
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): moved statement `x` from `depot::level/tail` to `depot::level/S0/else/tail` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::level=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f1)
+      affected bodies: depot::level (with 1 other edit of this body)
+      graph: no graph change of its own
+      equivalence: `depot::level`: no result alone (the body has 2 edits); the body: MIR changes: the same MIR text; a changed callee: `depot::level::{closure#0}` (the same line for f2)
+      equivalence: `depot::level::{closure#0} { if x > 7 { 7 } else { x } }`: equivalent alone (proved by equal MIR); the body: MIR changes
+  ◆ f2 add (Semilla; R90.2-3, 3 new MIR elements): added `if` `if x > 7 { 7 } else { x }` (inner statements: 1 moved to a different place; 1 not in a deleted statement: `7`) at `depot::level/S0` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::level=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f1)
+      affected bodies: depot::level (with 1 other edit of this body)
+      graph: +1 branch (`x > 7`), +3 arrows, −1 arrow
+      control flow: + branch `x > 7` (src/lib.rs:2): false → return, true → return
+      control flow: + arrow entry (src/lib.rs:1) → branch `x > 7` (src/lib.rs:2)
+      control flow: − arrow entry (src/lib.rs:-1) → return (src/lib.rs:-3)
+      equivalence: the same line as f1
+      equivalence: `depot::level::{closure#0} { if x > 7 { 7 } else { x } }`: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::level (src/lib.rs:1): same graph; MIR changes (the same MIR text; a changed callee: `depot::level::{closure#0}`)
+    depot::level::{closure#0} { if x > 7 { 7 } else { x } } (src/lib.rs:1): graph changes: +1 branch, +3 arrows, −1 arrow; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): moved statement `x` from `depot::level/tail` to `depot::level/S0/else/tail` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f2 add (Semilla; R90.2-3, 3 new MIR elements): added `if` `if x > 7 { 7 } else { x }` (inner statements: 1 moved to a different place; 1 not in a deleted statement: `7`) at `depot::level/S0` [semantics · code different]
+    lines: src/lib.rs:2

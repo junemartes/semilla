@@ -41,9 +41,10 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::one` (src/lib.rs:7): the full compare: `#[same(shop::one)] fn one_same() {}`; a difference: `#[change(shop::one)] fn one_change() -> bool { … }` or `#[different(shop::one)] fn one_different() -> bool { … }`
     MIR changes with no claim: `shop::two` (src/lib.rs:11): the full compare: `#[same(shop::two)] fn two_same() {}`; a difference: `#[change(shop::two)] fn two_change() -> bool { … }` or `#[different(shop::two)] fn two_different() -> bool { … }`
-  changed nodes: 1 in 4 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 4 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   file `src/lib.rs`:
   ◆ f4 replace (Semilla; R90.3-2, no changed node (the fact of today)): comment in `src/lib.rs`: added `// The place of each call is in its value.` [docs · no code]
@@ -52,12 +53,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): replace macro input `here!(2)` → `here!(3)` at `shop::two/tail` [macro · code different]
       not stated (src/lib.rs:12, src/lib.rs:-10); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::two=TEXT'; if it does not change, --same 'rewrite here!(2) => here!(3)'
       affected bodies: shop::two
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
       expansion: `here!(3)` at `shop::two/tail` (src/lib.rs:12): expansion changed: changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `10u32` → `12u32` at `expansion/elems[1]` [semantics]
   compiled code that changes with no edit:
   item `shop::one`:
   ◆ f2 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::one` changes with no edit at its place: `here!(1)` [indirect · code different]
       affected bodies: shop::one
+      graph: same graph (the edit keeps the control flow)
       expansion: `here!(1)` at `shop::one/tail` (src/lib.rs:8): expansion changed: only the context of the call changes: the line of the call
       note: lines 8
       ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'shop::one=…'
@@ -65,7 +68,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   file `src/lib.rs`:
   ◆ f3 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
   cover: each of the 4 changed line(s) is in a fact
-  control flow: 1 body
+  control flow: 2 bodies
+    shop::one (src/lib.rs:7): same graph; no edit in the body; MIR changes; the expansion of `here!(1)` changes (semilla expand src/lib.rs:8 --step 0)
     shop::two (src/lib.rs:11): same graph (the edit keeps the control flow); MIR changes
   expansions: 2 changed
     `here!(1)` at `shop::one/tail` (src/lib.rs:8): expansion changed: `macro_rules! here` (src/lib.rs:1): only the context of the call changes: the line of the call; the context of the call changes

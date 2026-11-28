@@ -35,30 +35,36 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::float::at` (src/float.rs:5): the full compare: `#[same(shop::float::at)] fn at_same() {}`; a difference: `#[change(shop::float::at)] fn at_change() -> bool { … }` or `#[different(shop::float::at)] fn at_different() -> bool { … }`
     MIR changes with no claim: `shop::float::first` (src/float.rs:1): no template: error[S0112]: the scope path `before::shop::float::first` names no item of the version
-  changed nodes: 0 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 0 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 4 in the section of R92.4-1
   real edits:
   file `src/float.rs`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): src/float.rs: changed [file · code different]
       not stated (src/float.rs:1-4); to state it: --change 'src/float.rs=TEXT'
       affected bodies: shop::float::at, shop::float::first
-      control flow: + graph of `shop::float::first`: 2 points, 1 arrow (semilla expand --step 0)
+      graph: no graph change of its own
       expansion: `load!()` at `shop::load!#0` (src/lib.rs:4): expansion changed: changed literal `2u32` → `6u32` at `shop::float::at/tail/lhs` [semantics]; added `shop::float::first` (the public API changes: a different crate can now use the item) [added]
       ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/float.rs:=…'
   item `shop::float::at`:
   ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiler reads this item from another file: `shop::float::at` (src/float.rs) [file · code different]
       not stated (src/float.rs:1-4); to state it: --change 'shop::float::at=TEXT'
       affected bodies: shop::float::at
-      control flow: + graph of `shop::float::first`: 2 points, 1 arrow (semilla expand --step 0)
+      graph: no graph change of its own
       ✗ spotlight: the compiler reads `shop::float::at` from `src/float.rs`, a file that Semilla does not parse; it needs a reason: --reason 'shop::float::at=…'
   item `shop::float::first`:
   ◆ f3 replace (Semilla; R90.3-2, no changed node (the fact of today)): the compiler reads this item from another file: `shop::float::first` (src/float.rs) [file · code different]
       not stated (src/float.rs:1-4); to state it: --change 'shop::float::first=TEXT'
       affected bodies: shop::float::first
-      control flow: + graph of `shop::float::first`: 2 points, 1 arrow (semilla expand --step 0)
+      graph: no graph change of its own
       ✗ spotlight: the compiler reads `shop::float::first` from `src/float.rs`, a file that Semilla does not parse; it needs a reason: --reason 'shop::float::first=…'
+  compiled code that changes with no edit:
+  body `shop::float::at` (src/float.rs:5): graph: 1 changed check (`overflow: 2u32 + 0` → `overflow: 6u32 + 0`, implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1, f2
+      control flow: ~ check `overflow: 2u32 + 0` → `overflow: 6u32 + 0` (src/float.rs:-2, src/float.rs:6)
+  body `shop::float::first` (src/float.rs:1): graph: +1 body, +1 return, +1 arrow (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1, f3
+      control flow: + entry (src/float.rs:1): → return
+      control flow: + return (src/float.rs:3)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::float::at (src/float.rs:5): graph changes: +1 check, −1 check, +3 arrows, −3 arrows; no edit in the body; MIR changes
+    shop::float::at (src/float.rs:5): same structure: 1 changed check; no edit in the body; MIR changes
     shop::float::first (src/float.rs:1): graph added: 2 points, 1 arrow; no edit in the body
   expansions: 2 changed
     `here!()` at `float (no item)` (src/float.rs:6): expansion changed: `macro_rules! here` (src/lib.rs:1): only the context of the call changes: the line of the call; the context of the call changes

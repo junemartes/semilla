@@ -68,15 +68,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 2 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::mode_name` (src/lib.rs:15)
     equal MIR: `depot::state::Mode::busy` (src/lib.rs:22)
-  changed nodes: 4 in 6 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 4 in 6 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 4 in entries (0 implicit, 4 explained by the check of a transformation), 4 in the section of R92.4-1
   real edits:
   item `depot::mode_name`:
   ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `depot::mode_name` `m: &Mode` → `m: &state::Mode` (the public API can change: a different crate can use the item) [declaration · code equal]
       not stated (src/lib.rs:15, src/lib.rs:-16); to state it: --change 'depot::mode_name=TEXT'
-      control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Idle)
-      control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Busy)
-      control flow: − arrow branch `m` (src/lib.rs:-16) → return (src/lib.rs:-16) (depot::Mode::Idle)
-      control flow: … 1 more (semilla expand --step 0)
       equivalence: equivalent alone (proved by equal MIR); the body: equivalent (proved by equal MIR)
       ! public API: the compare does not cover the code of a different crate
   compiled code that changes with no edit:
@@ -87,16 +83,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 move (Semilla; R90.2-5, the pair check holds): moved `depot::Mode` → `depot::state::Mode`, with 1 impl [move · code equal]
   item `depot::mode_name`:
   ◆ f3 same code (Semilla; R90.2-1, equal MIR): changed pattern `Mode::Idle` → `state::Mode::Idle` at `depot::mode_name/S0/arm[0].pat` [semantics · code equal]
-      control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Idle)
-      control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Busy)
-      control flow: − arrow branch `m` (src/lib.rs:-16) → return (src/lib.rs:-16) (depot::Mode::Idle)
-      control flow: … 1 more (semilla expand --step 0)
+      graph: no change after the check: the equal MIR at `n1` explains 4 graph change(s)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: equivalent (proved by equal MIR) (the same line for f4)
   ◆ f4 same code (Semilla; R90.2-1, equal MIR): changed pattern `Mode::Busy` → `state::Mode::Busy` at `depot::mode_name/S0/arm[1].pat` [semantics · code equal]
-      control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Idle)
-      control flow: + arrow branch `m` (src/lib.rs:15) → return (src/lib.rs:15) (depot::state::Mode::Busy)
-      control flow: − arrow branch `m` (src/lib.rs:-16) → return (src/lib.rs:-16) (depot::Mode::Idle)
-      control flow: … 1 more (semilla expand --step 0)
       equivalence: the same line as f3
   syntax only:
   item `depot::state`:

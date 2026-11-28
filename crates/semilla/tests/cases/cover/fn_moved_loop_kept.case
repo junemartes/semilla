@@ -57,42 +57,48 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::probe` (src/lib.rs:4): the full compare: `#[same(depot::probe)] fn probe_same() {}`; a difference: `#[change(depot::probe)] fn probe_change() -> bool { … }` or `#[different(depot::probe)] fn probe_different() -> bool { … }`
-  changed nodes: 5 in 7 entries; 4 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 5 in 7 entries; 4 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 22 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::probe`:
   ◆ f2 add (Semilla; R90.2-3, 6 new MIR elements): added `if` `if result.file.is_none() { result.file = Some(0); }` at `depot::probe/S1` [semantics · code different]
       not stated (src/lib.rs:6-9); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::probe=TEXT'; if it does not change, --same 'rewrite [1, 2, 3] => [1, 2, 3, 4]', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 4 places: f2, f3, f4, f5)
       affected bodies: depot::probe (with 3 other edits of this body)
+      graph: +1 call (`Option::<u32>::is_none`), +1 branch (`result.file.is_none()`), +4 arrows, −1 arrow
       control flow: + call `Option::<u32>::is_none` (src/lib.rs:6): return → branch `result.file.is_none()`
       control flow: + branch `result.file.is_none()` (src/lib.rs:6): false → call `dirs`, true → call `dirs`
       control flow: + arrow call `Vec::<u32>::new` (src/lib.rs:5) → call `Option::<u32>::is_none` (src/lib.rs:6) (return)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: no result alone (the body has 4 edits; an edit of the fact adds or removes a node); the body: MIR changes (the same line for f4, f5)
       docs of `depot::probe`, no edit in this step (src/lib.rs:3): `/// Finds the things.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `[1, 2, 3]` → `[1, 2, 3, 4]` at `depot::probe/S1/body/S0/init` [semantics · code different]
       not stated (src/lib.rs:11, src/lib.rs:-12); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::probe=TEXT'; if it does not change, --same 'rewrite [1, 2, 3] => [1, 2, 3, 4]', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 4 places: f2, f3, f4, f5)
       affected bodies: depot::probe (with 3 other edits of this body)
+      graph: no graph change of its own
       equivalence: MIR changes alone; the body: MIR changes
       comment above old line 12, removed in this step: see f1
   ◆ f4 add (Semilla; R90.2-3, 2 new MIR elements): added `if` `if names.contains(&dir) { result.file = Some(dir); }` (an inner statement of the deleted `for name in names.iter(▫)`, except: `if dir == *name { result.file = Some(dir); }` → `if names.contains(&dir) { result.file = Some(dir); }`) at `depot::probe/S2/body/S1` [semantics · code different]
       not stated (src/lib.rs:12-13); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::probe=TEXT'; if it does not change, --same 'rewrite [1, 2, 3] => [1, 2, 3, 4]', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 4 places: f2, f3, f4, f5)
       affected bodies: depot::probe (with 3 other edits of this body)
-      control flow: ~ call `slice::<impl [u32]>::iter` → `slice::<impl [u32]>::contains` (src/lib.rs:-13, src/lib.rs:12) (the same line for f5)
-      control flow: ~ branch `dir == *name` → `names.contains(&dir)` (src/lib.rs:-14, src/lib.rs:12)
-      control flow: + arrow call `slice::<impl [u32]>::contains` (src/lib.rs:12) → branch `names.contains(&dir)` (src/lib.rs:12) (return)
+      graph: +1 call (`slice::<impl [u32]>::contains`), +1 branch (`names.contains(&dir)`), +4 arrows
+      control flow: + call `slice::<impl [u32]>::contains` (src/lib.rs:12): return → branch `names.contains(&dir)`
+      control flow: + branch `names.contains(&dir)` (src/lib.rs:12): false → call `Vec::<u32>::push`, true → call `Vec::<u32>::push`
+      control flow: + arrow for `dirs()` (src/lib.rs:10) → call `slice::<impl [u32]>::contains` (src/lib.rs:12) (next)
       equivalence: the same line as f2
   ◆ f5 delete (Semilla; R90.2-3, 7 removed MIR elements): deleted statement `for name in names.iter() { if dir == *name { result.file = Some(dir); } }` (inner statements: 1 with a change in an added statement) at `depot::probe/S1/body/S1` [semantics · code different]
       not stated (src/lib.rs:-13-16); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::probe=TEXT'; if it does not change, --same 'rewrite [1, 2, 3] => [1, 2, 3, 4]', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 4 places: f2, f3, f4, f5)
       affected bodies: depot::probe (with 3 other edits of this body)
+      graph: −1 call (`slice::<impl [u32]>::iter`), −1 for (`names.iter()`), −1 branch (`dir == *name`), −6 arrows
+      control flow: − call `slice::<impl [u32]>::iter` (src/lib.rs:-13): return → for `names.iter()`
       control flow: − for `names.iter()` (src/lib.rs:-13): done → call `Vec::<u32>::push`, next → branch `dir == *name`
-      control flow: the same line as f4
-      control flow: ~ branch `dir == *name` → `names.contains(&dir)` (src/lib.rs:-14, src/lib.rs:12)
-      control flow: … 3 more (semilla expand --step 0)
+      control flow: − branch `dir == *name` (src/lib.rs:-14): false → for `names.iter()`, true → for `names.iter()`
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: the same line as f2
   compiled code that changes with no edit:
   item `depot::probe`:
   ◆ f6 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::probe` changes with no edit at its place: `dir`, `dirs()`, `result.dirs.push(dir)` [indirect · code different]
       affected bodies: depot::probe
+      graph: no graph change of its own
       note: lines 10, 15; the cause: the edits of this body at src/lib.rs:6, src/lib.rs:11, src/lib.rs:12, src/lib.rs:-13 (the step changes no other input of the body)
   transformations:
   file `src/lib.rs`:
@@ -102,7 +108,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): removed comment `// an old comment` [docs · no code]
   cover: each of the 22 changed line(s) is in a fact
   control flow: 1 body
-    depot::probe (src/lib.rs:4): graph changes: +1 branch, +1 call, −1 for, 1 changed condition, 1 changed call target, +7 arrows, −6 arrows; MIR changes
+    depot::probe (src/lib.rs:4): graph changes: +2 branches, +2 calls, −1 branch, −1 call, −1 for, +8 arrows, −7 arrows; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
   note: `▫` is in place of a child of the node (a condition, a block, an argument). It is not a cut: each edit in the child has its own fact.

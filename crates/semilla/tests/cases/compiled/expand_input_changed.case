@@ -27,12 +27,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::f` (src/lib.rs:4): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(v: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
     MIR changes with no claim: `shop::g` (src/lib.rs:5): the full compare: `#[same(shop::g)] fn g_same() {}`; a difference: `#[change(shop::g)] fn g_change(v: u32) -> bool { … }` or `#[different(shop::g)] fn g_different() -> bool { … }`
-  changed nodes: 4 in 4 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 4 in 4 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 8 in entries (8 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::f`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): replace macro input `scale!(v + 1)` → `scale!(v + 2)` at `shop::f/tail` [macro · code different]
       not stated (src/lib.rs:4, src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::f=TEXT'; if it does not change, --same 'rewrite scale!(v + 1) => scale!(v + 2)'
       affected bodies: shop::f
+      graph: same structure: 2 changed checks (implicit)
       control flow: ~ check `overflow: v + 1` → `overflow: v + 2` (src/lib.rs:-4, src/lib.rs:4)
       control flow: ~ check `overflow: (v + 1) * 3` → `overflow: (v + 2) * 3` (src/lib.rs:-4, src/lib.rs:4)
       equivalence: MIR changes
@@ -41,14 +42,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): deleted statement `other!(v)` at `shop::g/tail` [semantics · code different]
       not stated (src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::g=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f3)
       affected bodies: shop::g (with 1 other edit of this body)
+      graph: −1 overflow check (implicit), −1 panic (implicit), +1 arrow (implicit), −3 arrows (implicit)
       control flow: − check `overflow: v + 1` (src/lib.rs:-5): ok → return, fail → panic `overflow`
       control flow: − panic `overflow` (src/lib.rs:-5)
-      control flow: − arrow entry (src/lib.rs:-5) → check `overflow: v + 1` (src/lib.rs:-5)
+      control flow: + arrow entry (src/lib.rs:5) → return (src/lib.rs:5)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
   ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `v` at `shop::g/tail` [semantics · code different]
       not stated (src/lib.rs:5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::g=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f3)
       affected bodies: shop::g (with 1 other edit of this body)
-      control flow: + arrow entry (src/lib.rs:5) → return (src/lib.rs:5)
+      graph: no graph change of its own
       equivalence: MIR changes
   syntax only:
   item `shop::other!`:

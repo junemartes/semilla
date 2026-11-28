@@ -201,6 +201,11 @@ pub struct ElementDiff {
     /// edits read. It is data of this process only: no store and no record has it.
     #[serde(skip)]
     pub table: Option<std::sync::Arc<Table>>,
+    /// [R98.1-2] Each distinct element table of the diffs of this body pair (the targets and the
+    /// checked configurations), for the graph compare of design 98: each pair of graphs takes the
+    /// table that fits it. Data of this process only, as `table`.
+    #[serde(skip)]
+    pub graph_tables: Vec<std::sync::Arc<Table>>,
 }
 
 /// [R97.2-1] The element table of a changed body pair (design 97). The verifier has no parser
@@ -237,6 +242,11 @@ impl ElementDiff {
     pub fn merge(&mut self, other: ElementDiff) {
         // [R97.2-1] One table for the body pair: the tables of two diffs with elements must be
         // equal, else the body has no table (a check reads one text for each side).
+        for table in &other.graph_tables {
+            if !self.graph_tables.contains(table) {
+                self.graph_tables.push(table.clone());
+            }
+        }
         self.table = match (self.table.take(), other.table.clone()) {
             (Some(known), Some(found)) if known == found => Some(known),
             (known, None) if other.is_empty() => known,
@@ -990,7 +1000,9 @@ pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), or
         Element { tokens, call, targets, exit, glue, jump, symbols, sources }
     };
     // [R90.1-1] Step 5: the elements that differ, paired inside each aligned region.
-    let changed_pairs = region_pairs([old_order.as_slice(), new_order.as_slice()], &partner, [same.as_slice(), same_new.as_slice()], [symbols[0].as_slice(), symbols[1].as_slice()]);
+    let kinds: [Vec<u8>; 2] = [(0..old.elements.len()).map(|index| element_kind(&old, index)).collect(), (0..new.elements.len()).map(|index| element_kind(&new, index)).collect()];
+    let element_texts: [Vec<&str>; 2] = [old.elements.iter().map(|(text, _)| *text).collect(), new.elements.iter().map(|(text, _)| *text).collect()];
+    let changed_pairs = region_pairs([old_order.as_slice(), new_order.as_slice()], &partner, [same.as_slice(), same_new.as_slice()], [symbols[0].as_slice(), symbols[1].as_slice()], [kinds[0].as_slice(), kinds[1].as_slice()], [element_texts[0].as_slice(), element_texts[1].as_slice()]);
     let changed: Vec<(Place, Place)> = changed_pairs
         .iter()
         .copied()
@@ -1008,6 +1020,7 @@ pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), or
         transforms: Vec::new(),
         reorder: None,
         table: None,
+        graph_tables: Vec::new(),
     };
     // [R97.2-1] The table of the body pair, for the plain diff (not for the diff of a check of
     // design 94, whose sides have keys).
@@ -1025,6 +1038,7 @@ pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), or
             decls: [decls(old_record), decls(new_record)],
             same: [same.clone(), same_new.clone()],
         }));
+        out.graph_tables = out.table.iter().cloned().collect();
     }
     unique(&mut out.old);
     unique(&mut out.new);
@@ -1035,6 +1049,64 @@ pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), or
     Some(out)
 }
 
+/// [R98.1-3] The callee of a call element: the text in the braces before its arguments
+/// (`{core::num::<impl u32>::wrapping_add}(…)`). `None`: no such text (a call through a local).
+fn callee_text(text: &str) -> Option<&str> {
+    let end = text.rfind(") -> ")?;
+    let open = {
+        let bytes = text.as_bytes();
+        let mut depth = 0i32;
+        let mut found = None;
+        for at in (0..=end).rev() {
+            match bytes[at] {
+                b')' => depth += 1,
+                b'(' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        found = Some(at);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        found?
+    };
+    let head = text[..open].strip_suffix('}')?;
+    let bytes = head.as_bytes();
+    let mut depth = 0i32;
+    for at in (0..bytes.len()).rev() {
+        match bytes[at] {
+            b'}' => depth += 1,
+            b'{' if depth == 0 => return Some(&head[at + 1..]),
+            b'{' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// [R98.1-3] The kind of an element for the pairs by the order of a region (design 98): 0 for a
+/// statement, else the class of the terminator (`switchInt`, `assert`, `goto`, `return`, `drop`,
+/// `unreachable`, `resume` or `abort`, a call).
+fn element_kind(parsed: &Parsed, index: usize) -> u8 {
+    let (text, block) = parsed.elements[index];
+    if parsed.elements.get(index + 1).is_some_and(|(_, next)| *next == block) {
+        return 0;
+    }
+    match text.split(['(', ' ', ';']).next().unwrap_or("") {
+        "switchInt" => 1,
+        "assert" => 2,
+        "goto" => 3,
+        "return" => 4,
+        "drop" => 5,
+        "unreachable" => 6,
+        "resume" | "abort" => 7,
+        _ if text.contains(" -> ") => 8,
+        _ => 9,
+    }
+}
+
 /// [R90.1-1] The pairs of the elements that differ, inside each aligned region (design 90).
 ///
 /// The equal pairs of the alignment are the anchors. They are in the order of the source on
@@ -1043,7 +1115,12 @@ pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), or
 /// they name (an equal list of symbols that is not empty), one to one in the order of the
 /// source, and then the rest by their order. An element with no partner is new or removed
 /// code. The cost is at most the product of the sizes of each region: no search.
-fn region_pairs(order: [&[usize]; 2], partner: &[Option<usize>], same: [&[bool]; 2], symbols: [&[Vec<Symbol>]; 2]) -> Vec<(usize, usize)> {
+///
+/// [R98.1-3] The rest of a region pairs by the order of the source with the elements of its
+/// own kind only (`element_kind`: a statement with a statement, a terminator with a terminator
+/// of its class): a call never pairs with a `goto` (design 98). Two calls of one callee pair
+/// first.
+fn region_pairs(order: [&[usize]; 2], partner: &[Option<usize>], same: [&[bool]; 2], symbols: [&[Vec<Symbol>]; 2], kinds: [&[u8]; 2], texts: [&[&str]; 2]) -> Vec<(usize, usize)> {
     let new_place: BTreeMap<usize, usize> = order[1].iter().enumerate().map(|(place, index)| (*index, place)).collect();
     // The anchors in the order of the source: the place in each order list.
     let mut anchors: Vec<(usize, usize)> = Vec::new();
@@ -1072,7 +1149,27 @@ fn region_pairs(order: [&[usize]; 2], partner: &[Option<usize>], same: [&[bool];
             }
         }
         let rest: Vec<usize> = news.iter().zip(&used).filter(|(_, used)| !**used).map(|(b, _)| *b).collect();
-        out.extend(left.into_iter().zip(rest));
+        let kind = |side: usize, index: usize| kinds[side].get(index).copied().unwrap_or(0);
+        let mut by_kind: BTreeMap<u8, [Vec<usize>; 2]> = BTreeMap::new();
+        for a in left {
+            by_kind.entry(kind(0, a)).or_default()[0].push(a);
+        }
+        for b in rest {
+            by_kind.entry(kind(1, b)).or_default()[1].push(b);
+        }
+        for (kind, [olds, mut news]) in by_kind {
+            // [R98.1-3] Two calls of one callee (the text in the braces of the operand, also a
+            // callee of the standard library, which has no symbol) pair first, in order.
+            let mut left = Vec::new();
+            for a in olds {
+                let callee = (kind == 8).then(|| callee_text(texts[0].get(a).copied().unwrap_or(""))).flatten();
+                match callee.and_then(|callee| news.iter().position(|b| callee_text(texts[1].get(*b).copied().unwrap_or("")) == Some(callee))) {
+                    Some(at) => out.push((a, news.remove(at))),
+                    None => left.push(a),
+                }
+            }
+            out.extend(left.into_iter().zip(news));
+        }
         start = (end.0 + 1, end.1 + 1);
     }
     out
@@ -1654,6 +1751,31 @@ mod tests {
         }
         out.push_str("}\n");
         out
+    }
+
+    // rule+ R98.1-3
+    // rule- R98.1-3
+    #[test]
+    fn the_rest_of_a_region_pairs_by_order_with_the_elements_of_its_own_kind() {
+        // The old call and the new call are in one region with a new `goto` before the new
+        // call. With no symbols, the rest pairs by order: the call pairs with the call, never
+        // with the `goto`.
+        let old = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_3 = const fn(u32) -> u32 {demo::f}(_2) -> [return: bb1, unwind continue]"], &["_0 = _3", "return"]]);
+        let new = blocks(&[&["_2 = Add(_1, const u32 = 1)", "goto -> bb1"], &["_3 = const fn(u32, u32) -> u32 {demo::g}(_2, const u32 = 5) -> [return: bb2, unwind continue]"], &["_0 = _3", "return"]]);
+        let diff = super::diff((&old, &record_at(&[0, 10, 20, 30])), (&new, &record_at(&[0, 8, 10, 20, 30]))).unwrap();
+        let starts: Vec<(usize, usize)> = diff.changed.iter().map(|(a, b)| (a.start, b.start)).collect();
+        assert_eq!(starts, vec![(10, 10)], "{diff:?}");
+        // The negative case: the `goto` (at 8) is new code with no partner.
+        assert!(!diff.changed.iter().any(|(_, b)| b.start == 8), "{diff:?}");
+        assert!(diff.new.iter().any(|element| element.tokens.as_ref().is_some_and(|place| place.start == 8)), "{diff:?}");
+        // Two calls of one callee pair first: the old call of `f` pairs with the new call of
+        // `f`, not with the new call of `g` before it (a callee of the standard library has no
+        // symbol, so the order decided before).
+        let old = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_3 = const fn(u32) -> u32 {demo::f}(_2, const u32 = 1) -> [return: bb1, unwind continue]"], &["_0 = _3", "return"]]);
+        let new = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_4 = const fn(u32) -> u32 {demo::g}(_2) -> [return: bb1, unwind continue]"], &["_3 = const fn(u32) -> u32 {demo::f}(_4, const u32 = 2) -> [return: bb2, unwind continue]"], &["_0 = _3", "return"]]);
+        let diff = super::diff((&old, &record_at(&[0, 10, 20, 30])), (&new, &record_at(&[0, 8, 10, 20, 30]))).unwrap();
+        let starts: Vec<(usize, usize)> = diff.changed.iter().map(|(a, b)| (a.start, b.start)).collect();
+        assert_eq!(starts, vec![(10, 10)], "{diff:?}");
     }
 
     #[test]

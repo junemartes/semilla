@@ -47,12 +47,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:13): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(f_before: &before::depot::Food, f_after: &after::depot::Food) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (0 implicit, 1 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::total`:
   ◆ f1 extract (Semilla; R95.4-1, the MIR of `<depot::Food as depot::Tax>::rate` put in at the call is the MIR of the old code (2 element place(s) explained); the impl method that rustc resolves for the call of `<depot::Food as depot::Tax>::rate` (R95.4-1)): changed expression `f.0.wrapping_mul(3)` → `f.rate()` at `depot::total/tail/lhs` [semantics · code different]
       affected bodies: depot::total
-      control flow: ~ call `num::<impl u32>::wrapping_mul` → `<Food as Tax>::rate` (src/lib.rs:-14, src/lib.rs:14)
+      graph: no change after the check: the check of the extract explains 1 graph change(s)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

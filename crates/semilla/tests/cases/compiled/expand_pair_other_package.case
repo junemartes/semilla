@@ -70,12 +70,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (shop/src/lib.rs:5): no template: the check of the intent files stops before the templates: the compile of the facade `before` failed (error[E0460]: found possibly newer version of crate `depot` which `shop` depends on)
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 2 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::price`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): replace macro input `twice!(<(u8, u8)>::size())` → `twice!(<(u8, u8, u8)>::size())` at `shop::price/tail` [macro · code different]
       not stated (shop/src/lib.rs:5, shop/src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite twice!(<(u8, u8)>::size()) => twice!(<(u8, u8, u8)>::size())'
       affected bodies: shop::price
+      graph: same structure: 1 changed call target (`<(u8, u8) as Size>::size` → `<(u8, u8, u8) as Size>::size`), 1 changed check (`overflow: <(u8, u8)>::size() * 2` → `overflow: <(u8, u8, u8)>::size() * 2`, implicit)
       control flow: ~ call `<(u8, u8) as Size>::size` → `<(u8, u8, u8) as Size>::size` (shop/src/lib.rs:-5, shop/src/lib.rs:5)
       control flow: ~ check `overflow: <(u8, u8)>::size() * 2` → `overflow: <(u8, u8, u8)>::size() * 2` (shop/src/lib.rs:-5, shop/src/lib.rs:5)
       equivalence: MIR changes

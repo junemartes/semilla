@@ -34,17 +34,24 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 0 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::size` (src/lib.rs:8): the full compare: `#[same(shop::size)] fn size_same() {}`; a difference: `#[change(shop::size)] fn size_change() -> bool { … }` or `#[different(shop::size)] fn size_different() -> bool { … }`
+    MIR changes with no claim: `shop::size::DATA` (src/lib.rs:3): no template: `shop::size::DATA` is no item of the syntax tree (a body that the compiler makes)
+  changed nodes: 0 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   file `data/a.txt`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): data/a.txt: changed [file · code different]
       not stated (data/a.txt:2); to state it: --change 'data/a.txt=TEXT'
       affected bodies: shop::size, shop::size::DATA
+      graph: same graph (the edit keeps the control flow)
       expansion: `table!("a")` at `shop::size/tail` (src/lib.rs:9): expansion changed: only the context of the call changes: the file `data/a.txt` (`include_bytes!(concat!("../data/", $name, ".txt"))`); changed code `n` → `ntwo\n`
   file `data/b.txt`:
   ◆ f2 replace (Semilla; R90.3-2, a file edit (no tree)): data/b.txt: changed [file · no code]
       not stated (data/b.txt:1, data/b.txt:-1); to state it: --change 'data/b.txt=TEXT'
   cover: each of the 3 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::size (src/lib.rs:8): same graph; no edit in the body; MIR changes; the expansion of `table!("a")` changes (semilla expand src/lib.rs:9 --step 0)
+    shop::size::DATA (src/lib.rs:3): same graph; no edit in the body; MIR changes
   expansions: 1 changed
     `table!("a")` at `shop::size/tail` (src/lib.rs:9): expansion changed: `macro_rules! table` (src/lib.rs:1): only the context of the call changes: the file `data/a.txt` (`include_bytes!(concat!("../data/", $name, ".txt"))`); changed code `n` → `ntwo\n`; the code of the call reads `data/a.txt`, which the step changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

@@ -35,12 +35,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::f` (src/lib.rs:1): the full compare: `#[same(depot::f)] fn f_same() {}`; a difference: `#[change(depot::f)] fn f_change(x: u32) -> bool { … }` or `#[different(depot::f)] fn f_different() -> bool { … }`
-  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::f`:
   ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements; 2 nodes; one change (R92.6-1)): moved match arm `3 => 30` from `depot::f/S0/arm[2].pat` to `depot::f/S0/arm[0].pat`; changed literal `10` → `11` at `depot::f/S0/arm[0].body` [semantics · code different]
       not stated (src/lib.rs:4-5, src/lib.rs:-3-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::f=TEXT'; if it does not change, --same 'rewrite 10 => 11', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1)
       affected bodies: depot::f
+      graph: same graph (the edit keeps the control flow)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
       equivalence: MIR changes alone; the body: MIR changes
   cover: each of the 4 changed line(s) is in a fact

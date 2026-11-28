@@ -1,0 +1,47 @@
+note: a new `assert!` adds a branch and the panic of the macro (one point, R60.2-12): the panic is implicit, the branch of the input is not
+rule+: R98.3-1
+must_match: \+1 branch \(`x < 100`\)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn half(x: u32) -> u32 {
+    x / 2
+}
+=== new src/lib.rs
+pub fn half(x: u32) -> u32 {
+    assert!(x < 100);
+    x / 2
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::half` (src/lib.rs:1): the full compare: `#[same(depot::half)] fn half_same() {}`; a difference: `#[change(depot::half)] fn half_change(x: u32) -> bool { … }` or `#[different(depot::half)] fn half_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::half`:
+  ◆ f1 add (Semilla; R90.2-3, 4 new MIR elements): added macro statement `assert!(x < 100);` at `depot::half/S0` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::half=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      affected bodies: depot::half
+      graph: +1 branch (`x < 100`), +1 panic (`assert!(x < 100)`), +3 arrows, −1 arrow
+      control flow: + branch `x < 100` (src/lib.rs:2): false → panic `assert!(x < 100)`, true → return
+      control flow: + panic `assert!(x < 100)` (src/lib.rs:2)
+      control flow: + arrow entry (src/lib.rs:1) → branch `x < 100` (src/lib.rs:2)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 1 changed line(s) is in a fact
+  control flow: 1 body
+    depot::half (src/lib.rs:1): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow; MIR changes
+  expansions: 1 added
+    `assert!(x < 100)` at `depot::half/S0` (src/lib.rs:2): expansion added: `macro assert` (crate core): 1 line(s) of code; the step adds the call or its input
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 add (Semilla; R90.2-3, 4 new MIR elements): added macro statement `assert!(x < 100);` at `depot::half/S0` [semantics · code different]
+    lines: src/lib.rs:2

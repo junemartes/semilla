@@ -41,7 +41,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::unix::open` (src/unix.rs:1): the full compare: `#[same(depot::unix::open)] fn open_same() {}`; a difference: `#[change(depot::unix::open)] fn open_change() -> bool { … }` or `#[different(depot::unix::open)] fn open_different() -> bool { … }`
-  changed nodes: 1 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   file `src/other.rs`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): src/other.rs: changed [file · no code]
@@ -51,6 +51,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different]
       not stated (src/unix.rs:2, src/unix.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::unix::open=TEXT'; if it does not change, --same 'rewrite 3 => 4'
       affected bodies: depot::unix::open
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body

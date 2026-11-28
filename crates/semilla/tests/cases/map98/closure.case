@@ -1,0 +1,46 @@
+note: a closure (a nested body) follows the same rules: the new branch of the closure is in the entry of the `if` in the closure
+rule+: R98.2-1
+must_match: graph: \+1 branch \(`\*x > 3`\)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(v: &[u32]) -> u32 {
+    v.iter().map(|x| x + 1).sum()
+}
+=== new src/lib.rs
+pub fn total(v: &[u32]) -> u32 {
+    v.iter().map(|x| if *x > 3 { x + 1 } else { 0 }).sum()
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the same MIR text; a changed callee: `depot::total::{closure#0}`; the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(v: &[u32]) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+    MIR changes with no claim: `depot::total::{closure#0} |x| if *x > 3 { x + 1 } else { 0 }` (src/lib.rs:2): the template of `depot::total` covers its item `depot::total`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed if: `x + 1` → `if *x > 3 { x + 1 } else { 0 }` at `depot::total/tail/recv/args[0]/body` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a + 1 => if *$a > 3 { $a + 1 } else { 0 }'
+      affected bodies: depot::total
+      graph: +1 branch (`*x > 3`), +3 arrows, −1 arrow
+      control flow: + branch `*x > 3` (src/lib.rs:2): false → return, true → call `<&u32 as Add<u32>>::add`
+      control flow: + arrow entry (src/lib.rs:2) → branch `*x > 3` (src/lib.rs:2)
+      control flow: − arrow entry (src/lib.rs:-2) → call `<&u32 as Add<u32>>::add` (src/lib.rs:-2)
+      equivalence: `depot::total`: MIR changes: the same MIR text; a changed callee: `depot::total::{closure#0}`
+      equivalence: `depot::total::{closure#0} |x| if *x > 3 { x + 1 } else { 0 }`: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::total (src/lib.rs:1): same graph; MIR changes (the same MIR text; a changed callee: `depot::total::{closure#0}`)
+    depot::total::{closure#0} |x| if *x > 3 { x + 1 } else { 0 } (src/lib.rs:2): graph changes: +1 branch, +3 arrows, −1 arrow; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed if: `x + 1` → `if *x > 3 { x + 1 } else { 0 }` at `depot::total/tail/recv/args[0]/body` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

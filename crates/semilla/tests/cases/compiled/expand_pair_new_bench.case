@@ -60,16 +60,18 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+  changed bodies: 0 equal MIR, 0 explained by claims, 4 MIR changes with no claim
     MIR changes with no claim: `extra::x` (benches/extra.rs:4): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `extra::x::{closure#0} #[test]` (benches/extra.rs:3): the template of `extra::x` covers its item `shop (bench "extra")::x`
     MIR changes with no claim: `extra::{test-harness-main}` (no place): no result of the equivalence check; no template: `extra` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
-  changed nodes: 3 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
+    MIR changes with no claim: `shop::one` (src/lib.rs:3): the full compare: `#[same(shop::one)] fn one_same() {}`; a difference: `#[change(shop::one)] fn one_change() -> bool { … }` or `#[different(shop::one)] fn one_different() -> bool { … }`
+  changed nodes: 3 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 10 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop (bench "extra")::x`:
   ◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `shop (bench "extra")::x` [added · code different]
       not stated (benches/extra.rs:3-6); to state it: --change 'shop (bench "extra")::x=TEXT'
       affected bodies: shop (bench "extra")::x
+      graph: +2 bodys, +2 returns, +2 calls, +4 arrows
       control flow: + graph of `extra::x`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: + graph of `extra::x::{closure#0} #[test]`: 4 points, 3 arrows (semilla expand --step 0)
       expansion: `#[test]` at `shop (bench "extra")::x` (benches/extra.rs:3): expansion added: makes `extra::test`, `extra::x`
@@ -81,10 +83,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: shop::one
       expansion: `base!()` at `shop::one/tail` (src/lib.rs:3): expansion changed: changed expression `1` → `1 + 0` at `expansion` [semantics]
   cover: each of the 8 changed line(s) is in a fact
-  control flow: 3 bodies
+  control flow: 4 bodies
     extra::x (benches/extra.rs:4): graph added: 2 points, 1 arrow
     extra::x::{closure#0} #[test] (benches/extra.rs:3): graph added: 4 points, 3 arrows
     extra::{test-harness-main} (no place): no graph data: a record of the driver has no graph; no edit in the body
+    shop::one (src/lib.rs:3): same graph; no edit in the body; MIR changes; the expansion of `base!()` changes (semilla expand src/lib.rs:3 --step 0)
   expansions: 1 changed, 2 added, 7 equal
     `#[test]` at `shop (bench "extra")::x` (benches/extra.rs:3): expansion added: `attribute macro test` (crate core): makes `extra::test`, `extra::x`; the step adds the call or its input
     `ck!(shop::one())` at `shop (bench "extra")::x/S0` (benches/extra.rs:5): expansion added: `macro_rules! ck` (benches/extra.rs:1): 1 line(s) of code; the step adds the call or its input

@@ -26,12 +26,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::first` (src/lib.rs:5): an added body: `#[new(shop::first)] fn first_new() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 11 in entries (8 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::first`:
   ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::first` (the public API changes: a different crate can now use the item) [added · code different]
       not stated (src/lib.rs:4-7); to state it: --change 'shop::first=TEXT'
       affected bodies: shop::first
+      graph: +1 body, +1 alignment check (implicit), +1 null pointer check (implicit), +2 panics (implicit), +1 return, +5 arrows (4 implicit)
       control flow: + graph of `shop::first`: 6 points, 5 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
       ! unsafe code: the changed body has an `unsafe` block

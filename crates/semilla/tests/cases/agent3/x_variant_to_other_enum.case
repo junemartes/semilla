@@ -119,18 +119,20 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::mode_name` (src/lib.rs:24): a type of the signature changes (the type `Mode` changes: `depot::Mode`: `enum Mode { }` → `enum Mode { }`): `#[same(depot::mode_name)] fn mode_name(m_before: &before::depot::Mode, m_after: &after::depot::Mode) -> bool { !(same(m_bef… (147 characters more; `semilla expand --step 0` shows the full line) …e_change() -> bool { … }` or `#[different(depot::mode_name)] fn mode_name_different() -> bool { … }`
     MIR changes with no claim: `depot::start` (src/lib.rs:25): the signature changes (`fn start () -> Mode` → `fn start () -> Other`): `#[same(depot::start)] fn start() -> bool { let old = before::depot::start(); let new = after::depot::start(); true }`; a difference: `#[change(depot::start)] fn start_change() -> bool { … }` or `#[different(depot::start)] fn start_different() -> bool { … }`
-  changed nodes: 7 in 5 entries; 4 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 7 in 5 entries; 4 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::Mode::Idle`:
   ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): variant `depot::Mode::Idle` removed: `Idle` (the public API can change: a different crate can use the item) [removed · code different]
       not stated (src/lib.rs:22, src/lib.rs:-22); to state it: --change 'depot::Mode::Idle=TEXT'
       affected bodies: depot::mode_name
       through: `depot::Mode` (1 body), `depot::mode_name` (1 body)
+      graph: no graph change of its own
       ! public API: the compare does not cover the code of a different crate
   item `depot::mode_name`:
   ◆ f3 delete (Semilla; R90.2-3, 3 removed MIR elements): removed match arm `Mode::Idle => "idle"` at `depot::mode_name/S0/arm[0].pat` [semantics · code different]
       not stated (src/lib.rs:24, src/lib.rs:-23); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::mode_name=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::mode_name
+      graph: −1 branch (`m`), +1 arrow, −3 arrows
       control flow: − branch `m` (src/lib.rs:-23): depot::Mode::Idle → return, depot::Mode::Busy → return
       control flow: + arrow entry (src/lib.rs:24) → return (src/lib.rs:24)
       control flow: − arrow entry (src/lib.rs:-23) → branch `m` (src/lib.rs:-23)
@@ -139,10 +141,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Mode::Idle` → `Other::Rest` at `depot::start/tail` [semantics · code different]
       not stated (src/lib.rs:25, src/lib.rs:-24); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::start=TEXT'; if it does not change, --same 'rewrite Mode::Idle => Other::Rest'
       affected bodies: depot::start (with 1 other edit of this body)
+      graph: same graph (the edit keeps the control flow)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): return type of `depot::start` `-> Mode` → `-> Other` (the public API can change: a different crate can use the item) [declaration · code different]
       not stated (src/lib.rs:25, src/lib.rs:-24); to state it: --change 'depot::start=TEXT'
       affected bodies: depot::start (with 1 other edit of this body)
+      graph: same graph (the edit keeps the control flow)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
       ! public API: the compare does not cover the code of a different crate
   syntax only:

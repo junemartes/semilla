@@ -23,15 +23,20 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::rate` (src/lib.rs:1): no template: `shop::rate` is no item of the syntax tree (a body that the compiler makes)
+  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   file `src/rate.in`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): src/rate.in: changed [file · code different]
       not stated (src/rate.in:1, src/rate.in:-1); to state it: --change 'src/rate.in=TEXT'
       affected bodies: shop::rate
+      graph: same graph (the edit keeps the control flow)
       expansion: `mkfn!(rate, include!("rate.in"))` at `shop::mkfn!#0` (src/lib.rs:3): expansion changed: changed literal `10` → `12` at `shop::rate/tail` [semantics]
       ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/rate.in:=…'
   cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::rate (src/lib.rs:1): same graph; no edit in the body; MIR changes
   expansions: 1 changed, 1 equal
     `mkfn!(rate, include!("rate.in"))` at `shop::mkfn!#0` (src/lib.rs:3): expansion changed: `macro_rules! mkfn` (src/lib.rs:1): changed literal `10` → `12` at `shop::rate/tail` [semantics]; the code of the call reads `src/rate.in`, which the step changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

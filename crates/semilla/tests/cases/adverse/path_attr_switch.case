@@ -55,13 +55,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::first` (src/impl_b.rs:8): the full compare: `#[same(depot::list::first)] fn first_same() {}`; a difference: `#[change(depot::list::first)] fn first_change(v: &[u32]) -> bool { … }` or `#[different(depot::list::first)] fn first_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   to state them, add these options to the command of the step: --change 'depot::list::first=TEXT'
   real edits:
   item `depot::list::first`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
       not stated; to state it: --change 'depot::list::first=TEXT'
       affected bodies: depot::list::first
+      graph: same structure: 1 changed check (`bounds: v[0]` → `bounds: v[1]`, implicit)
+      control flow: ~ check `bounds: v[0]` → `bounds: v[1]` (src/impl_a.rs:-8, src/impl_b.rs:8)
       docs of `depot::list::first`, no edit in this step (src/impl_b.rs:7): `/// The first element.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   syntax only:

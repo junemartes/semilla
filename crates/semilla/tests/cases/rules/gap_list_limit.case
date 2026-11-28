@@ -63,29 +63,33 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::limit` (src/lib.rs:11): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
     MIR changes with no claim: `depot::wrap` (src/lib.rs:9): the full compare: `#[same(depot::wrap)] fn wrap_same() {}`; a difference: `#[change(depot::wrap)] fn wrap_change(x: u32) -> bool { … }` or `#[different(depot::wrap)] fn wrap_different() -> bool { … }`
     MIR changes with no claim: `depot::wrap2` (src/lib.rs:10): the full compare: `#[same(depot::wrap2)] fn wrap2_same() {}`; a difference: `#[change(depot::wrap2)] fn wrap2_change(x: u32) -> bool { … }` or `#[different(depot::wrap2)] fn wrap2_different() -> bool { … }`
-  changed nodes: 7 in 7 entries; 7 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 7 in 7 entries; 7 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 14 in entries (14 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::a`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `9` at `depot::a/tail/rhs` [semantics · code different]
       not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::a=TEXT'; if it does not change, --same 'rewrite 1 => 9'
       affected bodies: depot::a
+      graph: same structure: 1 changed check (`overflow: c.total + 1` → `overflow: c.total + 9`, implicit)
       control flow: ~ check `overflow: c.total + 1` → `overflow: c.total + 9` (src/lib.rs:-6, src/lib.rs:6)
       equivalence: MIR changes
   item `depot::b`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `5` at `depot::b/tail/rhs` [semantics · code different]
       not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::b=TEXT'; if it does not change, --same 'rewrite 2 => 5'
       affected bodies: depot::b
+      graph: same structure: 1 changed check (`overflow: c.total * 2` → `overflow: c.total * 5`, implicit)
       control flow: ~ check `overflow: c.total * 2` → `overflow: c.total * 5` (src/lib.rs:-7, src/lib.rs:7)
       equivalence: MIR changes
   item `depot::conf::depth`:
   ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `4` → `6` at `depot::conf::depth/tail` [semantics · code different]
       not stated (src/lib.rs:17, src/lib.rs:-17); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::conf::depth=TEXT'; if it does not change, --same 'rewrite 4 => 6'
       affected bodies: depot::conf::depth
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   item `depot::idle`:
   ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `3` → `4` at `depot::idle/tail` [semantics · code different]
       not stated (src/lib.rs:14, src/lib.rs:-14); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::idle=TEXT'; if it does not change, --same 'rewrite 3 => 4'
       affected bodies: depot::idle
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
       docs of `depot::idle`, no edit in this step (src/lib.rs:13): `/// Gives three.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
@@ -93,11 +97,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
       not stated (src/lib.rs:11, src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
       affected bodies: depot::limit
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   item `depot::wrap2`:
   ◆ f7 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x * 3` at `depot::wrap2/tail` [semantics · code different]
       not stated (src/lib.rs:10, src/lib.rs:-10); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::wrap2=TEXT'; if it does not change, --same 'rewrite x => x * 3'
       affected bodies: depot::wrap2
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: x * 3` (src/lib.rs:10): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:10)
       control flow: + arrow entry (src/lib.rs:10) → check `overflow: x * 3` (src/lib.rs:10)
@@ -107,6 +113,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f6 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 7` at `depot::wrap/tail` [semantics · code different]
       not stated (src/lib.rs:9, src/lib.rs:-9); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::wrap=TEXT'; if it does not change, --same 'rewrite x => x + 7'
       affected bodies: depot::wrap
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: x + 7` (src/lib.rs:9): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:9)
       control flow: + arrow entry (src/lib.rs:9) → check `overflow: x + 7` (src/lib.rs:9)

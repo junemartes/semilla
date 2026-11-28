@@ -33,12 +33,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::W::<u8>::get` (src/lib.rs:6): the full compare: `#[same(shop::W::get)] fn get_same() {}`; a difference: `#[change(shop::W::get)] fn get_change() -> bool { … }` or `#[different(shop::W::get)] fn get_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (6 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::W::get#1`:
   ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `self.0` → `self.0 + 1` at `shop::W::get#1/tail` [semantics · code different]
       not stated (src/lib.rs:5-7, src/lib.rs:-2-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::W::get#1=TEXT'; if it does not change, --same 'rewrite $a.0 => $a.0 + 1'
       affected bodies: shop::W::get#1
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: self.0 + 1` (src/lib.rs:6): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:6)
       control flow: + arrow entry (src/lib.rs:6) → check `overflow: self.0 + 1` (src/lib.rs:6)

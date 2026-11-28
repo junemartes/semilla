@@ -46,12 +46,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::last` (src/list/mod.rs:13): no template: the step pairs `depot::list::first` with `depot::list::last` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
-  changed nodes: 2 in 5 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 5 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 9 in entries (5 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::list::last`:
   ◆ f3 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `0` → `v.len() - 1` at `depot::list::last/tail/index` [semantics · code different]
       not stated (src/list.rs:-8, src/list/mod.rs:13); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::last=TEXT'; if it does not change, --same 'rewrite 0 => v.len() - 1'
       affected bodies: depot::list::last
+      graph: +1 call (`slice::<impl [u32]>::len`), +1 overflow check (implicit), +1 panic (implicit), 1 changed check (`bounds: v[0]` → `bounds: v[v.len() - 1]`, implicit), +4 arrows (2 implicit), −1 arrow
       control flow: + call `slice::<impl [u32]>::len` (src/list/mod.rs:13): return → check `overflow: v.len() - 1`
       control flow: + check `overflow: v.len() - 1` (src/list/mod.rs:13): ok → check `bounds: v[v.len() - 1]`, fail → panic `overflow`
       control flow: + panic `overflow` (src/list/mod.rs:13)

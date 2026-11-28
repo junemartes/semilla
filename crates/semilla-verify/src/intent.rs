@@ -845,6 +845,8 @@ pub fn semantic_lines(step: &semilla_core::StepReport, limit: Option<usize>) -> 
         }
         let mut lines = vec!["  semantic changes (no intent file: the map of the AST pass and the equal-MIR check):".to_string()];
         lines.extend(crate::astmap::lines(map, None, step.step));
+        // [R98.5-1] Each graph change with its entry (design 98).
+        lines.extend(step.flow.iter().flat_map(crate::flowmap::lines));
         lines.extend(cover_lines(step, None, "    "));
         return lines;
     }
@@ -865,6 +867,10 @@ pub fn semantic_lines(step: &semilla_core::StepReport, limit: Option<usize>) -> 
     // [R79.6-1] The coverage line of the AST pass, before the line of the changed bodies.
     if let Some(map) = &step.ast {
         lines.extend(crate::astmap::lines(map, limit, step.step));
+        // [R98.5-1] Each graph change with its entry (design 98), in the full text.
+        if limit.is_none() {
+            lines.extend(step.flow.iter().flat_map(crate::flowmap::lines));
+        }
     }
     if step.coverage.is_empty() {
         let cause = if step.flow.is_some() { "no changed body" } else { "the coverage needs the compiled check of the step (phase 2)" };

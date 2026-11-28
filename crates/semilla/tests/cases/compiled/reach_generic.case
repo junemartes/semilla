@@ -74,7 +74,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     ✗ false: i2 `#[same(shop::food_bill)] fn same_1()`: for n = 1: before returns 5, after returns 6 (suggested test `semilla_test_food_bill_3f08e7`)
     changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
       MIR changes with no claim: `<shop::Food as shop::Tax>::rate` (src/lib.rs:8): the full compare: `#[same(<shop::Food as shop::Tax>::rate)] fn rate_same() {}`; a difference: `#[change(<shop::Food as shop::Tax>::rate)] fn rate_change() -> bool { … }` or `#[different(<shop::Food as shop::Tax>::rate)] fn rate_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::<Food as Tax>::rate`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different]

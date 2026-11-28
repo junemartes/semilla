@@ -45,13 +45,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `<shop::Count as std::iter::Iterator>::size_hint` (src/lib.rs:13): an added body: `#[new(<shop::Count as core::iter::traits::iterator::Iterator>::size_hint)] fn size_hint_new() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 3 in entries (0 implicit), 0 in the section of R92.4-1
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::<Count as Iterator>::size_hint=TEXT'
   real edits:
   item `shop::<Count as Iterator>::size_hint`:
   ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): `shop::<Count as Iterator>::size_hint` now overrides the default body of `core::iter::traits::iterator::Iterator::size_hint` (a trait of another crate: Semilla does not show its default body): `fn size_hint(&self) -> (usize, Option<usize>) { (self.0 as usize, Some(self.0 as usize)) }` [semantics · code different]
       not stated (src/lib.rs:12-15); to state it: --change 'shop::<Count as Iterator>::size_hint=TEXT'
       affected bodies: shop::<Count as Iterator>::size_hint
+      graph: +1 body, +1 return, +1 arrow
       control flow: + graph of `<shop::Count as std::iter::Iterator>::size_hint`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body

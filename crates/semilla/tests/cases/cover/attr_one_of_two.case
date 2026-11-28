@@ -27,13 +27,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::limit` (src/lib.rs:5): no template: error[S0112]: the scope path `after::depot::limit` names no item of the version
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 3 in the section of R92.4-1
   real edits:
   item `depot::limit`:
   ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): attributes of `depot::limit`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute · code different]
       not stated (src/lib.rs:4, src/lib.rs:-4); to state it: --change 'depot::limit=TEXT'
       ! the compiled code changes: depot::limit
+      graph: no graph change of its own
       ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::limit=…'
+  compiled code that changes with no edit:
+  body `depot::limit` (src/lib.rs:5): graph: −1 body, −1 return, −1 arrow (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
+      control flow: − entry (src/lib.rs:-5): → return
+      control flow: − return (src/lib.rs:-5)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     depot::limit (src/lib.rs:5): graph removed: 2 points, 1 arrow; no edit in the body

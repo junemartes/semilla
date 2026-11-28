@@ -41,30 +41,37 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::part` (src/lib.rs:5): an added body: `#[new(depot::part)] fn part_new(a: u32, b: u32) -> bool { let new = after::depot::part(a, b); true }`
     MIR changes with no claim: `depot::piece` (src/lib.rs:9): an added body: `#[new(depot::piece)] fn piece_new(a: u32, b: u32) -> bool { let new = after::depot::piece(a, b); true }`
     MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 4 in 4 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 4 in 4 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 38 in entries (25 implicit, 3 explained by the check of a transformation), 0 in the section of R92.4-1
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::total=TEXT'
   real edits:
   item `depot::piece`:
   ◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::piece` [added · code different]
       not stated (src/lib.rs:9); to state it: --change 'depot::piece=TEXT'
       affected bodies: depot::piece
+      graph: +1 body, +2 overflow checks (implicit), +2 panics (implicit), +1 return, +5 arrows (4 implicit)
       control flow: + graph of `depot::piece`: 6 points, 5 arrows (semilla expand --step 0)
   item `depot::total`:
-  ◆ f1 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `a * 3 + b` at `depot::total/tail` [semantics · code different]
+  ◆ f1 delete (Semilla; R90.2-3, 4 removed MIR elements): deleted statement `a * 3 + b` at `depot::total/tail` [semantics · code different]
       not stated; to state it: --change 'depot::total=TEXT' (one statement for 2 places: f1, f5)
       affected bodies: depot::total (with 1 other edit of this body)
+      graph: −2 overflow checks (implicit), −2 panics (implicit), −5 arrows (implicit)
+      control flow: − check `overflow: a * 3` (src/lib.rs:-2): ok → check `overflow: a * 3 + b`, fail → panic `overflow`
+      control flow: − check `overflow: a * 3 + b` (src/lib.rs:-2): ok → return, fail → panic `overflow`
+      control flow: − panic `overflow` (src/lib.rs:-2)
+      control flow: … 1 more (semilla expand --step 0)
   ◆ f5 add (Semilla; R94.1-2, 3 MIR element place(s) that differ after the callee is put in at the call): the code of the extract of `depot::part` that the MIR does not explain: new `part(a, b).min(piece(a, b))`, `piece(a, b)`, `a * 3 + b` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:6); to state it: --change 'depot::total=TEXT' (one statement for 2 places: f1, f5)
       affected bodies: depot::total
+      graph: +2 overflow checks (implicit), +2 panics (implicit), +3 calls, +8 arrows (4 implicit)
+      control flow: + check `overflow: a * 3` (src/lib.rs:6): ok → check `overflow: a * 3 + b`, fail → panic `overflow`
+      control flow: + check `overflow: a * 3 + b` (src/lib.rs:6): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:6)
+      control flow: … 4 more (semilla expand --step 0)
   transformations:
   item `depot::total`:
   ◆ f2 extract (a1; R94.1-1, the MIR of `depot::part` put in at the call explains 1 element place(s); 3 element place(s) differ: a real edit of its own (R94.1-2); 2 nodes; one change (R92.6-1)): added statement `part(a, b).min(piece(a, b))` at `depot::total/tail`; added `depot::part` [semantics · code different]
       affected bodies: depot::total, depot::part
-      control flow: + call `part` (src/lib.rs:2): return → call `piece`
-      control flow: + call `piece` (src/lib.rs:2): return → call `impls::<impl Ord for u32>::min`
-      control flow: + call `impls::<impl Ord for u32>::min` (src/lib.rs:2): return → return
-      control flow: … 1 more (semilla expand --step 0)
-      control flow: + graph of `depot::part`: 6 points, 5 arrows (semilla expand --step 0)
+      graph: no change after the check: the check of the extract explains 3 graph change(s)
       equivalence: MIR changes
   cover: each of the 8 changed line(s) is in a fact
   control flow: 3 bodies
@@ -76,7 +83,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 === positions
 ◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::piece` [added · code different]
     lines: src/lib.rs:9
-◆ f1 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `a * 3 + b` at `depot::total/tail` [semantics · code different]
+◆ f1 delete (Semilla; R90.2-3, 4 removed MIR elements): deleted statement `a * 3 + b` at `depot::total/tail` [semantics · code different]
     no position
 ◆ f5 add (Semilla; R94.1-2, 3 MIR element place(s) that differ after the callee is put in at the call): the code of the extract of `depot::part` that the MIR does not explain: new `part(a, b).min(piece(a, b))`, `piece(a, b)`, `a * 3 + b` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:6

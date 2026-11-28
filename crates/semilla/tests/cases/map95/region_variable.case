@@ -34,12 +34,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:5): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::total`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `5` → `6` at `depot::total/S0/init/rhs` [semantics · code different]
       not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite 5 => 6'
       affected bodies: depot::total (with 1 other edit of this body)
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes alone; the body: MIR changes
   transformations:
   item `depot::total`:

@@ -84,12 +84,13 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:16): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::price`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::price/tail/rhs` [semantics · code different]
       not stated (src/lib.rs:17, src/lib.rs:-17); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: shop::price
+      graph: same structure: 1 changed check (`overflow: x + 1` → `overflow: x + 2`, implicit)
       control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-17, src/lib.rs:17)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact

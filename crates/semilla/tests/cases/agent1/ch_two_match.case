@@ -63,17 +63,19 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::conf::depth` (src/lib.rs:18): the full compare: `#[same(depot::conf::depth)] fn depth_same() {}`; a difference: `#[change(depot::conf::depth)] fn depth_change() -> bool { … }` or `#[different(depot::conf::depth)] fn depth_different() -> bool { … }`
     MIR changes with no claim: `depot::other::depth` (src/lib.rs:10): an added body: `#[new(depot::other::depth)] fn depth_new() -> bool { let new = after::depot::other::depth(); true }`
-  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 3 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::conf::depth`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `4` → `5` at `depot::conf::depth/tail` [semantics · code different]
       not stated (src/lib.rs:18, src/lib.rs:-17); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::conf::depth=TEXT'; if it does not change, --same 'rewrite 4 => 5'
       affected bodies: depot::conf::depth
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   item `depot::other`:
   ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): added `depot::other` (the public API changes: a different crate can now use the item) [added · code different]
       not stated (src/lib.rs:10); to state it: --change 'depot::other=TEXT'
       affected bodies: depot::other::depth
+      graph: +1 body, +1 return, +1 arrow
       control flow: + graph of `depot::other::depth`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 3 changed line(s) is in a fact

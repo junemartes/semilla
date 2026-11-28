@@ -53,12 +53,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::tests::two` (src/lib.rs:14): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `shop::tests::two::{closure#0} #[test]` (src/lib.rs:13): the same MIR text; a changed callee: `shop::tests::two`, `shop::tests::two::{closure#0}`; the template of `shop::tests::two` covers its item `shop::tests::two`
-  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::tests::two`:
   ◆ f1 replace (Semilla; R94.3-2, an extracted variable: the MIR is not equal after the normal form, and it is not a new order of the same parts; 2 nodes): extracted variable `x` = `2` (1 use) at `shop::tests::two/S0` [move · code different]
       not stated (src/lib.rs:15-16, src/lib.rs:-14); to state it: --change 'shop::tests::two=TEXT'
       ! the compiled code changes: shop::tests::two
+      graph: same graph (the edit keeps the control flow)
       equivalence: `shop::tests::two`: MIR changes
       equivalence: `shop::tests::two::{closure#0} #[test]`: MIR changes: the same MIR text; a changed callee: `shop::tests::two`, `shop::tests::two::{closure#0}`
       expansion: `assert_eq!(super::add(x), 3)` at `shop::tests::two/S1` (src/lib.rs:16): expansion changed: changed expression `2` → `x` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/args[0]` [semantics]

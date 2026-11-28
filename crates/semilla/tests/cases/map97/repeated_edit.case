@@ -45,20 +45,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::first` (src/lib.rs:6): the full compare: `#[same(shop::first)] fn first_same() {}`; a difference: `#[change(shop::first)] fn first_change(c_before: &before::shop::Cart, c_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::first)] fn first_different() -> bool { … }`
     MIR changes with no claim: `shop::second` (src/lib.rs:10): the full compare: `#[same(shop::second)] fn second_same() {}`; a difference: `#[change(shop::second)] fn second_change(other_before: &before::shop::Cart, other_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::second)] fn second_different() -> bool { … }`
-  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 10 in entries (2 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::first`:
   ◆ f1 replace (Semilla; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `shop::first` (src/lib.rs:7), `shop::second` (src/lib.rs:11); 2 nodes; one change (R92.6-1)): changed expression `c.items.len()` → `c.count` at `shop::first/tail/lhs`; changed expression `other.items.len()` → `other.count` at `shop::second/tail/lhs` [semantics · code different]
       not stated (src/lib.rs:7, src/lib.rs:11, src/lib.rs:-7, src/lib.rs:-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::first,shop::second=TEXT'; if it does not change, --same 'rewrite $a.items.len() => $a.count' (one statement for 2 places: f1)
       template: `#[rewrite] fn first_rewrite() { (|c: &before::shop::Cart| c.items.len(), |c: &after::shop::Cart| c.count) }`
       affected bodies: shop::first, shop::second
+      graph: −2 calls, 2 changed checks (implicit), +2 arrows, −4 arrows
       control flow: − call `Vec::<u32>::len` (src/lib.rs:-7): return → check `overflow: c.items.len() + 1`
       control flow: ~ check `overflow: c.items.len() + 1` → `overflow: c.count + 1` (src/lib.rs:-7, src/lib.rs:7)
       control flow: + arrow entry (src/lib.rs:6) → check `overflow: c.count + 1` (src/lib.rs:7)
-      control flow: … 1 more (semilla expand --step 0)
-      control flow: − call `Vec::<u32>::len` (src/lib.rs:-11): return → check `overflow: other.items.len() * 2`
-      control flow: ~ check `overflow: other.items.len() * 2` → `overflow: other.count * 2` (src/lib.rs:-11, src/lib.rs:11)
-      control flow: + arrow entry (src/lib.rs:10) → check `overflow: other.count * 2` (src/lib.rs:11)
+      control flow: … 5 more (semilla expand --step 0)
       equivalence: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies

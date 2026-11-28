@@ -19,7 +19,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The names of the checks. A line `known_failure: NAME: CAUSE` of a case names one of them.
-const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit", "full_text", "ast_map", "templates"];
+const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit", "full_text", "ast_map", "templates", "control_map"];
 
 /// A spotlight line of `semilla step` with no reason, in the form of a tag after the commit
 /// (design 62): `✗ spotlight…: TEXT; it needs a reason: --reason '…'` gives
@@ -1051,6 +1051,8 @@ static CLOSURE_TEMPLATES: AtomicUsize = AtomicUsize::new(0);
 /// entries; K real edits (S stated by the agent); J not mapped" (design 90).
 fn map_counts(line: &str) -> Option<[usize; 5]> {
     let rest = line.trim_start().strip_prefix("changed nodes: ")?;
+    // [R98.5-1] The control-flow part of the line has its own property (18).
+    let rest = rest.split("; control-flow changes: ").next().unwrap_or(rest);
     let (nodes, rest) = rest.split_once(" in ")?;
     let (entries, rest) = rest.split_once(" entries; ")?;
     let (real, rest) = rest.split_once(" real edits (")?;
@@ -1058,6 +1060,112 @@ fn map_counts(line: &str) -> Option<[usize; 5]> {
     let open = rest.strip_suffix(" not mapped")?;
     let number = |text: &str| text.trim().parse::<usize>().ok();
     Some([number(nodes)?, number(entries)?, number(real)?, number(stated)?, number(open)?])
+}
+
+/// [R98.5-1] The counts of the control-flow part of the coverage line (design 98): the changes in
+/// the entries, the implicit ones, the ones that a transformation explains, and the changes in
+/// the section of R92.4-1.
+fn flow_counts(line: &str) -> Option<[usize; 4]> {
+    let rest = line.trim_start().strip_prefix("changed nodes: ")?.split_once("; control-flow changes: ")?.1;
+    let (entries, rest) = rest.split_once(" in entries (")?;
+    let (inner, rest) = rest.split_once("), ")?;
+    let implicit = inner.split(' ').next()?;
+    let explained = inner.split_once(", ").and_then(|(_, rest)| rest.split(' ').next()).unwrap_or("0");
+    let section = rest.strip_suffix(" in the section of R92.4-1")?;
+    let number = |text: &str| text.trim().parse::<usize>().ok();
+    Some([number(entries)?, number(implicit)?, number(explained)?, number(section)?])
+}
+
+/// Property 18 (R98.5-1, design 98): the control-flow map never hides a graph change. The full
+/// text of the step lists each graph change `gI` with its entry: each number from 1 to the count
+/// of the list is in exactly one line, each line names an entry of the step output (or the
+/// section of R92.4-1 with no entry), and the counts of the lines are the counts of the coverage
+/// line. `control_units` gives the count of the change lines of `status --verbose`.
+fn control_map_problems(output: &str, full: &str, state: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    let Some(counts) = output.lines().find_map(flow_counts) else {
+        if full.contains("each control-flow change (of ") {
+            problems.push(format!("{state}: the full text lists the control-flow changes, and the coverage line of the step output has no part `control-flow changes: …`"));
+        }
+        return problems;
+    };
+    let total = full.lines().find_map(|line| line.trim_start().strip_prefix("each control-flow change (of ").and_then(|rest| rest.strip_suffix("):")).and_then(|count| count.parse::<usize>().ok()));
+    let Some(total) = total else {
+        problems.push(format!("{state}: the coverage line has the part `control-flow changes: …`, and the full text has no list of the control-flow changes"));
+        return problems;
+    };
+    let entries: BTreeSet<String> = output.lines().map(str::trim_start).filter_map(|line| line.strip_prefix("◆ ").and_then(|rest| rest.split(' ').next())).map(str::to_string).collect();
+    let mut seen: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut found = [0usize; 4];
+    for line in full.lines() {
+        let Some(rest) = line.strip_prefix("      g") else { continue };
+        let Some((number, tail)) = rest.split_once(' ') else { continue };
+        let Ok(number) = number.parse::<usize>() else { continue };
+        *seen.entry(number).or_default() += 1;
+        let Some((_, entry)) = tail.rsplit_once("`: ") else {
+            problems.push(format!("{state}: the control-flow change `g{number}` names no entry"));
+            continue;
+        };
+        if entry.starts_with("no entry (R98.4-1)") {
+            found[3] += 1;
+            continue;
+        }
+        let Some(id) = entry.strip_prefix("in ").and_then(|rest| rest.split([' ', ',']).next()) else {
+            problems.push(format!("{state}: the control-flow change `g{number}` names no entry: `{entry}`"));
+            continue;
+        };
+        let named = output.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == id);
+        if !entries.contains(id) && !named {
+            problems.push(format!("{state}: the control-flow change `g{number}` is in the entry {id}, and the step output has no such entry"));
+        }
+        if entry.contains(" (R92.4-1)") {
+            found[3] += 1;
+            continue;
+        }
+        found[0] += 1;
+        found[1] += usize::from(entry.contains(", implicit"));
+        found[2] += usize::from(entry.contains(", explained by "));
+    }
+    let twice: Vec<usize> = seen.iter().filter(|(_, count)| **count > 1).map(|(number, _)| *number).collect();
+    let missing: Vec<usize> = (1..=total).filter(|number| !seen.contains_key(number)).collect();
+    let extra: Vec<usize> = seen.keys().filter(|number| **number == 0 || **number > total).copied().collect();
+    if !twice.is_empty() || !missing.is_empty() || !extra.is_empty() {
+        problems.push(format!("{state}: each control-flow change must be in exactly one entry: two times {twice:?}, in no line {missing:?}, not a change {extra:?}"));
+    }
+    if found != counts {
+        problems.push(format!("{state}: the control-flow changes of the full text give the counts {found:?} (in entries, implicit, explained, in the section of R92.4-1), and the coverage line has {counts:?}"));
+    }
+    if counts[0] + counts[3] != total {
+        problems.push(format!("{state}: the coverage line has {} + {} control-flow changes, and the step has {total}", counts[0], counts[3]));
+    }
+    problems
+}
+
+/// [R98.5-1] The count of the graph changes of `status --verbose`: the lines of the points and the
+/// arrows of the first result of each body (design 60, R60.4-3). `None`: no control flow section.
+fn control_units(text: &str) -> Option<usize> {
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.iter().position(|line| line.starts_with("  control flow: ") && line.ends_with(['y', 's']))?;
+    let mut count = 0;
+    // The count of the result lines of the current body.
+    let mut results = 0;
+    for line in &lines[start + 1..] {
+        if !line.starts_with("    ") {
+            break;
+        }
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("reached bodies: ") && !line.starts_with("     ") {
+            break;
+        }
+        if !line.starts_with("     ") {
+            results = 0;
+        } else if line.starts_with("        ") && !line.starts_with("         ") {
+            results += 1;
+        } else if results == 1 && line.starts_with("          ") && ["+ ", "− ", "~ ", "moved "].iter().any(|start| trimmed.starts_with(start)) {
+            count += 1;
+        }
+    }
+    Some(count)
 }
 
 /// The kinds of the entries of the map (design 90).
@@ -1152,6 +1260,10 @@ fn map_problems(work: &mut Work, folder: &Path, output: &str, state: &str, refac
     let extra: Vec<usize> = seen.keys().filter(|number| **number == 0 || **number > total).copied().collect();
     if !twice.is_empty() || !missing.is_empty() || !extra.is_empty() {
         problems.push(format!("{state}: each changed node must be in exactly one entry: in two entries {twice:?}, in no entry {missing:?}, not a node {extra:?}"));
+    }
+    // Property 18 (R98.5-1): each graph change is in exactly one entry of the map.
+    if !again {
+        problems.extend(control_map_problems(output, &run.stdout, state));
     }
     Ok(problems)
 }
@@ -2116,6 +2228,12 @@ fn check(case: &Case) -> Result<Outcome, String> {
         for problem in flow_problems(&status.stdout) {
             work.fail("control_flow", format!("`status --verbose`: {problem}"));
         }
+        // Property 18 (R98.5-1): the coverage line counts each graph change of `status --verbose`.
+        if let (Some(units), Some(counts)) = (control_units(&status.stdout), run.all().lines().find_map(flow_counts))
+            && units != counts[0] + counts[3]
+        {
+            work.fail("control_map", format!("`status --verbose` has {units} graph change line(s), and the coverage line counts {} + {}", counts[0], counts[3]));
+        }
         for comment in facts(&run.all()).iter().flat_map(|fact| comment_subs(&fact.subs).1) {
             let lines = std::iter::once(&comment.head).chain(comment.text.iter().flatten());
             for line in lines.filter(|line| !markdown.contains(no_escape(line).trim())) {
@@ -2323,6 +2441,26 @@ fn the_eighth_property_finds_a_token_that_the_other_item_does_not_have() {
     assert!(problems.iter().any(|problem| problem.contains("`1`")), "{problems:#?}");
     // A line of a different form.
     assert_eq!(equal_token_problems("  equal tokens: in `depot::f`: src/lib.rs:2\n", &old, &new).len(), 1);
+}
+
+// rule+ R98.5-1
+// rule- R98.5-1
+#[test]
+fn the_eighteenth_property_finds_a_control_flow_change_in_two_lines_and_a_wrong_count() {
+    let output = "  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 2 in entries (1 implicit), 1 in the section of R92.4-1\n  ◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added `if`\n  ◆ f2 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code\n";
+    let full = "    each control-flow change (of 3):\n      g1 + branch `x > 3` (src/lib.rs:2) in `demo::f`: in f1\n      g2 + check `overflow: a + b` (src/lib.rs:2) in `demo::f`: in f1, implicit\n      g3 − arrow entry (src/lib.rs:-1) → return (src/lib.rs:-2) in `demo::f`: in f2 (R92.4-1), implicit\n";
+    assert_eq!(flow_counts(output.lines().next().unwrap()), Some([2, 1, 0, 1]));
+    assert!(control_map_problems(output, full, "after").is_empty(), "{:?}", control_map_problems(output, full, "after"));
+    // The negative cases: a change in two lines, a change in no line, an entry that the step
+    // output does not have, and counts that are not the counts of the coverage line.
+    let twice = full.replace("g3 −", "g2 −");
+    assert!(control_map_problems(output, &twice, "after").iter().any(|problem| problem.contains("exactly one entry")));
+    let other = full.replace("in f1, implicit", "in f9, implicit");
+    assert!(control_map_problems(output, &other, "after").iter().any(|problem| problem.contains("no such entry")));
+    let counts = full.replace("in f1, implicit", "in f1");
+    assert!(control_map_problems(output, &counts, "after").iter().any(|problem| problem.contains("the coverage line has")));
+    let verbose = "  control flow: 1 body\n    demo::f (src/lib.rs:1): graph changes: +1 branch, +1 check, −1 arrow\n        graph changes: +1 branch, +1 check, −1 arrow\n          + branch `x > 3` (src/lib.rs:2)\n          + check `overflow: a + b` (src/lib.rs:2)\n          − arrow entry (src/lib.rs:-1) → return (src/lib.rs:-2)\n          = branch `w > 3` → `level > 3` (src/lib.rs:-3, src/lib.rs:3): the same MIR (R98.6-2)\n";
+    assert_eq!(control_units(verbose), Some(3));
 }
 
 /// Design 58.11, property 7. The runner reads the comment tokens of the two trees itself. A
