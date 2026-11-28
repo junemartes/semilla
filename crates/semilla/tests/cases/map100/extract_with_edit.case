@@ -1,0 +1,79 @@
+note: design 100 (R100.9-1): an extract with a new branch in the code that it leaves is no transformation entry: no entry explains the graph changes, so the step line of the body lists each change and names no entry
+rule-: R100.9-1
+must_not_match: explained by f
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = a * 3 + b;
+    s + 1
+}
+=== new src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = part(a, b);
+    if s > 9 { s + 2 } else { s + 1 }
+}
+
+fn part(a: u32, b: u32) -> u32 {
+    a * 3 + b
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::part` (src/lib.rs:6): an added body: `#[new(depot::part)] fn part_new(a: u32, b: u32) -> bool { let new = after::depot::part(a, b); true }`
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 4 in 4 entries; 4 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 33 in entries (24 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::part`:
+  ◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::part` [added · code different]
+      not stated (src/lib.rs:4-7); to state it: --change 'depot::part=TEXT'
+      affected bodies: depot::part
+      graph: +1 body, +2 overflow checks (implicit), +2 panics (implicit), +1 return, +5 arrows (4 implicit)
+      control flow: + graph of `depot::part`: 6 points, 5 arrows (semilla expand --step 0)
+  item `depot::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): moved statement `s + 1` from `depot::total/tail` to `depot::total/S1/else/tail` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a * 3 + $b => part($a, $b)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f2, f3, f1)
+      affected bodies: depot::total (with 2 other edits of this body)
+      graph: +1 overflow check (implicit), +1 panic (implicit), −1 overflow check (implicit), −1 panic (implicit), +3 arrows (implicit), −3 arrows (implicit)
+      control flow: + check `overflow: s + 1` (src/lib.rs:3): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:3)
+      control flow: − check `overflow: s + 1` (src/lib.rs:-3): ok → return, fail → panic `overflow`
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
+  ◆ f2 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `a * 3 + b` → `part(a, b)` at `depot::total/S0/init` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a * 3 + $b => part($a, $b)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f2, f3, f1)
+      affected bodies: depot::total (with 2 other edits of this body)
+      graph: +1 call (`part`), −1 overflow check (implicit), −1 panic (implicit), 1 changed check (`overflow: a * 3 + b` → `overflow: s + 2`, implicit), +2 arrows, −3 arrows (implicit)
+      control flow: + call `part` (src/lib.rs:2): return → branch `s > 9`
+      control flow: − check `overflow: a * 3` (src/lib.rs:-2): ok → check `overflow: a * 3 + b`, fail → panic `overflow`
+      control flow: − panic `overflow` (src/lib.rs:-2)
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
+  ◆ f3 add (Semilla; R90.2-3, 1 new MIR element): added `if` `if s > 9 { s + 2 } else { s + 1 }` (inner statements: 1 moved to a different place; 1 not in a deleted statement: `s + 2`) at `depot::total/S1` [semantics · code different]
+      not stated (src/lib.rs:3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a * 3 + $b => part($a, $b)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f2, f3, f1)
+      affected bodies: depot::total (with 2 other edits of this body)
+      graph: +1 branch (`s > 9`), +2 arrows
+      control flow: + branch `s > 9` (src/lib.rs:3): false → check `overflow: s + 1`, true → check `overflow: s + 2`
+      equivalence: no result alone (the body has 3 edits; an edit of the fact adds or removes a node); the body: MIR changes
+  cover: each of the 8 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::part (src/lib.rs:6): graph added: 6 points, 5 arrows
+    depot::total (src/lib.rs:1): graph changes: +1 branch, +1 call, +1 check, +1 panic, −2 checks, −2 panics, 1 changed check, +7 arrows, −6 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::part` [added · code different]
+    lines: src/lib.rs:4-7
+◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): moved statement `s + 1` from `depot::total/tail` to `depot::total/S1/else/tail` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-3
+◆ f2 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `a * 3 + b` → `part(a, b)` at `depot::total/S0/init` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f3 add (Semilla; R90.2-3, 1 new MIR element): added `if` `if s > 9 { s + 2 } else { s + 1 }` (inner statements: 1 moved to a different place; 1 not in a deleted statement: `s + 2`) at `depot::total/S1` [semantics · code different]
+    lines: src/lib.rs:3

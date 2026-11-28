@@ -30,17 +30,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::part` (src/lib.rs:6): a removed body: `#[removed(depot::part)] fn part_removed(a: u32, b: u32) -> bool { let old = before::depot::part(a, b); true }`
     MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 26 in entries (20 implicit, 26 explained by the check of a transformation), 0 in the section of R92.4-1
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 31 in entries (25 implicit, 31 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::part`:
   ◆ f1 inline (Semilla; R94.2-1, the removed callee of the inline in `depot::total`; 2 nodes; one change (R92.6-1)): removed `depot::part`; changed expression `part(a, b)` → `a * 3 + b` at `depot::total/S0/init` [removed · code different]
       affected bodies: depot::part, depot::total
-      graph: no change after the check: the check of the inline explains 26 graph change(s)
+      graph: no change after the check: the check of the inline explains 31 graph change(s)
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::part (src/lib.rs:6): graph removed: 6 points, 5 arrows
-    depot::total (src/lib.rs:1): graph changes: +2 checks, +2 panics, −1 call, 1 changed check, +6 arrows, −3 arrows; MIR changes
+    depot::part (src/lib.rs:6): graph removed: 6 points, 5 arrows; explained by f1 (11 graph changes)
+    depot::total (src/lib.rs:1): graph changes: explained by f1 (20 graph changes); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

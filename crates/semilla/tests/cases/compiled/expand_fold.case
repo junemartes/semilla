@@ -34,22 +34,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::c` (src/lib.rs:5): the full compare: `#[same(shop::c)] fn c_same() {}`; a difference: `#[change(shop::c)] fn c_change(v: u32) -> bool { … }` or `#[different(shop::c)] fn c_different() -> bool { … }`
     MIR changes with no claim: `shop::d` (src/lib.rs:6): the full compare: `#[same(shop::d)] fn d_same() {}`; a difference: `#[change(shop::d)] fn d_change(v: u32) -> bool { … }` or `#[different(shop::d)] fn d_different() -> bool { … }`
     MIR changes with no claim: `shop::e` (src/lib.rs:7): the full compare: `#[same(shop::e)] fn e_same() {}`; a difference: `#[change(shop::e)] fn e_change(w: u32) -> bool { … }` or `#[different(shop::e)] fn e_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 5 in the section of R92.4-1
-  compiled code that changes with no edit:
-  body `shop::a` (src/lib.rs:3): graph: 1 changed check (`overflow: v + 1` → `overflow: v + 5`, implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
-      control flow: ~ check `overflow: v + 1` → `overflow: v + 5` (src/lib.rs:-3, src/lib.rs:3)
-  body `shop::b` (src/lib.rs:4): graph: 1 changed check (`overflow: v + 1` → `overflow: v + 5`, implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
-      control flow: ~ check `overflow: v + 1` → `overflow: v + 5` (src/lib.rs:-4, src/lib.rs:4)
-  body `shop::c` (src/lib.rs:5): graph: 1 changed check (`overflow: v + 1` → `overflow: v + 5`, implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
-      control flow: ~ check `overflow: v + 1` → `overflow: v + 5` (src/lib.rs:-5, src/lib.rs:5)
-  body `shop::d` (src/lib.rs:6): graph: 1 changed check (`overflow: v + 1` → `overflow: v + 5`, implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
-      control flow: ~ check `overflow: v + 1` → `overflow: v + 5` (src/lib.rs:-6, src/lib.rs:6)
-  body `shop::e` (src/lib.rs:7): graph: 1 changed check (`overflow: w * 2 + 1` → `overflow: w * 2 + 5`, implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
-      control flow: ~ check `overflow: w * 2 + 1` → `overflow: w * 2 + 5` (src/lib.rs:-7, src/lib.rs:7)
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
   syntax only:
   item `shop::bump!`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `bump`: `macro_rules! bump { ($v:expr) => { $v + 1 } }` → `macro_rules! bump { ($v:expr) => { $v + 5 } }` [declaration · code different]
       affected bodies: shop::a, shop::b, shop::c, shop::d, shop::e
+      graph: same structure: 5 changed checks
+      control flow: ~ check `overflow: v + 1` → `overflow: v + 5` (src/lib.rs:-3, src/lib.rs:3)
+      control flow: ~ check `overflow: v + 1` → `overflow: v + 5` (src/lib.rs:-4, src/lib.rs:4)
+      control flow: ~ check `overflow: v + 1` → `overflow: v + 5` (src/lib.rs:-5, src/lib.rs:5)
+      control flow: … 2 more (semilla expand --step 0)
       expansion: 5 calls of `bump`: expansion changed: changed literal `1` → `5` at `expansion/rhs` [semantics]: `shop::a/tail`, `shop::b/tail`, `shop::c/tail`, and 2 more (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 5 bodies

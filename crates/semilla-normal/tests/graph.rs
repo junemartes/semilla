@@ -256,11 +256,12 @@ fn each_construct_gives_its_points_and_its_arrows_and_two_runs_give_the_same_gra
         // R60.2-2, the negative case: the call `v.iter()` before a `for` is its own point. The
         // `for` point has the text of the head of the loop.
         assert!(graph_text(&graph("probe::f_for")).starts_with("0 entry: →1; 1 call `core::slice::<impl [u32]>::iter`: return→2; 2 for `v.iter()`"));
-        // R60.2-4: a drop, an unwind arrow, and a cleanup block are not points; the record
-        // counts them. The negative case: a body with no drop has no count.
+        // R60.2-4: an unwind arrow and a cleanup block are not points; the record counts them.
+        // R100.6-1 (design 100): a drop is a point now, and the record still counts it. The
+        // negative case: a body with no drop has no count.
         let generic = graph("probe::f_generic");
         assert_eq!((generic.n.drops, generic.n.unwind, generic.n.cleanup), (1, 3, 2), "{generic:?}");
-        assert!(generic.p.iter().all(|point| point.k != "drop"));
+        assert_eq!(generic.p.iter().filter(|point| point.k == "drop").count(), 1, "{generic:?}");
         assert_eq!(graph("probe::f_if").n, semilla_normal::graph::GraphCounts::default());
         // R76.2-1 (before batch 12b, R60.2-5: only the entry): the body of a coroutine has the
         // graph of its MIR before the coroutine transform. R76.2-2: the `.await` is one point

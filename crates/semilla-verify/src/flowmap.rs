@@ -118,9 +118,13 @@ pub fn summary(parts: &[(Part, bool)]) -> String {
         let value = groups.remove(&key).unwrap_or_default();
         (key, value)
     }).collect();
-    let plural = |label: &str, count: usize| -> String {
+    fn plural(label: &str, count: usize) -> String {
         if count == 1 {
             return label.to_string();
+        }
+        // [R100.4-1] `call moved in` gives `calls moved in`.
+        if let Some((head, rest)) = label.split_once(" moved ") {
+            return format!("{} moved {rest}", plural(head, count));
         }
         match label {
             "branch" => "branches".into(),
@@ -131,7 +135,7 @@ pub fn summary(parts: &[(Part, bool)]) -> String {
             },
             other => format!("{other}s"),
         }
-    };
+    }
     let mut out = Vec::new();
     for ((group, label), (count, implicit, texts)) in groups {
         let sign = match group {
@@ -196,8 +200,12 @@ pub(crate) fn apply(input: &crate::StepInput, outcome: &mut crate::StepOutcome) 
             }
             let implicit = element.anchor.implicit;
             // [R98.4-1] A body with no edit has no node: its entry of the section of R92.4-1.
+            // [R100.7-1] A change whose point comes from the expansion of a macro whose definition
+            // the step changes goes to the entry of the changed node of the definition (the
+            // tokens of the point are in the definition): no search for another cause.
             if !body.edit {
-                list.push(Some(Placed { fact: None, implicit, explained: None }));
+                let by_macro = element.anchor.macro_tokens.iter().find_map(|(side, place)| map.holder(*side, place).and_then(fact_of));
+                list.push(Some(Placed { fact: by_macro, implicit: implicit && by_macro.is_none(), explained: None }));
                 continue;
             }
             // 1. The projection of design 90.
@@ -412,8 +420,48 @@ pub(crate) fn apply(input: &crate::StepInput, outcome: &mut crate::StepOutcome) 
             flow.entries.insert(fact.id.clone(), graph);
         }
     }
+    // [R100.9-1] The line of a body whose graph changes a transformation or a statement explains
+    // (design 100): the line names the entry and lists only the changes that no entry explains,
+    // so one change never shows two times in two forms.
+    for (body, list) in bodies.iter().zip(&placed) {
+        let mut by: Vec<&str> = Vec::new();
+        let mut count = 0usize;
+        let mut rest: Vec<(Part, bool)> = Vec::new();
+        for (element, found) in body.elements.iter().zip(list) {
+            let Some(found) = found else { continue };
+            match (found.fact, &found.explained) {
+                (Some(fact), Some(_)) if rank(&facts[fact]) == 3 => {
+                    count += units(element);
+                    if !by.contains(&facts[fact].id.as_str()) {
+                        by.push(facts[fact].id.as_str());
+                    }
+                }
+                (_, Some(_)) => {}
+                (_, None) => rest.extend(element.parts.iter().map(|part| (part.clone(), found.implicit))),
+            }
+        }
+        if by.is_empty() {
+            continue;
+        }
+        let Some(shown) = flow.bodies.iter_mut().find(|known| known.name == body.shown || known.name == body.name || known.name.starts_with(&format!("{} ", body.name))) else { continue };
+        // A body that one tree has keeps its counts: they are one form of the same changes.
+        if head_whole(&shown.line) && rest.is_empty() {
+            let (head, tail) = shown.line.split_once("; ").map_or((shown.line.clone(), String::new()), |(head, tail)| (head.to_string(), format!("; {tail}")));
+            shown.line = format!("{head}; explained by {} ({count} graph change{}){tail}", by.join(", "), if count == 1 { "" } else { "s" });
+            continue;
+        }
+        let Some((head, tail)) = shown.line.split_once(": ") else { continue };
+        let tail = tail.split_once("; ").map(|(_, tail)| format!("; {tail}")).unwrap_or_default();
+        let explained = format!("explained by {} ({count} graph change{})", by.join(", "), if count == 1 { "" } else { "s" });
+        shown.line = if rest.is_empty() { format!("{head}: {explained}{tail}") } else { format!("{head}: {}; {explained}{tail}", summary(&rest)) };
+    }
     flow.no_entry = no_entry;
     flow.cover = Some(cover);
+}
+
+/// True for the line of a body that one tree has (`graph added: 6 points, 5 arrows`).
+fn head_whole(line: &str) -> bool {
+    line.starts_with("graph added") || line.starts_with("graph removed")
 }
 
 /// [R98.5-1] The lines of the full text: each graph change with its entry (design 98).

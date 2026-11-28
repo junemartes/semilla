@@ -53,8 +53,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
   cover: each of the 7 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::Cart::subtotal (src/lib.rs:11): graph added: 5 points, 4 arrows
-    depot::Cart::total (src/lib.rs:7): graph changes: +1 call, −3 calls, 1 changed check, +2 arrows, −4 arrows; MIR changes
+    depot::Cart::subtotal (src/lib.rs:11): graph added: 5 points, 4 arrows; explained by f1 (9 graph changes)
+    depot::Cart::total (src/lib.rs:7): graph changes: explained by f1 (11 graph changes); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -31,7 +31,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::Bits::count` (src/lib.rs:4): a type of the signature changes (the type of `self` changes: `shop::Bits`: `items: Vec < u8 >` → `items: Vec < u16 >`, `lo: u8` → `lo: i8`): `#[same(shop::Bits::count)] fn count(this_before: &before::shop::Bits, this_after: &after::s… (188 characters more; `semilla expand --step 0` shows the full line) …ount_change() -> bool { … }` or `#[different(shop::Bits::count)] fn count_different() -> bool { … }`
     MIR changes with no claim: `shop::Bits::first` (src/lib.rs:5): a type of the signature changes (the type of `self` changes: `shop::Bits`: `items: Vec < u8 >` → `items: Vec < u16 >`, `lo: u8` → `lo: i8`): `#[same(shop::Bits::first)] fn first(this_before: &before::shop::Bits, this_after: &after::s… (188 characters more; `semilla expand --step 0` shows the full line) …irst_change() -> bool { … }` or `#[different(shop::Bits::first)] fn first_different() -> bool { … }`
     MIR changes with no claim: `shop::Bits::first::{closure#0} |x| *x as u32` (src/lib.rs:5): the template of `shop::Bits::first` covers its item `shop::Bits::first`
-  changed nodes: 2 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 4 in the section of R92.4-1
+  changed nodes: 2 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 12 in the section of R92.4-1
   real edits:
   item `shop::Bits.items`:
   ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): type of `shop::Bits.items`: `Vec<u8>` → `Vec<u16>` (the public API can change: a different crate can use the item) [declaration · code different]
@@ -51,17 +51,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   item `shop::Bits::first`:
   ◆ f3 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::Bits::first` changes with no edit at its place: `*x as u32` [indirect · code different]
       affected bodies: shop::Bits::first
-      graph: same structure: 3 changed call targets
-      control flow: ~ call `<Vec<u8> as Deref>::deref` → `<Vec<u16> as Deref>::deref` (src/lib.rs:-5, src/lib.rs:5)
-      control flow: ~ call `slice::<impl [u8]>::first` → `slice::<impl [u16]>::first` (src/lib.rs:-5, src/lib.rs:5)
-      control flow: ~ call `Option::<&u8>::map::<u32, Bits::first::{closure#0}>` → `Option::<&u16>::map::<u32, Bits::first::{closure#0}>` (src/lib.rs:-5, src/lib.rs:5)
+      graph: +2 calls, −2 calls, 1 changed call target (`Option::<&u8>::map::<u32, Bits::first::{closure#0}>` → `Option::<&u16>::map::<u32, Bits::first::{closure#0}>`), +3 arrows, −3 arrows
+      control flow: + call `<Vec<u16> as Deref>::deref` (src/lib.rs:5): return → call `slice::<impl [u16]>::first`
+      control flow: + call `slice::<impl [u16]>::first` (src/lib.rs:5): return → call `Option::<&u16>::map::<u32, Bits::first::{closure#0}>`
+      control flow: − call `<Vec<u8> as Deref>::deref` (src/lib.rs:-5): return → call `slice::<impl [u8]>::first`
+      control flow: … 4 more (semilla expand --step 0)
       note: lines 5; the cause: a changed definition that the body uses (f1, f2); the step changes no other input of the body
   body `shop::Bits::count` (src/lib.rs:4): graph: 1 changed call target (`Vec::<u8>::len` → `Vec::<u16>::len`) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1, f2
       control flow: ~ call `Vec::<u8>::len` → `Vec::<u16>::len` (src/lib.rs:-4, src/lib.rs:4)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 3 bodies
     shop::Bits::count (src/lib.rs:4): same structure: 1 changed call target; no edit in the body; MIR changes
-    shop::Bits::first (src/lib.rs:5): same structure: 3 changed call targets; no edit in the body; MIR changes
+    shop::Bits::first (src/lib.rs:5): graph changes: +2 calls, −2 calls, 1 changed call target, +3 arrows, −3 arrows; no edit in the body; MIR changes
     shop::Bits::first::{closure#0} |x| *x as u32 (src/lib.rs:5): same graph; no edit in the body; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

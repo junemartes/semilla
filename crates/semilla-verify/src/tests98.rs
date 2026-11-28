@@ -97,7 +97,7 @@ fn an_equal_mir_pairs_by_the_index_and_no_table_pairs_the_entries_only() {
     assert_eq!(found.result(), FlowResult::Changes);
     assert!(cause.is_some_and(|cause| cause.contains("no element table, and the two graphs have two structures (R98.1-2)")));
     // Two tables (two configurations with two texts): the table that fits the two graphs.
-    let fits = MirTable { texts: [TEXT.into(), TEXT.into()], ranges: [ranges(), ranges()], pairs: (0..5).map(|index| (index, index, true)).collect(), locals: Vec::new(), decls: [Vec::new(), Vec::new()], same: [vec![true; 5], vec![true; 5]] };
+    let fits = MirTable { texts: [TEXT.into(), TEXT.into()], ranges: [ranges(), ranges()], pairs: (0..5).map(|index| (index, index, true)).collect(), locals: Vec::new(), decls: [Vec::new(), Vec::new()], same: [vec![true; 5], vec![true; 5]], moved: Vec::new() };
     let mut other_ranges = ranges();
     other_ranges[2] = (Some(at(90, 94)), None);
     other_ranges[3] = (Some(at(95, 99)), None);
@@ -110,7 +110,7 @@ fn an_equal_mir_pairs_by_the_index_and_no_table_pairs_the_entries_only() {
 // rule- R98.6-2
 #[test]
 fn a_changed_text_is_a_changed_point_also_with_equal_elements() {
-    let table = MirTable { texts: [TEXT.into(), TEXT.into()], ranges: [ranges(), ranges()], pairs: (0..5).map(|index| (index, index, true)).collect(), locals: Vec::new(), decls: [Vec::new(), Vec::new()], same: [vec![true; 5], vec![true; 5]] };
+    let table = MirTable { texts: [TEXT.into(), TEXT.into()], ranges: [ranges(), ranges()], pairs: (0..5).map(|index| (index, index, true)).collect(), locals: Vec::new(), decls: [Vec::new(), Vec::new()], same: [vec![true; 5], vec![true; 5]], moved: Vec::new() };
     let old = body();
     let mut new = body();
     new.points[1].text = "level > 3".into();
@@ -177,7 +177,7 @@ fn entry(id: &str, kind: EntryKind, nodes: Vec<usize>, affected: &[&str]) -> Fac
 }
 
 fn change(text: &str, elements: Vec<(usize, MirPlace)>, implicit: bool) -> crate::flow::Element {
-    test_element(text, Anchor { elements, points: Vec::new(), implicit }, vec![Part { group: 0, label: "branch".into(), text: text.into() }])
+    test_element(text, Anchor { elements, points: Vec::new(), implicit, macro_tokens: Vec::new() }, vec![Part { group: 0, label: "branch".into(), text: text.into() }])
 }
 
 /// The outcome of a step with three entries (a real edit, an extract, and the compiled code of

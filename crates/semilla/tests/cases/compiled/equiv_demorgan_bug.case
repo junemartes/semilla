@@ -26,12 +26,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::closed`:
-  ◆ f1 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `!(a && b)` at `shop::closed/tail` [semantics · code different]
+  ◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `!(a && b)` at `shop::closed/tail` [semantics · code different]
       not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::closed=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: shop::closed (with 1 other edit of this body)
       graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
-  ◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added statement `!a && !b` at `shop::closed/tail` [semantics · code different]
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added statement `!a && !b` at `shop::closed/tail` [semantics · code different]
       not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::closed=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: shop::closed (with 1 other edit of this body)
       graph: same graph (the edit keeps the control flow)
@@ -42,7 +42,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `!(a && b)` at `shop::closed/tail` [semantics · code different]
+◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `!(a && b)` at `shop::closed/tail` [semantics · code different]
     lines: src/lib.rs:-2
-◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added statement `!a && !b` at `shop::closed/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added statement `!a && !b` at `shop::closed/tail` [semantics · code different]
     lines: src/lib.rs:2

@@ -40,7 +40,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `<depot::Pair as std::cmp::PartialEq>::eq` (src/lib.rs:1): the full compare: `#[same(<depot::Pair as core::cmp::PartialEq>::eq)] fn eq_same() {}`; a difference: `#[change(<depot::Pair as core::cmp::PartialEq>::eq)] fn eq_change() -> bool { … }` or `#[different(<depot::Pair as core::cmp::PartialEq>::eq)] fn eq_different() -> bool { … }`
     MIR changes with no claim: `<depot::Pair as std::fmt::Debug>::fmt` (src/lib.rs:1): the full compare: `#[same(<depot::Pair as core::fmt::Debug>::fmt)] fn fmt_same() {}`; a difference: `#[change(<depot::Pair as core::fmt::Debug>::fmt)] fn fmt_change() -> bool { … }` or `#[different(<depot::Pair as core::fmt::Debug>::fmt)] fn fmt_different() -> bool { … }`
     MIR changes with no claim: `dyn std::fmt::Debug` (no place): no result of the equivalence check; no template: `dyn std::fmt::Debug` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 4 in the section of R92.4-1
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 10 in the section of R92.4-1
   real edits:
   item `depot::Pair`:
   ◆ f1 reorder, the order can matter (Semilla; R94.4-3, the MIR of 3 body(ies) reads the order of the fields: `<depot::Pair as std::cmp::Ord>::cmp`, `<depot::Pair as std::cmp::PartialEq>::eq`, `<depot::Pair as std::fmt::Debug>::fmt`): member order of `depot::Pair`: `a, b` → `b, a` [declaration · code different]
@@ -54,15 +54,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: … 1 more (semilla expand --step 0)
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`Debug`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`): the code that it makes reads the members in order; it needs a reason: --reason 'depot::Pair=…'
   compiled code that changes with no edit:
-  body `<depot::Pair as std::cmp::Ord>::cmp` (src/lib.rs:1): graph: 2 changed call targets, 1 changed condition (`Ord: pub a: u32` → `Ord: pub b: u64`) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
-      control flow: ~ call `impls::<impl Ord for u32>::cmp` → `impls::<impl Ord for u64>::cmp` (src/lib.rs:-1, src/lib.rs:1)
+  body `<depot::Pair as std::cmp::Ord>::cmp` (src/lib.rs:1): graph: 1 changed condition (`Ord: pub a: u32` → `Ord: pub b: u64`), +4 arrows, −4 arrows (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
       control flow: ~ branch `Ord: pub a: u32` → `Ord: pub b: u64` (src/lib.rs:-1, src/lib.rs:1)
-      control flow: ~ call `impls::<impl Ord for u64>::cmp` → `impls::<impl Ord for u32>::cmp` (src/lib.rs:-1, src/lib.rs:1)
+      control flow: + arrow entry (src/lib.rs:1) → call `impls::<impl Ord for u64>::cmp` (src/lib.rs:1)
+      control flow: + arrow call `impls::<impl Ord for u64>::cmp` (src/lib.rs:1) → branch `Ord: pub b: u64` (src/lib.rs:1) (return)
   body `<depot::Pair as std::cmp::PartialEq>::eq` (src/lib.rs:1): graph: 1 changed condition (`PartialEq: pub a: u32` → `PartialEq: pub b: u64`) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
       control flow: ~ branch `PartialEq: pub a: u32` → `PartialEq: pub b: u64` (src/lib.rs:-1, src/lib.rs:1)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 4 bodies
-    <depot::Pair as std::cmp::Ord>::cmp (src/lib.rs:1): same structure: 1 changed condition, 2 changed call targets; no edit in the body; MIR changes; the expansion of derive `Ord` changes (semilla expand src/lib.rs:1 --step 0)
+    <depot::Pair as std::cmp::Ord>::cmp (src/lib.rs:1): graph changes: 1 changed condition, +4 arrows, −4 arrows; no edit in the body; MIR changes; the expansion of derive `Ord` changes (semilla expand src/lib.rs:1 --step 0)
     <depot::Pair as std::cmp::PartialEq>::eq (src/lib.rs:1): same structure: 1 changed condition; no edit in the body; MIR changes; the expansion of derive `PartialEq` changes (semilla expand src/lib.rs:1 --step 0)
     <depot::Pair as std::fmt::Debug>::fmt (src/lib.rs:1): same graph; no edit in the body; MIR changes; the expansion of derive `Debug` changes (semilla expand src/lib.rs:1 --step 0)
     dyn std::fmt::Debug (no place): the candidates of a call through `dyn std::fmt::Debug`: +`&u32`, +`u64`, −`&u64`, −`u32`

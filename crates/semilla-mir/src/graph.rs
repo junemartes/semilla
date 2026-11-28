@@ -12,7 +12,9 @@
 //!   `dyn`);
 //! - `return`; `panic` (a call that never returns); `check` (an `Assert` terminator; its arrow
 //!   `fail` goes to a `panic` point of its own);
-//! - `loop`: the head of a loop (the target of a back edge).
+//! - `loop`: the head of a loop (the target of a back edge);
+//! - [R100.6-1] `drop`: a `Drop` terminator (the drop glue of a value). Its text is the name of
+//!   the variable and the type of the place.
 //!
 //! The terminators of one desugaring expansion (`?`, `for`, `.await`, each kind that the
 //! compiler gives) are one point with the name of the construct (`try`, `for`). Its arrows get
@@ -25,9 +27,8 @@
 //! (`panic!("too big")`, `assert!(x < 9)`; R60.2-12).
 //!
 //! An arrow goes from a point to the next point along the normal MIR edges. A chain of blocks
-//! with no point is not in the graph. The unwind arrows, the cleanup blocks, the `drop`
-//! terminators, and the arrows to `unreachable` are not in the graph; the record has their
-//! counts. The record has no block number, no local number, and no hash, so two runs give the
+//! with no point is not in the graph. The unwind arrows, the cleanup blocks, and the arrows to
+//! `unreachable` are not in the graph; the record has their counts. The record has no block number, no local number, and no hash, so two runs give the
 //! same graph.
 
 use std::collections::{BTreeMap, HashMap};
@@ -154,10 +155,10 @@ pub fn build(body: &Body, item: Option<rustc_public::DefId>) -> Graph {
         let local = item.and_then(|item| rustc_public::rustc_internal::internal(tcx, item).as_local());
         match local.filter(|local| tcx.coroutine_kind(local.to_def_id()).is_some()) {
             Some(local) => match crate::config::source_body(tcx, local).and_then(|source| crate::guarded(|| source_form(source))) {
-                Some((source, yields)) => build_with(tcx, &source, item, &yields),
+                Some((source, yields)) => build_with(tcx, &source, item, &yields, false),
                 None => coroutine_entry(tcx, body),
             },
-            None => build_with(tcx, body, item, &BTreeMap::new()),
+            None => build_with(tcx, body, item, &BTreeMap::new(), true),
         }
     })
 }
@@ -227,7 +228,10 @@ fn source_form(source: &rustc_middle::mir::Body<'_>) -> (Body, BTreeMap<usize, u
     (rustc_public::rustc_internal::stable(&copy), yields)
 }
 
-fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc_public::DefId>, yields: &BTreeMap<usize, usize>) -> Graph {
+/// `drops`: [R100.6-1] a `Drop` terminator is a point. A coroutine body has the MIR before the
+/// drop elaboration (R76.2-1), whose drops are not the drops of the code (a moved value keeps its
+/// drop), so its graph has no drop point.
+fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc_public::DefId>, yields: &BTreeMap<usize, usize>, drops: bool) -> Graph {
     let mut graph = Graph::default();
     let local = item.and_then(|item| rustc_public::rustc_internal::internal(tcx, item).as_local());
     let hir = local.map(|local| arm_roles(tcx, local)).unwrap_or_default();
@@ -250,7 +254,7 @@ fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc
                 let (tokens, call) = place(tcx, span, &mut graph.f);
                 Raw::Point(Point { k: YIELD.into(), t: source_text(tcx, span), m: None, r: tokens.map(array), c: call.map(array), x: Vec::new(), v: None, s: Some(span) }, vec![(RESUME.to_string(), Target::Block(*resume))])
             }
-            None => raw_block(tcx, typing, body, &block.terminator.kind, span, &discriminants, &hir.lets, &consts, &mut graph),
+            None => raw_block(tcx, typing, body, &block.terminator.kind, span, &discriminants, &hir.lets, &consts, &mut graph, drops),
         };
         // R76.2-2: the expansions of one desugared construct are one group (`Hir::parts`).
         let group = match (&raw, span.desugaring_kind()) {
@@ -716,14 +720,19 @@ fn add_callee(list: &mut Vec<String>, point: &Point) {
 
 /// The raw form of a block.
 #[allow(clippy::too_many_arguments)]
-fn raw_block<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, typing: Option<rustc_middle::ty::TypingEnv<'tcx>>, body: &Body, kind: &TerminatorKind, span: Span, discriminants: &HashMap<usize, Vec<(u128, String)>>, lets: &HashMap<Span, String>, consts: &crate::consts::Consts, graph: &mut Graph) -> Raw {
+fn raw_block<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, typing: Option<rustc_middle::ty::TypingEnv<'tcx>>, body: &Body, kind: &TerminatorKind, span: Span, discriminants: &HashMap<usize, Vec<(u128, String)>>, lets: &HashMap<Span, String>, consts: &crate::consts::Consts, graph: &mut Graph, drops: bool) -> Raw {
     let point = |k: &str, t: String, m: Option<&'static str>, graph: &mut Graph| {
         let (tokens, call) = place(tcx, span, &mut graph.f);
         Point { k: k.to_string(), t, m, r: tokens.map(array), c: call.map(array), x: Vec::new(), v: None, s: Some(span) }
     };
     match kind {
         TerminatorKind::Goto { target } => Raw::Pass(*target),
-        TerminatorKind::Drop { target, .. } => Raw::Pass(*target),
+        // [R100.6-1] A drop of a value with drop glue is a point (design 100; R60.2-4 before
+        // batch 15c2). The MIR of the driver is after the drop elaboration, so each `Drop` that is
+        // left runs the drop glue of its value. Its text is the name of the variable (when the
+        // debug data has one) and the type of the place.
+        TerminatorKind::Drop { target, .. } if !drops => Raw::Pass(*target),
+        TerminatorKind::Drop { place, target, .. } => Raw::Point(point("drop", drop_text(tcx, body, place), None, graph), vec![(String::new(), Target::Block(*target))]),
         TerminatorKind::Resume | TerminatorKind::Abort | TerminatorKind::Unreachable => Raw::End,
         TerminatorKind::Return => Raw::Point(point("return", String::new(), None, graph), Vec::new()),
         TerminatorKind::SwitchInt { discr, targets } => {
@@ -782,6 +791,42 @@ fn raw_block<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, typing: Option<rustc_mid
             None => Raw::Point(point("panic", "asm!".into(), None, graph), Vec::new()),
         },
     }
+}
+
+/// [R100.6-1] The text of a drop point: `v: std::vec::Vec<u32>` for a variable with a name,
+/// else the type of the place.
+fn drop_text(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, place: &rustc_public::mir::Place) -> String {
+    // A type of a closure or a coroutine prints its span (`{async block@src/lib.rs:2:5: 2:15}`):
+    // the text keeps the kind only, so a line that moves does not change the text.
+    let ty = place.ty(body.locals()).map(|ty| format!("{}", rustc_public::rustc_internal::internal(tcx, ty))).unwrap_or_default();
+    let ty = no_spans(&ty);
+    let name = body.var_debug_info.iter().find_map(|info| match &info.value {
+        rustc_public::mir::VarDebugInfoContents::Place(found) if found.local == place.local && found.projection.is_empty() && place.projection.is_empty() && info.composite.is_none() => Some(info.name.clone()),
+        _ => None,
+    });
+    match name {
+        Some(name) => format!("{name}: {ty}"),
+        None => ty,
+    }
+}
+
+/// A type text with no span of a closure or a coroutine type (`{closure@src/lib.rs:3:9: 3:12}`
+/// gives `{closure}`).
+fn no_spans(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut skip = false;
+    for c in text.chars() {
+        match c {
+            '@' => skip = true,
+            '}' if skip => {
+                skip = false;
+                out.push(c);
+            }
+            _ if skip => {}
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// The text of a callee: the callee that the MIR calls (design 60, R60.2-11). The text has the

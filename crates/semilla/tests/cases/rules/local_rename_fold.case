@@ -89,7 +89,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       graph: no change after the check: the equal MIR of the node (same code) explains 1 graph change(s)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body
-    depot::sum (src/lib.rs:20): same structure: 3 changed checks; MIR changes
+    depot::sum (src/lib.rs:20): same structure: 2 changed checks (implicit); explained by f3 (1 graph change); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

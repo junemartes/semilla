@@ -75,7 +75,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   cover: each of the 8 changed line(s) is in a fact
   control flow: 3 bodies
-    depot::part (src/lib.rs:5): graph added: 6 points, 5 arrows
+    depot::part (src/lib.rs:5): graph added: +2 overflow checks (implicit), +2 panics (implicit), +4 arrows (implicit); explained by f2 (3 graph changes)
     depot::piece (src/lib.rs:9): graph added: 6 points, 5 arrows
     depot::total (src/lib.rs:1): graph changes: +3 calls, −2 checks, −2 panics, +4 arrows, −5 arrows; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

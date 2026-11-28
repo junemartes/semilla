@@ -1093,5 +1093,6 @@ pub(crate) fn mir_table(table: Option<Arc<semilla_normal::elements::Table>>) -> 
         locals: table.locals.clone(),
         decls: [decls(&table.decls[0]), decls(&table.decls[1])],
         same: table.same.clone(),
+        moved: table.moved.clone(),
     }))
 }

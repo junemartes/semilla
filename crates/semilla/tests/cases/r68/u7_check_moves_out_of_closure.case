@@ -34,7 +34,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `get(i)` → `v[i]` at `shop::pick/tail/recv` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, --same 'rewrite get($a) => v[$a]', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: shop::pick (with 1 other edit of this body)
-      graph: +1 bounds check (implicit), +1 panic (implicit), −1 call (`get`), +3 arrows (implicit), −2 arrows
+      graph: +1 bounds check moved in (implicit), +1 panic moved in (implicit), −1 call (`get`), +3 arrows (implicit), −2 arrows
       control flow: moved check `bounds: v[i]` (src/lib.rs:2) from `shop::pick::{closure#0}`: ok → call `num::<impl u32>::wrapping_add`, fail → panic `bounds`
       control flow: moved panic `bounds` (src/lib.rs:2) from `shop::pick::{closure#0}`
       control flow: − call `get` [closure] (src/lib.rs:-3): return → call `num::<impl u32>::wrapping_add`
@@ -43,7 +43,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different]
       not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, --same 'rewrite get($a) => v[$a]', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: shop::pick (with 1 other edit of this body)
-      graph: −1 body, −1 bounds check (implicit), −1 return, −1 panic (implicit), −3 arrows (2 implicit)
+      graph: −1 body, −1 bounds check moved out (implicit), −1 return, −1 panic moved out (implicit), −3 arrows (2 implicit)
       control flow: − graph of `shop::pick::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows (semilla expand --step 0)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
   cover: each of the 3 changed line(s) is in a fact

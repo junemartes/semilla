@@ -220,13 +220,16 @@ pub struct GraphDiff {
     /// graph.
     pub added_arrows: Vec<usize>,
     pub removed_arrows: Vec<usize>,
+    /// [R100.1-1] The point pairs with an equal text whose MIR elements moved across an anchor of
+    /// the alignment (design 100), with an arrow that is not shared: a call in a new order.
+    pub moved: Vec<(usize, usize)>,
 }
 
 impl GraphDiff {
     pub fn result(&self) -> FlowResult {
         if !self.added.is_empty() || !self.removed.is_empty() || !self.added_arrows.is_empty() || !self.removed_arrows.is_empty() {
             FlowResult::Changes
-        } else if !self.changed.is_empty() {
+        } else if !self.changed.is_empty() || !self.moved.is_empty() {
             FlowResult::SameStructure
         } else {
             FlowResult::Same
@@ -277,6 +280,42 @@ pub fn diff_pairs(old: &FlowGraph, new: &FlowGraph, pairs: &[(usize, usize)]) ->
     out
 }
 
+/// [R100.1-1] The point pairs with an equal text whose terminators are a moved pair of the
+/// alignment (two equal elements in two regions, design 100), when an arrow of the point is not
+/// shared: the point is in a new place of the graph.
+fn moved_points(old: &FlowGraph, new: &FlowGraph, diff: &GraphDiff, links: [&crate::flowalign::Linked; 2], moved: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    if moved.is_empty() {
+        return Vec::new();
+    }
+    let moved: BTreeSet<(usize, usize)> = moved.iter().copied().collect();
+    let changed: BTreeSet<(usize, usize)> = diff.changed.iter().copied().collect();
+    let touched = |graph: &FlowGraph, list: &[usize], point: usize| list.iter().any(|index| graph.arrows.get(*index).is_some_and(|(from, to, _)| *from == point || *to == point));
+    diff.pairs
+        .iter()
+        .copied()
+        .filter(|pair| !changed.contains(pair))
+        .filter(|(a, b)| {
+            let (x, y) = (links[0].terms.get(*a).map(Vec::as_slice).unwrap_or(&[]), links[1].terms.get(*b).map(Vec::as_slice).unwrap_or(&[]));
+            x.iter().any(|at| y.iter().any(|bt| moved.contains(&(*at, *bt))))
+        })
+        .filter(|(a, b)| touched(old, &diff.removed_arrows, *a) || touched(new, &diff.added_arrows, *b))
+        .filter(|(a, b)| crosses(old, new, &diff.pairs, *a, *b))
+        .collect()
+}
+
+/// [R100.1-1] True if the point pair is in a new order against another point pair: one pair is
+/// before the other on one side and after it on the other side (the start of the places in one
+/// file). A point that stays in its order (a new call before it, a new head of a `for`) is no
+/// moved point.
+fn crosses(old: &FlowGraph, new: &FlowGraph, pairs: &[(usize, usize)], a: usize, b: usize) -> bool {
+    let at = |graph: &FlowGraph, point: usize| graph.points.get(point).and_then(|found| found.place()).map(|place| (place.0.clone(), place.1));
+    let (Some(x), Some(y)) = (at(old, a), at(new, b)) else { return false };
+    pairs.iter().filter(|pair| **pair != (a, b)).any(|(c, d)| match (at(old, *c), at(new, *d)) {
+        (Some(u), Some(v)) if u.0 == x.0 && v.0 == y.0 && u.1 != x.1 && v.1 != y.1 => (u.1 < x.1) != (v.1 < y.1),
+        _ => false,
+    })
+}
+
 /// A count with its noun: `1 point`, `2 points`.
 fn count(value: usize, noun: &str) -> String {
     format!("{value} {noun}{}", if value == 1 { "" } else { "s" })
@@ -325,6 +364,14 @@ pub fn summary(old: &FlowGraph, new: &FlowGraph, diff: &GraphDiff) -> String {
             other => format!("`{other}` point"),
         };
         parts.push(format!("{count} changed {noun}{}", if count == 1 { "" } else { "s" }));
+    }
+    // [R100.1-1] The points in a new order.
+    let mut moved: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, b) in &diff.moved {
+        *moved.entry(new.points[*b].kind.clone()).or_insert(0) += 1;
+    }
+    for (kind, count) in moved {
+        parts.push(format!("{count} moved {}", kinds(&kind, count)));
     }
     if !diff.added_arrows.is_empty() {
         parts.push(format!("+{} arrow{}", diff.added_arrows.len(), if diff.added_arrows.len() == 1 { "" } else { "s" }));
@@ -423,6 +470,9 @@ pub struct Anchor {
     /// [R98.3-1] True for a point that the source has no node for: a check, the panic of a check,
     /// a point of the expansion of a macro of another crate (no tokens in the workspace).
     pub implicit: bool,
+    /// [R100.7-1] The side and the token place of each point from the expansion of a macro whose
+    /// definition is in the workspace: the tokens are in the definition, outside the macro call.
+    pub macro_tokens: Vec<(usize, MirPlace)>,
 }
 
 /// [R98.2-2] One graph change in the summary of an entry: the group (0: an added point, 1: a
@@ -463,12 +513,23 @@ fn implicit_point(graph: &FlowGraph, roles: &[crate::flowalign::Role], point: us
     found.kind == "check" || roles.get(point) == Some(&crate::flowalign::Role::CheckPanic) || (found.tokens.is_none() && found.call.is_some())
 }
 
+/// [R100.7-1] The token place of a point from the expansion of a macro of the workspace: the
+/// tokens and the macro call are two places, and the tokens are not inside the call (the
+/// expansion data of the span of the driver: the definition and the call site, R60.2-10).
+fn macro_tokens(point: &FlowPoint) -> Option<&MirPlace> {
+    match (&point.tokens, &point.call) {
+        (Some(tokens), Some(call)) if !(tokens.0 == call.0 && call.1 <= tokens.1 && tokens.2 <= call.2) => Some(tokens),
+        _ => None,
+    }
+}
+
 /// The anchor of one point of one side.
 fn point_anchor(graph: &FlowGraph, roles: &[crate::flowalign::Role], links: &Links, side: usize, point: usize) -> Anchor {
     Anchor {
         elements: links.of(side, point).iter().map(|place| (side, place.clone())).collect(),
         points: graph.points[point].place().map(|place| (side, place.clone())).into_iter().collect(),
         implicit: implicit_point(graph, roles, point),
+        macro_tokens: macro_tokens(&graph.points[point]).map(|place| (side, place.clone())).into_iter().collect(),
     }
 }
 
@@ -574,10 +635,27 @@ fn elements(old: &FlowGraph, new: &FlowGraph, diff: &GraphDiff, lines: &mut Line
         let other = point_anchor(new, &roles[1], links, 1, b);
         anchor.elements.extend(other.elements);
         anchor.points.extend(other.points);
+        anchor.macro_tokens.extend(other.macro_tokens);
         anchor.implicit &= other.implicit;
         let words = if x.short_text() != y.short_text() { format!("`{}` → `{}`", x.short_text(), y.short_text()) } else { format!("`{}`", y.short_text()) };
         let parts = vec![Part { group: 2, label: format!("changed {}", changed_noun(&y.kind)), text: words }];
         out.push(Element { places, details: vec![detail], text, arrows: Vec::new(), all: false, point: None, anchor, parts });
+    }
+    // [R100.1-1] A point in a new order: `~ moved call `push` (src/lib.rs:-2, src/lib.rs:3)`.
+    for &(a, b) in &diff.moved {
+        let (x, y) = (&old.points[a], &new.points[b]);
+        let places = format!("({}, {})", lines.text(0, x), lines.text(1, y));
+        let text = format!("~ moved {} `{}` {places}", y.kind, y.short_text());
+        let detail = format!("~ moved {} `{}` {places}", y.kind, y.text);
+        let at = [place(old, a).map(|at| (0, at)), place(new, b).map(|at| (1, at))].into_iter().flatten().collect();
+        let mut anchor = point_anchor(old, &roles[0], links, 0, a);
+        let other = point_anchor(new, &roles[1], links, 1, b);
+        anchor.elements.extend(other.elements);
+        anchor.points.extend(other.points);
+        anchor.macro_tokens.extend(other.macro_tokens);
+        anchor.implicit &= other.implicit;
+        let parts = vec![Part { group: 2, label: format!("moved {}", point_word(new, b)), text: format!("`{}`", y.short_text()) }];
+        out.push(Element { places: at, details: vec![detail], text, arrows: Vec::new(), all: false, point: None, anchor, parts });
     }
     let shown: BTreeSet<(usize, usize)> = out.iter().flat_map(|element| element.arrows.iter().copied()).collect();
     let paired: [BTreeSet<usize>; 2] = [diff.pairs.iter().map(|(a, _)| *a).collect(), diff.pairs.iter().map(|(_, b)| *b).collect()];
@@ -1234,7 +1312,8 @@ pub(crate) fn graph_diff(old: &FlowGraph, new: &FlowGraph, tables: &[std::sync::
     }
     if let Some((_, sides, linked, table)) = best {
         let pairs = align([old, new], [&linked[0], &linked[1]], &table.pairs);
-        let found = diff_pairs(old, new, &pairs);
+        let mut found = diff_pairs(old, new, &pairs);
+        found.moved = moved_points(old, new, &found, [&linked[0], &linked[1]], &table.moved);
         let places = [0usize, 1].map(|side| linked[side].elements.iter().map(|list| list.iter().filter_map(|at| crate::flowalign::place(&sides[side].ranges[*at]).cloned()).collect()).collect());
         return (found, Links { places }, None);
     }
@@ -1620,6 +1699,11 @@ fn unit_moves(results: &mut [BodyResult]) {
                     element.text = moved(&element.text);
                     if let Some(detail) = element.details.first_mut() {
                         *detail = moved(detail);
+                    }
+                    // [R100.4-1] The mark of the move in the graph part of the entry: `+1 call
+                    // moved in (`helper`)`.
+                    if let Some(part) = element.parts.first_mut().filter(|part| part.group < 2) {
+                        part.label = format!("{} moved {}", part.label, if word == "from" { "in" } else { "out" });
                     }
                 }
             }

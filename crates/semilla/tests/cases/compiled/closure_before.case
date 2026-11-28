@@ -33,27 +33,27 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::total` (src/lib.rs:6): the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(items_before: &[before::shop::Item], items_after: &[after::shop::Item]) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
     MIR changes with no claim: `shop::total::{closure#0} |x| x.cost() > 0` (src/lib.rs:7): the template of `shop::total` covers its item `shop::total`
     MIR changes with no claim: `shop::total::{closure#1} |x| x.cost()` (src/lib.rs:7): the same MIR text; a changed callee: `shop::total::{closure#0}`, `shop::total::{closure#1}`; the template of `shop::total` covers its item `shop::total`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 11 in entries (0 implicit), 0 in the section of R92.4-1
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 14 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::total`:
-  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `items.iter()` → `items.iter().filter(|x| x.cost() > 0)` at `shop::total/tail/recv/recv` [semantics · code different]
+  ◆ f1 replace (Semilla; R90.2-2, 6 changed MIR elements): changed expression `items.iter()` → `items.iter().filter(|x| x.cost() > 0)` at `shop::total/tail/recv/recv` [semantics · code different]
       not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, --same 'rewrite $a.iter() => $a.iter().filter(|x| x.cost() > 0)'
       affected bodies: shop::total
-      graph: +2 calls, +1 body, +1 return, 2 changed call targets, +4 arrows, −1 arrow
+      graph: +3 calls, +1 body, +1 return, −1 call (`<Iter<'_, Item> as Iterator>::map::<u32, {closure#1}> (trait default)`), 1 changed call target (`<Map<Iter<'_, Item>, {closure#1}> as Iterator>::sum::<u32> (trait default)` → `<Map<Filter<Iter<'_, Item>, {closure#0}>, {closure#1}> as Iterator>::sum::<u32> (trait default)`), +5 arrows, −2 arrows
       control flow: + call `<Iter<'_, Item> as Iterator>::filter::<{closure#0}> (trait default)` (src/lib.rs:7): return → call `<Filter<Iter<'_, Item>, {closure#0}> as Iterator>::map::<u32, {closure#1}> (trait default)`
-      control flow: ~ call `<Iter<'_, Item> as Iterator>::map::<u32, {closure#1}> (trait default)` → `<Filter<Iter<'_, Item>, {closure#0}> as Iterator>::map::<u32, {closure#1}> (trait default)` (src/lib.rs:-7, src/lib.rs:7)
-      control flow: ~ call `<Map<Iter<'_, Item>, {closure#1}> as Iterator>::sum::<u32> (trait default)` → `<Map<Filter<Iter<'_, Item>, {closure#0}>, {closure#1}> as Iterator>::sum::<u32> (trait default)` (src/lib.rs:-7, src/lib.rs:7)
-      control flow: … 2 more (semilla expand --step 0)
+      control flow: + call `<Filter<Iter<'_, Item>, {closure#0}> as Iterator>::map::<u32, {closure#1}> (trait default)` (src/lib.rs:7): return → call `<Map<Filter<Iter<'_, Item>, {closure#0}>, {closure#1}> as Iterator>::sum::<u32> (trait default)`
+      control flow: − call `<Iter<'_, Item> as Iterator>::map::<u32, {closure#1}> (trait default)` (src/lib.rs:-7): return → call `<Map<Iter<'_, Item>, {closure#1}> as Iterator>::sum::<u32> (trait default)`
+      control flow: … 3 more (semilla expand --step 0)
       control flow: + graph of `shop::total::{closure#0} |x| x.cost() > 0`: 3 points, 2 arrows (semilla expand --step 0)
       equivalence: `shop::total`: MIR changes
       equivalence: `shop::total::{closure#1} |x| x.cost()`: MIR changes: the same MIR text; a changed callee: `shop::total::{closure#0}`, `shop::total::{closure#1}`
   cover: each of the 2 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::total (src/lib.rs:6): graph changes: +1 call, 2 changed call targets, +2 arrows, −1 arrow; MIR changes
+    shop::total (src/lib.rs:6): graph changes: +2 calls, −1 call, 1 changed call target, +3 arrows, −2 arrows; MIR changes
     shop::total::{closure#0} |x| x.cost() > 0 (src/lib.rs:7): graph added: 3 points, 2 arrows
     shop::total::{closure#1} |x| x.cost() (src/lib.rs:7): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `shop::total::{closure#0}`, `shop::total::{closure#1}`)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `items.iter()` → `items.iter().filter(|x| x.cost() > 0)` at `shop::total/tail/recv/recv` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 6 changed MIR elements): changed expression `items.iter()` → `items.iter().filter(|x| x.cost() > 0)` at `shop::total/tail/recv/recv` [semantics · code different]
     lines: src/lib.rs:7, src/lib.rs:-7

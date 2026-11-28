@@ -213,9 +213,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: no result alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
   cover: each of the 18 changed line(s) is in a fact
   control flow: 4 bodies
-    shop::Bits::blocks (src/lib.rs:40): same structure: 1 changed check; equivalent (proved by equal MIR)
+    shop::Bits::blocks (src/lib.rs:40): same structure: explained by f2 (1 graph change); equivalent (proved by equal MIR)
     shop::Bits::first_block (src/lib.rs:32): graph added: 12 points, 13 arrows
-    shop::Bits::get_unchecked (src/lib.rs:24): same structure: 2 changed checks; equivalent (proved by equal MIR)
+    shop::Bits::get_unchecked (src/lib.rs:24): same structure: explained by f3 (2 graph changes); equivalent (proved by equal MIR)
     shop::Bits::with_capacity_and_blocks (src/lib.rs:15): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step

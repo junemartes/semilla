@@ -78,7 +78,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes alone; the body: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::both (src/lib.rs:8): graph changes: +1 call, 1 changed call target, 2 changed checks, +2 arrows, −1 arrow; MIR changes
+    depot::both (src/lib.rs:8): graph changes: 1 changed call target (`wrap` → `wrap2`), 1 changed check (`overflow: wrap(c.total + 1) + d.total` → `overflow: wrap2(c.total() + 1) + d.total`, implicit); explained by f2 (5 graph changes); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

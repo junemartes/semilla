@@ -26,39 +26,40 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: usize, s: String) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
     MIR changes with no claim: `depot::total::{closure#0} move |x: usize| x.wrapping_add(s.len())` (src/lib.rs:2): the template of `depot::total` covers its item `depot::total`
-  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 12 in entries (0 implicit), 0 in the section of R92.4-1
+  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 13 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::total`:
   ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): changed pattern `n` → `part` at `depot::total/S0/pat` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite a.wrapping_add($a) => move |x: usize| x.wrapping_add($a)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f1, f2, f3) (the same line for f2)
       affected bodies: depot::total (with 2 other edits of this body)
-      graph: no graph change of its own
+      graph: same structure: 1 changed `drop` point (`s: std::string::String` → `part: {closure}`, implicit)
+      control flow: ~ drop `s: std::string::String` → `part: {closure}` (src/lib.rs:-4, src/lib.rs:5)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
-  ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `a.wrapping_add(s.len())` → `move |x: usize| x.wrapping_add(s.len())` at `depot::total/S0/init` [semantics · code different]
+  ◆ f2 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `a.wrapping_add(s.len())` → `move |x: usize| x.wrapping_add(s.len())` at `depot::total/S0/init` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the same line as f1
       affected bodies: depot::total (with 2 other edits of this body)
-      graph: +1 body, +2 calls, +1 return, −1 call (`String::len`), 1 changed call target (`num::<impl usize>::wrapping_add` → `part`), +4 arrows, −2 arrows
+      graph: +1 body, +1 call moved in (`String::len`), +1 call (`num::<impl usize>::wrapping_add`), +1 return, −1 call moved out (`String::len`), 1 changed call target (`num::<impl usize>::wrapping_add` → `part`), +4 arrows, −2 arrows
       control flow: moved call `String::len` (src/lib.rs:-2) to `depot::total::{closure#0}`: return → call `num::<impl usize>::wrapping_add`
       control flow: ~ call `num::<impl usize>::wrapping_add` → `part` [closure] (src/lib.rs:-2, src/lib.rs:3)
       control flow: + arrow entry (src/lib.rs:1) → call `part` [closure] (src/lib.rs:3)
       control flow: … 1 more (semilla expand --step 0)
       control flow: + graph of `depot::total::{closure#0} move |x: usize| x.wrapping_add(s.len())`: 4 points, 3 arrows (semilla expand --step 0)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
-  ◆ f3 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let n = part(a);` at `depot::total/S1` [semantics · code different]
+  ◆ f3 replace (Semilla; R90.2-2, 3 changed MIR elements): added `let` `let n = part(a);` at `depot::total/S1` [semantics · code different]
       not stated (src/lib.rs:3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite a.wrapping_add($a) => move |x: usize| x.wrapping_add($a)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 3 places: f1, f2, f3)
       affected bodies: depot::total (with 2 other edits of this body)
       graph: no graph change of its own
       equivalence: no result alone (the body has 3 edits; an edit of the fact adds or removes a node); the body: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::total (src/lib.rs:1): graph changes: 1 changed call target, +1 arrow, −2 arrows; moved out to `depot::total::{closure#0}`: 1 call; MIR changes
+    depot::total (src/lib.rs:1): graph changes: 1 changed call target, 1 changed `drop` point, +1 arrow, −2 arrows; moved out to `depot::total::{closure#0}`: 1 call; MIR changes
     depot::total::{closure#0} move |x: usize| x.wrapping_add(s.len()) (src/lib.rs:2): graph added: 4 points, 3 arrows; moved in from `depot::total`: 1 call
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
 ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): changed pattern `n` → `part` at `depot::total/S0/pat` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2
-◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `a.wrapping_add(s.len())` → `move |x: usize| x.wrapping_add(s.len())` at `depot::total/S0/init` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `a.wrapping_add(s.len())` → `move |x: usize| x.wrapping_add(s.len())` at `depot::total/S0/init` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2
-◆ f3 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let n = part(a);` at `depot::total/S1` [semantics · code different]
+◆ f3 replace (Semilla; R90.2-2, 3 changed MIR elements): added `let` `let n = part(a);` at `depot::total/S1` [semantics · code different]
     lines: src/lib.rs:3

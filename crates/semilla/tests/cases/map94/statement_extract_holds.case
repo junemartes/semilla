@@ -47,17 +47,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
       MIR changes with no claim: `depot::part` (src/lib.rs:6): an added body: `#[new(depot::part)] fn part_new(a: u32, b: u32) -> bool { let new = after::depot::part(a, b); true }`
       MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 26 in entries (20 implicit, 26 explained by the check of a transformation), 0 in the section of R92.4-1
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 31 in entries (25 implicit, 31 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::total`:
   ◆ f1 extract (a1; R94.1-1, the MIR of `depot::part` put in at the call is the MIR of the old code (3 element place(s) explained); 2 nodes; one change (R92.6-1)): changed expression `a * 3 + b` → `part(a, b)` at `depot::total/S0/init`; added `depot::part` [semantics · code different]
       affected bodies: depot::total, depot::part
-      graph: no change after the check: the check of the extract explains 26 graph change(s)
+      graph: no change after the check: the check of the extract explains 31 graph change(s)
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::part (src/lib.rs:6): graph added: 6 points, 5 arrows
-    depot::total (src/lib.rs:1): graph changes: +1 call, −2 checks, −2 panics, 1 changed check, +3 arrows, −6 arrows; MIR changes
+    depot::part (src/lib.rs:6): graph added: 6 points, 5 arrows; explained by f1 (11 graph changes)
+    depot::total (src/lib.rs:1): graph changes: explained by f1 (20 graph changes); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

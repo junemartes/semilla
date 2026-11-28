@@ -93,7 +93,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::mode_name (src/lib.rs:15): graph changes: +2 arrows, −2 arrows; equivalent (proved by equal MIR)
+    depot::mode_name (src/lib.rs:15): graph changes: explained by f3 (4 graph changes); equivalent (proved by equal MIR)
     depot::state::Mode::busy (src/lib.rs:22): graph changes: +2 arrows, −2 arrows; no edit in the body; equivalent (proved by equal MIR)
   expansions: 1 changed, 2 equal
     `#[test]` at `depot::tests::t_limit` (src/lib.rs:18): expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes

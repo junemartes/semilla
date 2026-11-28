@@ -1,0 +1,54 @@
+note: design 100 (R100.7-1): a body with no edit whose code comes from a macro whose definition the step changes: its graph changes go to the entry of the changed definition, not to the section of R92.4-1
+rule+: R100.7-1
+must_match: control-flow changes: [1-9][0-9]* in entries \(0 implicit\), 0 in the section of R92.4-1
+must_not_match: no entry: no changed node
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! limit {
+    ($v:expr) => { if $v > 9 { 9 } else { $v } };
+}
+
+pub fn clamp(v: u32) -> u32 {
+    limit!(v)
+}
+=== new src/lib.rs
+macro_rules! limit {
+    ($v:expr) => { if $v > 9 { 9 } else if $v < 2 { 2 } else { $v } };
+}
+
+pub fn clamp(v: u32) -> u32 {
+    limit!(v)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::clamp` (src/lib.rs:5): the full compare: `#[same(depot::clamp)] fn clamp_same() {}`; a difference: `#[change(depot::clamp)] fn clamp_change(v: u32) -> bool { … }` or `#[different(depot::clamp)] fn clamp_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
+  syntax only:
+  item `depot::limit!`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `limit`: `macro_rules! limit { ($v:expr) => { if $v > 9 { 9 } else { $v } }; }` → [1] [declaration · code different]
+        [1] macro_rules! limit { ($v:expr) => { if $v > 9 { 9 } else if $v < 2 { 2 } else { $v } }; }
+      affected bodies: depot::clamp
+      graph: +1 branch (`limit!(v): v < 2`), +3 arrows, −1 arrow
+      control flow: + branch `limit!(v): v < 2` (src/lib.rs:6): false → return, true → return
+      control flow: + arrow branch `limit!(v): v > 9` (src/lib.rs:6) → branch `limit!(v): v < 2` (src/lib.rs:6) (false)
+      control flow: − arrow branch `limit!(v): v > 9` (src/lib.rs:-6) → return (src/lib.rs:-7) (false)
+      expansion: `limit!(v)` at `depot::clamp/tail` (src/lib.rs:6): expansion changed: changed if: `{ v }` → `if v < 2 { 2 } else { v }` at `expansion/S0/else` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::clamp (src/lib.rs:5): graph changes: +1 branch, +3 arrows, −1 arrow; no edit in the body; MIR changes; the expansion of `limit!(v)` changes (semilla expand src/lib.rs:6 --step 0)
+  expansions: 1 changed
+    `limit!(v)` at `depot::clamp/tail` (src/lib.rs:6): expansion changed: `macro_rules! limit` (src/lib.rs:1): changed if: `{ v }` → `if v < 2 { 2 } else { v }` at `expansion/S0/else` [semantics]; from `macro_rules! limit` (src/lib.rs:1)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `limit`: `macro_rules! limit { ($v:expr) => { if $v > 9 { 9 } else { $v } }; }` → [1] [declaration · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
