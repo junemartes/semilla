@@ -509,6 +509,48 @@ pub fn run_and_stop(command: &mut Command) -> std::io::Result<std::process::Outp
     Ok(std::process::Output { status, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() })
 }
 
+/// [R96.2-1] [`run_and_stop`], and each full line of the standard output goes to `line` when the
+/// program writes it (the messages of cargo while it builds). The result has the full output,
+/// as with `run_and_stop`. A line with no end (the program stopped in it) does not go to `line`.
+pub fn run_and_stop_lines(command: &mut Command, line: &(dyn Fn(&str) + Sync)) -> std::io::Result<std::process::Output> {
+    use std::io::{BufRead, Read};
+    group::start(command);
+    let mut child = command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn()?;
+    let (out, err) = (child.stdout.take(), child.stderr.take());
+    std::thread::scope(|scope| {
+        // As in `run_and_stop`: two threads read the pipes, and this thread waits only for the
+        // program, then stops each process that it left.
+        let stdout = scope.spawn(move || {
+            let mut data = Vec::new();
+            if let Some(pipe) = out {
+                let mut pipe = std::io::BufReader::new(pipe);
+                loop {
+                    let start = data.len();
+                    match pipe.read_until(b'\n', &mut data) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            if data.ends_with(b"\n") {
+                                line(&String::from_utf8_lossy(&data[start..data.len() - 1]));
+                            }
+                        }
+                    }
+                }
+            }
+            data
+        });
+        let stderr = scope.spawn(move || {
+            let mut data = Vec::new();
+            if let Some(mut pipe) = err {
+                let _ = pipe.read_to_end(&mut data);
+            }
+            data
+        });
+        group::wait_and_stop(child.id());
+        let status = child.wait()?;
+        Ok(std::process::Output { status, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() })
+    })
+}
+
 #[cfg(not(target_os = "linux"))]
 mod imp {
     use super::Sandbox;

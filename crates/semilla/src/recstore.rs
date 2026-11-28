@@ -797,6 +797,76 @@ const POINTER_MEMBER: &str = "semilla-body";
 /// [R93.3-1] The member of the keys line of the driver.
 const KEYS_MEMBER: &str = "semilla-keys";
 
+// ----- the task of a unit at its message (design 96) -----
+
+/// [R96.2-1] The size and the time (nanoseconds) of a file: a change of the file changes them.
+fn plain_state(file: &Path) -> Option<[u64; 2]> {
+    let meta = std::fs::metadata(file).ok()?;
+    let time = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos() as u64;
+    Some([meta.len(), time])
+}
+
+/// [R96.2-1] The results of the unit tasks of this process, by the path of the record file in
+/// the records folder of the build: the state of the file after the task, and its index (`None`:
+/// the lines do not have the plain form).
+type UnitDone = BTreeMap<PathBuf, ([u64; 2], Option<semilla_normal::index::UnitIndex>)>;
+static UNIT_DONE: Mutex<UnitDone> = Mutex::new(BTreeMap::new());
+
+/// [R96.2-1] The indexes of the copies of the record files in a cache folder that is not
+/// complete yet: the size of the copy and its index. `complete` takes them.
+type CopyIndex = BTreeMap<PathBuf, (u64, Option<semilla_normal::index::UnitIndex>)>;
+static COPY_INDEX: Mutex<CopyIndex> = Mutex::new(BTreeMap::new());
+
+/// [R96.2-1] The phase name of the unit tasks in the timing lines.
+pub(crate) const UNIT_PHASE: &str = "the tasks of the units at their messages (design 96)";
+
+/// [R96.2-1] The task of one unit at the message of cargo: the pointer lines of its record file
+/// get their records (R93.3-1), then the index of the file. The build of the other units runs
+/// at the same time. The task reads the file only after the message of its unit (the caller
+/// gives only the files of [`semilla_normal::cargo::message_units`]).
+pub(crate) fn unit_task(db: &Db, file: &Path, keys: &Path) -> Result<()> {
+    let started = std::time::Instant::now();
+    resolve_bodies(db, file, keys)?;
+    let bytes = std::fs::read(file)?;
+    let Some(state) = plain_state(file) else { return Ok(()) };
+    let index = semilla_normal::index::build(&bytes, None).map(|(index, _)| index);
+    UNIT_DONE.lock().unwrap_or_else(|error| error.into_inner()).insert(file.to_path_buf(), (state, index));
+    semilla_core::timing::add(UNIT_PHASE, started);
+    semilla_core::timing::count(UNIT_PHASE, "units done during the build", 1);
+    Ok(())
+}
+
+/// [R96.2-1] True if a unit task resolved the file and the file did not change after the task.
+pub(crate) fn resolved_by_task(file: &Path) -> bool {
+    let done = UNIT_DONE.lock().unwrap_or_else(|error| error.into_inner());
+    done.get(file).is_some_and(|(state, _)| plain_state(file).as_ref() == Some(state))
+}
+
+/// [R96.2-1] Forgets the unit tasks of the files of a records folder (a new build of the folder
+/// starts).
+pub(crate) fn forget_unit_tasks(folder: &Path) {
+    UNIT_DONE.lock().unwrap_or_else(|error| error.into_inner()).retain(|file, _| !file.starts_with(folder));
+}
+
+/// [R96.2-1] The copy `to` of the record file `from` is in a cache folder: if a unit task made
+/// the index of `from`, and `from` did not change after the task, the index is the index of
+/// the copy (the copy has the same bytes).
+pub(crate) fn index_for_copy(from: &Path, to: &Path) {
+    let found = UNIT_DONE.lock().unwrap_or_else(|error| error.into_inner()).remove(from);
+    let Some((state, index)) = found else { return };
+    if plain_state(from) != Some(state) {
+        return;
+    }
+    COPY_INDEX.lock().unwrap_or_else(|error| error.into_inner()).insert(to.to_path_buf(), (state[0], index));
+}
+
+/// [R96.2-1] The index of a unit task for a file of a cache folder, if the file has the size of
+/// the bytes of the task. `None`: no such index (the caller makes the index).
+fn take_copy_index(file: &Path, size: u64) -> Option<Option<semilla_normal::index::UnitIndex>> {
+    let (known, index) = COPY_INDEX.lock().unwrap_or_else(|error| error.into_inner()).remove(file)?;
+    (known == size).then_some(index)
+}
+
 /// [R91.2-1] The name of the phase of the stored syntax data of one file.
 pub(crate) const FILE_PHASE: &str = "file-syntax";
 
@@ -934,17 +1004,62 @@ fn record_files(folder: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Builds and writes the index of each record file of a complete folder, in one transaction.
-fn index_folder(db: &Db, folder: &Path, key: &FolderKey) {
+/// [R96.2-1] The index that a unit task made for the bytes of the file is the index of the file.
+fn index_folder(db: &Arc<Db>, folder: &Path, key: &FolderKey) {
     let Ok(files) = record_files(folder) else { return };
     let mut puts = Vec::new();
     for file in files {
-        let (Ok(bytes), Some(state)) = (std::fs::read(&file), file_state(&file, key.1)) else { continue };
-        if let Some((index, _)) = semilla_normal::index::build(&bytes, None) {
+        let Some(state) = file_state(&file, key.1) else { continue };
+        let index = match take_copy_index(&file, state[0]) {
+            Some(made) => made,
+            None => match std::fs::read(&file) {
+                Ok(bytes) => semilla_normal::index::build(&bytes, None).map(|(index, _)| index),
+                Err(_) => continue,
+            },
+        };
+        if let Some(index) = index {
             puts.push((Kind::Index, index_key(db, &file), semilla_normal::index::FORMAT, index_payload(state, &index)));
+            INDEXED.lock().unwrap_or_else(|error| error.into_inner()).insert(file.clone(), (state, Arc::new(index)));
         }
     }
     semilla_core::timing::count(INDEX_PHASE, "units indexed", puts.len() as u64);
-    let _ = db.put(puts);
+    // [R96.9-2] The write of the index goes to a thread of its own: this process reads the
+    // index from memory, and the end of the command waits for the write (`join_writes`).
+    if !ASYNC_WRITES.load(std::sync::atomic::Ordering::SeqCst) {
+        let _ = db.put(puts);
+        return;
+    }
+    let db = db.clone();
+    let write = std::thread::spawn(move || {
+        let _span = semilla_core::tasks::span("the write of the index of a record folder");
+        let _ = db.put(puts);
+    });
+    WRITES.lock().unwrap_or_else(|error| error.into_inner()).push(write);
+}
+
+/// [R96.9-2] True if the writes of the index run in their own threads: the command turns it on
+/// (it waits for the writes at its end). A test of the store writes at once.
+static ASYNC_WRITES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// [R96.9-2] Turns on the writes in their own threads (for a command that calls `join_writes`).
+pub(crate) fn async_writes() {
+    ASYNC_WRITES.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// [R96.9-2] The index of each record file of a folder that this process completed, by the
+/// file: the state of the file (as in the database) and the index.
+static INDEXED: Mutex<BTreeMap<PathBuf, ([u64; 3], Arc<semilla_normal::index::UnitIndex>)>> = Mutex::new(BTreeMap::new());
+
+/// [R96.9-2] The writes of the store that run in their own threads.
+static WRITES: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
+
+/// [R96.9-2] Waits for each write of the store that runs in its own thread. The end of each
+/// command calls it.
+pub(crate) fn join_writes() {
+    let writes = std::mem::take(&mut *WRITES.lock().unwrap_or_else(|error| error.into_inner()));
+    for write in writes {
+        let _ = write.join();
+    }
 }
 
 /// [R88.2-1] The records of a complete folder through the index of each record file: the index
@@ -955,7 +1070,8 @@ fn read_indexed(db: &Db, folder: &Path, key: Option<&FolderKey>) -> Result<Vec<s
     let files = record_files(folder)?;
     // [R88.2-1] The files decode in parallel threads; the records join in the order of the
     // files, so the result does not depend on the threads.
-    let threads = std::thread::available_parallelism().map_or(4, |count| count.get()).clamp(1, MOST_THREADS);
+    // [R96.5-1] While a build runs, the read uses the thread limit of the tasks of Semilla.
+    let threads = semilla_core::tasks::threads(std::thread::available_parallelism().map_or(4, |count| count.get()).clamp(1, MOST_THREADS));
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results: Mutex<Vec<(usize, Result<UnitRead>)>> = Mutex::new(Vec::new());
     std::thread::scope(|scope| {
@@ -1015,6 +1131,19 @@ fn read_unit(db: &Db, file: &Path, key: Option<&FolderKey>) -> Result<UnitRead> 
     use anyhow::Context as _;
     let state = key.and_then(|key| file_state(file, key.1));
     let handle = || std::fs::File::open(file).map(Arc::new).with_context(|| format!("cannot read {}", file.display()));
+    // [R96.9-2] The index that this process made when the folder completed, if the file has
+    // the same state. The read takes it (the memory of the store keeps the records of the
+    // folder), so the index is not in memory for the rest of the command.
+    let made = state.and_then(|state| {
+        let mut indexed = INDEXED.lock().unwrap_or_else(|error| error.into_inner());
+        let (known, _) = indexed.get(file)?;
+        (*known == state).then(|| indexed.remove(file)).flatten().map(|(_, index)| index)
+    });
+    if let Some(index) = made {
+        if let Some(records) = semilla_normal::index::records(&index, Some(&handle()?)) {
+            return Ok(UnitRead { records, put: None, from_index: true, full: false });
+        }
+    }
     let stored = state.and_then(|state| {
         db.get(Kind::Index, &index_key(db, file), semilla_normal::index::FORMAT, |payload| {
             let (head, rest) = payload.split_at_checked(24)?;
@@ -1771,6 +1900,97 @@ mod tests {
         // A file with no keys line does not change.
         resolve_bodies(&db, &file, &keys).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+    }
+
+    // [R96.2-1] The task of a unit at its message resolves the pointer lines of its file and
+    // makes its index; the copy of the file in a cache folder gets that index.
+    // rule+ R96.2-1
+    #[test]
+    fn a_unit_task_resolves_its_file_and_its_index_goes_to_the_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let stored = r#"{"name":"k::old","level":"n0","text":"fn old() {}"}"#;
+        db.put(vec![(Kind::Body, format!("{BODY_PHASE} aa11"), BODY_FORMAT, stored.as_bytes().to_vec())]).unwrap();
+        let file = keyed_file(dir.path(), "aa11");
+        let keys = dir.path().join("keys/k.lib.1.jsonl");
+        unit_task(&db, &file, &keys).unwrap();
+        assert!(resolved_by_task(&file));
+        assert_eq!(std::fs::read_to_string(&file).unwrap().lines().nth(1), Some(stored));
+        let copy = dir.path().join("cache/k.lib.1.jsonl");
+        std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        std::fs::copy(&file, &copy).unwrap();
+        index_for_copy(&file, &copy);
+        let size = std::fs::metadata(&copy).unwrap().len();
+        let index = take_copy_index(&copy, size).expect("the index of the task").expect("a plain file");
+        let fresh = semilla_normal::index::build(&std::fs::read(&copy).unwrap(), None).map(|(index, _)| index).unwrap();
+        assert_eq!(semilla_normal::index::encode(&index), semilla_normal::index::encode(&fresh));
+    }
+
+    // [R96.2-1] The negative case: a file that changes after its task is not resolved by the
+    // task, and its copy gets no index of the task (the end of the build does the work again).
+    // rule- R96.2-1
+    #[test]
+    fn a_file_that_changes_after_its_unit_task_gets_no_result_of_the_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let stored = r#"{"name":"k::old","level":"n0","text":"fn old() {}"}"#;
+        db.put(vec![(Kind::Body, format!("{BODY_PHASE} bb22"), BODY_FORMAT, stored.as_bytes().to_vec())]).unwrap();
+        let file = keyed_file(dir.path(), "bb22");
+        let keys = dir.path().join("keys/k.lib.1.jsonl");
+        unit_task(&db, &file, &keys).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, format!("{text}{{\"name\":\"k::more\",\"level\":\"n0\",\"text\":\"fn more() {{}}\"}}\n")).unwrap();
+        assert!(!resolved_by_task(&file));
+        let copy = dir.path().join("cache/k.lib.1.jsonl");
+        std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        std::fs::copy(&file, &copy).unwrap();
+        index_for_copy(&file, &copy);
+        assert!(take_copy_index(&copy, std::fs::metadata(&copy).unwrap().len()).is_none());
+        // A file with no task has no result of a task.
+        assert!(!resolved_by_task(&dir.path().join("other.jsonl")));
+    }
+
+    /// A complete record folder with one plain record file, and its key.
+    fn complete_folder(dir: &Path) -> (PathBuf, PathBuf, FolderKey) {
+        let folder = dir.join("mir/tree/n0");
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("k.lib.1.jsonl");
+        let lines = [r#"{"unit":{"target":"k.lib.1","cfg":[],"files":[]}}"#, r#"{"name":"k::a","level":"n0","text":"fn a() {}"}"#, r#"{"name":"k::b","level":"n0","text":"fn b() {}"}"#];
+        std::fs::write(&file, lines.join("\n") + "\n").unwrap();
+        std::fs::write(folder.join(COMPLETE), "").unwrap();
+        let time = std::fs::metadata(folder.join(COMPLETE)).unwrap().modified().unwrap();
+        (folder.clone(), file, (folder, time))
+    }
+
+    // [R96.9-2] The index of a folder that this process completed comes from memory: the read
+    // needs no entry of the database (the write runs in its own thread).
+    // rule+ R96.9-2
+    #[test]
+    fn a_complete_folder_gives_its_index_to_the_reads_of_this_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let (folder, file, key) = complete_folder(dir.path());
+        index_folder(&db, &folder, &key);
+        // With no entry in the database, the read takes the index from memory.
+        db.remove_where(Kind::Index, &|_| true).unwrap();
+        let read = read_unit(&db, &file, Some(&key)).unwrap();
+        assert!(read.from_index && read.put.is_none(), "the read made a new index");
+        assert_eq!(read.records.iter().map(|record| record.name.as_str()).collect::<Vec<_>>(), ["k::a", "k::b"]);
+    }
+
+    // [R96.9-2] The negative case: a file that changed after the index takes a new index.
+    // rule- R96.9-2
+    #[test]
+    fn a_file_that_changed_after_its_index_is_indexed_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let (folder, file, key) = complete_folder(dir.path());
+        index_folder(&db, &folder, &key);
+        let text = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, format!("{text}{{\"name\":\"k::c\",\"level\":\"n0\",\"text\":\"fn c() {{}}\"}}\n")).unwrap();
+        let read = read_unit(&db, &file, Some(&key)).unwrap();
+        assert!(!read.from_index, "an index of another state of the file");
+        assert_eq!(read.records.len(), 3);
     }
 
     // [R93.3-1] The negative case: a pointer whose record the store does not have is an error

@@ -113,60 +113,115 @@ fn result_lines(record: &BuildCheck, base_failed: &[String], time: &str) -> Vec<
     lines
 }
 
+/// The folder of the build check in the Semilla cache: the build folder, the target folder of
+/// cargo, and the results by tree. Only a command that records a step uses it.
+fn check_folder_of(repo: &crate::git::Repo) -> std::path::PathBuf {
+    repo.cache_dir().join("check")
+}
+
+/// The tool chain of the build check of a tree (design 53.2): the tool chain that cargo uses for
+/// the author in this tree. The file `rust-toolchain` or `rust-toolchain.toml` at the root of
+/// the tree names it (rustup reads `rust-toolchain` first). Else it is the default of the
+/// machine.
+fn check_toolchain_of(repo: &crate::git::Repo, tree: &str) -> Result<CheckToolchain> {
+    for file in ["rust-toolchain", "rust-toolchain.toml"] {
+        if let Ok(text) = repo.git(&["show", &format!("{tree}:{file}")]) {
+            return semilla_normal::cargo::check_toolchain(Some((&toolchain_request(file, &text)?, file)));
+        }
+    }
+    semilla_normal::cargo::check_toolchain(None)
+}
+
+/// The file of the stored result of the build check of a tree, by the tree and the build
+/// settings (the key has the identity of the tool chain: a different tool chain runs the check
+/// again).
+fn result_file(repo: &crate::git::Repo, tree: &str) -> Result<(std::path::PathBuf, CheckToolchain)> {
+    let folder = check_folder_of(repo);
+    let results = folder.join("results");
+    std::fs::create_dir_all(&results).with_context(|| format!("cannot create the folder {}", results.display()))?;
+    let toolchain = check_toolchain_of(repo, tree)?;
+    let key = semilla_normal::cargo::check_settings_key(&folder, &toolchain);
+    Ok((results.join(format!("{tree}-{key}.json")), toolchain))
+}
+
+/// The build check of one tree. The result of a tree is in the cache, by the tree and the build
+/// settings. `reuse_failure` is false for the new tree of a step: a stored failure is not final,
+/// and the check runs again. The second value is true for a stored result. [R96.8-1] With
+/// `write` false, a new result does not go to the cache: the caller writes it when it uses it
+/// ([`write_result`]).
+fn tree_build_in(repo: &crate::git::Repo, tree: &str, reuse_failure: bool, write: bool) -> Result<(BuildRun, bool)> {
+    let folder = check_folder_of(repo);
+    let (file, toolchain) = result_file(repo, tree)?;
+    let stored = || {
+        let text = std::fs::read_to_string(&file).ok()?;
+        serde_json::from_str::<BuildRun>(&text).ok().filter(|run| reuse_failure || run.failed.is_empty())
+    };
+    if let Some(run) = stored() {
+        return Ok((run, true));
+    }
+    // One build folder serves one build at a time, also across processes.
+    let lock = std::fs::File::create(folder.join("lock")).with_context(|| format!("cannot write the folder {}", folder.display()))?;
+    lock.lock()?;
+    if let Some(run) = stored() {
+        return Ok((run, true));
+    }
+    let build = folder.join("build");
+    repo.checkout_build(&build, tree).with_context(|| format!("cannot write the tree to the build folder {}", build.display()))?;
+    let started = std::time::Instant::now();
+    let target = folder.join("target");
+    let run = {
+        let _building = semilla_core::tasks::Building::start();
+        let _span = semilla_core::tasks::span("the build check");
+        semilla_normal::cargo::build_check(&build, &target, &toolchain)?
+    };
+    crate::timing("build check", started);
+    if write {
+        write_result(repo, tree, &run);
+    }
+    Ok((run, false))
+}
+
+/// [R96.8-1] Writes the result of the build check of a tree to the cache. A failed write only
+/// costs time: the next check of this tree runs cargo again.
+fn write_result(repo: &crate::git::Repo, tree: &str, run: &BuildRun) {
+    if let (Ok((file, _)), Ok(text)) = (result_file(repo, tree), serde_json::to_string(run)) {
+        let _ = std::fs::write(&file, text);
+    }
+}
+
+/// [R96.8-1] The build check of the new tree of a step that runs at the start of the step
+/// (design 96): a step with no compiled build (`--fast` with no property claim) always runs its
+/// own `cargo check`, and the check of the step does not read it. The time is the time of the
+/// task. The result goes to the cache only when the step uses it.
+pub(crate) struct EarlyCheck {
+    result: Result<(BuildRun, bool)>,
+    took: String,
+}
+
+impl EarlyCheck {
+    pub(crate) fn run(repo: &crate::git::Repo, tree: &str) -> EarlyCheck {
+        semilla_core::tasks::delay("the build check");
+        let started = std::time::Instant::now();
+        let result = tree_build_in(repo, tree, false, false);
+        EarlyCheck { result, took: seconds(started) }
+    }
+}
+
 impl App {
     /// The folder of the build check in the Semilla cache: the build folder, the target folder
     /// of cargo, and the results by tree. Only a command that records a step uses it.
     pub(crate) fn check_folder(&self) -> std::path::PathBuf {
-        self.repo.cache_dir().join("check")
+        check_folder_of(&self.repo)
     }
 
-    /// The tool chain of the build check of a tree (design 53.2): the tool chain that cargo
-    /// uses for the author in this tree. The file `rust-toolchain` or `rust-toolchain.toml` at
-    /// the root of the tree names it (rustup reads `rust-toolchain` first). Else it is the
-    /// default of the machine.
+    /// The tool chain of the build check of a tree (design 53.2).
     fn check_toolchain(&self, tree: &str) -> Result<CheckToolchain> {
-        for file in ["rust-toolchain", "rust-toolchain.toml"] {
-            if let Ok(text) = self.repo.git(&["show", &format!("{tree}:{file}")]) {
-                return semilla_normal::cargo::check_toolchain(Some((&toolchain_request(file, &text)?, file)));
-            }
-        }
-        semilla_normal::cargo::check_toolchain(None)
+        check_toolchain_of(&self.repo, tree)
     }
 
-    /// The build check of one tree. The result of a tree is in the cache, by the tree and the
-    /// build settings. `reuse_failure` is false for the new tree of a step: a stored failure
-    /// is not final, and the check runs again. The second value is true for a stored result.
+    /// The build check of one tree (see [`tree_build_in`]).
     fn tree_build(&self, tree: &str, reuse_failure: bool) -> Result<(BuildRun, bool)> {
-        let folder = self.check_folder();
-        let results = folder.join("results");
-        std::fs::create_dir_all(&results).with_context(|| format!("cannot create the folder {}", results.display()))?;
-        // The key of a result has the identity of the tool chain: a different tool chain runs
-        // the check again.
-        let toolchain = self.check_toolchain(tree)?;
-        let key = semilla_normal::cargo::check_settings_key(&folder, &toolchain);
-        let file = results.join(format!("{tree}-{key}.json"));
-        let stored = || {
-            let text = std::fs::read_to_string(&file).ok()?;
-            serde_json::from_str::<BuildRun>(&text).ok().filter(|run| reuse_failure || run.failed.is_empty())
-        };
-        if let Some(run) = stored() {
-            return Ok((run, true));
-        }
-        // One build folder serves one build at a time, also across processes.
-        let lock = std::fs::File::create(folder.join("lock")).with_context(|| format!("cannot write the folder {}", folder.display()))?;
-        lock.lock()?;
-        if let Some(run) = stored() {
-            return Ok((run, true));
-        }
-        let build = folder.join("build");
-        self.repo.checkout_build(&build, tree).with_context(|| format!("cannot write the tree to the build folder {}", build.display()))?;
-        let started = std::time::Instant::now();
-        let target = folder.join("target");
-        let run = semilla_normal::cargo::build_check(&build, &target, &toolchain)?;
-        crate::timing("build check", started);
-        // A failed write only costs time: the next check of this tree runs cargo again.
-        let _ = std::fs::write(&file, serde_json::to_string(&run)?);
-        Ok((run, false))
+        tree_build_in(&self.repo, tree, reuse_failure, true)
     }
 
     /// R68.12-1: a "not checked" line for each `cfg` attribute of the new tree whose condition
@@ -207,6 +262,12 @@ impl App {
     /// The compiled check of this command can be the build check: it builds each target of the
     /// new tree, and it rejects a tree that does not build. Then no second build runs.
     pub(crate) fn build_check(&mut self, before: &str, after: &str) -> Outcome {
+        self.build_check_with(before, after, None)
+    }
+
+    /// [`App::build_check`] with the result of the build check of the new tree that ran at the
+    /// start of the step (R96.8-1), if any.
+    pub(crate) fn build_check_with(&mut self, before: &str, after: &str, early: Option<EarlyCheck>) -> Outcome {
         if self.compiled_build(before, after) {
             return Outcome::Stored { record: BuildCheck::Passes, lines: vec!["build check: passes (the build of the compiled check)".to_string()] };
         }
@@ -214,10 +275,18 @@ impl App {
         let cannot_run = |error: anyhow::Error| Outcome::CannotRun {
             text: format!("  ! build check: cannot run: {}\n", semilla_core::text::block(format!("{error:#}").trim_end()).replace('\n', "\n    ")),
         };
-        let (run, stored) = match self.tree_build(after, false) {
+        let (found, took) = match early {
+            Some(early) => (early.result, Some(early.took)),
+            None => (self.tree_build(after, false), None),
+        };
+        let (run, stored) = match found {
             Ok(found) => found,
             Err(error) => return cannot_run(error),
         };
+        // [R96.8-1] The step uses the early result: it goes to the cache now.
+        if !stored && took.is_some() {
+            write_result(&self.repo, after, &run);
+        }
         // A build with a limit of the sandbox missing (design 27): the result says so.
         let mut notes: Vec<String> = Vec::new();
         // R68.12-1: the changed code that the target of the check does not build.
@@ -225,7 +294,7 @@ impl App {
         if let Some(missing) = semilla_normal::sandbox::missing().filter(|_| !stored) {
             notes.push(format!("  ! build check: {}", missing.line()));
         }
-        let time = if stored { "a stored result of this tree".to_string() } else { seconds(started) };
+        let time = if stored { "a stored result of this tree".to_string() } else { took.clone().unwrap_or_else(|| seconds(started)) };
         if run.failed.is_empty() {
             let mut lines = vec![format!("build check: passes ({time})")];
             lines.extend(notes);

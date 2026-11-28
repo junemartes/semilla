@@ -99,7 +99,7 @@ impl NormalOracle {
         if let Some(found) = self.added.lock().unwrap_or_else(|error| error.into_inner()).intent_checks.get(&key) {
             return found.clone();
         }
-        let found = Arc::new(crate::intentcrate::check(self, &step.tree_before, &step.tree_after, sources).map_err(|error| format!("the intent crate does not compile: {error:#}")));
+        let found = Arc::new(crate::intentcrate::check_shared(self, &step.tree_before, &step.tree_after, sources).map_err(|error| format!("the intent crate does not compile: {error:#}")));
         self.added.lock().unwrap_or_else(|error| error.into_inner()).intent_checks.insert(key, found.clone());
         found
     }

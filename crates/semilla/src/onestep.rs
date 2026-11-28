@@ -291,6 +291,27 @@ fn position(text: &str) -> Option<(String, usize, Option<usize>)> {
     file.ends_with(".rs").then(|| (file.to_string(), line, Some(last)))
 }
 
+/// [R96.8-1] The build check of the new tree that runs at the start of a step. The end of the
+/// value waits for the task: no build runs after the command.
+struct EarlyTask(Option<std::thread::JoinHandle<crate::buildcheck::EarlyCheck>>);
+
+impl EarlyTask {
+    fn start(inputs: Option<(crate::git::Repo, String)>) -> EarlyTask {
+        EarlyTask(inputs.map(|(repo, tree)| std::thread::spawn(move || crate::buildcheck::EarlyCheck::run(&repo, &tree))))
+    }
+
+    /// The result of the task, or `None` (no task).
+    fn take(&mut self) -> Option<crate::buildcheck::EarlyCheck> {
+        self.0.take().and_then(|handle| handle.join().ok())
+    }
+}
+
+impl Drop for EarlyTask {
+    fn drop(&mut self) {
+        let _ = self.take();
+    }
+}
+
 impl App {
     /// Resolves an anchor: an item path, or a position `FILE:LINE[:COLUMN]` in the working tree.
     /// A position of a claim on existing code (a rename, a move) is in the "before" tree.
@@ -306,6 +327,7 @@ impl App {
         if request.intent.trim().is_empty() {
             bail!("the intent has no text. The reviewer reads the intent: say what the step does, for example `semilla step \"rename the field\"`");
         }
+        let start_span = semilla_core::tasks::span("the start of the step command");
         let mut session = self.load_session()?;
         // The record of a rejected step is for the last `semilla step` only.
         session.rejected = None;
@@ -324,6 +346,7 @@ impl App {
             session = Session::default();
         }
         let tree = self.repo.write_tree()?;
+        drop(start_span);
         let before = if session.changeset.steps.is_empty() {
             let head = self.repo.commit_tree("HEAD").context("the repository has no commit; commit the base first")?;
             session.changeset.base_tree = head.clone();
@@ -434,7 +457,12 @@ impl App {
         self.save_session(&session)?;
         let no_bodies = self.no_bodies;
         self.no_bodies = no_bodies || !full;
+        // [R96.8-1] A step with no compiled build always runs the build check with its own
+        // `cargo check` (design 53), and the check of the step does not read it: it starts now.
+        let mut early = EarlyTask::start((!full).then(|| (self.repo.clone(), tree.clone())));
+        let check_span = semilla_core::tasks::span("the check of the step");
         let mut result = self.check(Some(index), false);
+        drop(check_span);
         // A candidate pair for a derived identity: only phase 2 can derive it (design 24.2, rule 4).
         if !full && !no_bodies && result.as_ref().is_ok_and(|r| r.report.steps.first().is_some_and(|s| s.identity_candidates)) {
             full = true;
@@ -497,7 +525,7 @@ impl App {
         // result of a tree that builds is in the cache: the next command does not build again.
         // Rule 9: a compiled check of this command that does not accept the step built the new
         // tree, or it has a different cause for the reject. No second build runs.
-        let build = if !request.fast && !accepted { None } else { Some(self.build_check(&before, &tree)) };
+        let build = if !request.fast && !accepted { None } else { Some(self.build_check_with(&before, &tree, early.take())) };
         let (build_record, build_lines, build_stop) = match build {
             None => (None, Vec::new(), None),
             Some(crate::buildcheck::Outcome::Stored { record, lines }) => (Some(record), lines, None),
@@ -824,8 +852,11 @@ impl App {
         // set with a step of `--fast` keeps the background check (the earlier rule): the state of
         // that step comes from the background result (D7).
         let fast_steps = self.load_session().map(|session| !session.fast_steps.is_empty()).unwrap_or(true);
-        let result_stored = full && !self.no_bodies && (stored_set.steps.len() == 1 || !fast_steps) && self.store_session_result(&stored_set).is_ok();
-        if !result_stored {
+        // [R96.9-1] The store write of the result comes after the output (design 96): the caller
+        // runs `finish_deferred` after it prints the text. The text does not read the result.
+        if full && !self.no_bodies && (stored_set.steps.len() == 1 || !fast_steps) {
+            self.deferred = Some(stored_set);
+        } else {
             self.queue_session(&stored_set)?;
         }
         // B4: a commit between the steps makes `tag` fail. Say it now, with the fix.

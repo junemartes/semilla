@@ -581,8 +581,15 @@ impl TimeTotal {
 }
 
 fn main() -> ExitCode {
+    // [R96.7-1] The time line of the tasks starts with the process.
+    semilla_core::tasks::start_line();
+    recstore::async_writes();
     let cli = Cli::parse();
-    match run(cli) {
+    let result = run(cli);
+    // [R96.9-2] The end of a command waits for the writes of the store in their own threads.
+    recstore::join_writes();
+    semilla_core::tasks::print_line();
+    match result {
         Ok(code) => code,
         Err(error) => {
             // A rejected result is not a tool error: its first line is the result line.
@@ -750,6 +757,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let request = onestep::StepRequest { intent, group, claims, reasons, same, change, intent_files, tags: tag, tree, fast, configurations: app.new_list.clone() };
             let (text, stored) = app.step_once(&request)?;
             print!("{text}");
+            // [R96.9-1] The output first, then the store write of the result of the change set.
+            use std::io::Write as _;
+            let _ = std::io::stdout().flush();
+            app.finish_deferred()?;
             // Design 37.22: the build code cache keeps the entries of the stored steps and the
             // newest other entries. A failure of the clean is not a failure of the step.
             // The build check has its own folder (design 53).

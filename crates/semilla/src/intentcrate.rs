@@ -97,8 +97,68 @@ fn heads_of(files: &[Source]) -> (Vec<(String, Vec<semilla_intent::heads::Head>)
 /// cache, or one N0 build each), the facades (one time for each pair), the compile of the
 /// intent crate by rustc, then the meaning of each attribute.
 pub(crate) fn check(oracle: &crate::oracle::NormalOracle, before: &str, after: &str, files: &[Source]) -> Result<Check> {
-    let started = Instant::now();
     let (heads, findings) = heads_of(files);
+    let made = pair(oracle, before, after)?;
+    finish(oracle, &made, heads, findings, files)
+}
+
+/// [R96.4-1] The part of an intent check before the compile (design 96): the builds of the two
+/// trees, the second build of the old tree (R78.1-2), and the facades. Its inputs are the two
+/// trees and their builds, not the intent files: the task of the builds of a step starts it
+/// when the builds end, and the gate and the check of the claims read it.
+#[derive(Clone, Debug)]
+pub(crate) struct Pair {
+    prepared: semilla_normal::intent::Prepared,
+    build: Duration,
+    /// The start of the check after the builds (for the time of the check).
+    checking: Instant,
+    second: Option<(Duration, bool)>,
+}
+
+/// [R96.4-1] The pairs of this process, by the cache folders of the two trees.
+static PAIRS: semilla_core::tasks::Keyed<String, std::sync::Arc<Pair>> = semilla_core::tasks::Keyed::new();
+
+/// [R96.4-1] The key of the pair of two trees: the cache folder of the N0 build of each one.
+fn pair_key(oracle: &crate::oracle::NormalOracle, before: &str, after: &str) -> Result<String> {
+    let config = semilla_normal::Configuration::DEV;
+    let folder = |tree: &str| -> Result<String> {
+        let cache = oracle.cache_folder(tree, "n0", &config)?.1;
+        let time = std::fs::metadata(cache.join(".complete")).and_then(|meta| meta.modified()).map(|time| format!("{time:?}")).unwrap_or_default();
+        Ok(format!("{} {time}", cache.display()))
+    };
+    Ok(format!("{}\n{}\n{}", oracle.repo.cache_dir().display(), folder(before)?, folder(after)?))
+}
+
+/// [R96.4-1] The pair of two trees, made one time in this process: a second reader waits for
+/// the first one. A failed pair keeps no result (the next reader tries again, as each check
+/// did before).
+pub(crate) fn shared_pair(oracle: &crate::oracle::NormalOracle, before: &str, after: &str) -> Result<std::sync::Arc<Pair>> {
+    let key = pair_key(oracle, before, after)?;
+    PAIRS.get_or_run(&key, || pair(oracle, before, after).map(std::sync::Arc::new))
+}
+
+/// [R96.4-1] [`check`] with the pair of this process ([`shared_pair`]).
+pub(crate) fn check_shared(oracle: &crate::oracle::NormalOracle, before: &str, after: &str, files: &[Source]) -> Result<Check> {
+    let (heads, findings) = heads_of(files);
+    let made = shared_pair(oracle, before, after)?;
+    finish(oracle, &made, heads, findings, files)
+}
+
+/// The compile of the intent files against a pair, then the meaning of each attribute.
+fn finish(oracle: &crate::oracle::NormalOracle, made: &Pair, heads: Vec<(String, Vec<semilla_intent::heads::Head>)>, findings: Vec<semilla_intent::heads::Finding>, files: &[Source]) -> Result<Check> {
+    let prepared = &made.prepared;
+    let sources = compile_sources(files, &heads, &findings);
+    let mut compiled = compile(prepared, &sources, &oracle.repo.root)?;
+    clean_panic(&mut compiled, &heads, &sources, &|sources| compile(prepared, sources, &oracle.repo.root).ok());
+    let mut findings = findings;
+    findings.extend(link_findings(&compiled, &heads));
+    let build = made.build;
+    Ok(Check { compiled, heads, findings, cold: prepared.made, build: if build.as_millis() > 50 { build } else { Duration::ZERO }, took: made.checking.elapsed(), second: made.second })
+}
+
+/// The work of [`Pair`].
+fn pair(oracle: &crate::oracle::NormalOracle, before: &str, after: &str) -> Result<Pair> {
+    let started = Instant::now();
     let config = semilla_normal::Configuration::DEV;
     let mut libraries = Vec::new();
     let mut keys = String::new();
@@ -146,12 +206,7 @@ pub(crate) fn check(oracle: &crate::oracle::NormalOracle, before: &str, after: &
     if let Some(fast) = fast_file(&oracle.repo.cache_dir(), before, after) {
         let _ = std::fs::write(fast, prepared.folder.display().to_string());
     }
-    let sources = compile_sources(files, &heads, &findings);
-    let mut compiled = compile(&prepared, &sources, &oracle.repo.root)?;
-    clean_panic(&mut compiled, &heads, &sources, &|sources| compile(&prepared, sources, &oracle.repo.root).ok());
-    let mut findings = findings;
-    findings.extend(link_findings(&compiled, &heads));
-    Ok(Check { compiled, heads, findings, cold: prepared.made, build: if build.as_millis() > 50 { build } else { Duration::ZERO }, took: checking.elapsed(), second })
+    Ok(Pair { prepared, build, checking, second })
 }
 
 /// [R87.3-1] True for the text of an internal error of the compiler (a panic).
