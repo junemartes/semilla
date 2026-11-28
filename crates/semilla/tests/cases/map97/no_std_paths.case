@@ -45,9 +45,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 4 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::f`:
-  ◆ f1 replace (a1; R97.3-1, the closure pair of `fn end` fits 1 site(s): `shop::f` (src/lib.rs:3); at the first site the parameter `r` binds to `r`; a real edit that the statement states (statement 1)): changed field: `r.len()` → `r.end` at `shop::f/tail` [semantics · code different]
+  ◆ f1 replace (a1; R97.3-1, the form of `fn end` holds at 1 site(s): `shop::f` (src/lib.rs:3); 1 case(s): 1 changed (form); at the first site the parameter `r` binds to `r`; a real edit that the statement states (statement 1)): changed field: `r.len()` → `r.end` at `shop::f/tail` [semantics · code different]
+      case 1 (each input): changed (the result: `<Range<usize> as ExactSizeIterator>::len(&shared r)` → `(r.Range.end: usize)`; the effects: call `<Range<usize> as ExactSizeIterator>::len(&shared r)` → none)
       affected bodies: shop::f
-      graph: −1 call (`<Range<usize> as ExactSizeIterator>::len (trait default)`), +1 arrow, −2 arrows
+      graph: −1 call (`<Range<usize> as ExactSizeIterator>::len (trait default)`), +1 arrow, −2 arrows; see the case table
       control flow: − call `<Range<usize> as ExactSizeIterator>::len (trait default)` (src/lib.rs:-3): return → return
       control flow: + arrow entry (src/lib.rs:2) → return (src/lib.rs:4)
       control flow: − arrow entry (src/lib.rs:-2) → call `<Range<usize> as ExactSizeIterator>::len (trait default)` (src/lib.rs:-3)
@@ -58,5 +59,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (a1; R97.3-1, the closure pair of `fn end` fits 1 site(s): `shop::f` (src/lib.rs:3); at the first site the parameter `r` binds to `r`; a real edit that the statement states (statement 1)): changed field: `r.len()` → `r.end` at `shop::f/tail` [semantics · code different]
+◆ f1 replace (a1; R97.3-1, the form of `fn end` holds at 1 site(s): `shop::f` (src/lib.rs:3); 1 case(s): 1 changed (form); at the first site the parameter `r` binds to `r`; a real edit that the statement states (statement 1)): changed field: `r.len()` → `r.end` at `shop::f/tail` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:-3

@@ -53,7 +53,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes alone; the body: MIR changes
   transformations:
   item `shop::f`:
-  ◆ f1 same code (a1; R97.3-1, the closure pair of `fn add_one` fits 1 site(s): `shop::f` (src/lib.rs:2); at the first site the parameter `a` binds to `a`; the compiled code of the site is equal under the binding (statement 1)): changed expression `a.wrapping_add(1)` → `u32::wrapping_add(a, 1)` at `shop::f/S0/init` [semantics · code equal]
+  ◆ f1 same code (a1; R97.3-1, the form of `fn add_one` holds at 1 site(s): `shop::f` (src/lib.rs:2); 1 case(s): 1 equal code (form); at the first site the parameter `a` binds to `a`; the compiled code of the site is equal under the binding (statement 1)): changed expression `a.wrapping_add(1)` → `u32::wrapping_add(a, 1)` at `shop::f/S0/init` [semantics · code equal]
+      case 1 (each input): equal code (both returns `Add(a, const u32 = 1)`)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
@@ -63,5 +64,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 === positions
 ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `shop::f/tail/args[0]` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:-3
-◆ f1 same code (a1; R97.3-1, the closure pair of `fn add_one` fits 1 site(s): `shop::f` (src/lib.rs:2); at the first site the parameter `a` binds to `a`; the compiled code of the site is equal under the binding (statement 1)): changed expression `a.wrapping_add(1)` → `u32::wrapping_add(a, 1)` at `shop::f/S0/init` [semantics · code equal]
+◆ f1 same code (a1; R97.3-1, the form of `fn add_one` holds at 1 site(s): `shop::f` (src/lib.rs:2); 1 case(s): 1 equal code (form); at the first site the parameter `a` binds to `a`; the compiled code of the site is equal under the binding (statement 1)): changed expression `a.wrapping_add(1)` → `u32::wrapping_add(a, 1)` at `shop::f/S0/init` [semantics · code equal]
     lines: src/lib.rs:2, src/lib.rs:-2

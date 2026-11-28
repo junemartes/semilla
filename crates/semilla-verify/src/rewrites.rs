@@ -47,6 +47,9 @@ pub const RULE_NO_SITE: &str = "R97.5-1";
 pub const RULE_TIE: &str = "R97.6-1";
 pub const RULE_GROUP: &str = "R97.7-1";
 pub const RULE_TEMPLATE: &str = "R97.8-1";
+pub const RULE_GRAPH: &str = "R101.1-1";
+pub const RULE_REGION: &str = "R101.1-2";
+pub const RULE_TYPE: &str = "R101.2-1";
 
 /// The MIR operators whose two operands can swap: the printer gives them an order that does not
 /// read the numbers of the locals (design 47), so the order of a closure text does not give the
@@ -187,7 +190,7 @@ pub(crate) fn strip_facade(text: &str) -> String {
 const STD_CRATES: &[&str] = &["std", "alloc", "core"];
 
 /// [R97.2-4] A text with each path of a crate of the standard library under the name `core`.
-fn std_paths(text: &str) -> String {
+pub(crate) fn std_paths(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
@@ -275,11 +278,13 @@ fn renamed(text: &str, map: &dyn Fn(usize) -> Option<String>) -> Option<String> 
 // ---------------------------------------------------------------------------------------------
 // The pattern of one closure.
 
-/// One hole of a pattern: the result (`_0`), a parameter, or a temporary of the closure.
+/// One hole of a pattern: the result (`_0`), a parameter, a temporary of the closure, or
+/// [R101.2-1] a generic parameter of the statement function (a hole for a type).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Hole {
     Value(usize),
     Temp(usize),
+    Type(usize),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -288,27 +293,116 @@ enum Seg {
     Hole(Hole),
 }
 
-/// One element of a closure chain.
+/// [R101.1-1] The kind of one element of the graph of a closure (or of a body).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// A statement.
+    Stmt,
+    Goto(usize),
+    Return,
+    /// A `switchInt`: the target of each arm in the order of the text (`otherwise` last).
+    Switch(Vec<usize>),
+    /// A call, an assert, or a drop with a normal edge.
+    Normal(usize),
+    /// A call with no return (a panic, a call of a function that returns `!`).
+    Diverge,
+    Unreachable,
+    /// An end that the pattern does not read (`resume`, `abort`).
+    Other,
+}
+
+/// [R101.1-1] The kind of an element text: the last element of a block is a terminator.
+pub(crate) fn kind_of(text: &str, terminator: bool) -> Kind {
+    if !terminator {
+        return Kind::Stmt;
+    }
+    if text == "return" {
+        return Kind::Return;
+    }
+    if text == "unreachable" {
+        return Kind::Unreachable;
+    }
+    if text.starts_with("goto -> ") {
+        return normal_target(text).map_or(Kind::Other, Kind::Goto);
+    }
+    if text.starts_with("switchInt(") {
+        return Kind::Switch(switch_targets(text));
+    }
+    if text.contains("[no return") {
+        return Kind::Diverge;
+    }
+    match normal_target(text) {
+        Some(target) if text.contains(" -> [") => Kind::Normal(target),
+        _ => Kind::Other,
+    }
+}
+
+/// The targets of a `switchInt` in the order of the text: each `: bbN` of its list.
+fn switch_targets(text: &str) -> Vec<usize> {
+    let Some(list) = text.find(" -> [").map(|at| &text[at..]) else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(at) = list[from..].find(": bb").map(|at| from + at) {
+        let digits = &list[at + 4..];
+        let end = digits.find(|c: char| !c.is_ascii_digit()).unwrap_or(digits.len());
+        if let Ok(number) = digits[..end].parse() {
+            out.push(number);
+        }
+        from = at + 4 + end;
+    }
+    out
+}
+
+/// [R101.1-1] The text of an element for the graph match: [`masked`], and each target of a
+/// `switchInt` masked too (the graph match pairs the targets by their place in the list).
+fn masked_all(text: &str) -> String {
+    let out = masked(text);
+    if !out.starts_with("switchInt(") {
+        return out;
+    }
+    let Some(start) = out.find(" -> [") else { return out };
+    let (head, list) = out.split_at(start);
+    let mut masked_list = String::with_capacity(list.len());
+    let mut rest = list;
+    while let Some(at) = rest.find(": bb") {
+        masked_list.push_str(&rest[..at + 4]);
+        let digits = &rest[at + 4..];
+        let end = digits.find(|c: char| !c.is_ascii_digit()).unwrap_or(digits.len());
+        masked_list.push('?');
+        rest = &digits[end..];
+    }
+    masked_list.push_str(rest);
+    format!("{head}{masked_list}")
+}
+
+/// One element of a closure graph.
 #[derive(Clone, Debug)]
 struct Step {
     /// The forms of the element: the text, and each other order of the operands of a symmetric
     /// operation (R97.6-1).
     forms: Vec<Vec<Seg>>,
     text: String,
-    terminator: bool,
-    /// True if the normal edge goes to the end of the closure (a block with only `return`).
-    ends: bool,
+    kind: Kind,
 }
 
-/// [R97.1-1] The pattern of one closure: its elements on the one path from the start to the
-/// return, the types of its parameters, of its result, and of its temporaries.
+/// [R97.1-1] [R101.1-1] The pattern of one closure: its graph (each block that a normal edge
+/// reaches from the start, with its elements), the types of its parameters, of its result, and
+/// of its temporaries, and its type holes (R101.2-1).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Pattern {
-    steps: Vec<Step>,
+    blocks: BTreeMap<usize, Vec<Step>>,
     /// The parameters (the local `_2` and up), with their types.
     params: BTreeMap<usize, String>,
     ret: String,
     temps: BTreeMap<usize, String>,
+    /// [R101.2-1] The names of the type holes (the generic parameters of the statement function).
+    types: Vec<String>,
+    /// [R101.3-2] The drops of a value whose type has a type hole: the place of the first
+    /// element (the block and the index), the block where the code continues with no drop, and
+    /// the local of the closure that the drop reads.
+    optional: BTreeMap<(usize, usize), (usize, usize)>,
+    /// The count of the elements of the graph (for the nearest candidates).
+    pub size: usize,
 }
 
 impl Pattern {
@@ -316,21 +410,62 @@ impl Pattern {
     pub fn arity(&self) -> usize {
         self.params.len()
     }
+
 }
 
-/// The segments of an element text: the text, and a hole for each local.
-fn segments(text: &str, args: usize) -> Vec<Seg> {
+/// [R101.2-1] The names of the type parameters of a signature line (`generics <T#0, E#1, #2>`):
+/// the names that are identifiers (a lifetime and a parameter with no name are no hole).
+fn generic_names(text: &str) -> Vec<String> {
+    let Some(first) = text.lines().find(|line| line.starts_with("fn _(")) else { return Vec::new() };
+    let Some(at) = first.rfind(" generics <") else { return Vec::new() };
+    let list = first[at + " generics <".len()..].trim_end_matches(" {").trim_end_matches('>');
+    list.split(", ").filter_map(|part| part.rsplit_once('#').map(|(name, _)| name)).filter(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.starts_with(|c: char| c.is_ascii_digit())).map(str::to_string).collect()
+}
+
+/// The segments of an element text: the text, a hole for each local, and [R101.2-1] a hole for
+/// each name of a type hole (a word that is not a part of a path).
+fn segments(text: &str, args: usize, types: &[String]) -> Vec<Seg> {
     let mut out = Vec::new();
+    let mut literal = String::new();
+    let locals = locals_in(text);
+    let bytes = text.as_bytes();
     let mut at = 0;
-    for (start, end, number) in locals_in(text) {
-        if start > at {
-            out.push(Seg::Lit(text[at..start].to_string()));
+    let mut next_local = 0;
+    while at < text.len() {
+        if let Some((start, end, number)) = locals.get(next_local).copied()
+            && start == at
+        {
+            if !literal.is_empty() {
+                out.push(Seg::Lit(std::mem::take(&mut literal)));
+            }
+            out.push(Seg::Hole(if number == 0 || (2..=args).contains(&number) { Hole::Value(number) } else { Hole::Temp(number) }));
+            at = end;
+            next_local += 1;
+            continue;
         }
-        out.push(Seg::Hole(if number == 0 || (2..=args).contains(&number) { Hole::Value(number) } else { Hole::Temp(number) }));
-        at = end;
+        let word_start = (bytes[at].is_ascii_alphabetic() || bytes[at] == b'_') && (at == 0 || !(ident_char(bytes[at - 1]) || bytes[at - 1] == b':' || bytes[at - 1] == b'\'' || bytes[at - 1] == b'#'));
+        if word_start {
+            let end = text[at..].find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).map_or(text.len(), |len| at + len);
+            let word = &text[at..end];
+            if let Some(index) = types.iter().position(|name| name == word)
+                && !text[end..].starts_with("::")
+            {
+                if !literal.is_empty() {
+                    out.push(Seg::Lit(std::mem::take(&mut literal)));
+                }
+                out.push(Seg::Hole(Hole::Type(index)));
+            } else {
+                literal.push_str(word);
+            }
+            at = end;
+            continue;
+        }
+        let c = text[at..].chars().next().unwrap_or(' ');
+        literal.push(c);
+        at += c.len_utf8();
     }
-    if at < text.len() {
-        out.push(Seg::Lit(text[at..].to_string()));
+    if !literal.is_empty() {
+        out.push(Seg::Lit(literal));
     }
     out
 }
@@ -404,12 +539,14 @@ fn forms(text: &str) -> (Vec<String>, usize) {
     (out, count)
 }
 
-/// [R97.1-1] The pattern of a closure from its canonical text. `Err`: the cause why the closure
-/// is no pattern (an error of the statement).
+/// [R97.1-1] [R101.1-1] The pattern of a closure from its canonical text: the graph of the blocks
+/// that a normal edge reaches from the start. `Err`: the cause why the closure is no pattern (an
+/// error of the statement).
 pub(crate) fn pattern(text: &str) -> Result<Pattern, String> {
     if text.contains(&format!("{CLAIMS_CRATE}::")) {
         return Err(format!("the closure calls an item of the intent file: a closure reads only its parameters ({RULE_FORM})"));
     }
+    let types = generic_names(text);
     let stripped = strip_facade(text);
     let mir = parse_mir(&stripped);
     if mir.args == 0 {
@@ -420,54 +557,78 @@ pub(crate) fn pattern(text: &str) -> Result<Pattern, String> {
     }
     let params: BTreeMap<usize, String> = (2..=mir.args).map(|local| (local, mir.local_type(local).unwrap_or("").to_string())).collect();
     let temps: BTreeMap<usize, String> = mir.locals.iter().filter(|(local, _)| **local > mir.args).map(|(local, ty)| (*local, ty.clone())).collect();
-    let only_return = |block: usize| mir.blocks.get(&block).is_some_and(|list| list.len() == 1 && mir.elements[list[0]].0 == "return");
-    let mut steps = Vec::new();
-    let mut block = 0;
-    let mut seen = BTreeSet::new();
+    let mut blocks: BTreeMap<usize, Vec<Step>> = BTreeMap::new();
+    let mut todo = vec![0usize];
     let mut symmetric = 0;
-    loop {
-        if !seen.insert(block) {
-            return Err("the closure body has a loop".into());
-        }
-        let list = mir.blocks.get(&block).cloned().unwrap_or_default();
-        let Some((&last, statements)) = list.split_last() else { return Err("the closure body has an empty block".into()) };
-        for &index in statements {
-            let text = &mir.elements[index].0;
-            steps.push(step(text, false, false, mir.args, &mut symmetric)?);
-        }
-        let text = &mir.elements[last].0;
-        if text == "return" {
-            break;
-        }
-        if text.starts_with("goto -> ") {
-            block = normal_target(text).ok_or("a jump with no target")?;
+    let mut size = 0;
+    while let Some(block) = todo.pop() {
+        if blocks.contains_key(&block) {
             continue;
         }
-        if text.starts_with("switchInt(") || !text.contains(" -> [") {
-            return Err(format!("the closure body has a branch or an end that is not a return (`{text}`): the closure form reads one path"));
+        let list = mir.blocks.get(&block).cloned().unwrap_or_default();
+        if list.is_empty() {
+            return Err("the closure body has an empty block".into());
         }
-        let target = normal_target(text).ok_or_else(|| format!("the element `{text}` has no normal edge"))?;
-        let ends = only_return(target);
-        steps.push(step(text, true, ends, mir.args, &mut symmetric)?);
-        if ends {
-            break;
+        let mut steps = Vec::new();
+        for (place, &index) in list.iter().enumerate() {
+            let text = &mir.elements[index].0;
+            let kind = kind_of(text, place + 1 == list.len());
+            match &kind {
+                Kind::Other => return Err(format!("the closure body has an end that the pattern does not read (`{text}`)")),
+                Kind::Goto(target) | Kind::Normal(target) => todo.push(*target),
+                Kind::Switch(targets) => todo.extend(targets.iter().rev()),
+                _ => {}
+            }
+            if !matches!(kind, Kind::Return | Kind::Goto(_)) {
+                size += 1;
+            }
+            steps.push(step(text, kind, mir.args, &types, &mut symmetric)?);
         }
-        block = target;
+        blocks.insert(block, steps);
     }
-    if steps.is_empty() {
+    if size == 0 {
         return Err("the closure body has no element".into());
     }
-    Ok(Pattern { steps, params, ret: mir.ret.clone(), temps })
+    // [R101.3-2] The drops of a value whose type has a type hole: the bound type at a site can
+    // need no drop, and then rustc puts in no element.
+    let has_hole = |local: usize| mir.local_type(local).is_some_and(|ty| segments(ty, 0, &types).iter().any(|seg| matches!(seg, Seg::Hole(Hole::Type(_)))));
+    let mut optional = BTreeMap::new();
+    for (block, steps) in &blocks {
+        let Some(last) = steps.last() else { continue };
+        // A drop of the value: `drop(_N) -> [return: bbJ, …]`.
+        if let Some(rest) = last.text.strip_prefix("drop(")
+            && let Some((local, _)) = local_at(rest, 0)
+            && has_hole(local)
+            && let Kind::Normal(target) = last.kind
+        {
+            optional.insert((*block, steps.len() - 1), (target, local));
+        }
+        // The drop of the rest of a value after a move out of one variant: `_k = discriminant(_N)`,
+        // `switchInt(_k) -> [V: bbJ, otherwise: bbD]`, and `bbD` is only `drop(_N) -> bbJ`.
+        if steps.len() >= 2
+            && let Kind::Switch(targets) = &last.kind
+            && let [join, other] = targets.as_slice()
+            && let Some(rest) = steps[steps.len() - 2].text.split_once(" = discriminant(").map(|(_, rest)| rest)
+            && let Some((local, _)) = local_at(rest, 0)
+            && has_hole(local)
+            && let Some(drop) = blocks.get(other).filter(|list| list.len() == 1).map(|list| &list[0])
+            && drop.text.starts_with(&format!("drop(_{local})"))
+            && drop.kind == Kind::Normal(*join)
+        {
+            optional.insert((*block, steps.len() - 2), (*join, local));
+        }
+    }
+    Ok(Pattern { blocks, params, ret: mir.ret.clone(), temps, types, optional, size })
 }
 
-fn step(text: &str, terminator: bool, ends: bool, args: usize, symmetric: &mut usize) -> Result<Step, String> {
-    let text = masked(text);
+fn step(text: &str, kind: Kind, args: usize, types: &[String], symmetric: &mut usize) -> Result<Step, String> {
+    let text = masked_all(text);
     let (forms, count) = forms(&text);
     *symmetric += count;
     if *symmetric > MOST_SYMMETRIC {
         return Err(format!("the closure has more than {MOST_SYMMETRIC} symmetric operations with a parameter or a temporary: the check of the binding of their operands is too large ({RULE_TIE})"));
     }
-    Ok(Step { forms: forms.iter().map(|form| segments(form, args)).collect(), text, terminator, ends })
+    Ok(Step { forms: forms.iter().map(|form| segments(form, args, types)).collect(), text, kind })
 }
 
 /// The name of the intent crate (design 78) in a record name.
@@ -477,11 +638,13 @@ const CLAIMS_CRATE: &str = "semilla_claims";
 // The binding and the match.
 
 /// The binding of the holes of a pattern to the body: each value hole (the result and the
-/// parameters) to one operand text, and each temporary to one local of the body.
+/// parameters) to one operand text, each temporary to one local of the body, and [R101.2-1] each
+/// type hole to one type text.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Binding {
     values: BTreeMap<usize, String>,
     temps: BTreeMap<usize, usize>,
+    pub(crate) types: BTreeMap<usize, String>,
 }
 
 /// The local of a body text at a place, and its length.
@@ -514,9 +677,133 @@ fn operand_end(text: &str, at: usize, next: Option<&str>) -> Option<usize> {
     (next.is_none() && depth == 0 && text.len() > at).then_some(text.len())
 }
 
+/// [R101.2-1] The end of one type that starts at `at`: the shortest text with balanced brackets
+/// (also `<` and `>`, not the arrow `->`) and no comma at its top level that the next literal
+/// follows.
+fn type_end(text: &str, at: usize, next: Option<&str>) -> Option<usize> {
+    let mut depth = 0i32;
+    let bytes = text.as_bytes();
+    for (offset, c) in text[at..].char_indices() {
+        let place = at + offset;
+        if depth == 0 && offset > 0 && next.is_some_and(|literal| text[place..].starts_with(literal)) {
+            return Some(place);
+        }
+        match c {
+            '(' | '[' | '{' | '<' => depth += 1,
+            '>' if place > 0 && bytes[place - 1] == b'-' => {}
+            ')' | ']' | '}' | '>' => {
+                depth -= 1;
+                if depth < 0 {
+                    return None;
+                }
+            }
+            ',' if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    (next.is_none() && depth == 0 && text.len() > at).then_some(text.len())
+}
+
+/// [R101.3-3] The text of segments with each hole bound; `None`: a hole with no binding.
+fn fill(segs: &[Seg], binding: &Binding) -> Option<String> {
+    let mut out = String::new();
+    for seg in resolved(segs, binding) {
+        match seg {
+            Seg::Lit(text) => out.push_str(&text),
+            Seg::Hole(Hole::Value(number)) => out.push_str(binding.values.get(&number)?),
+            Seg::Hole(Hole::Temp(number)) => out.push_str(&format!("_{}", binding.temps.get(&number)?)),
+            Seg::Hole(Hole::Type(_)) => return None,
+        }
+    }
+    Some(out)
+}
+
+/// [R101.3-3] The place of a result kept in its place, as the body reads it: the text of the
+/// segments with each hole bound, where the type of a type hole that no element bound comes from
+/// the first element of the body that reads the place. `None`: no element reads it.
+fn kept_place(body: &Mir, segs: &[Seg], binding: &Binding) -> Option<(String, BTreeMap<usize, String>)> {
+    let mut binding = binding.clone();
+    for _ in 0..4 {
+        let segs = resolved(segs, &binding);
+        let open = segs.iter().position(|seg| matches!(seg, Seg::Hole(Hole::Type(_))));
+        let Some(open) = open else {
+            let place = fill(&segs, &binding)?;
+            let read = body.elements.iter().any(|(text, _)| masked(text).contains(&place));
+            return read.then_some((place, binding.types));
+        };
+        let prefix = fill(&segs[..open], &binding)?;
+        let next = match segs.get(open + 1) {
+            Some(Seg::Lit(literal)) => Some(literal.as_str()),
+            _ => None,
+        };
+        let Seg::Hole(Hole::Type(index)) = segs[open] else { return None };
+        let (text, at) = body.elements.iter().find_map(|(text, _)| {
+            let text = masked(text);
+            text.find(&prefix).map(|at| (text.clone(), at + prefix.len()))
+        })?;
+        let end = type_end(&text, at, next)?;
+        binding.types.insert(index, text[at..end].to_string());
+    }
+    None
+}
+
+/// [R101.3-3] True if the closure goes from a place to a `return` with only jumps and drops of
+/// R101.3-2 between.
+fn reaches_return(pattern: &Pattern, mut block: usize, mut index: usize) -> bool {
+    for _ in 0..16 {
+        if let Some((join, _)) = pattern.optional.get(&(block, index)) {
+            (block, index) = (*join, 0);
+            continue;
+        }
+        match pattern.blocks.get(&block).and_then(|steps| steps.get(index)).map(|step| &step.kind) {
+            Some(Kind::Return) => return true,
+            Some(Kind::Goto(target)) => (block, index) = (*target, 0),
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// True if an operand text is one local (`_N`).
+fn is_local(text: &str) -> bool {
+    local_at(text, 0).is_some_and(|(_, len)| len == text.len())
+}
+
+/// [R101.2-1] The segments with each bound type hole as its text, the literals joined, and the
+/// unit return of a function type in the form of the printer (`fn(A) -> ()` is `fn(A)`).
+fn resolved(segs: &[Seg], binding: &Binding) -> Vec<Seg> {
+    let mut out: Vec<Seg> = Vec::with_capacity(segs.len());
+    for seg in segs {
+        let seg = match seg {
+            Seg::Hole(Hole::Type(index)) => match binding.types.get(index) {
+                Some(text) => Seg::Lit(text.clone()),
+                None => seg.clone(),
+            },
+            other => other.clone(),
+        };
+        match (out.last_mut(), seg) {
+            (Some(Seg::Lit(last)), Seg::Lit(text)) => last.push_str(&text),
+            (_, seg) => out.push(seg),
+        }
+    }
+    for seg in &mut out {
+        if let Seg::Lit(text) = seg {
+            *text = unit_return(text);
+        }
+    }
+    out
+}
+
+/// The printer gives a function type with the unit result no arrow: `fn(A) -> () {path}` is
+/// `fn(A) {path}`.
+fn unit_return(text: &str) -> String {
+    text.replace(") -> () {", ") {")
+}
+
 /// Unifies the segments of one closure element with one body element. No search: each hole takes
 /// the text that the next literal gives.
 fn unify(segs: &[Seg], text: &str, binding: &Binding) -> Option<Binding> {
+    let segs = resolved(segs, binding);
     let mut out = binding.clone();
     let mut at = 0;
     for (k, seg) in segs.iter().enumerate() {
@@ -540,6 +827,23 @@ fn unify(segs: &[Seg], text: &str, binding: &Binding) -> Option<Binding> {
                     }
                 }
                 at += len;
+            }
+            Seg::Hole(Hole::Type(index)) => {
+                // A type hole of the closure that the element binds now (no earlier element bound
+                // it, so `resolved` kept the hole).
+                let next = match segs.get(k + 1) {
+                    Some(Seg::Lit(literal)) => Some(literal.as_str()),
+                    None => None,
+                    Some(Seg::Hole(_)) => return None,
+                };
+                let end = type_end(text, at, next)?;
+                let bound = text[at..end].to_string();
+                // The same hole later in this element has the same text.
+                out.types.insert(*index, bound);
+                return unify(&segs[k..], &text[at..], &out).map(|mut done| {
+                    done.temps.extend(out.temps.clone());
+                    done
+                });
             }
             Seg::Hole(Hole::Value(number)) => match out.values.get(number) {
                 Some(known) => {
@@ -568,11 +872,14 @@ fn unify(segs: &[Seg], text: &str, binding: &Binding) -> Option<Binding> {
     (at == text.len()).then_some(out)
 }
 
-/// One match of a pattern in a body: the elements (in the order of the run) and the binding.
+/// One match of a pattern in a body: the elements (in the order of the run), the binding, and
+/// [R101.1-1] the one point where each exit of the pattern continues in the body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Found {
+    start: usize,
     elements: Vec<usize>,
     binding: Binding,
+    exit: Option<usize>,
 }
 
 /// How far a pattern fits at one start: the count of its elements that fit, and the first
@@ -584,60 +891,205 @@ struct Near {
     closure: String,
 }
 
-/// The matches of a pattern that start at one element of a body: each form of the symmetric
-/// operations gives at most one match. The run follows the normal edge of each terminator; a
-/// `goto` of the body is glue.
+/// The state of one run of the graph match.
+#[derive(Clone, Debug, Default)]
+struct Run {
+    binding: Binding,
+    /// The body element of each closure block (R101.1-1: one place for each block).
+    map: BTreeMap<usize, usize>,
+    elements: Vec<usize>,
+    exit: Option<usize>,
+    /// The closure places to match: the block, the element, and the body element.
+    todo: Vec<(usize, usize, usize)>,
+    fits: usize,
+}
+
+/// The most states of one graph match (a bound: each fork is a form of a symmetric operation or
+/// a drop with no element).
+const MOST_RUNS: usize = 4096;
+
+/// The first element of a block of a body.
+fn block_start(body: &Mir, block: usize) -> Option<usize> {
+    body.blocks.get(&block).and_then(|list| list.first().copied())
+}
+
+/// [R101.1-1] The matches of a pattern that start at one element of a body: the closure graph
+/// and the body graph run together from the start. Each element of the closure fits one element
+/// of the body; each arm of a branch of the closure goes to the arm of the body at the same place
+/// of the list; each block of the closure has one place in the body; each exit (a `return`) of
+/// the closure continues at one point of the body. A `goto` of the body is glue. Each form of
+/// the symmetric operations and each drop with no element (R101.3-2) gives a run.
 fn matches_at(body: &Mir, pattern: &Pattern, start: usize, binding: &Binding, near: &mut Near) -> Vec<Found> {
     let mut out = Vec::new();
-    let mut todo: Vec<(usize, Option<usize>, Binding, Vec<usize>)> = vec![(0, Some(start), binding.clone(), Vec::new())];
-    while let Some((k, at, bound, mut elements)) = todo.pop() {
-        if k == pattern.steps.len() {
-            out.push(Found { elements, binding: bound });
-            continue;
+    let mut runs = vec![Run { binding: binding.clone(), todo: vec![(0, 0, start)], ..Default::default() }];
+    let mut budget = MOST_RUNS;
+    let fail = |run: &Run, at: usize, step: &Step, near: &mut Near| {
+        if run.fits >= near.fits {
+            *near = Near { fits: run.fits, body: body.elements.get(at).map(|(text, _)| text.clone()).unwrap_or_default(), closure: step.text.clone() };
         }
-        let Some(mut at) = at else { continue };
+    };
+    while let Some(mut run) = runs.pop() {
+        if budget == 0 {
+            break;
+        }
+        budget -= 1;
+        let Some((block, index, mut at)) = run.todo.pop() else {
+            out.push(Found { start, elements: run.elements, binding: run.binding, exit: run.exit });
+            continue;
+        };
         // A `goto` of the body is glue between two elements of the run.
         let mut hops = 0;
-        while body.elements[at].0.starts_with("goto -> ") && hops < 8 {
-            let Some(first) = normal_target(&body.elements[at].0).and_then(|block| body.blocks.get(&block)).and_then(|list| list.first().copied()) else { break };
-            elements.push(at);
+        while at < body.elements.len() && body.elements[at].0.starts_with("goto -> ") && hops < 8 {
+            let Some(first) = normal_target(&body.elements[at].0).and_then(|target| block_start(body, target)) else { break };
+            if !run.elements.contains(&at) {
+                run.elements.push(at);
+            }
             at = first;
             hops += 1;
         }
-        let step = &pattern.steps[k];
-        if body.is_terminator(at) != step.terminator {
-            if k >= near.fits {
-                *near = Near { fits: k, body: body.elements[at].0.clone(), closure: step.text.clone() };
-            }
+        if at >= body.elements.len() {
             continue;
         }
-        let text = masked(&body.elements[at].0);
-        let mut any = false;
-        for form in &step.forms {
-            let Some(next_binding) = unify(form, &text, &bound) else { continue };
-            any = true;
-            let mut next_elements = elements.clone();
-            next_elements.push(at);
-            let next = if !step.terminator {
-                let (block, place) = body.position(at);
-                body.blocks.get(&block).and_then(|list| list.get(place + 1)).copied()
-            } else if step.ends {
-                None
-            } else {
-                normal_target(&body.elements[at].0).and_then(|block| body.blocks.get(&block)).and_then(|list| list.first().copied())
-            };
-            if k + 1 < pattern.steps.len() && next.is_none() {
+        if index == 0 {
+            match run.map.get(&block) {
+                Some(known) if *known == at => {
+                    runs.push(run);
+                    continue;
+                }
+                Some(_) => continue,
+                None => {
+                    run.map.insert(block, at);
+                }
+            }
+        }
+        let Some(step) = pattern.blocks.get(&block).and_then(|steps| steps.get(index)) else { continue };
+        // [R101.3-2] A drop with no element: the bound type needs no drop. Only when the body has
+        // no drop and no discriminant of the bound value here.
+        if let Some((join, local)) = pattern.optional.get(&(block, index)) {
+            let text = &body.elements[at].0;
+            let bound = run.binding.values.get(local).cloned().or_else(|| run.binding.temps.get(local).map(|known| format!("_{known}")));
+            let reads = bound.is_some_and(|bound| text.starts_with(&format!("drop({bound})")) || text.contains(&format!("discriminant({bound})")));
+            if !reads {
+                let mut skip = run.clone();
+                skip.todo.push((*join, 0, at));
+                runs.push(skip);
+            }
+        }
+        // [R101.3-3] The result kept in its place: the closure moves a place of a parameter into
+        // its result (`_0 = ((_2 as Ok).0: T)`) just before it returns, and the body has no
+        // element for it (rustc reads the place where the value is used). The result binds to the
+        // place.
+        if step.kind == Kind::Stmt
+            && !run.binding.values.contains_key(&0)
+            && reaches_return(pattern, block, index + 1)
+            && let Some(rest) = step.text.strip_prefix("_0 = (")
+            && !rest.contains("const ")
+            && let Some((place, types)) = step.forms.first().and_then(|form| match form.as_slice() {
+                [Seg::Hole(Hole::Value(0)), Seg::Lit(first), rest @ ..] => {
+                    let mut tail = vec![Seg::Lit(first.strip_prefix(" = ")?.to_string())];
+                    tail.extend(rest.iter().cloned());
+                    kept_place(body, &tail, &run.binding)
+                }
+                _ => None,
+            })
+        {
+            let mut kept = run.clone();
+            kept.binding.values.insert(0, place);
+            kept.binding.types = types;
+            kept.todo.push((block, index + 1, at));
+            runs.push(kept);
+        }
+        match &step.kind {
+            Kind::Return => {
+                if run.exit.is_some_and(|exit| exit != at) {
+                    fail(&run, at, step, near);
+                    continue;
+                }
+                run.exit = Some(at);
+                runs.push(run);
                 continue;
             }
-            todo.push((k + 1, next, next_binding, next_elements));
+            Kind::Goto(target) => {
+                run.todo.push((*target, 0, at));
+                runs.push(run);
+                continue;
+            }
+            _ => {}
         }
-        if !any && k >= near.fits {
-            *near = Near { fits: k, body: body.elements[at].0.clone(), closure: step.text.clone() };
+        let terminator = step.kind != Kind::Stmt;
+        if body.is_terminator(at) != terminator || run.elements.contains(&at) {
+            fail(&run, at, step, near);
+            continue;
         }
+        let text = masked_all(&body.elements[at].0);
+        let body_kind = kind_of(&body.elements[at].0, terminator);
+        let mut any = false;
+        for form in &step.forms {
+            let Some(next_binding) = unify(form, &text, &run.binding) else { continue };
+            let mut next = run.clone();
+            next.binding = next_binding;
+            next.elements.push(at);
+            next.fits += 1;
+            let ok = match (&step.kind, &body_kind) {
+                (Kind::Stmt, _) => {
+                    let (block_at, place) = body.position(at);
+                    match body.blocks.get(&block_at).and_then(|list| list.get(place + 1)).copied() {
+                        Some(following) => {
+                            next.todo.push((block, index + 1, following));
+                            true
+                        }
+                        None => false,
+                    }
+                }
+                (Kind::Switch(targets), Kind::Switch(body_targets)) if targets.len() == body_targets.len() => {
+                    let mut ok = true;
+                    for (target, body_target) in targets.iter().zip(body_targets).rev() {
+                        match block_start(body, *body_target) {
+                            Some(first) => next.todo.push((*target, 0, first)),
+                            None => ok = false,
+                        }
+                    }
+                    ok
+                }
+                (Kind::Normal(target), Kind::Normal(body_target)) => match block_start(body, *body_target) {
+                    Some(first) => {
+                        next.todo.push((*target, 0, first));
+                        true
+                    }
+                    None => false,
+                },
+                (Kind::Diverge, Kind::Diverge) | (Kind::Unreachable, Kind::Unreachable) => true,
+                _ => false,
+            };
+            if ok {
+                any = true;
+                runs.push(next);
+            }
+        }
+        if !any {
+            fail(&run, at, step, near);
+        }
+    }
+    for found in &mut out {
+        found.elements.sort();
+        found.elements.dedup();
     }
     out.sort_by(|a, b| a.elements.cmp(&b.elements).then_with(|| format!("{:?}", a.binding).cmp(&format!("{:?}", b.binding))));
     out.dedup();
-    out
+    // [R101.3-2] A run that skips a drop and a run that fits it at one start with one binding:
+    // the run with more elements of the body.
+    let mut kept: Vec<Found> = Vec::new();
+    for found in out {
+        let same_binding = |a: &Binding, b: &Binding| a.temps == b.temps && a.types == b.types && a.values.iter().filter(|(hole, _)| **hole != 0).eq(b.values.iter().filter(|(hole, _)| **hole != 0));
+        if let Some(other) = kept.iter_mut().find(|known| same_binding(&known.binding, &found.binding) && (known.elements.iter().all(|e| found.elements.contains(e)) || found.elements.iter().all(|e| known.elements.contains(e)))) {
+            if found.elements.len() > other.elements.len() {
+                *other = found;
+            }
+            continue;
+        }
+        kept.push(found);
+    }
+    kept
 }
 
 /// [R97.2-6] The type of an operand of a body: a local, a place with its type, or a constant.
@@ -670,14 +1122,57 @@ fn operand_type(body: &Mir, text: &str) -> Option<String> {
     None
 }
 
-/// The check of one match: the types of the binding (R97.2-6), and the temporaries of the match
-/// that the body reads only inside the match (R97.2-5). `Err`: the cause.
-fn check_found(body: &Mir, pattern: &Pattern, found: &Found) -> Result<(), String> {
+/// [R97.2-6] [R101.2-1] The type of a hole fits the type of the body: the type of the closure with
+/// each bound type hole as its text (an unbound hole binds now). `None`: the types differ.
+fn fit_type(want: &str, have: &str, types: &[String], binding: &mut Binding) -> bool {
+    let want = std_paths(want);
+    let have = std_paths(have);
+    let segs = segments(&want, 0, types);
+    match unify(&segs, &have, binding) {
+        Some(done) => {
+            binding.types = done.types;
+            true
+        }
+        None => false,
+    }
+}
+
+/// The predecessors of each block of a body: the blocks whose terminator names it (each edge,
+/// also an unwind edge).
+fn predecessors(body: &Mir) -> BTreeMap<usize, Vec<usize>> {
+    let mut out: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (block, list) in &body.blocks {
+        let Some(&last) = list.last() else { continue };
+        let text = &body.elements[last].0;
+        let mut from = 0;
+        while let Some(at) = text[from..].find("bb").map(|at| from + at) {
+            let digits = &text[at + 2..];
+            let end = digits.find(|c: char| !c.is_ascii_digit()).unwrap_or(digits.len());
+            let boundary = at == 0 || !ident_char(text.as_bytes()[at - 1]);
+            if end > 0
+                && boundary
+                && let Ok(target) = digits[..end].parse::<usize>()
+            {
+                out.entry(target).or_default().push(*block);
+            }
+            from = at + 2 + end;
+        }
+    }
+    out
+}
+
+/// The check of one match: the types of the binding (R97.2-6), the temporaries of the match that
+/// the body reads only inside the match (R97.2-5), and [R101.1-2] one entry and one exit: each
+/// block of the body that the site enters by an edge has each of its edges from the site, and
+/// the exit point is not an element of the site. `Ok`: the binding with each type hole of the
+/// types bound. `Err`: the cause.
+fn check_found(body: &Mir, pattern: &Pattern, found: &Found) -> Result<Binding, String> {
+    let mut binding = found.binding.clone();
     for (hole, value) in &found.binding.values {
         let want = if *hole == 0 { Some(&pattern.ret) } else { pattern.params.get(hole) };
         let have = operand_type(body, value);
         match (want, have) {
-            (Some(want), Some(have)) if std_paths(want) == std_paths(&have) => {}
+            (Some(want), Some(have)) if fit_type(want, &have, &pattern.types, &mut binding) => {}
             (Some(want), Some(have)) => return Err(format!("the binding `{value}` has the type `{have}`, and the closure has `{want}` ({RULE_MOVED})")),
             (_, None) => return Err(format!("the type of the binding `{value}` is not known ({RULE_MOVED})")),
             (None, _) => return Err(format!("the binding `{value}` has no hole of the closure")),
@@ -689,7 +1184,11 @@ fn check_found(body: &Mir, pattern: &Pattern, found: &Found) -> Result<(), Strin
         if in_values.contains(local) {
             return Err(format!("the local `_{local}` of the body is a temporary of the closure and a part of a binding ({RULE_OPERAND})"));
         }
-        if pattern.temps.get(temp).map(|ty| std_paths(ty)) != body.local_type(*local).map(std_paths) {
+        let fits = match (pattern.temps.get(temp), body.local_type(*local)) {
+            (Some(want), Some(have)) => fit_type(want, have, &pattern.types, &mut binding),
+            _ => false,
+        };
+        if !fits {
             return Err(format!("the temporary `_{local}` of the body has another type than the temporary of the closure ({RULE_MOVED})"));
         }
         let outside = body.elements.iter().enumerate().any(|(index, (text, _))| !inside.contains(&index) && locals_in(text).iter().any(|(_, _, number)| number == local));
@@ -697,7 +1196,28 @@ fn check_found(body: &Mir, pattern: &Pattern, found: &Found) -> Result<(), Strin
             return Err(format!("the body reads the temporary `_{local}` of the site at an other place ({RULE_OPERAND})"));
         }
     }
-    Ok(())
+    // [R101.1-2] One entry: a block of the site that the site enters at its first element has each
+    // edge from an element of the site (the first element of the site is the entry).
+    let preds = predecessors(body);
+    for index in &found.elements {
+        let (block, place) = body.position(*index);
+        // A block with only `unreachable` has no code: rustc shares one such block across the
+        // body (the `otherwise` arm of each full `match`).
+        let only_unreachable = body.blocks.get(&block).is_some_and(|list| list.len() == 1 && body.elements[list[0]].0 == "unreachable");
+        if place != 0 || *index == found.start || only_unreachable {
+            continue;
+        }
+        for pred in preds.get(&block).into_iter().flatten() {
+            let Some(&last) = body.blocks.get(pred).and_then(|list| list.last()) else { continue };
+            if !inside.contains(&last) {
+                return Err(format!("the block `bb{block}` of the site has an edge from `bb{pred}` outside the site: a site has one entry ({RULE_REGION})"));
+            }
+        }
+    }
+    if found.exit.is_some_and(|exit| inside.contains(&exit)) {
+        return Err(format!("the exit of the site is an element of the site ({RULE_REGION})"));
+    }
+    Ok(binding)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -720,7 +1240,7 @@ pub struct Site {
 }
 
 /// The result of the check of one statement.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Checked {
     pub file: String,
@@ -739,6 +1259,17 @@ pub struct Checked {
     pub refused: Vec<String>,
     /// The edits of the nodes of the entry of the statement.
     pub edits: Vec<usize>,
+    /// [R101.6-1] The lines of the case table, or the cause of no table (design 101).
+    pub cases: Result<Vec<String>, String>,
+    /// [R101.7-1] The count of each label of the case table (`1 equal code, 1 undefined on the
+    /// two sides`).
+    pub counts: String,
+}
+
+impl Default for Checked {
+    fn default() -> Checked {
+        Checked { file: String::new(), function: String::new(), scope: None, sites: Vec::new(), error: None, nearest: Vec::new(), kept: Vec::new(), refused: Vec::new(), edits: Vec::new(), cases: Ok(Vec::new()), counts: String::new() }
+    }
 }
 
 impl Checked {
@@ -821,6 +1352,17 @@ fn binding_text(tree: &Workspace, table: &MirTable, side: usize, value: &str) ->
     {
         return format!("`{}`", text.trim_start_matches('&').trim_start_matches("mut ").trim());
     }
+    // [R101.7-1] A temporary: the source text of the expression that makes it.
+    if let Some((local, len)) = local_at(value, 0)
+        && len == value.len()
+        && let Some((3, Some((file, start, end)))) = table.decls[side].get(local)
+        && let Some(text) = tree.rust_files.get(file).and_then(|text| text.get(*start..*end))
+    {
+        let flat = semilla_core::text::flat_text(text);
+        if flat.chars().count() <= 80 {
+            return format!("`{flat}`");
+        }
+    }
     format!("`{value}`")
 }
 
@@ -843,8 +1385,14 @@ fn new_range(table: &MirTable, old: &[usize]) -> Vec<usize> {
 /// old body renamed by the map of the body. `Err`: a local with no partner.
 fn mapped_binding(table: &MirTable, old: &Binding) -> Result<Binding, String> {
     let map: BTreeMap<usize, usize> = table.locals.iter().copied().collect();
-    let mut out = Binding::default();
+    // [R101.2-1] A type hole binds to the same type on the two sides.
+    let mut out = Binding { types: old.types.clone(), ..Binding::default() };
     for (hole, value) in &old.values {
+        // [R101.3-3] A result kept in its place of the old body binds on the new side to the
+        // result of the new code.
+        if *hole == 0 && !is_local(value) {
+            continue;
+        }
         let renamed = renamed(value, &|local| map.get(&local).map(|new| format!("_{new}"))).ok_or_else(|| format!("the binding `{value}` names a local of the old body with no partner in the new body ({RULE_TWO_PLACES})"))?;
         out.values.insert(*hole, renamed);
     }
@@ -878,7 +1426,8 @@ fn statements(input: &StepInput) -> Vec<(String, String, Option<String>, Vec<Str
 
 /// [R97.2-2] [R97.3-1] [R97.4-1] [R97.5-1] [R97.6-1] The check of each closure form of a step,
 /// and the kinds of the nodes of its sites.
-pub(crate) fn plan(input: &StepInput, outcome: &mut StepOutcome, closures: &BTreeMap<(String, String), [String; 2]>) {
+pub(crate) fn plan(input: &StepInput, outcome: &mut StepOutcome, closures: &BTreeMap<(String, String), [String; 2]>, callee_texts: &BTreeMap<String, String>) {
+    let callees = crate::cases::Callees::new(callee_texts);
     let trees = [input.before, input.after];
     let mut checked = Vec::new();
     // [R97.8-1] The templates of the ties: the statement, the body, and the template.
@@ -908,6 +1457,17 @@ pub(crate) fn plan(input: &StepInput, outcome: &mut StepOutcome, closures: &BTre
                 continue;
             }
         };
+        // [R101.5-1] [R101.6-1] The case table of the pair: from the two closures, with the small
+        // callees put in (R101.4-1). It changes no site.
+        result.cases = match (crate::cases::cases(&texts[0], &names, &callees), crate::cases::cases(&texts[1], &names, &callees)) {
+            (Ok(old), Ok(new)) => {
+                let lines = crate::cases::table(&old, &new);
+                result.counts = format!("{} case(s): {}", lines.len(), crate::cases::counts(&lines));
+                Ok(lines.iter().enumerate().map(|(at, line)| crate::cases::line_text(at + 1, line)).collect())
+            }
+            (Err(cause), _) => Err(format!("the old closure: {cause}")),
+            (_, Err(cause)) => Err(format!("the new closure: {cause}")),
+        };
         let bodies: Vec<(BodyName, std::sync::Arc<MirTable>)> = tables(outcome).into_iter().filter(|(body, _)| scope.as_ref().is_none_or(|scope| body.name == *scope)).collect();
         if bodies.is_empty() {
             result.error = Some(match &scope {
@@ -927,12 +1487,17 @@ pub(crate) fn plan(input: &StepInput, outcome: &mut StepOutcome, closures: &BTre
                     continue;
                 }
                 let mut near = Near::default();
-                let found: Vec<Found> = matches_at(&mirs[0], &patterns[0], start, &Binding::default(), &mut near).into_iter().filter(|found| check_found(&mirs[0], &patterns[0], found).is_ok()).collect();
+                let found: Vec<Found> = matches_at(&mirs[0], &patterns[0], start, &Binding::default(), &mut near).into_iter()
+                    .filter_map(|mut found| {
+                        found.binding = check_found(&mirs[0], &patterns[0], &found).ok()?;
+                        Some(found)
+                    })
+                    .collect();
                 let (file_at, line) = line_at(trees[0], table, 0, &[start]);
                 let place = format!("`{}` ({file_at}:{line})", body.name);
                 if found.is_empty() {
                     if near.fits > 0 {
-                        nearest.push((near.fits, format!("{place}: {} of {} element(s) fit; the element that differs: the body has `{}`, the closure has `{}`", near.fits, patterns[0].steps.len(), near.body, near.closure)));
+                        nearest.push((near.fits, format!("{place}: {} of {} element(s) fit; the element that differs: the body has `{}`, the closure has `{}`", near.fits, patterns[0].size, near.body, near.closure)));
                     }
                     continue;
                 }
@@ -959,14 +1524,16 @@ pub(crate) fn plan(input: &StepInput, outcome: &mut StepOutcome, closures: &BTre
                     };
                     let mut new_found: Vec<Found> = Vec::new();
                     for start in new_range(table, &old.elements) {
-                        for found in matches_at(&mirs[1], &patterns[1], start, &bound, &mut new_near) {
+                        for mut found in matches_at(&mirs[1], &patterns[1], start, &bound, &mut new_near) {
                             // [R97.2-3] A parameter that only the new closure reads binds to a place
                             // of the new body whose locals each have an old partner: the place is in
                             // the two bodies.
                             let in_both = |value: &String| locals_in(value).iter().all(|(_, _, local)| partners.contains(local));
                             // (The match keeps each value of the given binding.)
-                            let fits = found.binding.values.iter().all(|(hole, value)| bound.values.contains_key(hole) || in_both(value));
-                            if check_found(&mirs[1], &patterns[1], &found).is_ok() && fits && !new_found.contains(&found) {
+                            let fits = found.binding.values.iter().all(|(hole, value)| bound.values.contains_key(hole) || in_both(value) || (*hole == 0 && is_local(value) && old.binding.values.get(&0).is_some_and(|known| !is_local(known))));
+                            let Ok(checked) = check_found(&mirs[1], &patterns[1], &found) else { continue };
+                            found.binding = checked;
+                            if fits && !new_found.contains(&found) {
                                 new_found.push(found);
                             }
                         }
@@ -989,9 +1556,9 @@ pub(crate) fn plan(input: &StepInput, outcome: &mut StepOutcome, closures: &BTre
                     if all_equal {
                         result.kept.push(place);
                     } else if let Some(cause) = unmapped {
-                        nearest.push((patterns[0].steps.len(), format!("{place}: the old closure fits; {cause}")));
+                        nearest.push((patterns[0].size, format!("{place}: the old closure fits; {cause}")));
                     } else {
-                        nearest.push((patterns[0].steps.len() + new_near.fits, format!("{place}: the old closure fits; at the aligned place of the new body {} of {} element(s) of the new closure fit; the element that differs: the body has `{}`, the closure has `{}` ({RULE_TWO_PLACES})", new_near.fits, patterns[1].steps.len(), new_near.body, new_near.closure)));
+                        nearest.push((patterns[0].size + new_near.fits, format!("{place}: the old closure fits; at the aligned place of the new body {} of {} element(s) of the new closure fit; the element that differs: the body has `{}`, the closure has `{}` ({RULE_TWO_PLACES})", new_near.fits, patterns[1].size, new_near.body, new_near.closure)));
                     }
                     continue;
                 };
@@ -1041,7 +1608,7 @@ pub(crate) fn plan(input: &StepInput, outcome: &mut StepOutcome, closures: &BTre
                 // equal code): a type change, an addition, and a removal keep their own entries.
                 let fact = outcome.fact_of.get(*edit).copied().flatten().and_then(|fact| outcome.report.facts.get(fact));
                 let kind = crate::diffmap::node_kind(&outcome.edits[*edit], outcome.report.node_mir.get(edit), fact, trees);
-                let inside = owned && kind.kind == EntryKind::Replace && !kind.syntax_only && (0..2).all(|side| places[side].is_subset(&site.places[side]));
+                let inside = owned && matches!(kind.kind, EntryKind::Replace | EntryKind::Add | EntryKind::Delete) && !kind.syntax_only && (0..2).all(|side| places[side].is_subset(&site.places[side]));
                 let same_node = site.same && !owned && kind.kind == EntryKind::SameCode && node_holds(outcome, trees, *edit, site);
                 if inside || same_node {
                     edits.push((*edit, site.same && !owned));
@@ -1053,7 +1620,12 @@ pub(crate) fn plan(input: &StepInput, outcome: &mut StepOutcome, closures: &BTre
         let binding = if binding.is_empty() { String::new() } else { format!("; at the first site {}", binding.join(", ")) };
         for (edit, same) in &edits {
             let (kind, words) = if *same { (EntryKind::SameCode, "the compiled code of the site is equal under the binding") } else { (EntryKind::Replace, "a real edit that the statement states") };
-            let check = format!("the closure pair of `fn {}` fits {} site(s): {}{binding}; {words} (statement {})", result.function, result.sites.len(), list.join(", "), number + 1);
+            // [R101.7-1] The head gives the form result: the sites and the count of each label.
+            let cases = match &result.cases {
+                Ok(_) => format!("; {} (form)", result.counts),
+                Err(cause) => format!("; no case table: {cause}"),
+            };
+            let check = format!("the form of `fn {}` holds at {} site(s): {}{cases}{binding}; {words} (statement {})", result.function, result.sites.len(), list.join(", "), number + 1);
             outcome.transforms.nodes.insert(*edit, NodeKind { kind, syntax_only: false, rule: RULE_ENTRY, check, order: None });
         }
         if let Some((first, _)) = edits.first() {
@@ -1109,8 +1681,19 @@ fn node_holds(outcome: &StepOutcome, trees: [&Workspace; 2], edit: usize, site: 
 /// not fit keeps its own entry (after the shape of the entries).
 pub(crate) fn split_statements(outcome: &mut StepOutcome, trees: [&Workspace; 2], map: &mut crate::astmap::AstMapRef<'_>, indices: &[usize]) {
     let moved: Vec<BTreeSet<usize>> = outcome.transforms.rewrites.statements.iter().map(|statement| statement.edits.iter().copied().collect()).filter(|set: &BTreeSet<usize>| !set.is_empty()).collect();
-    for set in moved {
-        crate::diffmap::split_off(outcome, trees, map.0, indices, &set);
+    let count = outcome.report.facts.len();
+    let before: Vec<usize> = (0..count).map(|fact| indices.iter().filter(|index| outcome.fact_of.get(**index).copied().flatten() == Some(fact)).count()).collect();
+    for set in &moved {
+        crate::diffmap::split_off(outcome, trees, map.0, indices, set);
+    }
+    // [R101.7-1] A fact that the split left with only the nodes of one statement gets the text of
+    // its own nodes (a fact of the syntax diff can hold the sites of two statements).
+    let all: BTreeSet<usize> = moved.iter().flatten().copied().collect();
+    for (fact, count_before) in before.iter().enumerate() {
+        let held: Vec<usize> = indices.iter().copied().filter(|index| outcome.fact_of.get(*index).copied().flatten() == Some(fact)).collect();
+        if !held.is_empty() && held.len() < *count_before && held.iter().all(|index| all.contains(index)) {
+            crate::diffmap::rebuild(outcome, trees, map.0, indices, fact);
+        }
     }
 }
 
@@ -1429,7 +2012,19 @@ pub(crate) fn closure_template(input: &StepInput, table: &MirTable, body: &str, 
         Some(path) if path.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':') => format!("(after::{path})"),
         _ => String::new(),
     };
-    Ok(format!("#[rewrite{scope}] fn {short}_rewrite() {{ (|{}| {}, |{}| {}) }}", lists[0].join(", "), texts[0], lists[1].join(", "), texts[1]))
+    // [R101.8-1] A generic parameter of the body in the type of a parameter is a type hole of
+    // the template: a generic parameter of the statement function.
+    let mut holes: Vec<String> = Vec::new();
+    for side in 0..2 {
+        for name in generic_names(&table.texts[side]) {
+            let used = lists[side].iter().any(|param| segments(param, 0, std::slice::from_ref(&name)).iter().any(|seg| matches!(seg, Seg::Hole(Hole::Type(_)))));
+            if used && !holes.contains(&name) {
+                holes.push(name);
+            }
+        }
+    }
+    let generics = if holes.is_empty() { String::new() } else { format!("<{}>", holes.join(", ")) };
+    Ok(format!("#[rewrite{scope}] fn {short}_rewrite{generics}() {{ (|{}| {}, |{}| {}) }}", lists[0].join(", "), texts[0], lists[1].join(", "), texts[1]))
 }
 
 /// [R97.8-1] The templates of the "not mapped" entries: a template of the closure form for each
@@ -1470,9 +2065,23 @@ pub(crate) fn open_templates(input: &StepInput, outcome: &mut StepOutcome) {
     outcome.transforms.rewrites.templates.extend(found);
 }
 
+/// [R101.7-1] Writes the case table of each statement on the fact of its entry.
+fn attach_cases(outcome: &mut StepOutcome) {
+    for statement in outcome.transforms.rewrites.statements.clone() {
+        let Some(first) = statement.edits.first() else { continue };
+        let Some(fact) = outcome.fact_of.get(*first).copied().flatten() else { continue };
+        let Some(fact) = outcome.report.facts.get_mut(fact) else { continue };
+        fact.cases = match &statement.cases {
+            Ok(lines) => lines.clone(),
+            Err(cause) => vec![format!("no case table: {cause} ({})", crate::cases::RULE_CASES)],
+        };
+    }
+}
+
 /// [R97.8-1] Writes the template of each group and of each "not mapped" entry on the fact of its
 /// first node, for the gate (after the shape of the entries).
 pub(crate) fn attach(outcome: &mut StepOutcome) {
+    attach_cases(outcome);
     for (edit, template) in outcome.transforms.rewrites.templates.clone() {
         let Some(fact) = outcome.fact_of.get(edit).copied().flatten() else { continue };
         let Some(fact) = outcome.report.facts.get_mut(fact) else { continue };
@@ -1493,3 +2102,7 @@ pub(crate) fn attach(outcome: &mut StepOutcome) {
 #[cfg(test)]
 #[path = "tests97.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests101.rs"]
+mod tests101;

@@ -1,0 +1,93 @@
+note: an `if` that only tests the result becomes a new `let` and a call: the drop of a value with a type hole has no element at the site, and the case table shows the changed drop
+rule+: R101.3-2
+rule+: R101.6-1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: the form of `fn err_is_unreachable` holds at 1 site\(s\)
+must_match: case 2 \(`r` is `Ok`\): changed \(the drops
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub fn check(r: Result<(), u8>) {
+    if r.is_err() {
+        unsafe { core::hint::unreachable_unchecked() }
+    }
+}
+=== new src/lib.rs
+pub fn check(r: Result<(), u8>) {
+    let result = r;
+    unsafe { result.unwrap_unchecked() };
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite]
+fn err_is_unreachable<T, E>() {
+    (
+        |r: Result<T, E>| {
+            if r.is_err() {
+                unsafe { core::hint::unreachable_unchecked() }
+            }
+        },
+        |r: Result<T, E>| {
+            unsafe { r.unwrap_unchecked() };
+        },
+    )
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `fn err_is_unreachable` (the closure form, .semilla/intent/step.rs) (holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::check` (src/lib.rs:2))
+      places: shop::check/S0, shop::check/S1
+      entries, in the list below: f1
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  · i1 `#[rewrite()] fn err_is_unreachable()` (.semilla/intent/step.rs:3): hint: the check of `--same 'rewrite fn err_is_unreachable in .semilla/intent/step.rs'` holds (fact a1 of the agent: holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::check` (src/lib.rs:2)); a hint pairs the old and the new code and explains no body: a claim states the behavior
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+      n2 not mapped [R79.5-1]: added `let` `shop::check/S0` (src/lib.rs:2): not mapped in f2: `let result = r;`
+          template: #[same(shop::check)] fn check(r: Result<(), u8>) -> bool { after::shop::check(r) == before::shop::check(r) }
+    changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+      MIR changes with no claim: `shop::check` (src/lib.rs:1): the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+  changed nodes: 3 in 2 entries; 1 real edits (1 stated by the agent); 1 not mapped; control-flow changes: 10 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `shop::check`:
+  ◆ f1 replace (a1; R97.3-1, the form of `fn err_is_unreachable` holds at 1 site(s): `shop::check` (src/lib.rs:2); 2 case(s): 1 undefined on the two sides, 1 changed (form); at the first site the parameter `r` binds to `r`; a real edit that the statement states (statement 1); 2 nodes; one change (R92.6-1)): deleted statement `if r.is_err() { unsafe { core::hint::unreachable_unchecked() } }` at `shop::check/S0`; added `unsafe` `unsafe { result.unwrap_unchecked() }` at `shop::check/S1` [semantics · code different]
+      case 1 (`r` is `Err`): undefined on the two sides (the two paths end in `unreachable`)
+      case 2 (`r` is `Ok`): changed (the drops: `r` → `((r as Ok).Ok.0: T)`)
+      affected bodies: shop::check (with 1 other edit of this body)
+      graph: +1 call (`Result::<(), u8>::unwrap_unchecked`), −1 call (`Result::<(), u8>::is_err`), −1 branch (`r.is_err()`), −1 panic, +2 arrows, −4 arrows; see the case table
+      control flow: + call `Result::<(), u8>::unwrap_unchecked` (src/lib.rs:3): return → return
+      control flow: − call `Result::<(), u8>::is_err` (src/lib.rs:-2): return → branch `r.is_err()`
+      control flow: − branch `r.is_err()` (src/lib.rs:-2): false → return, true → panic `unreachable_unchecked`
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: MIR changes
+      ! unsafe code: the changed body has an `unsafe` block
+  not mapped:
+  item `shop::check`:
+  ◆ f2 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): added `let` `let result = r;` at `shop::check/S0` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::check=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      no template: the node has no MIR element inside it or around it on each side (a pattern or a binding is not an expression of the closure form)
+      affected bodies: shop::check (with 2 other edits of this body)
+      graph: no graph change of its own
+      equivalence: MIR changes
+      ! unsafe code: the changed body has an `unsafe` block
+  cover: each of the 5 changed line(s) is in a fact
+  control flow: 1 body
+    shop::check (src/lib.rs:1): graph changes: +1 call, −1 branch, −1 call, −1 panic, +2 arrows, −4 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: unsafe code: shop::check/S0
+  ! spotlight: unsafe code: shop::check/S1
+
+=== positions
+◆ f1 replace (a1; R97.3-1, the form of `fn err_is_unreachable` holds at 1 site(s): `shop::check` (src/lib.rs:2); 2 case(s): 1 undefined on the two sides, 1 changed (form); at the first site the parameter `r` binds to `r`; a real edit that the statement states (statement 1); 2 nodes; one change (R92.6-1)): deleted statement `if r.is_err() { unsafe { core::hint::unreachable_unchecked() } }` at `shop::check/S0`; added `unsafe` `unsafe { result.unwrap_unchecked() }` at `shop::check/S1` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-2-4
+◆ f2 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): added `let` `let result = r;` at `shop::check/S0` [semantics · code different]
+    lines: src/lib.rs:2

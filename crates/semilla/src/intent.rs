@@ -908,7 +908,7 @@ pub(crate) fn compiled_claims(check: &crate::intentcrate::Check, sources: &[semi
         return Err(format!("the intent crate has {rustc} error(s) of rustc and {semilla} error(s) of Semilla (`semilla intent check` shows them)"));
     }
     let compiled = &check.compiled;
-    let mut out = semilla_verify::astmap::CompiledClaims { links: compiled.links.iter().map(|link| (link.path.clone(), link.resolved.clone())).collect(), functions: BTreeMap::new(), rewrites: BTreeMap::new() };
+    let mut out = semilla_verify::astmap::CompiledClaims { links: compiled.links.iter().map(|link| (link.path.clone(), link.resolved.clone())).collect(), functions: BTreeMap::new(), rewrites: BTreeMap::new(), callees: BTreeMap::new() };
     let forms: BTreeMap<&str, Arc<semilla_smt::mir::Ir>> = compiled.records.iter().filter_map(|record| record_form(record).map(|form| (record.name.as_str(), form))).collect();
     let prefix = format!("{}::", semilla_normal::intent::CLAIMS_CRATE);
     for (source, module) in sources.iter().zip(&compiled.modules) {
@@ -958,6 +958,15 @@ pub(crate) fn compiled_claims(check: &crate::intentcrate::Check, sources: &[semi
             let text = |number: usize| compiled.records.iter().find(|record| record.name == format!("{start}{}::{{closure#{number}}}", head.function)).map(|record| record.text.clone());
             if let (Some(old), Some(new)) = (text(0), text(1)) {
                 out.rewrites.insert((source.path.clone(), head.function.clone()), [old, new]);
+            }
+            // [R101.4-1] The small callees of the two closures, for the case table.
+            for number in 0..2 {
+                let name = format!("{start}{}::{{closure#{number}}}", head.function);
+                for record in compiled.records.iter().filter(|record| record.name == name) {
+                    for (path, text) in &record.callee_texts {
+                        out.callees.entry(path.clone()).or_insert_with(|| text.clone());
+                    }
+                }
             }
         }
     }

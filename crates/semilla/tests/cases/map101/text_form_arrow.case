@@ -1,0 +1,53 @@
+note: the text form of a rewrite whose pattern holds `=>`: the parser splits at the arrow outside the brackets
+rule+: R101.8-2
+option: --same
+option: rewrite match $a { Some(v) => v, None => 0 } => $a.unwrap_or(0)
+must_match: ✓ a1 same: rewrite
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub fn size(o: Option<u32>) -> u32 {
+    let n = match o { Some(v) => v, None => 0 };
+    n + 1
+}
+=== new src/lib.rs
+pub fn size(o: Option<u32>) -> u32 {
+    let n = o.unwrap_or(0);
+    n + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `match $a { Some(v) => v, None => 0 }` => `$a.unwrap_or(0)` (the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
+      places: shop::size/S0/init
+      entries, in the list below: f1
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::size` (src/lib.rs:1): the full compare: `#[same(shop::size)] fn size_same() {}`; a difference: `#[change(shop::size)] fn size_change(o: Option<u32>) -> bool { … }` or `#[different(shop::size)] fn size_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 7 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `shop::size`:
+  ◆ f1 replace (a1; R90.2-2, 8 changed MIR elements): changed method_call: `match o { Some(v) => v, None => 0 }` → `o.unwrap_or(0)` at `shop::size/S0/init` [semantics · code different]
+      affected bodies: shop::size
+      graph: +1 call (`Option::<u32>::unwrap_or`), −1 branch (`o`), +2 arrows, −3 arrows
+      control flow: + call `Option::<u32>::unwrap_or` (src/lib.rs:2): return → check `overflow: n + 1`
+      control flow: − branch `o` (src/lib.rs:-2): std::option::Option::None → check `overflow: n + 1`, std::option::Option::Some → check `overflow: n + 1`
+      control flow: + arrow entry (src/lib.rs:1) → call `Option::<u32>::unwrap_or` (src/lib.rs:2)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::size (src/lib.rs:1): graph changes: +1 call, −1 branch, +2 arrows, −3 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (a1; R90.2-2, 8 changed MIR elements): changed method_call: `match o { Some(v) => v, None => 0 }` → `o.unwrap_or(0)` at `shop::size/S0/init` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

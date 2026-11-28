@@ -45,6 +45,7 @@ mod opaque;
 pub mod sites;
 pub mod template;
 pub mod rewrites;
+pub mod cases;
 pub mod transforms;
 pub use opaque::{KnownTrait, KNOWN_TRAITS};
 mod srcconfig;

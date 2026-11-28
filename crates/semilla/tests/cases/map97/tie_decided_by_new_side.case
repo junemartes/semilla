@@ -44,9 +44,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 4 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::f`:
-  ◆ f1 replace (a1; R97.3-1, the closure pair of `fn sub` fits 1 site(s): `shop::f` (src/lib.rs:2); at the first site the parameter `a` binds to `x`, the parameter `b` binds to `y`; a real edit that the statement states (statement 1)): changed expression `x ^ y` → `x.wrapping_sub(y)` at `shop::f/tail/recv` [semantics · code different]
+  ◆ f1 replace (a1; R97.3-1, the form of `fn sub` holds at 1 site(s): `shop::f` (src/lib.rs:2); 1 case(s): 1 changed (form); at the first site the parameter `a` binds to `x`, the parameter `b` binds to `y`; a real edit that the statement states (statement 1)): changed expression `x ^ y` → `x.wrapping_sub(y)` at `shop::f/tail/recv` [semantics · code different]
+      case 1 (each input): changed (the result: `BitXor(a, b)` → `Sub(a, b)`)
       affected bodies: shop::f
-      graph: +1 call (`num::<impl u32>::wrapping_sub`), +2 arrows, −1 arrow
+      graph: +1 call (`num::<impl u32>::wrapping_sub`), +2 arrows, −1 arrow; see the case table
       control flow: + call `num::<impl u32>::wrapping_sub` (src/lib.rs:2): return → call `num::<impl u32>::rotate_left`
       control flow: + arrow entry (src/lib.rs:1) → call `num::<impl u32>::wrapping_sub` (src/lib.rs:2)
       control flow: − arrow entry (src/lib.rs:-1) → call `num::<impl u32>::rotate_left` (src/lib.rs:-2)
@@ -57,5 +58,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (a1; R97.3-1, the closure pair of `fn sub` fits 1 site(s): `shop::f` (src/lib.rs:2); at the first site the parameter `a` binds to `x`, the parameter `b` binds to `y`; a real edit that the statement states (statement 1)): changed expression `x ^ y` → `x.wrapping_sub(y)` at `shop::f/tail/recv` [semantics · code different]
+◆ f1 replace (a1; R97.3-1, the form of `fn sub` holds at 1 site(s): `shop::f` (src/lib.rs:2); 1 case(s): 1 changed (form); at the first site the parameter `a` binds to `x`, the parameter `b` binds to `y`; a real edit that the statement states (statement 1)): changed expression `x ^ y` → `x.wrapping_sub(y)` at `shop::f/tail/recv` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

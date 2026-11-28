@@ -1,0 +1,83 @@
+note: a call through a bound of a type hole (`T: Clone`) fits the call that rustc resolves for the bound type at each site
+rule+: R101.2-2
+rule+: R101.2-1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: the form of `fn owned` holds at 2 site\(s\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+#[derive(Clone)]
+pub struct Item(pub u32);
+#[derive(Clone)]
+pub struct Other(pub u8);
+
+pub fn a(x: &Item) -> Item {
+    x.clone()
+}
+
+pub fn b(x: &Other) -> Other {
+    x.clone()
+}
+=== new src/lib.rs
+#[derive(Clone)]
+pub struct Item(pub u32);
+#[derive(Clone)]
+pub struct Other(pub u8);
+
+pub fn a(x: &Item) -> Item {
+    x.to_owned()
+}
+
+pub fn b(x: &Other) -> Other {
+    x.to_owned()
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite]
+fn owned<T: Clone>() {
+    (|x: &T| x.clone(), |x: &T| x.to_owned())
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `fn owned` (the closure form, .semilla/intent/step.rs) (holds: the closure pair fits 2 site(s), each with one binding (R97.2-2): `shop::a` (src/lib.rs:7), `shop::b` (src/lib.rs:11))
+      places: shop::a/tail, shop::b/tail
+      entries, in the list below: f1
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  · i1 `#[rewrite()] fn owned()` (.semilla/intent/step.rs:3): hint: the check of `--same 'rewrite fn owned in .semilla/intent/step.rs'` holds (fact a1 of the agent: holds: the closure pair fits 2 site(s), each with one binding (R97.2-2): `shop::a` (src/lib.rs:7), `shop::b` (src/lib.rs:11)); a hint pairs the old and the new code and explains no body: a claim states the behavior
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+      MIR changes with no claim: `shop::a` (src/lib.rs:6): the full compare: `#[same(shop::a)] fn a_same() {}`; a difference: `#[change(shop::a)] fn a_change(x_before: &before::shop::Item, x_after: &after::shop::Item) -> bool { … }` or `#[different(shop::a)] fn a_different() -> bool { … }`
+      MIR changes with no claim: `shop::b` (src/lib.rs:10): the full compare: `#[same(shop::b)] fn b_same() {}`; a difference: `#[change(shop::b)] fn b_change(x_before: &before::shop::Other, x_after: &after::shop::Other) -> bool { … }` or `#[different(shop::b)] fn b_different() -> bool { … }`
+  changed nodes: 2 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 2 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `shop::a`:
+  ◆ f1 replace (a1; R97.3-1, the form of `fn owned` holds at 2 site(s): `shop::a` (src/lib.rs:7), `shop::b` (src/lib.rs:11); 1 case(s): 1 changed (form); at the first site the parameter `x` binds to `x`; a real edit that the statement states (statement 1); 2 nodes): 2 site(s): changed method_call: `x.clone()` → `x.to_owned()` [semantics · code different]
+      case 1 (each input): changed (the result: `<T as Clone>::clone(&shared (*x))` → `<T as ToOwned>::to_owned(&shared (*x))`; the effects: call `<T as Clone>::clone(&shared (*x))` → call `<T as ToOwned>::to_owned(&shared (*x))`)
+      in: shop::a, shop::b
+      affected bodies: shop::a, shop::b
+      graph: same structure: 2 changed call targets; see the case table
+      control flow: ~ call `<Item as Clone>::clone` → `<Item as ToOwned>::to_owned` (src/lib.rs:-7, src/lib.rs:7)
+      control flow: ~ call `<Other as Clone>::clone` → `<Other as ToOwned>::to_owned` (src/lib.rs:-11, src/lib.rs:11)
+      equivalence: `shop::a`: MIR changes
+      equivalence: `shop::b`: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::a (src/lib.rs:6): same structure: 1 changed call target; MIR changes
+    shop::b (src/lib.rs:10): same structure: 1 changed call target; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (a1; R97.3-1, the form of `fn owned` holds at 2 site(s): `shop::a` (src/lib.rs:7), `shop::b` (src/lib.rs:11); 1 case(s): 1 changed (form); at the first site the parameter `x` binds to `x`; a real edit that the statement states (statement 1); 2 nodes): 2 site(s): changed method_call: `x.clone()` → `x.to_owned()` [semantics · code different]
+    lines: src/lib.rs:7, src/lib.rs:11, src/lib.rs:-7, src/lib.rs:-11

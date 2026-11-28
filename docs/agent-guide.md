@@ -537,6 +537,36 @@ The step compiles the intent crate against the two trees, and its compiled claim
 - The fact line names the statement: `✓ a1 same: rewrite `fn count` (the closure form, FILE) (holds: the closure pair fits 2 site(s), …)`, and its short form for the gap lines is `--same 'rewrite fn count in FILE'`.
 - The text form `#[rewrite("FROM", "TO")]` and `--same 'rewrite FROM => TO'` stay, with their check of the syntax tree (design 54.3). A `#[change(ITEM)]` claim also states its item for the gap list, as `--change` does.
 
+**A pair of code with branches and type holes** (design 101). A statement is a conversion: "this old code became this new code". A closure can have a `match`, an `if`, statements, and `let` lines. A generic parameter of the function is a hole for a type: it binds to one type at each site, the same type on the two sides, and two sites can have two types. A real example (a change of a hash table crate: 8 sites in 3 functions of this form):
+
+```rust
+#[rewrite]
+fn ok_or_unreachable<T, E>() {
+    (
+        |r: Result<T, E>| match r {
+            Ok(v) => v,
+            Err(_) => unsafe { core::hint::unreachable_unchecked() },
+        },
+        |r: Result<T, E>| unsafe { r.unwrap_unchecked() },
+    )
+}
+```
+
+- The fit reads the compiled code: a site with or without an inner `unsafe` block, with the value in a new `let` or in place, and with a block around it fits the same pair. Each branch of the old closure must fit a branch of the body on the same value, each block one place, each `return` one point of the body, and the site has one entry. An arm with one more edit is no site. A call through a bound (`T: Clone`, `x.clone()`) fits the call of the bound type.
+- The entry of the statement gives the form result and the case table:
+
+```text
+◆ f28 replace (a1; R97.3-1, the form of `fn ok_or_unreachable` holds at 3 site(s): …; 2 case(s): 1 undefined on the two sides, 1 equal code (form); …)
+    case 1 (`r` is `Err`): undefined on the two sides (the two paths end in `unreachable`)
+    case 2 (`r` is `Ok`): equal code (both returns `((r as Ok).Ok.0: T)`)
+    graph: +3 calls, −3 branches, −3 panics, +6 arrows, −9 arrows; see the case table
+```
+
+- A case is one path of a closure (one arm of a `match`, one side of an `if`). Semilla puts the small callees in first (`r.unwrap_unchecked()` has the cases of its `match`), and pairs the old and the new cases by their decisions on the holes. The labels: `equal code` (the result, the effects, the drops, and the end are equal), `changed` (the line says what differs), `undefined on the two sides` (the two paths end in `unreachable`), `accepts more` (the old path panics or is `unreachable`, the new path returns), `accepts less` (the reverse), `new`, and `removed`.
+- What the check guarantees: the sites fit the pair, and a case with `equal code` has the same compiled code under the binding. What it does not guarantee: each other label is a fact of the form for the reviewer, not a proof, and the check proves no behavior of a site. A loop gives no case table.
+- The text form accepts `=>` inside the pattern: `--same 'rewrite match $a { Some(v) => v, None => 0 } => $a.unwrap_or(0)'`.
+- A template of Semilla for a group in a generic body has a type hole for each generic parameter (`fn first_rewrite<T>()`); a template that needs a bound is `no template: CAUSE`.
+
 **The rules of a body.** A call of a version runs the body of that version. A call sees the writes of the earlier calls through a `&mut` place of the claim (design 82); the effects on the world of one call are not inputs of another call. A panic of a call outside `panics(|| …)`, `panics_with(|| …, "…")`, `returns(|| …)`, and `same_outcome(|| …, || …)` makes the claim false. An operation of the claim has the checks of a debug build (an overflow panics). `==` compares the values of integers, `bool`, `char`, tuples, sequences, and `Option` and `Result` of these; on a type of the workspace it calls `PartialEq::eq` of that version. A path can be loose (`shop::Cart::len` for `shop::Cart::<T>::len`); a trait method has its record name as a text: `#[same("<shop::Cart as core::fmt::Debug>::fmt")]`.
 
 **The loop.**

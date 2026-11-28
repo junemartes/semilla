@@ -630,6 +630,24 @@ pub(crate) fn split_off(outcome: &mut StepOutcome, trees: [&Workspace; 2], map: 
     }
 }
 
+/// [R101.7-1] The text and the lines of a fact from its nodes, after a split moved some of its
+/// nodes to the entries of other statements: the fact keeps its number and its check.
+pub(crate) fn rebuild(outcome: &mut StepOutcome, trees: [&Workspace; 2], map: &AstMap, indices: &[usize], fact: usize) {
+    let place_of: BTreeMap<usize, usize> = indices.iter().enumerate().map(|(place, index)| (*index, place)).collect();
+    let held: Vec<usize> = indices.iter().copied().filter(|index| outcome.fact_of.get(*index).copied().flatten() == Some(fact)).collect();
+    let nodes: Vec<(&AstEntry, &Edit)> = held.iter().filter_map(|index| Some((map.entries.get(*place_of.get(index)?)?, &outcome.edits[*index]))).collect();
+    if nodes.is_empty() {
+        return;
+    }
+    let old = &outcome.report.facts[fact];
+    let number = old.id.strip_prefix('f').and_then(|number| number.parse().ok()).unwrap_or(0);
+    let mut part = split_fact(old, &nodes, number, trees);
+    part.check = old.check.clone();
+    part.id = old.id.clone();
+    let fresh = Fact { id: part.id.clone(), at: part.at.clone(), file: part.file.clone(), positions: part.positions.clone(), description: part.description.clone(), ..old.clone() };
+    outcome.report.facts[fact] = fresh;
+}
+
 /// [R90.3-1] Gives each fact of the step the fields of the one fact (design 90): its nodes, its
 /// kind, its check, its source, and the mark "not stated" (R90.5-2). It runs after the facts of
 /// the agent and the claims of the intent files have their results.

@@ -35,6 +35,38 @@ enum Same {
     Inline(String, String),
 }
 
+/// [R101.8-2] The two sides of a text `FROM => TO`: the first ` => ` outside each bracket and
+/// each literal, so a pattern can hold `=>` (an arm of a `match`).
+pub(crate) fn split_arrow(text: &str) -> Option<(&str, &str)> {
+    let bytes = text.as_bytes();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut at = 0;
+    while at < bytes.len() {
+        let c = bytes[at];
+        match quote {
+            Some(open) => {
+                if c == b'\\' {
+                    at += 2;
+                    continue;
+                }
+                if c == open {
+                    quote = None;
+                }
+            }
+            None => match c {
+                b'"' => quote = Some(b'"'),
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => depth -= 1,
+                b' ' if depth == 0 && text[at..].starts_with(" => ") => return Some((&text[..at], &text[at + 4..])),
+                _ => {}
+            },
+        }
+        at += 1;
+    }
+    None
+}
+
 /// Parses the text of a `--same` option.
 fn parse_same(text: &str) -> Result<Same, String> {
     let text = text.trim();
@@ -42,7 +74,7 @@ fn parse_same(text: &str) -> Result<Same, String> {
     let rest = rest.trim();
     // The two sides: around `=>`, or two words.
     let sides = |arrow: bool| -> Option<(String, String)> {
-        if let Some((from, to)) = rest.split_once(" => ") {
+        if let Some((from, to)) = split_arrow(rest) {
             return (!from.trim().is_empty() && !to.trim().is_empty()).then(|| (from.trim().to_string(), to.trim().to_string()));
         }
         // The words. The target of a path (` (test "list")`, design 56.1) is a part of its word.

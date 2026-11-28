@@ -1464,6 +1464,10 @@ pub struct Fact {
     /// and a group of the repeated edits have one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
+    /// [R101.6-1] The case table of a statement `#[rewrite]` (design 101): one line for each old
+    /// case and each new case, or the cause of no table. Only the entry of the statement has it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cases: Vec<String>,
 }
 
 /// [R90.2-1] The kind of an entry of the map of the diff (design 90).

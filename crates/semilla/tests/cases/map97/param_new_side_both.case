@@ -43,7 +43,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::f`:
-  ◆ f1 replace (a1; R97.3-1, the closure pair of `fn other` fits 1 site(s): `shop::f` (src/lib.rs:2); at the first site the parameter `a` binds to `x`; a real edit that the statement states (statement 1)): changed path `x` → `y` at `shop::f/tail/lhs/recv` [semantics · code different]
+  ◆ f1 replace (a1; R97.3-1, the form of `fn other` holds at 1 site(s): `shop::f` (src/lib.rs:2); 1 case(s): 1 changed (form); at the first site the parameter `a` binds to `x`; a real edit that the statement states (statement 1)): changed path `x` → `y` at `shop::f/tail/lhs/recv` [semantics · code different]
+      case 1 (each input): changed (the result: `Mul(a, const u32 = 3)` → `Mul(b, const u32 = 3)`)
       affected bodies: shop::f
       graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
@@ -53,5 +54,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (a1; R97.3-1, the closure pair of `fn other` fits 1 site(s): `shop::f` (src/lib.rs:2); at the first site the parameter `a` binds to `x`; a real edit that the statement states (statement 1)): changed path `x` → `y` at `shop::f/tail/lhs/recv` [semantics · code different]
+◆ f1 replace (a1; R97.3-1, the form of `fn other` holds at 1 site(s): `shop::f` (src/lib.rs:2); 1 case(s): 1 changed (form); at the first site the parameter `a` binds to `x`; a real edit that the statement states (statement 1)): changed path `x` → `y` at `shop::f/tail/lhs/recv` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

@@ -78,8 +78,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: `shop::Cart::total`: MIR changes
       equivalence: `shop::Cart::twice`: MIR changes
-  ◆ f2 replace (a1; R97.3-1, the closure pair of `fn count` fits 1 site(s): `shop::Cart::total` (src/lib.rs:8); at the first site the parameter `c` binds to `self`; a real edit that the statement states (statement 1)): changed expression `shop::Cart::total/tail/lhs`: `self . items . len ()` → `self . count` [semantics · code different]
-      graph: −1 call (`Vec::<u32>::len`), 1 changed check (`overflow: self.items.len() + 1` → `overflow: self.count + 1`, implicit), +1 arrow, −2 arrows
+  ◆ f2 replace (a1; R97.3-1, the form of `fn count` holds at 1 site(s): `shop::Cart::total` (src/lib.rs:8); 1 case(s): 1 changed (form); at the first site the parameter `c` binds to `self`; a real edit that the statement states (statement 1)): changed expression `shop::Cart::total/tail/lhs`: `self . items . len ()` → `self . count` [semantics · code different]
+      case 1 (each input): changed (the result: `(((*c).Cart.items: Vec<u32>).Vec.len: usize)` → `((*c).Cart.count: usize)`; the effects: assume(Le((((*c).Cart.items: Vec<u32>).Vec.len: usize), const usize = unevaluated MAX_SLICE_LEN::<T> @MAX_SLICE_LEN)) → none)
+      graph: −1 call (`Vec::<u32>::len`), 1 changed check (`overflow: self.items.len() + 1` → `overflow: self.count + 1`, implicit), +1 arrow, −2 arrows; see the case table
       control flow: − call `Vec::<u32>::len` (src/lib.rs:-8): return → check `overflow: self.items.len() + 1`
       control flow: ~ check `overflow: self.items.len() + 1` → `overflow: self.count + 1` (src/lib.rs:-8, src/lib.rs:8)
       control flow: + arrow entry (src/lib.rs:7) → check `overflow: self.count + 1` (src/lib.rs:8)
@@ -93,5 +94,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 === positions
 ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): 2 site(s): changed expression `self.items.len()` → `self.count` [semantics · code different]
     lines: src/lib.rs:8, src/lib.rs:12, src/lib.rs:-8, src/lib.rs:-12
-◆ f2 replace (a1; R97.3-1, the closure pair of `fn count` fits 1 site(s): `shop::Cart::total` (src/lib.rs:8); at the first site the parameter `c` binds to `self`; a real edit that the statement states (statement 1)): changed expression `shop::Cart::total/tail/lhs`: `self . items . len ()` → `self . count` [semantics · code different]
+◆ f2 replace (a1; R97.3-1, the form of `fn count` holds at 1 site(s): `shop::Cart::total` (src/lib.rs:8); 1 case(s): 1 changed (form); at the first site the parameter `c` binds to `self`; a real edit that the statement states (statement 1)): changed expression `shop::Cart::total/tail/lhs`: `self . items . len ()` → `self . count` [semantics · code different]
     lines: src/lib.rs:8

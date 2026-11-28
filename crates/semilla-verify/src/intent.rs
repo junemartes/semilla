@@ -183,7 +183,7 @@ pub fn option_statement(kind: &str, text: &str) -> Option<String> {
                     format!("#[{word}(before::{}, after::{})]", from.trim(), to.trim())
                 }
                 "rewrite" => {
-                    let (from, to) = rest.split_once(" => ")?;
+                    let (from, to) = crate::agent::split_arrow(rest)?;
                     format!("#[rewrite({}, {})]", quoted(from.trim()), quoted(to.trim()))
                 }
                 // [R94.6-1] The short forms of the statements of design 94.

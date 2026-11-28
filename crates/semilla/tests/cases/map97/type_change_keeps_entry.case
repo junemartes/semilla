@@ -72,9 +72,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       through: `shop::err` (1 body)
       graph: no graph change of its own
   item `shop::err`:
-  ◆ f3 replace (a1; R97.3-1, the closure pair of `fn bounds_len` fits 1 site(s): `shop::err` (src/lib.rs:9); at the first site the parameter `s` binds to `input`; a real edit that the statement states (statement 1)): changed path `input` → `bounds` at `shop::err/tail/args[0]/fields[len]/lhs/recv` [semantics · code different]
+  ◆ f3 replace (a1; R97.3-1, the form of `fn bounds_len` holds at 1 site(s): `shop::err` (src/lib.rs:9); 1 case(s): 1 changed (form); at the first site the parameter `s` binds to `input`; a real edit that the statement states (statement 1)): changed path `input` → `bounds` at `shop::err/tail/args[0]/fields[len]/lhs/recv` [semantics · code different]
+      case 1 (each input): changed (the result: `PtrMetadata(&shared (*s) as &[u8] (Transmute))` → `<Range<usize> as ExactSizeIterator>::len(&shared b)`; the effects: none → call `<Range<usize> as ExactSizeIterator>::len(&shared b)`)
       affected bodies: shop::err
-      graph: same structure: 1 changed check (`overflow: input.len() - 3` → `overflow: bounds.len() - 3`, implicit)
+      graph: same structure: 1 changed check (`overflow: input.len() - 3` → `overflow: bounds.len() - 3`, implicit); see the case table
       control flow: ~ check `overflow: input.len() - 3` → `overflow: bounds.len() - 3` (src/lib.rs:-9, src/lib.rs:9)
       equivalence: MIR changes
   compiled code that changes with no edit:
@@ -92,5 +93,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     lines: src/lib.rs:2, src/lib.rs:-2
 ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): changed macro or signature `Other` → `Other( )` [declaration · code different]
     lines: src/lib.rs:2, src/lib.rs:-2
-◆ f3 replace (a1; R97.3-1, the closure pair of `fn bounds_len` fits 1 site(s): `shop::err` (src/lib.rs:9); at the first site the parameter `s` binds to `input`; a real edit that the statement states (statement 1)): changed path `input` → `bounds` at `shop::err/tail/args[0]/fields[len]/lhs/recv` [semantics · code different]
+◆ f3 replace (a1; R97.3-1, the form of `fn bounds_len` holds at 1 site(s): `shop::err` (src/lib.rs:9); 1 case(s): 1 changed (form); at the first site the parameter `s` binds to `input`; a real edit that the statement states (statement 1)): changed path `input` → `bounds` at `shop::err/tail/args[0]/fields[len]/lhs/recv` [semantics · code different]
     lines: src/lib.rs:9, src/lib.rs:-9

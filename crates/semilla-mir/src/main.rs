@@ -272,6 +272,11 @@ struct BodyRecord {
     /// The conversions to `dyn Trait` in the body: the trait and the source type (design 61, B3).
     #[serde(rename = "dyn", skip_serializing_if = "Vec::is_empty")]
     dyn_casts: Vec<(String, String)>,
+    /// [R101.4-1] The canonical texts of the small callees of a closure of the intent crate:
+    /// the def path of each callee and its text (design 101). Only the case table of a pair of
+    /// code reads them. At n0 only.
+    #[serde(rename = "ct", skip_serializing_if = "Vec::is_empty")]
+    callee_texts: Vec<(String, String)>,
 }
 
 /// One name of the expanded code, with its count (see `config::NameUse`).
@@ -998,6 +1003,10 @@ fn collect_bodies(level: Level, target: &str) -> Vec<Line> {
                     if level == Level::N0 {
                         parts::timed(parts::Part::Reach, || add_reach(&mut found, *item, body));
                         parts::timed(parts::Part::Forms, || add_forms(&mut found, *item, body));
+                        // [R101.4-1] The callees of a closure of the intent crate (design 101).
+                        if found.name.starts_with(INTENT_CRATE) && found.name.contains("{closure#") {
+                            found.callee_texts = guarded(|| callee_texts(body)).unwrap_or_default();
+                        }
                         let reach_started = std::time::Instant::now();
                         found.live_callees = guarded(|| reach::live_callees(item.def_id(), body, &by_def)).flatten();
                         if let Some((sure, ends)) = guarded(|| reach::sure_callees(item.def_id(), body, &by_def)).flatten() {
@@ -1235,6 +1244,7 @@ fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
         sv: Vec::new(),
         inst: Vec::new(),
         dyn_casts: Vec::new(),
+        callee_texts: Vec::new(),
     }
 }
 
@@ -1244,6 +1254,52 @@ fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
 /// The body prints a type parameter by its name (`A`), and a caller gives the generic arguments
 /// by position (`size::<u8, u64>`). A step that changes the order of the parameters changes the
 /// map from names to positions, and no body text shows it (batch 5e). This text shows it.
+/// The prefix of a record name of the intent crate (design 78).
+const INTENT_CRATE: &str = "semilla_claims::";
+
+/// [R101.4-1] The largest callee (blocks) whose text a closure of the intent crate gets.
+const CALLEE_TEXT_BLOCKS: usize = 24;
+
+/// [R101.4-1] The canonical texts of the small callees of a body, to depth 2: the def path of
+/// each callee with a body (no intrinsic) of at most [`CALLEE_TEXT_BLOCKS`] blocks, and its
+/// canonical text with its generic parameters. The text is the generic body of the callee (for
+/// a crate outside the workspace, the MIR that the crate gives).
+fn callee_texts(body: &Body) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut todo: Vec<(Body, usize)> = vec![(body.clone(), 0)];
+    while let Some((current, depth)) = todo.pop() {
+        for block in &current.blocks {
+            let rustc_public::mir::TerminatorKind::Call { func, .. } = &block.terminator.kind else { continue };
+            let Ok(ty) = func.ty(current.locals()) else { continue };
+            let TyKind::RigidTy(RigidTy::FnDef(def, _)) = ty.kind() else { continue };
+            let (path, intrinsic) = rustc_middle::ty::tls::with(|tcx| {
+                let id = rustc_public::rustc_internal::internal(tcx, def.def_id());
+                (rustc_middle::ty::print::with_no_trimmed_paths!(tcx.def_path_str(id)), tcx.intrinsic(id).is_some())
+            });
+            if intrinsic || out.iter().any(|(known, _)| *known == path) {
+                continue;
+            }
+            let item = CrateItem(def.def_id());
+            let Some(callee) = guarded(|| if item.has_body() { item.body() } else { None }).flatten() else { continue };
+            if callee.blocks.len() > CALLEE_TEXT_BLOCKS {
+                continue;
+            }
+            let Some(mut text) = guarded(|| normalize::canonical_text(&normalize::canonical_body(&callee)).text) else { continue };
+            let generics = generics_text(item);
+            if !generics.is_empty()
+                && let Some(end) = text.find(" {\n")
+            {
+                text.insert_str(end, &generics);
+            }
+            out.push((path, text));
+            if depth < 1 {
+                todo.push((callee, depth + 1));
+            }
+        }
+    }
+    out
+}
+
 fn generics_text(item: CrateItem) -> String {
     let params = rustc_middle::ty::tls::with(|tcx| {
         let mut params = Vec::new();
@@ -1477,6 +1533,7 @@ fn record_with(
         sv: Vec::new(),
         inst: Vec::new(),
         dyn_casts: Vec::new(),
+        callee_texts: Vec::new(),
     };
     parts::add_time(parts::Part::Text, text_started);
     found

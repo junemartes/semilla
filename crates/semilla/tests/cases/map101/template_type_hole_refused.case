@@ -1,0 +1,59 @@
+note: a template with a type hole that needs a bound: the check refuses it, so Semilla prints `no template` with the cause of rustc
+rule-: R101.8-1
+must_match: no template: error\[E0277\]
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub struct Wrap<T: Copy>(pub T, pub u32, pub u32);
+
+pub fn first<T: Copy>(w: &Wrap<T>) -> u32 {
+    w.1 + 1
+}
+
+pub fn second<T: Copy>(v: &Wrap<T>) -> u32 {
+    v.1 * 2
+}
+=== new src/lib.rs
+pub struct Wrap<T: Copy>(pub T, pub u32, pub u32);
+
+pub fn first<T: Copy>(w: &Wrap<T>) -> u32 {
+    w.2 + 1
+}
+
+pub fn second<T: Copy>(v: &Wrap<T>) -> u32 {
+    v.2 * 2
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::first` (src/lib.rs:3): the full compare: `#[same(shop::first)] fn first_same() {}`; a difference: `#[change(shop::first)] fn first_change() -> bool { … }` or `#[different(shop::first)] fn first_different() -> bool { … }`
+    MIR changes with no claim: `shop::second` (src/lib.rs:7): the full compare: `#[same(shop::second)] fn second_same() {}`; a difference: `#[change(shop::second)] fn second_change() -> bool { … }` or `#[different(shop::second)] fn second_different() -> bool { … }`
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 2 in entries (2 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `shop::first`:
+  ◆ f1 replace (Semilla; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `shop::first` (src/lib.rs:4), `shop::second` (src/lib.rs:8); 2 nodes; one change (R92.6-1)): changed expression `w.1` → `w.2` at `shop::first/tail/lhs`; changed expression `v.1` → `v.2` at `shop::second/tail/lhs` [semantics · code different]
+      not stated (src/lib.rs:4, src/lib.rs:8, src/lib.rs:-4, src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::first,shop::second=TEXT'; if it does not change, --same 'rewrite $a.1 => $a.2' (one statement for 2 places: f1)
+      no template: error[E0277]: the trait bound `T: std::marker::Copy` is not satisfied
+      affected bodies: shop::first, shop::second
+      graph: same structure: 2 changed checks (implicit)
+      control flow: ~ check `overflow: w.1 + 1` → `overflow: w.2 + 1` (src/lib.rs:-4, src/lib.rs:4)
+      control flow: ~ check `overflow: v.1 * 2` → `overflow: v.2 * 2` (src/lib.rs:-8, src/lib.rs:8)
+      equivalence: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::first (src/lib.rs:3): same structure: 1 changed check; MIR changes
+    shop::second (src/lib.rs:7): same structure: 1 changed check; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `shop::first` (src/lib.rs:4), `shop::second` (src/lib.rs:8); 2 nodes; one change (R92.6-1)): changed expression `w.1` → `w.2` at `shop::first/tail/lhs`; changed expression `v.1` → `v.2` at `shop::second/tail/lhs` [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:8, src/lib.rs:-4, src/lib.rs:-8
