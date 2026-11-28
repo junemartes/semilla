@@ -165,6 +165,8 @@ Each step gives one list of entries (design 90). Each changed node of the syntax
   - A transformation whose parts depend on each other has the mark `the order can matter` and its cause after the kind ("two parts that each can panic: `a * 2` and `b * 3`", "a `#[repr]` of the type fixes the layout", "the MIR of 3 body(ies) reads the order of the fields"). It is a real edit.
   - Semilla finds the candidates alone. Two candidates for one region are a tie: no pair, a note, and the template of each `#[extract]`. Your statement decides a tie. A callee that the check cannot put in at its call (`#[track_caller]`, a recursive callee, a call through a trait object or a type parameter of the caller, a closure that leaves the body, a capture by value that the body writes before the call) gives a note with the cause, and the edits stay real edits.
 - Semilla pairs a renamed or a moved item from your hints first (`--same 'rename …'`, `#[rename]`, `#[moved]`), then from one map of its matcher. A use that follows a pair (`two(x)` → `dos(x)`, `p.a` → `p.x`) decides the map. A tie (two candidates with an equal score and no such use) gives no pair: the items show as `delete` and `add`, and a note gives the template of each candidate; the source order never decides a pair. The pairs come before the check of the step, and the step runs its check one time with them. A pair that does not pass (for example a move that changes the `cfg` conditions on its path) shows as a `delete` and an `add`, with a template `#[rename(before::OLD, after::NEW)] fn …() {}`; it does not stop the other pairs.
+- Repeated edits (design 97, R97.7-1): the real edits whose old and new MIR are equal after a rename of the locals are one entry, `the same edit at N sites`, with the list of the sites (`◆ f1 replace (Semilla; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `shop::first` (src/lib.rs:7), `shop::second` (src/lib.rs:11); …)`). The callees, the fields, the constants, and the types are a part of the MIR, so two edits with other callees are two entries.
+- Templates of the closure form (R97.8-1): a group of repeated edits, a `not mapped` entry, and a tie of a statement `#[rewrite]` get a line `template: `#[rewrite] fn first_rewrite() { (|c: &before::shop::Cart| c.items.len(), |c: &after::shop::Cart| c.count) }`` below the entry. Each parameter is a value that the code reads and does not write (`self` is `this`), with its MIR type. The gate of R87.1-1 checks each template before the step prints it: a template that does not pass is `no template: CAUSE` (for example `error[E0425]: cannot find function `base` in this scope`: the code calls a function with no path in the intent file). Copy a template into the intent file only if the rewrite is what you did on purpose.
 - `semilla expand --step N` lists each node: `nI STATE [RULE]: CHANGE NODE `AT` (PLACE): KIND in fN`.
 
 ## The facts that you state
@@ -312,6 +314,15 @@ fn pair(x: u32) -> bool {
 // It is not a claim, and it explains no body.
 #[rename(before::shop::sum, after::shop::total)]
 fn sum_to_total() {}
+
+// [design 97] One mechanical rewrite at many places: the old code and the new code as two
+// closures. Rustc compiles each closure against its version, so a wrong name or a wrong type is
+// an error of rustc at its place. A parameter is a hole: it binds to one place or one operand
+// of the body. The scope is optional (no scope: each changed body).
+#[rewrite(after::shop::Cart::total)]
+fn count() {
+    (|c: &before::shop::Cart| c.items.len(), |c: &after::shop::Cart| c.count)
+}
 
 // An anchor of the map for an extract (and `#[inlined(after::BODY, from = before::CALLEE)]`
 // for an inline): Semilla checks this pair and looks for no other candidate of the body.
@@ -509,7 +520,18 @@ The step compiles the intent crate against the two trees, and its compiled claim
 
 **The budgets.** Each budget counts solver steps, not seconds: the same trees and the same intent files give the same results on each machine and at each load. `claimed: the budget of the step` (a claim) and `not checked (the budget of the step)` (a body) are the same in each run. Only the safety time limit is a time stop, with its own cause: `the safety time limit`.
 
-`#[rename]`, `#[moved]`, `#[rewrite]`, `#[extract]`, and `#[inlined]` have the checks of `--same`. A `#[change(ITEM)]` claim also states its item for the gap list, as `--change` does.
+`#[rename]`, `#[moved]`, `#[rewrite]`, `#[extract]`, and `#[inlined]` have the checks of `--same`.
+
+**The closure form of `#[rewrite]`** (design 97). The body of the function is one tuple of two closures: the old code and the new code. The two closures have the same count of parameters, each parameter has a type (`before::…` in the old closure, `after::…` in the new closure), and a closure reads only its parameters: no capture, and no call of an item of the intent file (S0114, or an error of the statement). The check:
+
+- A site is a place where the MIR of the old closure body fits the old body with each parameter bound, the MIR of the new closure body fits the new body at the place that the alignment gives, and each parameter binds to the same place on the two sides. The binding comes from the elements of the site: Semilla does not search for it.
+- The statement gives one entry with its sites (`◆ f1 replace (a1; R97.3-1, the closure pair of `fn count` fits 2 site(s): …)`): the sites are real edits that you state. A site whose compiled code is equal under the binding is `same code`.
+- A changed node that the pattern does not fit keeps its own entry. A place of the scope with the old form and no edit is a count in a note (`1 place(s) in the scope keep the old form with no edit (R97.4-1)`).
+- A statement with no site is false, with the nearest candidates (the places where the most elements fit, and the element that differs).
+- Two bindings that fit one site (for example `a ^ b` → `b ^ a`: the order of the operands of a symmetric operation is not in the MIR) are a tie: no site, a note, and a template.
+- No site: a parameter that binds to two places on the two sides, a call of a method of another type, a parameter that the closure reads two times where the body computes the value two times, a parameter by value where the body borrows (the type and the drop differ), and code of a macro expansion.
+- The fact line names the statement: `✓ a1 same: rewrite `fn count` (the closure form, FILE) (holds: the closure pair fits 2 site(s), …)`, and its short form for the gap lines is `--same 'rewrite fn count in FILE'`.
+- The text form `#[rewrite("FROM", "TO")]` and `--same 'rewrite FROM => TO'` stay, with their check of the syntax tree (design 54.3). A `#[change(ITEM)]` claim also states its item for the gap list, as `--change` does.
 
 **The rules of a body.** A call of a version runs the body of that version. A call sees the writes of the earlier calls through a `&mut` place of the claim (design 82); the effects on the world of one call are not inputs of another call. A panic of a call outside `panics(|| …)`, `panics_with(|| …, "…")`, `returns(|| …)`, and `same_outcome(|| …, || …)` makes the claim false. An operation of the claim has the checks of a debug build (an overflow panics). `==` compares the values of integers, `bool`, `char`, tuples, sequences, and `Option` and `Result` of these; on a type of the workspace it calls `PartialEq::eq` of that version. A path can be loose (`shop::Cart::len` for `shop::Cart::<T>::len`); a trait method has its record name as a text: `#[same("<shop::Cart as core::fmt::Debug>::fmt")]`.
 

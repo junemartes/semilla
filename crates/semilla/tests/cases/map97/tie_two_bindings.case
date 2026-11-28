@@ -1,0 +1,61 @@
+note: two bindings of the closure pair fit one site (a symmetric operation on the two sides): a tie, no site, and a note with a template
+rule+: R97.6-1
+exit: 1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: a tie of 2 bindings of the closure pair at one site \(R97\.6-1\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub fn f(x: u32, y: u32) -> u32 {
+    (x ^ y).rotate_left(3)
+}
+=== new src/lib.rs
+pub fn f(x: u32, y: u32) -> u32 {
+    (y ^ x).rotate_left(3) | 1
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite(after::shop::f)]
+fn swap() {
+    (|a: u32, b: u32| a ^ b, |a: u32, b: u32| b ^ a)
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  ✗ fact a1 of the agent is false: `--same 'rewrite fn swap in .semilla/intent/step.rs'`
+  ✗ the intent claim i1 `#[rewrite(shop::f)] fn swap()` (.semilla/intent/step.rs:3): false: the check of `--same 'rewrite fn swap in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the check refuses 1 place(s): `shop::f` (src/lib.rs:2): a tie of 2 bindings of the closure pair at one site (R97.6-1): no site, and Semilla does not use the order)
+
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✗ a1 same: rewrite `fn swap` (the closure form, .semilla/intent/step.rs) (false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the check refuses 1 place(s): `shop::f` (src/lib.rs:2): a tie of 2 bindings of the closure pair at one site (R97.6-1): no site, and Semilla does not use the order)
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  ✗ i1 `#[rewrite(shop::f)] fn swap()` (.semilla/intent/step.rs:3): false: the check of `--same 'rewrite fn swap in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the check refuses 1 place(s): `shop::f` (src/lib.rs:2): a tie of 2 bindings of the closure pair at one site (R97.6-1): no site, and Semilla does not use the order)
+      the input is an exact input of the two versions: correct the claim or the code
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    ✗ false: i1 `#[rewrite(shop::f)] fn swap()`: the check of `--same 'rewrite fn swap in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the check refuses 1 place(s): `shop::f` (src/lib.rs:2): a tie of 2 bindings of the closure pair at one site (R97.6-1): no site, and Semilla does not use the order)
+    changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+      MIR changes with no claim: `shop::f` (src/lib.rs:1): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(x: u32, y: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::f`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `(x ^ y).rotate_left(3)` → `(y ^ x).rotate_left(3) | 1` at `shop::f/tail` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::f=TEXT'; if it does not change, --same 'rewrite ($a ^ $b).rotate_left(3) => ($b ^ $a).rotate_left(3) | 1'
+      affected bodies: shop::f
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::f (src/lib.rs:1): same graph (the edit keeps the control flow); MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  note: `#[rewrite] fn swap`: `shop::f` (src/lib.rs:2): a tie of 2 bindings of the closure pair at one site (R97.6-1): no site, and Semilla does not use the order
+  note: `#[rewrite] fn swap`: the statement of the tie at `shop::f` (R97.8-1): template: `#[rewrite(after::shop::f)] fn f_rewrite() { (|x: u32, y: u32| (x ^ y), |x: u32, y: u32| (y ^ x)) }`
+no command can succeed without a code change: fix the cause, then run the step again
+=== positions
+none: the runner has no accepted step for this case

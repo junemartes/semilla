@@ -1,0 +1,73 @@
+note: the template of a group names a function with no path in the intent file: the gate refuses it, and the entry has "no template: CAUSE"
+rule-: R97.8-1
+must_match: R97\.7-1, the same edit at 2 sites
+must_match: no template: error\[E0425\]
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+fn base(a: u32) -> u32 {
+    a + 7
+}
+
+fn other(a: u32) -> u32 {
+    a ^ 7
+}
+
+pub fn first(a: u32) -> u32 {
+    base(a).rotate_left(3)
+}
+
+pub fn second(b: u32) -> u32 {
+    base(b).rotate_left(3) ^ 1
+}
+=== new src/lib.rs
+fn base(a: u32) -> u32 {
+    a + 7
+}
+
+fn other(a: u32) -> u32 {
+    a ^ 7
+}
+
+pub fn first(a: u32) -> u32 {
+    other(a).rotate_left(3)
+}
+
+pub fn second(b: u32) -> u32 {
+    other(b).rotate_left(3) ^ 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::first` (src/lib.rs:9): the full compare: `#[same(shop::first)] fn first_same() {}`; a difference: `#[change(shop::first)] fn first_change(a: u32) -> bool { … }` or `#[different(shop::first)] fn first_different() -> bool { … }`
+    MIR changes with no claim: `shop::second` (src/lib.rs:13): the full compare: `#[same(shop::second)] fn second_same() {}`; a difference: `#[change(shop::second)] fn second_change(b: u32) -> bool { … }` or `#[different(shop::second)] fn second_different() -> bool { … }`
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::first`:
+  ◆ f1 replace (Semilla; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `shop::first` (src/lib.rs:10), `shop::second` (src/lib.rs:14); 2 nodes): 2 site(s): changed path `base` → `other` [semantics · code different]
+      not stated (src/lib.rs:10, src/lib.rs:14, src/lib.rs:-10, src/lib.rs:-14); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::first,shop::second=TEXT'; if it does not change, --same 'rewrite base => other' (one statement for 2 places: f1)
+      no template: error[E0425]: cannot find function `base` in this scope
+      in: shop::first, shop::second
+      affected bodies: shop::first, shop::second
+      control flow: ~ call `base` → `other` (src/lib.rs:-10, src/lib.rs:10)
+      control flow: ~ call `base` → `other` (src/lib.rs:-14, src/lib.rs:14)
+      equivalence: `shop::first`: MIR changes
+      equivalence: `shop::second`: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::first (src/lib.rs:9): same structure: 1 changed call target; MIR changes
+    shop::second (src/lib.rs:13): same structure: 1 changed call target; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `shop::first` (src/lib.rs:10), `shop::second` (src/lib.rs:14); 2 nodes): 2 site(s): changed path `base` → `other` [semantics · code different]
+    lines: src/lib.rs:10, src/lib.rs:14, src/lib.rs:-10, src/lib.rs:-14

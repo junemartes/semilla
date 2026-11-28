@@ -1353,6 +1353,11 @@ pub struct Fact {
     /// depend on each other. Such an entry is a real edit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<String>,
+    /// [R97.8-1] The template of the closure form of `#[rewrite]` for the entry (design 97):
+    /// `template: `…`` after the gate of R87.1-1, or `no template: CAUSE`. A "not mapped" entry
+    /// and a group of the repeated edits have one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
 }
 
 /// [R90.2-1] The kind of an entry of the map of the diff (design 90).

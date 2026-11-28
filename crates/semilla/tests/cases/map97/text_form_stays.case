@@ -1,0 +1,85 @@
+note: the text form of `#[rewrite]` keeps its check of today
+rule+: R97.9-1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: ✓ a1 same: rewrite `\$a\.items\.len\(\)` => `\$a\.count`
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub struct Cart {
+    pub items: Vec<u32>,
+    pub count: usize,
+}
+
+impl Cart {
+    pub fn total(&self) -> usize {
+        self.items.len() + 1
+    }
+
+    pub fn twice(&self) -> usize {
+        self.items.len() * 2
+    }
+}
+=== new src/lib.rs
+pub struct Cart {
+    pub items: Vec<u32>,
+    pub count: usize,
+}
+
+impl Cart {
+    pub fn total(&self) -> usize {
+        self.count + 1
+    }
+
+    pub fn twice(&self) -> usize {
+        self.count * 2
+    }
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite("$a.items.len()", "$a.count")]
+fn count() {}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `$a.items.len()` => `$a.count` (the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
+      places: shop::Cart::total/tail/lhs, shop::Cart::twice/tail/lhs
+      entries, in the list below: f1
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  · i1 `#[rewrite($a.items.len(), $a.count)] fn count()` (.semilla/intent/step.rs:3): hint: the check of `--same 'rewrite $a.items.len() => $a.count'` holds (fact a1 of the agent: the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same); a hint pairs the old and the new code and explains no body: a claim states the behavior
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+      MIR changes with no claim: `shop::Cart::total` (src/lib.rs:7): the full compare: `#[same(shop::Cart::total)] fn total_same() {}`; a difference: `#[change(shop::Cart::total)] fn total_change(this_before: &before::shop::Cart, this_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::Cart::total)] fn total_different() -> bool { … }`
+      MIR changes with no claim: `shop::Cart::twice` (src/lib.rs:11): the full compare: `#[same(shop::Cart::twice)] fn twice_same() {}`; a difference: `#[change(shop::Cart::twice)] fn twice_change(this_before: &before::shop::Cart, this_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::Cart::twice)] fn twice_different() -> bool { … }`
+  changed nodes: 2 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::Cart::total`:
+  ◆ f1 replace (a1; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `shop::Cart::total` (src/lib.rs:8), `shop::Cart::twice` (src/lib.rs:12); 2 nodes): 2 site(s): changed expression `self.items.len()` → `self.count` [semantics · code different]
+      template: `#[rewrite] fn total_rewrite() { (|this: &before::shop::Cart| this.items.len(), |this: &after::shop::Cart| this.count) }`
+      in: shop::Cart::total, shop::Cart::twice
+      affected bodies: shop::Cart::total, shop::Cart::twice
+      control flow: − call `Vec::<u32>::len` (src/lib.rs:-8): return → check `overflow: self.items.len() + 1`
+      control flow: ~ check `overflow: self.items.len() + 1` → `overflow: self.count + 1` (src/lib.rs:-8, src/lib.rs:8)
+      control flow: + arrow entry (src/lib.rs:7) → check `overflow: self.count + 1` (src/lib.rs:8)
+      control flow: … 5 more (semilla expand --step 0)
+      equivalence: `shop::Cart::total`: MIR changes
+      equivalence: `shop::Cart::twice`: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::Cart::total (src/lib.rs:7): graph changes: −1 call, 1 changed check, +1 arrow, −2 arrows; MIR changes
+    shop::Cart::twice (src/lib.rs:11): graph changes: −1 call, 1 changed check, +1 arrow, −2 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (a1; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `shop::Cart::total` (src/lib.rs:8), `shop::Cart::twice` (src/lib.rs:12); 2 nodes): 2 site(s): changed expression `self.items.len()` → `self.count` [semantics · code different]
+    lines: src/lib.rs:8, src/lib.rs:12, src/lib.rs:-8, src/lib.rs:-12

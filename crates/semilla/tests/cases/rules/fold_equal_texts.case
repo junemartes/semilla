@@ -74,8 +74,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
   item `depot::wrap`:
-  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `x` → `x + 1` [semantics · code different]
+  ◆ f1 replace (Semilla; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `depot::wrap` (src/lib.rs:9), `depot::wrap2` (src/lib.rs:10); 2 nodes): 2 site(s): changed expression `x` → `x + 1` [semantics · code different]
       not stated (src/lib.rs:9-10, src/lib.rs:-9-10); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::wrap,depot::wrap2=TEXT'; if it does not change, --same 'rewrite x => x + 1' (one statement for 2 places: f1)
+      template: `#[rewrite] fn wrap_rewrite() { (|x: u32| x, |x: u32| x + 1) }`
       in: depot::wrap, depot::wrap2
       affected bodies: depot::wrap, depot::wrap2
       control flow: + check `overflow: x + 1` (src/lib.rs:9): ok → return, fail → panic `overflow`
@@ -94,5 +95,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 === positions
 ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 2` at `depot::wrap3/tail` [semantics · code different]
     lines: src/lib.rs:20, src/lib.rs:-20
-◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `x` → `x + 1` [semantics · code different]
+◆ f1 replace (Semilla; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `depot::wrap` (src/lib.rs:9), `depot::wrap2` (src/lib.rs:10); 2 nodes): 2 site(s): changed expression `x` → `x + 1` [semantics · code different]
     lines: src/lib.rs:9-10, src/lib.rs:-9-10

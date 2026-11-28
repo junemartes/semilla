@@ -7176,7 +7176,7 @@ fn run_elements(before: &str, after: &str, claims: Vec<Claim>, oracle: &ElementB
 }
 
 fn changed_body(name: &str, old: Vec<MirElement>, new: Vec<MirElement>) -> BodyComparison {
-    BodyComparison { graphs: Vec::new(), name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: Some(MirDiff { transforms: Vec::new(), reorder: None, old, new, other: false, pairs: Vec::new(), changed: Vec::new(), no_symbols: true, own: Vec::new(), evaluated: false }) }
+    BodyComparison { graphs: Vec::new(), name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: Some(MirDiff { transforms: Vec::new(), reorder: None, table: None, old, new, other: false, pairs: Vec::new(), changed: Vec::new(), no_symbols: true, own: Vec::new(), evaluated: false }) }
 }
 
 const COUNT_BEFORE: &str = "pub fn f(v: &Vec<u32>) -> usize {\n    let n = v.len();\n    n + 1\n}\n";

@@ -303,3 +303,29 @@ fn a_residue_element_must_differ_in_the_map_of_the_body() {
     // Negative: with no diff, the whole body must be a new order.
     assert!(permutation((SWAP_OLD, &el), (&changed, &el)).is_none());
 }
+
+// rule+ R97.2-1
+// rule- R97.2-1
+#[test]
+fn a_plain_diff_has_a_table_and_a_keyed_diff_has_none() {
+    let (old, new) = (record(OLD_TOTAL_EL), record(NEW_TOTAL_EL));
+    let diff = elements::diff((OLD_TOTAL, &old), (NEW_TOTAL, &new)).unwrap();
+    let table = diff.table.as_ref().expect("a table");
+    assert_eq!(table.texts, [OLD_TOTAL.to_string(), NEW_TOTAL.to_string()]);
+    assert_eq!((table.ranges[0].len(), table.ranges[1].len()), (old.n, new.n));
+    assert_eq!((table.same[0].len(), table.same[1].len()), (old.n, new.n));
+    // The arguments and the return local map to themselves, and the last element (the return)
+    // is an equal pair.
+    assert!(table.locals.contains(&(1, 1)) && table.locals.contains(&(2, 2)), "{:?}", table.locals);
+    assert!(table.pairs.contains(&(old.n - 1, new.n - 1, true)), "{:?}", table.pairs);
+    // Negative: the diff of a check of design 94 (a side with keys) has no table, and two
+    // configurations with other tables give none.
+    let keys: Vec<elements::OrderKey> = (0..new.n).map(|index| (String::new(), vec![(0, index)])).collect();
+    let keyed = elements::diff_keyed((OLD_TOTAL, &old), (NEW_TOTAL, &new), [None, Some(&keys)]).unwrap();
+    assert!(keyed.table.is_none());
+    let mut merged = diff.clone();
+    let mut other = diff.clone();
+    other.table = Some(std::sync::Arc::new(elements::Table { texts: [String::new(), String::new()], ..Default::default() }));
+    merged.merge(other);
+    assert!(merged.table.is_none());
+}

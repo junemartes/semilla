@@ -171,7 +171,7 @@ fn names_its_body(check: &crate::intentcrate::Check, ask: &Ask, line: usize) -> 
     for (_, heads) in &check.heads {
         for head in heads.iter().filter(|head| head.line == line) {
             for (index, scope) in head.scope.iter().enumerate() {
-                for link in semilla_intent::heads::scope_links(&head.kind, index, scope) {
+                for link in semilla_intent::heads::head_links(head, index, scope) {
                     let version = link.split("::").next().unwrap_or("");
                     let wanted: Vec<&String> = ask.expect.iter().filter(|name| name.split("::").next() == Some(version)).collect();
                     if wanted.is_empty() {

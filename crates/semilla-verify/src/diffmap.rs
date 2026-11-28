@@ -589,6 +589,46 @@ fn split_fact(fact: &Fact, nodes: &[(&AstEntry, &Edit)], id: usize, trees: [&Wor
     }
 }
 
+/// [R97.4-1] Moves a set of nodes to a fact of their own: each fact with nodes of the set and
+/// other nodes gives a new fact with the nodes of the set (design 97). The old fact keeps its
+/// text and its other nodes, as a split by kind does (R92.7-1).
+pub(crate) fn split_off(outcome: &mut StepOutcome, trees: [&Workspace; 2], map: &mut AstMap, indices: &[usize], moved: &BTreeSet<usize>) {
+    let count = outcome.report.facts.len();
+    let place_of: BTreeMap<usize, usize> = indices.iter().enumerate().map(|(place, index)| (*index, place)).collect();
+    let mut next_id = outcome.report.facts.iter().filter_map(|fact| fact.id.strip_prefix('f').and_then(|number| number.parse::<usize>().ok())).max().unwrap_or(0) + 1;
+    let mut target: Option<usize> = None;
+    for fact in 0..count {
+        let held: Vec<usize> = indices.iter().copied().filter(|index| outcome.fact_of.get(*index).copied().flatten() == Some(fact)).collect();
+        let (inside, outside): (Vec<usize>, Vec<usize>) = held.iter().partition(|index| moved.contains(index));
+        if inside.is_empty() || outside.is_empty() {
+            continue;
+        }
+        let at = match target {
+            Some(at) => at,
+            None => {
+                let nodes: Vec<(&AstEntry, &Edit)> = inside.iter().filter_map(|index| Some((map.entries.get(*place_of.get(index)?)?, &outcome.edits[*index]))).collect();
+                if nodes.is_empty() {
+                    continue;
+                }
+                let mut part = split_fact(&outcome.report.facts[fact], &nodes, next_id, trees);
+                part.check = String::new();
+                next_id += 1;
+                outcome.report.facts.push(part);
+                outcome.report.facts.len() - 1
+            }
+        };
+        target = Some(at);
+        for index in inside {
+            outcome.fact_of[index] = Some(at);
+        }
+    }
+    for (entry, index) in map.entries.iter_mut().zip(indices) {
+        if let Some(fact) = outcome.fact_of.get(*index).copied().flatten().and_then(|fact| outcome.report.facts.get(fact)) {
+            entry.entry = fact.id.clone();
+        }
+    }
+}
+
 /// [R90.3-1] Gives each fact of the step the fields of the one fact (design 90): its nodes, its
 /// kind, its check, its source, and the mark "not stated" (R90.5-2). It runs after the facts of
 /// the agent and the claims of the intent files have their results.

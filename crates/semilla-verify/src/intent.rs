@@ -79,7 +79,17 @@ pub fn parse_files(files: &[IntentFile]) -> Result<Vec<semilla_intent::File>, Ve
                 let _ = found;
                 parsed.push(semilla_intent::heads::as_file(&file.path, &file.text));
             }
-            Err(mut found) => errors.append(&mut found),
+            Err(mut found) => {
+                // [R97.1-1] A closure form of `#[rewrite]` with an error of its head: the error of
+                // the head (S0114), not the error of the reader of batch 10r1.
+                let (_, findings) = semilla_intent::heads::check(&file.path, &file.text);
+                let closure: Vec<semilla_intent::Error> = findings.iter().filter(|finding| finding.error && finding.code == "S0114").map(|finding| semilla_intent::Error { place: semilla_intent::Place { file: file.path.clone(), line: finding.line, column: finding.column }, message: format!("[{}] {}", finding.code, finding.message) }).collect();
+                if closure.is_empty() {
+                    errors.append(&mut found);
+                } else {
+                    errors.extend(closure);
+                }
+            }
         }
     }
     if errors.is_empty() { Ok(parsed) } else { Err(errors) }
@@ -93,6 +103,11 @@ fn ra_parse_clean(text: &str) -> bool {
 
 /// The text of the `--same` fact of a claim of the forms of `--same` (R67.4-1).
 pub fn same_text(claim: &semilla_intent::Claim) -> Option<String> {
+    // [R97.1-1] The closure form of `#[rewrite]` (a body with the two closures): the fact of the
+    // agent names the statement in its file (the closures have no text form).
+    if claim.kind == ClaimKind::Rewrite && claim.func.body.is_some() {
+        return Some(format!("rewrite fn {} in {}", claim.func.name, claim.place.file));
+    }
     let [from, to] = claim.targets.as_slice() else { return None };
     Some(match claim.kind {
         ClaimKind::Rename => format!("rename {} {}", from.name(), to.name()),
