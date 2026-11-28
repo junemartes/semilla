@@ -1,0 +1,56 @@
+note: the closure form with two counts of parameters is an error of the statement (S0114)
+rule-: R97.1-1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: S0114
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub struct Cart {
+    pub items: Vec<u32>,
+    pub count: usize,
+}
+
+impl Cart {
+    pub fn total(&self) -> usize {
+        self.items.len() + 1
+    }
+
+    pub fn twice(&self) -> usize {
+        self.items.len() * 2
+    }
+}
+=== new src/lib.rs
+pub struct Cart {
+    pub items: Vec<u32>,
+    pub count: usize,
+}
+
+impl Cart {
+    pub fn total(&self) -> usize {
+        self.count + 1
+    }
+
+    pub fn twice(&self) -> usize {
+        self.count * 2
+    }
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite]
+fn count() {
+    (|c: &before::shop::Cart| c.items.len(), |c: &after::shop::Cart, n: usize| c.count + n)
+}
+=== expected
+exit: 2
+=== stderr
+error: the intent file has errors:
+    .semilla/intent/step.rs:4:12: [S0114] the old closure has 1 parameter(s) and the new closure has 2: a parameter binds to one place of the two bodies, so the counts are equal
+=== positions
+none: the runner has no accepted step for this case

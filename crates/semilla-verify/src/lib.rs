@@ -42,6 +42,7 @@ pub mod mirmap;
 mod opaque;
 pub mod sites;
 pub mod template;
+pub mod rewrites;
 pub mod transforms;
 pub use opaque::{KnownTrait, KNOWN_TRAITS};
 mod srcconfig;
@@ -198,6 +199,46 @@ pub struct MirDiff {
     /// [R94.4-2] The new order of the same parts of the body pair, when the change is only a new
     /// order (design 94).
     pub reorder: Option<MirReorder>,
+    /// [R97.2-1] The element table of the body pair (design 97): the two texts, the ranges, the
+    /// pairs of the alignment, and the map of the locals. `None`: no table (more than one
+    /// checked configuration with different texts, or no element data). The stored form of the
+    /// result has it (R93.1-1); the output form does not.
+    #[serde(default, skip_serializing_if = "semilla_core::stored::output_only", serialize_with = "shared_table::serialize", deserialize_with = "shared_table::deserialize")]
+    pub table: Option<std::sync::Arc<MirTable>>,
+}
+
+/// [R97.2-1] The serde form of a shared table: the value of the table.
+mod shared_table {
+    use super::MirTable;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &Option<std::sync::Arc<MirTable>>, writer: S) -> Result<S::Ok, S::Error> {
+        value.as_deref().serialize(writer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(reader: D) -> Result<Option<std::sync::Arc<MirTable>>, D::Error> {
+        Ok(Option::<MirTable>::deserialize(reader)?.map(std::sync::Arc::new))
+    }
+}
+
+/// [R97.2-1] The element table of a changed body pair (design 97), from the element compare of
+/// design 90. The checks of `#[rewrite]` (the sites) and of the repeated edits read it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MirTable {
+    /// The canonical MIR text of each side (0: old, 1: new).
+    pub texts: [String; 2],
+    /// The range of each element of each side in the order of the text: the tokens and the
+    /// outermost macro call.
+    pub ranges: [Vec<(Option<MirPlace>, Option<MirPlace>)>; 2],
+    /// The pairs of the alignment: old index, new index, and true for an equal pair.
+    pub pairs: Vec<(usize, usize, bool)>,
+    /// The map of the locals (old, new).
+    pub locals: Vec<(usize, usize)>,
+    /// The kind and the first declaration place of each local of each side (design 45).
+    pub decls: [Vec<(i64, Option<MirPlace>)>; 2],
+    /// True for each element of each side with an equal partner.
+    pub same: [Vec<bool>; 2],
 }
 
 /// [R94.1-1] [R94.2-1] The check of one candidate of an extract or an inline (design 94): the

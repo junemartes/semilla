@@ -899,7 +899,7 @@ pub(crate) fn compiled_claims(check: &crate::intentcrate::Check, sources: &[semi
         return Err(format!("the intent crate has {rustc} error(s) of rustc and {semilla} error(s) of Semilla (`semilla intent check` shows them)"));
     }
     let compiled = &check.compiled;
-    let mut out = semilla_verify::astmap::CompiledClaims { links: compiled.links.iter().map(|link| (link.path.clone(), link.resolved.clone())).collect(), functions: BTreeMap::new() };
+    let mut out = semilla_verify::astmap::CompiledClaims { links: compiled.links.iter().map(|link| (link.path.clone(), link.resolved.clone())).collect(), functions: BTreeMap::new(), rewrites: BTreeMap::new() };
     let forms: BTreeMap<&str, Arc<semilla_smt::mir::Ir>> = compiled.records.iter().filter_map(|record| record_form(record).map(|form| (record.name.as_str(), form))).collect();
     let prefix = format!("{}::", semilla_normal::intent::CLAIMS_CRATE);
     for (source, module) in sources.iter().zip(&compiled.modules) {
@@ -941,6 +941,15 @@ pub(crate) fn compiled_claims(check: &crate::intentcrate::Check, sources: &[semi
                 }
             }
             out.functions.insert((source.path.clone(), name.to_string()), calls);
+        }
+        // [R97.1-1] The two closures of each closure form of `#[rewrite]`: the first and the
+        // second closure of the function, in the order of the source.
+        let (heads, _) = semilla_intent::heads::check(&source.path, &source.text);
+        for head in heads.iter().filter(|head| head.closure && head.kind == "rewrite") {
+            let text = |number: usize| compiled.records.iter().find(|record| record.name == format!("{start}{}::{{closure#{number}}}", head.function)).map(|record| record.text.clone());
+            if let (Some(old), Some(new)) = (text(0), text(1)) {
+                out.rewrites.insert((source.path.clone(), head.function.clone()), [old, new]);
+            }
         }
     }
     Ok(out)
@@ -1069,4 +1078,20 @@ fn ir_fields(form: &semilla_smt::mir::Ir, out: &mut [BTreeSet<(String, String, S
             _ => {}
         }
     }
+}
+
+/// [R97.2-1] The element table of a body pair in the form of the verifier (design 97).
+pub(crate) fn mir_table(table: Option<Arc<semilla_normal::elements::Table>>) -> Option<Arc<semilla_verify::MirTable>> {
+    let table = table?;
+    let place = |place: &semilla_normal::elements::Place| (place.file.clone(), place.start, place.end);
+    let ranges = |list: &[(Option<semilla_normal::elements::Place>, Option<semilla_normal::elements::Place>)]| list.iter().map(|(tokens, call)| (tokens.as_ref().map(place), call.as_ref().map(place))).collect();
+    let decls = |list: &[(i64, Option<semilla_normal::elements::Place>)]| list.iter().map(|(kind, at)| (*kind, at.as_ref().map(place))).collect();
+    Some(Arc::new(semilla_verify::MirTable {
+        texts: table.texts.clone(),
+        ranges: [ranges(&table.ranges[0]), ranges(&table.ranges[1])],
+        pairs: table.pairs.clone(),
+        locals: table.locals.clone(),
+        decls: [decls(&table.decls[0]), decls(&table.decls[1])],
+        same: table.same.clone(),
+    }))
 }

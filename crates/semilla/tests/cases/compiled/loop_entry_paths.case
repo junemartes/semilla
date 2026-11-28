@@ -57,8 +57,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
   real edits:
   item `shop::acc_a`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes): 2 site(s): changed literal `5` → `6` [semantics · code different]
+  ◆ f1 replace (Semilla; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `shop::acc_a` (src/lib.rs:3), `shop::acc_b` (src/lib.rs:13); 2 nodes): 2 site(s): changed literal `5` → `6` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:13, src/lib.rs:-3, src/lib.rs:-13); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::acc_a,shop::acc_b=TEXT'; if it does not change, --same 'rewrite 5 => 6' (one statement for 2 places: f1)
+      template: `#[rewrite] fn acc_a_rewrite() { (|| 5, || 6) }`
       in: shop::acc_a, shop::acc_b
       affected bodies: shop::acc_a, shop::acc_b
       equivalence: `shop::acc_a`: MIR changes
@@ -70,5 +71,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes): 2 site(s): changed literal `5` → `6` [semantics · code different]
+◆ f1 replace (Semilla; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `shop::acc_a` (src/lib.rs:3), `shop::acc_b` (src/lib.rs:13); 2 nodes): 2 site(s): changed literal `5` → `6` [semantics · code different]
     lines: src/lib.rs:3, src/lib.rs:13, src/lib.rs:-3, src/lib.rs:-13

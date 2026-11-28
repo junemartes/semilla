@@ -7971,6 +7971,10 @@ fn has_stated(text: &str) -> bool {
     text.lines().map(str::trim_start).filter(|line| line.starts_with("◆ f")).any(|line| line.split_once(" (").is_some_and(|(_, tail)| (tail.starts_with('a') || tail.starts_with('i')) && tail[1..].starts_with(|c: char| c.is_ascii_digit())))
 }
 
+/// [R97.7-1] The entry of the edit `c.total` → `c.total()` at `a` and `b` and of `e.total` →
+/// `e.total()` at `d`: one edit of the MIR (design 97), one entry.
+const FACTS_F1: &str = "◆ f1 replace (Semilla; R97.7-1, the same edit at 3 sites: the old and the new MIR are equal after a rename of the locals: `shop_core::facts::a` (crates/shop-core/src/facts.rs:11), `shop_core::facts::b` (crates/shop-core/src/facts.rs:14), `shop_core::facts::d` (crates/shop-core/src/facts.rs:17); 3 nodes; one change (R92.6-1)): 2 site(s): changed expression `c.total` → `c.total()`; changed expression `e.total` → `e.total()` at `shop_core::facts::d/tail/rhs` [semantics · code different]";
+
 const GAP_HEAD: &str = "that can change the behavior of existing code and that no fact of the agent states";
 
 // rule+ R48.2-1
@@ -7983,10 +7987,11 @@ fn a_step_with_no_agent_fact_is_valid_and_prints_the_gap_list_with_one_command()
     // The gap list: the largest group first, with the option that covers the group. The test
     // function is not in the list. [R92.5-1] Each line of the list is below its entries, with
     // the other entries of the group (design 92).
-    let one = "the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::a,shop_core::facts::b,shop_core::facts::d=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()' (one statement for 3 places: f1, f2)";
-    let list = format!("  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]\n      not stated (crates/shop-core/src/facts.rs:11, crates/shop-core/src/facts.rs:14, crates/shop-core/src/facts.rs:-11, crates/shop-core/src/facts.rs:-14); to state it: {one}\n");
+    let one = "the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::a,shop_core::facts::b,shop_core::facts::d=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()' (one statement for 3 places: f1)";
+    let list = format!("  {FACTS_F1}\n      not stated (crates/shop-core/src/facts.rs:11, crates/shop-core/src/facts.rs:14, crates/shop-core/src/facts.rs:17, crates/shop-core/src/facts.rs:-11, crates/shop-core/src/facts.rs:-14, crates/shop-core/src/facts.rs:-17); to state it: {one}\n");
     assert!(out.contains(&list), "{out}");
-    assert!(out.contains(&format!("      not stated (crates/shop-core/src/facts.rs:17, crates/shop-core/src/facts.rs:-17); to state it: {one}\n")), "{out}");
+    // [R97.7-1] The edit of `d` is a site of the entry f1 (one edit of the MIR), so no entry f2.
+    assert!(!out.contains("◆ f2 "), "{out}");
     assert!(out.contains("      not stated (crates/shop-core/src/facts.rs:20); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::idle=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f3, f4)\n"), "{out}");
     assert!(!out.lines().any(|line| line.starts_with("      not stated (") && line.contains("(one statement for") && line.contains("tests::t")), "{out}");
     // A line whose check did not decide has the two forms, and the command does not have it
@@ -7996,7 +8001,7 @@ fn a_step_with_no_agent_fact_is_valid_and_prints_the_gap_list_with_one_command()
     assert!(!out.contains("  to state them, add facts to the stored step"), "{out}");
     // Each fact has the source Semilla, in the sections of design 90.
     assert!(out.contains("◆ f7 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed literal `2` → `6` at `shop_core::facts::tests::t/S0/args[1]` [semantics · code different]\n"), "{out}");
-    assert!(out.contains("◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]\n"), "{out}");
+    assert!(out.contains(&format!("{FACTS_F1}\n")), "{out}");
     assert!(!has_stated(&out) && !out.contains("facts of the agent"), "{out}");
 
     // Part D (design 54.7). A long statement: the full text is in a block below the fact line.
@@ -8042,7 +8047,7 @@ fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     let output = semilla_env(repo, &["step", "use the method", "--same", "rewrite $a.total => $a.total()"], &checked);
     let out = String::from_utf8_lossy(&output.stdout).into_owned();
     assert!(output.status.success() && out.contains("build check: passes ("), "{out}{}", String::from_utf8_lossy(&output.stderr));
-    assert!(out.contains("  ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)\n      places: shop_core::facts::a/tail/lhs, shop_core::facts::b/tail/lhs, shop_core::facts::d/tail/rhs\n      entries, in the list below: f1, f2\n") && out.contains("◆ f1 replace (a1; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]\n"), "{out}");
+    assert!(out.contains("  ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)\n      places: shop_core::facts::a/tail/lhs, shop_core::facts::b/tail/lhs, shop_core::facts::d/tail/rhs\n      entries, in the list below: f1\n") && out.contains(&format!("{}\n", FACTS_F1.replace("(Semilla; ", "(a1; "))), "{out}");
     // A partial fact set: the other items are in the gap list.
     // [R90.5-3] The coverage line replaces the count line; the gap list follows it.
     assert!(out.contains("  changed nodes: ") && out.matches("\n      not stated (").count() >= 1, "{out}");
@@ -8124,7 +8129,8 @@ fn a_false_fact_of_the_agent_rejects_the_step_and_hides_no_edit() {
     assert!(out.contains("  ✗ fact a2 of the agent is false: `--same 'rename shop_core::facts::a shop_core::facts::first'`\n") && out.contains("  ✗ fact a3 of the agent is false: `--change 'facts::Cart=the cart changes'`\n"), "{out}");
     assert!(out.contains("(false: Semilla derives no rename `shop_core::facts::a` → `shop_core::facts::first` from the syntax tree)\n") && out.contains("      Semilla sees no edit in `shop_core::facts::Cart`\n"), "{out}");
     // No edit is hidden: each fact of the step is in the output.
-    for id in 1..=7 {
+    // [R97.7-1] f2 is a site of f1 (design 97).
+    for id in [1, 3, 4, 5, 6, 7] {
         assert_eq!(out.matches(&format!("◆ f{id} ")).count(), 1, "f{id}: {out}");
     }
     // The command to run again has the fact that holds, and not the false facts.
@@ -8286,7 +8292,7 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     // moved call (the hunk header `@@ -23 +29 @@`).
     let (code, out) = tree_mode(repo, &["step", "use the method", "--tag", &format!("{file}:11-17=method calls"), "--tag", &format!("{file}:20-25,{file}:-23=idle and tail")]);
     assert_eq!(code, Some(0), "{out}");
-    assert!(out.contains(&format!("  tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s)\n  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]\n")), "{out}");
+    assert!(out.contains(&format!("  tag `method calls` ({file}:11-17): 1 fact(s): 1 semantics; 6 changed line(s)\n  {FACTS_F1}\n")), "{out}");
     assert!(out.contains(&format!("  tag `idle and tail` ({file}:20-25, {file}:-23): 3 fact(s): 3 semantics; 8 changed line(s)\n  ◆ f3 add (Semilla; R90.2-3, 5 new MIR elements): added `let` [1]")), "{out}");
     // Design 90: the entries in no tag have the order of the one list (by item).
     assert!(out.contains("  not in a tag: 2 fact(s): 2 semantics; 4 changed line(s)\n  ◆ f5 replace (Semilla; ") && out.contains("  ◆ f7 replace (Semilla; "), "{out}");
@@ -8298,7 +8304,7 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     assert!(!out.lines().zip(out.lines().skip(1)).any(|(fact, next)| fact.starts_with("  ◆ ") && next.trim_start().starts_with("lines: ")), "{out}");
     // [R92.5-1] The line "not stated" of an entry is in the group of its tag (design 92).
     let tagged_at = out.find("  tag `method calls` (").unwrap_or_else(|| panic!("{out}"));
-    assert!(out[tagged_at..].split("\n  tag `").next().is_some_and(|group| group.contains("; to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::a,shop_core::facts::b,shop_core::facts::d=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()' (one statement for 3 places: f1, f2)\n")), "{out}");
+    assert!(out[tagged_at..].split("\n  tag `").next().is_some_and(|group| group.contains("; to state it: the check did not decide if the behavior changes: if it changes, --change 'shop_core::facts::a,shop_core::facts::b,shop_core::facts::d=TEXT'; if it does not change, --same 'rewrite $a.total => $a.total()' (one statement for 3 places: f1)\n")), "{out}");
     assert!(out.contains("\n  cover: each of the 18 changed line(s) is in a fact\n"), "{out}");
     // A tag does not replace a fact: each fact line and each gap line of the step with no
     // tag is in the output one time, and the stored facts are equal.
@@ -8332,9 +8338,10 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     let (_, verbose) = tree_mode(repo, &["status", "--verbose"]);
     assert!(verbose.contains("      facts, in the groups of the tags below: f3, f4\n"), "{verbose}");
     // The lines of the compiled check come between the fact line and its line `lines:`.
-    let f2 = verbose.find("  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `e.total` → `e.total()` at `shop_core::facts::d/tail/rhs` [semantics · code different]\n").expect("the line of f2");
-    let next = verbose[f2 + 1..].find("  ◆ ").map_or(verbose.len(), |at| f2 + 1 + at);
-    assert!(verbose[f2..next].contains(&format!("\n      lines: {file}:17, {file}:-17\n")), "{verbose}");
+    // [R97.7-1] The edit of `d` is a site of f1 (design 97).
+    let f1 = verbose.find(&format!("  {FACTS_F1}\n")).expect("the line of f1");
+    let next = verbose[f1 + 1..].find("  ◆ ").map_or(verbose.len(), |at| f1 + 1 + at);
+    assert!(verbose[f1..next].lines().any(|line| line.starts_with("      lines: ") && line.contains(&format!("{file}:17,")) && line.contains(&format!("{file}:-17"))), "{verbose}");
     assert!(verbose.contains(&format!("  tag `tail` ({file}:29): 1 fact(s): 1 semantics; 2 changed line(s)\n")), "{verbose}");
     let (_, status) = tree_mode(repo, &["status"]);
     assert!(!status.contains("tag `") && !status.contains("changed lines with no fact"), "{status}");
@@ -8342,13 +8349,14 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     let md = repo.join(".semilla/review.md");
     tree_mode(repo, &["review", "--md", md.to_str().unwrap()]);
     let report = std::fs::read_to_string(&md).unwrap();
-    assert!(report.contains("#### Tags of the agent (3)\n") && report.contains(&format!("Step 0, tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s):\n\n- step 0: f1 replace (Semilla; ")), "{report}");
+    assert!(report.contains("#### Tags of the agent (3)\n") && report.contains(&format!("Step 0, tag `method calls` ({file}:11-17): 1 fact(s): 1 semantics; 6 changed line(s):\n\n- step 0: f1 replace (Semilla; ")), "{report}");
     assert!(report.contains("- also in this tag, shown in a tag above: f6\n") && report.contains("Step 0, not in a tag: 2 fact(s): 2 semantics; 4 changed line(s):\n"), "{report}");
     // The gap line has the lines of its edits (a short list), then the tag.
     // [R92.5-1] Each entry has its line "not stated" in the group of its tag (design 92).
-    assert!(report.contains(&format!("; not stated ({file}:33, {file}:-27); to state it: ")) && report.contains(&format!("; not stated ({file}:17, {file}:-17); to state it: ")), "{report}");
+    assert!(report.contains(&format!("; not stated ({file}:33, {file}:-27); to state it: ")) && report.contains(&format!("; not stated ({file}:11, {file}:14, {file}:17, {file}:-11, {file}:-14, {file}:-17); to state it: ")), "{report}");
     assert!(!report.contains("#### Derived facts") && report.contains("  - facts, in the groups of the tags below: f3, f4\n"), "{report}");
-    for id in ["f1", "f2", "f3", "f4", "f5", "f6", "f7"] {
+    // [R97.7-1] f2 is a site of f1 (design 97).
+    for id in ["f1", "f3", "f4", "f5", "f6", "f7"] {
         assert_eq!(report.matches(&format!("- step 0: {id} ")).count(), 1, "{id}\n{report}");
     }
     // Negative test: the review of the step with no tag has no tag section.
@@ -8356,7 +8364,7 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     let md = plain_repo.join(".semilla/review.md");
     tree_mode(&plain_repo, &["review", "--md", md.to_str().unwrap()]);
     let report = std::fs::read_to_string(&md).unwrap();
-    assert!(!report.contains("Tags of the agent") && !report.contains("not in a tag") && report.contains("#### Entries of the map of the diff (7)"), "{report}");
+    assert!(!report.contains("Tags of the agent") && !report.contains("not in a tag") && report.contains("#### Entries of the map of the diff (6)"), "{report}");
 }
 
 /// Design 55.3: the MCP tools `step` and `fact`, and a step of a replay plan, take tags.
@@ -8379,7 +8387,7 @@ fn the_mcp_tools_and_a_plan_step_take_tags() {
         &env,
     );
     assert!(calls[0].1 && calls[0].0.contains("rejected: step 0") && calls[0].0.contains("has a position with no edit"), "{}", calls[0].0);
-    assert!(!calls[1].1 && calls[1].0.contains("accepted: step 0") && calls[1].0.contains(&format!("  tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s)\n")), "{}", calls[1].0);
+    assert!(!calls[1].1 && calls[1].0.contains("accepted: step 0") && calls[1].0.contains(&format!("  tag `method calls` ({file}:11-17): 1 fact(s): 1 semantics; 6 changed line(s)\n")), "{}", calls[1].0);
     assert!(!calls[2].1 && calls[2].0.contains("stored: 0 new fact(s) of the agent and 1 new tag(s) in step 0") && calls[2].0.contains(&format!("  tag `idle` ({file}:20-25): 2 fact(s): 2 semantics; 6 changed line(s)\n")), "{}", calls[2].0);
     assert!(calls[3].1 && calls[3].0.contains("rejected: no fact and no tag is added to step 0"), "{}", calls[3].0);
     // A tag changes no result: the short result has the gap count of the step with no tag.
@@ -8450,7 +8458,7 @@ fn the_step_output_names_the_command_that_gives_the_hunks_of_a_tag() {
     assert!(out.contains("\n  cover: each of the 18 changed line(s) is in a fact\n"), "{out}");
     let (code, out) = tree_mode(repo, &["fact", "--tag", &format!("{}=each hunk", places.join(","))]);
     assert_eq!(code, Some(0), "{out}");
-    assert!(out.contains("): 7 fact(s): 7 semantics; 18 changed line(s)\n"), "{out}");
+    assert!(out.contains("): 6 fact(s): 6 semantics; 18 changed line(s)\n"), "{out}");
     assert!(!out.contains("not in a tag") && !out.contains("in part") && !out.contains("facts with no position"), "{out}");
     // The help of the option names the command.
     let (_, help) = tree_mode(repo, &["step", "--help"]);

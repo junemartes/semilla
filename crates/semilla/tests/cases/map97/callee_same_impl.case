@@ -1,0 +1,102 @@
+note: the closure calls the method of the type of the body: one site
+rule+: R97.2-4
+rule+: R97.2-3
+rule+: R97.2-5
+rule+: R97.2-6
+rule+: R97.2-7
+option: --intent
+option: .semilla/intent/step.rs
+must_match: holds: the closure pair fits 1 site\(s\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub struct Cart {
+    pub items: Vec<u32>,
+    pub count: usize,
+}
+
+pub struct Bag {
+    pub items: Vec<u32>,
+}
+
+impl Cart {
+    pub fn size(&self) -> usize {
+        self.items.len()
+    }
+}
+
+impl Bag {
+    pub fn size(&self) -> usize {
+        self.items.len()
+    }
+}
+
+pub fn total(b: &Bag) -> usize {
+    b.size() + 1
+}
+=== new src/lib.rs
+pub struct Cart {
+    pub items: Vec<u32>,
+    pub count: usize,
+}
+
+pub struct Bag {
+    pub items: Vec<u32>,
+}
+
+impl Cart {
+    pub fn size(&self) -> usize {
+        self.items.len()
+    }
+}
+
+impl Bag {
+    pub fn size(&self) -> usize {
+        self.items.len()
+    }
+}
+
+pub fn total(b: &Bag) -> usize {
+    b.items.len() + 1
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite(after::shop::total)]
+fn size() {
+    (|c: &before::shop::Bag| c.size(), |c: &after::shop::Bag| c.items.len())
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `fn size` (the closure form, .semilla/intent/step.rs) (holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::total` (src/lib.rs:23))
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  · i1 `#[rewrite(shop::total)] fn size()` (.semilla/intent/step.rs:3): hint: the check of `--same 'rewrite fn size in .semilla/intent/step.rs'` holds (fact a1 of the agent: holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::total` (src/lib.rs:23)); a hint pairs the old and the new code and explains no body: a claim states the behavior
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+      MIR changes with no claim: `shop::total` (src/lib.rs:22): the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(b_before: &before::shop::Bag, b_after: &after::shop::Bag) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `shop::total`:
+  ◆ f1 inline (Semilla; R94.2-1, the MIR of `shop::Bag::size` put in at the call is the MIR of the new code (2 element place(s) explained)): changed expression `b.size()` → `b.items.len()` at `shop::total/tail/lhs` [semantics · code different]
+      affected bodies: shop::total
+      control flow: ~ call `Bag::size` → `Vec::<u32>::len` (src/lib.rs:-23, src/lib.rs:23)
+      control flow: ~ check `overflow: b.size() + 1` → `overflow: b.items.len() + 1` (src/lib.rs:-23, src/lib.rs:23)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::total (src/lib.rs:22): same structure: 1 changed call target, 1 changed check; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 inline (Semilla; R94.2-1, the MIR of `shop::Bag::size` put in at the call is the MIR of the new code (2 element place(s) explained)): changed expression `b.size()` → `b.items.len()` at `shop::total/tail/lhs` [semantics · code different]
+    lines: src/lib.rs:23, src/lib.rs:-23

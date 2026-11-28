@@ -842,6 +842,10 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     if let Some(line) = shared.report.and_then(|report| report.not_stated_line(fact)) {
         lines.push(format!("      {line}"));
     }
+    // [R97.8-1] The template of the closure form of `#[rewrite]` (design 97), after the gate.
+    if let Some(template) = fact.template.as_ref().filter(|text| !text.is_empty()) {
+        lines.push(format!("      {template}"));
+    }
     // The line of each shown line before its cut (R76.1-1): the compare of R71.1-2 reads it, so
     // that two facts with numbers of a different length share an equal line.
     let mut raws: Vec<String> = lines.clone();

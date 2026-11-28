@@ -1,0 +1,83 @@
+note: the old code of the site is a part of a macro expansion: no site, and a note
+rule-: R97.2-7
+exit: 1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: a part of a macro expansion \(R97\.2-7\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub struct Cart {
+    pub items: Vec<u32>,
+    pub count: usize,
+}
+
+macro_rules! size {
+    ($c:expr) => {
+        $c.items.len()
+    };
+}
+
+pub fn total(c: &Cart) -> usize {
+    size!(c) + 1
+}
+=== new src/lib.rs
+pub struct Cart {
+    pub items: Vec<u32>,
+    pub count: usize,
+}
+
+macro_rules! size {
+    ($c:expr) => {
+        $c.count
+    };
+}
+
+pub fn total(c: &Cart) -> usize {
+    size!(c) + 1
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite]
+fn count() {
+    (|c: &before::shop::Cart| c.items.len(), |c: &after::shop::Cart| c.count)
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  ✗ fact a1 of the agent is false: `--same 'rewrite fn count in .semilla/intent/step.rs'`
+  ✗ the intent claim i1 `#[rewrite()] fn count()` (.semilla/intent/step.rs:3): false: the check of `--same 'rewrite fn count in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the check refuses 1 place(s): `shop::total` (src/lib.rs:8): the old code is a part of a macro expansion (R97.2-7): no site)
+
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✗ a1 same: rewrite `fn count` (the closure form, .semilla/intent/step.rs) (false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the check refuses 1 place(s): `shop::total` (src/lib.rs:8): the old code is a part of a macro expansion (R97.2-7): no site)
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  ✗ i1 `#[rewrite()] fn count()` (.semilla/intent/step.rs:3): false: the check of `--same 'rewrite fn count in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the check refuses 1 place(s): `shop::total` (src/lib.rs:8): the old code is a part of a macro expansion (R97.2-7): no site)
+      the input is an exact input of the two versions: correct the claim or the code
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    ✗ false: i1 `#[rewrite()] fn count()`: the check of `--same 'rewrite fn count in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the check refuses 1 place(s): `shop::total` (src/lib.rs:8): the old code is a part of a macro expansion (R97.2-7): no site)
+    changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+      MIR changes with no claim: `shop::total` (src/lib.rs:12): the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(c_before: &before::shop::Cart, c_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  syntax only:
+  item `shop::size!`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `size`: `macro_rules! size { ($c:expr) => { $c.items.len() }; }` → `macro_rules! size { ($c:expr) => { $c.count }; }` [declaration · code different]
+      affected bodies: shop::total
+      expansion: `size!(c)` at `shop::total/tail/lhs` (src/lib.rs:13): expansion changed: changed field: `c.items.len()` → `c.count` at `expansion` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::total (src/lib.rs:12): graph changes: −1 call, +1 arrow, −2 arrows; no edit in the body; MIR changes; the expansion of `size!(c)` changes (semilla expand src/lib.rs:13 --step 0)
+  expansions: 1 changed
+    `size!(c)` at `shop::total/tail/lhs` (src/lib.rs:13): expansion changed: `macro_rules! size` (src/lib.rs:6): changed field: `c.items.len()` → `c.count` at `expansion` [semantics]; from `macro_rules! size` (src/lib.rs:6)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  note: `#[rewrite] fn count`: `shop::total` (src/lib.rs:8): the old code is a part of a macro expansion (R97.2-7): no site
+no command can succeed without a code change: fix the cause, then run the step again
+=== positions
+none: the runner has no accepted step for this case

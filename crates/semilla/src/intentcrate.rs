@@ -65,7 +65,7 @@ fn link_findings(compiled: &Compiled, heads: &[(String, Vec<semilla_intent::head
     for (file, heads) in heads {
         for head in heads {
             for (index, (scope, at)) in head.scope.iter().zip(&head.scope_at).enumerate() {
-                for link in semilla_intent::heads::scope_links(&head.kind, index, scope) {
+                for link in semilla_intent::heads::head_links(head, index, scope) {
                     let Some(entry) = compiled.links.iter().find(|entry| entry.path == link) else { continue };
                     if entry.resolved.is_some() {
                         continue;

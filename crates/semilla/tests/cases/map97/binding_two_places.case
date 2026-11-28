@@ -1,0 +1,73 @@
+note: the parameter binds to `x` in the old body and to `y` in the new body: no site
+rule-: R97.2-3
+exit: 1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: false: no site
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub struct Cart {
+    pub items: Vec<u32>,
+    pub count: usize,
+}
+
+pub fn pick(x: &Cart, y: &Cart) -> usize {
+    x.items.len() + y.count
+}
+=== new src/lib.rs
+pub struct Cart {
+    pub items: Vec<u32>,
+    pub count: usize,
+}
+
+pub fn pick(x: &Cart, y: &Cart) -> usize {
+    y.count + y.count
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite]
+fn count() {
+    (|c: &before::shop::Cart| c.items.len(), |c: &after::shop::Cart| c.count)
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  ✗ fact a1 of the agent is false: `--same 'rewrite fn count in .semilla/intent/step.rs'`
+  ✗ the intent claim i1 `#[rewrite()] fn count()` (.semilla/intent/step.rs:3): false: the check of `--same 'rewrite fn count in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::pick` (src/lib.rs:7): the old closure fits; at the aligned place of the new body 0 of 1 element(s) of the new closure fit; the element that differs: the body has `_3 = ((*_2).shop::Cart.count: usize)`, the closure has `_0 = ((*_2).shop::Cart.count: usize)` (R97.2-3))
+
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✗ a1 same: rewrite `fn count` (the closure form, .semilla/intent/step.rs) (false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::pick` (src/lib.rs:7): the old closure fits; at the aligned place of the new body 0 of 1 element(s) of the new closure fit; the element that differs: the body has `_3 = ((*_2).shop::Cart.count: usize)`, the closure has `_0 = ((*_2).shop::Cart.count: usize)` (R97.2-3))
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  ✗ i1 `#[rewrite()] fn count()` (.semilla/intent/step.rs:3): false: the check of `--same 'rewrite fn count in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::pick` (src/lib.rs:7): the old closure fits; at the aligned place of the new body 0 of 1 element(s) of the new closure fit; the element that differs: the body has `_3 = ((*_2).shop::Cart.count: usize)`, the closure has `_0 = ((*_2).shop::Cart.count: usize)` (R97.2-3))
+      the input is an exact input of the two versions: correct the claim or the code
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    ✗ false: i1 `#[rewrite()] fn count()`: the check of `--same 'rewrite fn count in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::pick` (src/lib.rs:7): the old closure fits; at the aligned place of the new body 0 of 1 element(s) of the new closure fit; the element that differs: the body has `_3 = ((*_2).shop::Cart.count: usize)`, the closure has `_0 = ((*_2).shop::Cart.count: usize)` (R97.2-3))
+    changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+      MIR changes with no claim: `shop::pick` (src/lib.rs:6): the full compare: `#[same(shop::pick)] fn pick_same() {}`; a difference: `#[change(shop::pick)] fn pick_change(x_before: &before::shop::Cart, x_after: &after::shop::Cart, y_before: &before::shop::Cart, y_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::pick)] fn pick_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::pick`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x.items.len()` → `y.count` at `shop::pick/tail/lhs` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, --same 'rewrite x.items.len() => y.count'
+      affected bodies: shop::pick
+      control flow: − call `Vec::<u32>::len` (src/lib.rs:-7): return → check `overflow: x.items.len() + y.count`
+      control flow: ~ check `overflow: x.items.len() + y.count` → `overflow: y.count + y.count` (src/lib.rs:-7, src/lib.rs:7)
+      control flow: + arrow entry (src/lib.rs:6) → check `overflow: y.count + y.count` (src/lib.rs:7)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::pick (src/lib.rs:6): graph changes: −1 call, 1 changed check, +1 arrow, −2 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+no command can succeed without a code change: fix the cause, then run the step again
+=== positions
+none: the runner has no accepted step for this case

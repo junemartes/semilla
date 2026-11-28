@@ -1,0 +1,91 @@
+note: a variant gets a field, and a rewrite changes a body that builds an other variant: the nodes of the type change keep their own entries
+rule-: R97.3-1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: holds: the closure pair fits 1 site\(s\)
+must_match: ◆ f\d+ type change \(Semilla
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub enum Kind {
+    Other,
+    Group { group: usize, len: usize },
+}
+
+pub struct Error(pub Kind);
+
+pub fn err(input: &str, bounds: core::ops::Range<usize>) -> Error {
+    Error(Kind::Group { group: 4, len: input.len() - 3 })
+}
+=== new src/lib.rs
+pub enum Kind {
+    Other(&'static str),
+    Group { group: usize, len: usize },
+}
+
+pub struct Error(pub Kind);
+
+pub fn err(input: &str, bounds: core::ops::Range<usize>) -> Error {
+    Error(Kind::Group { group: 4, len: bounds.len() - 3 })
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite(after::shop::err)]
+fn bounds_len() {
+    (|s: &str, b: core::ops::Range<usize>| s.len(), |s: &str, b: core::ops::Range<usize>| b.len())
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `fn bounds_len` (the closure form, .semilla/intent/step.rs) (holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::err` (src/lib.rs:9))
+      places: shop::err/tail/args[0]/fields[len]/lhs/recv
+      entries, in the list below: f3
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  · i1 `#[rewrite(shop::err)] fn bounds_len()` (.semilla/intent/step.rs:3): hint: the check of `--same 'rewrite fn bounds_len in .semilla/intent/step.rs'` holds (fact a1 of the agent: holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::err` (src/lib.rs:9)); a hint pairs the old and the new code and explains no body: a claim states the behavior
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+      MIR changes with no claim: `shop::Kind::Other` (src/lib.rs:2): the full compare: `#[same(shop::Kind::Other)] fn other_same() {}`; a difference: `#[change(shop::Kind::Other)] fn other_change() -> bool { … }` or `#[different(shop::Kind::Other)] fn other_different() -> bool { … }`
+      MIR changes with no claim: `shop::err` (src/lib.rs:8): the full compare: `#[same(shop::err)] fn err_same() {}`; a difference: `#[change(shop::err)] fn err_change(input: &str, bounds: core::ops::Range<usize>) -> bool { … }` or `#[different(shop::err)] fn err_different() -> bool { … }`
+  changed nodes: 4 in 3 entries; 3 real edits (1 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::Kind::Other`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): the tuple fields of `shop::Kind::Other` changed: `()` → `(& 'static str)` (the public API can change: a different crate can use the item) [declaration · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: --change 'shop::Kind::Other=TEXT'
+      affected bodies: shop::Kind::Other, shop::err
+      through: `shop::err` (1 body)
+      control flow: + graph of `shop::Kind::Other`: 2 points, 1 arrow (semilla expand --step 0)
+      ! public API: the compare does not cover the code of a different crate
+  ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): changed macro or signature `Other` → `Other( )` [declaration · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: --change 'shop::Kind::Other=TEXT'
+      affected bodies: shop::Kind::Other, shop::err
+      through: `shop::err` (1 body)
+      control flow: + graph of `shop::Kind::Other`: 2 points, 1 arrow (semilla expand --step 0)
+  item `shop::err`:
+  ◆ f3 replace (a1; R97.3-1, the closure pair of `fn bounds_len` fits 1 site(s): `shop::err` (src/lib.rs:9); at the first site the parameter `s` binds to `input`; a real edit that the statement states (statement 1)): changed path `input` → `bounds` at `shop::err/tail/args[0]/fields[len]/lhs/recv` [semantics · code different]
+      affected bodies: shop::err
+      control flow: ~ call `str::<impl str>::len` → `<Range<usize> as ExactSizeIterator>::len (trait default)` (src/lib.rs:-9, src/lib.rs:9)
+      control flow: ~ check `overflow: input.len() - 3` → `overflow: bounds.len() - 3` (src/lib.rs:-9, src/lib.rs:9)
+      equivalence: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::Kind::Other (src/lib.rs:2): graph added: 2 points, 1 arrow
+    shop::err (src/lib.rs:8): same structure: 1 changed call target, 1 changed check; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): the tuple fields of `shop::Kind::Other` changed: `()` → `(& 'static str)` (the public API can change: a different crate can use the item) [declaration · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): changed macro or signature `Other` → `Other( )` [declaration · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f3 replace (a1; R97.3-1, the closure pair of `fn bounds_len` fits 1 site(s): `shop::err` (src/lib.rs:9); at the first site the parameter `s` binds to `input`; a real edit that the statement states (statement 1)): changed path `input` → `bounds` at `shop::err/tail/args[0]/fields[len]/lhs/recv` [semantics · code different]
+    lines: src/lib.rs:9, src/lib.rs:-9

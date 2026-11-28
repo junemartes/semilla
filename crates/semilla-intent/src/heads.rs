@@ -89,6 +89,7 @@ pub const CODES: &[Code] = &[
     Code { code: "S0113", title: "a scope path with generic arguments or an empty part", long: "A scope path names an item by its path with no generic arguments: the scope is the item, for each instance. Rustc cannot take a path with arguments or with an empty part (`shop::Table::<V>::get`, `shop::Table::`), so Semilla rejects it before the compile. A qualified path `<T as Trait>::item` keeps the arguments of `T` and of `Trait`.\n\nWrong:\n\n    #[same(shop::Table::<V>::get)]\n\nRight:\n\n    #[same(shop::Table::get)]" },
     Code { code: "S0121", title: "an internal error of the compiler for a claim", long: "The compile of the intent crate stopped with an internal error of the compiler (a panic). Semilla gives the claim whose compile alone stops the compiler, and it does not show the text of the panic. Write the claim in another form (for example the scope path with no generic arguments), or remove it.\n\nThe line:\n\n    error[S0121]: the compiler stopped with an internal error at the claim `fn get_same`" },
     Code { code: "S0120", title: "an anchor of a claim that does not fit the syntax tree", long: "The step checks the anchors of each claim against the syntax trees of the two versions (the AST pass, design 79): the item that rustc resolves for the scope must have a node in the tree of its version, and its kind must fit the claim. `#[new(ITEM)]` needs an item that the step adds; `#[removed(ITEM)]` an item that the step removes; `#[same]`, `#[change]`, and `#[different]` one kind of item in the two versions; `#[relation(before::T, after::T)]` two types. The step shows the error at the place of the scope path, with the expected kind, and the claim is an error.\n\nWrong (the step does not add `shop::parse`):\n\n    #[new(shop::parse)]\n    fn parse_new(x: u32) -> bool { after::shop::parse(x) }\n\nRight:\n\n    #[change(shop::parse)]\n    fn parse_new(x: u32) -> bool { after::shop::parse(x) || !before::shop::parse(x) }" },
+    Code { code: "S0114", title: "a closure form of `rewrite` that Semilla cannot read", long: "The closure form of `rewrite` (design 97) has at most one scope path (the body; no path: each changed body), no parameter, and a body that is one tuple of two closures: the old code and the new code. The two closures have the same count of parameters, and each parameter has a type. A parameter is a hole of the pattern: it binds to one place or one operand of the body. A closure reads only its parameters (no capture) and calls no item of the intent file.\n\nRight:\n\n    #[rewrite(shop::Cart::total)]\n    fn count() {\n        (|c: &before::shop::Cart| c.items.len(), |c: &after::shop::Cart| c.count)\n    }\n\nWrong (one closure, a `let` before the closures, or two counts of parameters):\n\n    #[rewrite(shop::Cart::total)]\n    fn count() {\n        (|c: &before::shop::Cart| c.items.len(), |c: &after::shop::Cart, n: usize| c.count + n)\n    }\n" },
     Code { code: "S0111", title: "a hint with a body", long: "`rename`, `moved`, and `rewrite` are hints for the pairing of the old and the new code: the function has an empty body.\n\nRight:\n\n    #[rename(shop::total, shop::sum)]\n    fn renamed() {}" },
 ];
 
@@ -134,6 +135,11 @@ pub struct Head {
     pub line: usize,
     /// The batch that checks the kind, if the model cannot check it now.
     pub later: Option<String>,
+    /// [R97.1-1] True for the closure form of `rewrite` (a body with two closures).
+    pub closure: bool,
+    /// [R97.1-1] The parameter names of each closure of the closure form, and the source text of
+    /// each closure body.
+    pub closures: Vec<(Vec<String>, String)>,
 }
 
 struct Lines {
@@ -189,7 +195,7 @@ pub fn check(path: &str, text: &str) -> (Vec<Head>, Vec<Finding>) {
             let attr_name = path.syntax().text().to_string();
             let attr_name = attr_name.rsplit("::").next().unwrap_or("").to_string();
             let Some(kind) = KINDS.iter().find(|kind| kind.name == attr_name) else { continue };
-            let mut head = Head { function: name.clone(), kind: kind.name.to_string(), scope: Vec::new(), scope_at: Vec::new(), cfg: None, reason: None, except: Vec::new(), empty_body: body_empty, params, signature: signature.clone(), line: lines.at(text, usize::from(attr.syntax().text_range().start())).0, later: kind.later.map(str::to_string) };
+            let mut head = Head { function: name.clone(), kind: kind.name.to_string(), scope: Vec::new(), scope_at: Vec::new(), cfg: None, reason: None, except: Vec::new(), empty_body: body_empty, params, signature: signature.clone(), closure: false, closures: Vec::new(), line: lines.at(text, usize::from(attr.syntax().text_range().start())).0, later: kind.later.map(str::to_string) };
             let args = attr.syntax().descendants().find_map(ast::TokenTree::cast).map(|tree| arguments(&tree)).unwrap_or_default();
             for (arg, range) in &args {
                 match arg.split_once('=').map(|(key, value)| (key.trim(), value.trim())) {
@@ -254,7 +260,24 @@ pub fn check(path: &str, text: &str) -> (Vec<Head>, Vec<Finding>) {
                     }
                 }
             }
+            // [R97.1-1] The closure form of `rewrite` (design 97): a body with the two closures.
+            let closure_form = kind.name == "rewrite" && !body_empty;
+            if closure_form {
+                head.closure = true;
+                if let Some(ast::Expr::TupleExpr(tuple)) = function.body().and_then(|body| body.tail_expr()) {
+                    for field in tuple.fields() {
+                        if let ast::Expr::ClosureExpr(closure) = field {
+                            let names = closure.param_list().map(|list| list.params().map(|param| param.pat().map(|pat| pat.syntax().text().to_string()).unwrap_or_default()).collect()).unwrap_or_default();
+                            head.closures.push((names, closure.body().map(|body| body.syntax().text().to_string()).unwrap_or_default()));
+                        }
+                    }
+                }
+                if let Some(message) = closure_form_error(&function, head.scope.len()) {
+                    add("S0114", true, function.body().map(|body| body.syntax().text_range()).unwrap_or(attr_range), message, None);
+                }
+            }
             match kind.scope {
+                _ if closure_form => {}
                 Scope::Items if head.scope.is_empty() => add("S0102", true, attr_range, format!("`#[{}]` names no scope: give an item, for example `#[{}(shop::parse)]`", kind.name, kind.name), None),
                 Scope::Two if head.scope.len() != 2 => add("S0103", true, attr_range, format!("`#[{}]` has {} path(s); it needs two: `#[{}(OLD, NEW)]`", kind.name, head.scope.len(), kind.name), None),
                 _ => {}
@@ -265,7 +288,7 @@ pub fn check(path: &str, text: &str) -> (Vec<Head>, Vec<Finding>) {
             }
             match kind.body {
                 Body::Property if body_empty => add("S0105", true, function.name().map(|name| name.syntax().text_range()).unwrap_or(attr_range), format!("a `{}` claim is a property: the body is a `bool` expression", kind.name), None),
-                Body::Empty if !body_empty => add("S0111", true, function.name().map(|name| name.syntax().text_range()).unwrap_or(attr_range), format!("`#[{}]` is a hint: `fn {name}()` has an empty body", kind.name), None),
+                Body::Empty if !body_empty && !closure_form => add("S0111", true, function.name().map(|name| name.syntax().text_range()).unwrap_or(attr_range), format!("`#[{}]` is a hint: `fn {name}()` has an empty body", kind.name), None),
                 _ => {}
             }
             if !body_empty && kind.body != Body::Empty && !returns_bool {
@@ -283,6 +306,45 @@ pub fn check(path: &str, text: &str) -> (Vec<Head>, Vec<Finding>) {
         }
     }
     (heads, findings)
+}
+
+/// [R97.1-1] The error of a closure form of `rewrite`, if it has one: at most one scope path, no
+/// parameter, and a body that is one tuple of two closures with the same count of typed
+/// parameters. Rustc checks the names and the types of the closures.
+fn closure_form_error(function: &ast::Fn, scope: usize) -> Option<String> {
+    let name = function.name().map(|name| name.text().to_string()).unwrap_or_default();
+    if scope > 1 {
+        return Some(format!("the closure form of `#[rewrite]` has at most one scope path (the body), not {scope}"));
+    }
+    if function.param_list().is_some_and(|list| list.params().next().is_some() || list.self_param().is_some()) {
+        return Some(format!("`fn {name}` has a parameter: the parameters of the closure form are the parameters of the two closures"));
+    }
+    let body = function.body()?;
+    if body.statements().next().is_some() {
+        return Some(format!("the body of `fn {name}` has a statement before the closures: a closure reads only its parameters (no capture)"));
+    }
+    let tuple = match body.tail_expr() {
+        Some(ast::Expr::TupleExpr(tuple)) => tuple,
+        Some(ast::Expr::ParenExpr(_)) | Some(ast::Expr::ClosureExpr(_)) => return Some(format!("the body of `fn {name}` is one closure: write the old and the new code as two closures, `(|…| OLD, |…| NEW)`")),
+        _ => return Some(format!("the body of `fn {name}` is not a tuple of two closures: write `(|…| OLD, |…| NEW)`")),
+    };
+    let closures: Vec<ast::Expr> = tuple.fields().collect();
+    if closures.len() != 2 || !closures.iter().all(|expr| matches!(expr, ast::Expr::ClosureExpr(_))) {
+        return Some(format!("the body of `fn {name}` is a tuple of {} part(s): write two closures, `(|…| OLD, |…| NEW)`", closures.len()));
+    }
+    let mut counts = Vec::new();
+    for expr in &closures {
+        let ast::Expr::ClosureExpr(closure) = expr else { continue };
+        let params: Vec<ast::Param> = closure.param_list().map(|list| list.params().collect()).unwrap_or_default();
+        if let Some(param) = params.iter().find(|param| param.ty().is_none()) {
+            return Some(format!("the closure parameter `{}` has no type: write `NAME: before::TYPE` (or `after::TYPE`)", param.syntax().text()));
+        }
+        counts.push(params.len());
+    }
+    if counts[0] != counts[1] {
+        return Some(format!("the old closure has {} parameter(s) and the new closure has {}: a parameter binds to one place of the two bodies, so the counts are equal", counts[0], counts[1]));
+    }
+    None
 }
 
 /// [R87.3-1] For a scope path of an item with generic arguments or an empty part
@@ -454,6 +516,16 @@ mod tests {
             assert!(check("f.rs", &fixed).1.is_empty(), "{fixed}");
         }
     }
+}
+
+/// [R97.1-1] The doc links of one scope argument of a head: the scope path of the closure form of
+/// `rewrite` has the links of a `same` scope (each version, or the written one); each other
+/// head has the links of [`scope_links`].
+pub fn head_links(head: &Head, index: usize, scope: &str) -> Vec<String> {
+    if head.closure && head.kind == "rewrite" {
+        return scope_links("same", index, scope);
+    }
+    scope_links(&head.kind, index, scope)
 }
 
 /// [R78.1-3] The doc links that the attribute writes for one scope argument (the rule of the

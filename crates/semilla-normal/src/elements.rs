@@ -196,6 +196,33 @@ pub struct ElementDiff {
     /// order (design 94). `None`: the change is more than a new order, or no data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reorder: Option<crate::transform::Reorder>,
+    /// [R97.2-1] The element table of the body pair (design 97): the texts, the ranges, the
+    /// pairs, and the map of the locals that the checks of `#[rewrite]` and of the repeated
+    /// edits read. It is data of this process only: no store and no record has it.
+    #[serde(skip)]
+    pub table: Option<std::sync::Arc<Table>>,
+}
+
+/// [R97.2-1] The element table of a changed body pair (design 97). The verifier has no parser
+/// of the records: it reads the texts and the alignment here.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Table {
+    /// The canonical text of each side.
+    pub texts: [String; 2],
+    /// The range of each element of each side, in the order of the text: the tokens and the
+    /// outermost macro call. An element with no range has the range of its neighbor (the rule
+    /// of [`diff_keyed`]), as the elements that differ have.
+    pub ranges: [Vec<(Option<Place>, Option<Place>)>; 2],
+    /// The pairs of the alignment: the old index, the new index, and true for an equal pair
+    /// (false: a pair of elements that differ in one region, design 90).
+    pub pairs: Vec<(usize, usize, bool)>,
+    /// The map of the locals of the alignment (old, new).
+    pub locals: Vec<(usize, usize)>,
+    /// The kind and the first declaration place of each local of each side (design 45).
+    pub decls: [Vec<(i64, Option<Place>)>; 2],
+    /// True for each element of each side with an equal partner (a folded copy has the state of
+    /// its use).
+    pub same: [Vec<bool>; 2],
 }
 
 impl ElementDiff {
@@ -208,6 +235,14 @@ impl ElementDiff {
     /// [R94.1-1] A check of design 94 holds only if it holds in each diff with elements: the
     /// lists keep the candidates of both diffs, and a candidate holds if it holds in each.
     pub fn merge(&mut self, other: ElementDiff) {
+        // [R97.2-1] One table for the body pair: the tables of two diffs with elements must be
+        // equal, else the body has no table (a check reads one text for each side).
+        self.table = match (self.table.take(), other.table.clone()) {
+            (Some(known), Some(found)) if known == found => Some(known),
+            (known, None) if other.is_empty() => known,
+            (None, found) if self.is_empty() => found,
+            _ => None,
+        };
         if self.is_empty() {
             self.transforms = other.transforms.clone();
             self.reorder = other.reorder.clone();
@@ -781,6 +816,7 @@ pub type OrderKey = (String, Vec<(usize, usize)>);
 pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), order: [Option<&[OrderKey]>; 2]) -> Option<ElementDiff> {
     let no_symbols = old.1.v == 0 || new.1.v == 0;
     let (old_record, new_record) = (old.1, new.1);
+    let texts = [old.0, new.0];
     let symbols = [old.1.symbols().unwrap_or_default(), new.1.symbols().unwrap_or_default()];
     let sides = [old, new].map(|(text, elements)| (parse(text), elements.ranges()));
     for (parsed, ranges) in &sides {
@@ -954,8 +990,10 @@ pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), or
         Element { tokens, call, targets, exit, glue, jump, symbols, sources }
     };
     // [R90.1-1] Step 5: the elements that differ, paired inside each aligned region.
-    let changed: Vec<(Place, Place)> = region_pairs([old_order.as_slice(), new_order.as_slice()], &partner, [same.as_slice(), same_new.as_slice()], [symbols[0].as_slice(), symbols[1].as_slice()])
-        .into_iter()
+    let changed_pairs = region_pairs([old_order.as_slice(), new_order.as_slice()], &partner, [same.as_slice(), same_new.as_slice()], [symbols[0].as_slice(), symbols[1].as_slice()]);
+    let changed: Vec<(Place, Place)> = changed_pairs
+        .iter()
+        .copied()
         .filter_map(|(a, b)| Some((old_ranges[near(&old_blocks, &old_ranges, a)].0.clone()?, new_ranges[near(&new_blocks, &new_ranges, b)].0.clone()?)))
         .collect();
     let mut out = ElementDiff {
@@ -969,7 +1007,25 @@ pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), or
         pairs: partner.iter().enumerate().filter_map(|(a, b)| Some((old_ranges[a].0.clone()?, new_ranges[(*b)?].0.clone()?))).collect(),
         transforms: Vec::new(),
         reorder: None,
+        table: None,
     };
+    // [R97.2-1] The table of the body pair, for the plain diff (not for the diff of a check of
+    // design 94, whose sides have keys).
+    if free {
+        let near_ranges = |blocks: &[usize], ranges: &[(Option<Place>, Option<Place>)]| -> Vec<(Option<Place>, Option<Place>)> { (0..ranges.len()).map(|index| ranges[near(blocks, ranges, index)].clone()).collect() };
+        let mut table_pairs: Vec<(usize, usize, bool)> = partner.iter().enumerate().filter_map(|(a, b)| Some((a, (*b)?, true))).collect();
+        table_pairs.extend(changed_pairs.iter().map(|(a, b)| (*a, *b, false)));
+        table_pairs.sort();
+        let decls = |record: &RecordElements| -> Vec<(i64, Option<Place>)> { record.declarations().into_iter().map(|(kind, places)| (kind, places.into_iter().next())).collect() };
+        out.table = Some(std::sync::Arc::new(Table {
+            texts: texts.map(str::to_string),
+            ranges: [near_ranges(&old_blocks, &old_ranges), near_ranges(&new_blocks, &new_ranges)],
+            pairs: table_pairs,
+            locals: locals.forward.iter().map(|(a, b)| (*a, *b)).collect(),
+            decls: [decls(old_record), decls(new_record)],
+            same: [same.clone(), same_new.clone()],
+        }));
+    }
     unique(&mut out.old);
     unique(&mut out.new);
     out.pairs.sort();

@@ -42,6 +42,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   item `shop::quote`:
   ◆ f1 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed pattern `t` → `total` at `shop::quote/S0/pat` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::quote=TEXT'; if it does not change, --same 'rewrite t > 100 => total >= 100', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
+      no template: the node has no MIR element inside it or around it on each side (a pattern or a binding is not an expression of the closure form)
       affected bodies: shop::quote (with 1 other edit of this body)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   transformations:

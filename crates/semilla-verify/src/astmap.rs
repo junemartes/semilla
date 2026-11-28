@@ -25,6 +25,10 @@ pub struct CompiledClaims {
     pub links: BTreeMap<String, Option<String>>,
     /// The functions of the intent crate, by the path of their file and their name.
     pub functions: BTreeMap<(String, String), ClaimCalls>,
+    /// [R97.1-1] The two closures of each closure form of `#[rewrite]` (design 97), by the path
+    /// of the file and the name of the function: the canonical MIR text of the old closure and
+    /// of the new closure, as rustc compiles them against the two versions.
+    pub rewrites: BTreeMap<(String, String), [String; 2]>,
 }
 
 /// [R79.2-1] What one function of the intent crate calls and reads in each version, also through
@@ -117,14 +121,22 @@ fn inside(tree: &Workspace, root: &str, item: &str) -> bool {
     matches!(root_kind, Some(ItemKind::Fn | ItemKind::Const | ItemKind::Static)) || matches!(item_kind, Some(ItemKind::Variant | ItemKind::Field))
 }
 
+/// A mutable reference to the map of a step (for a pass of another module).
+pub(crate) struct AstMapRef<'a>(pub &'a mut AstMap);
+
 /// [R79.1-1] Runs the AST pass of a step: one entry for each changed node of the syntax diff.
 pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut StepOutcome) {
     let mut map = AstMap::default();
+    // [R97.1-1] The compiled closures of the closure forms of `#[rewrite]` (design 97).
+    let mut closures: BTreeMap<(String, String), [String; 2]> = BTreeMap::new();
     let anchors = if input.step.agent.intent.is_empty() {
         Vec::new()
     } else {
         match bodies.intent_anchors(input.step) {
-            Some(Ok(data)) => claim_anchors(input, outcome, &data, &mut map),
+            Some(Ok(data)) => {
+                closures = data.rewrites.clone();
+                claim_anchors(input, outcome, &data, &mut map)
+            }
             Some(Err(cause)) => {
                 map.gap = Some(format!("the claims give no anchor: {cause}"));
                 Vec::new()
@@ -159,6 +171,13 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
     // [R94.1-1] The transformations of the step (design 94): the kinds of their nodes, and
     // the note and the templates of each tie (R94.1-3), for the gate of R87.1-1.
     outcome.transforms = crate::transforms::plan(input, outcome);
+    // [R97.2-2] The sites of the closure forms of `#[rewrite]`, then [R97.7-1] the groups of
+    // the repeated edits (design 97): the kinds of their nodes, before the projection.
+    semilla_core::timing::phase(crate::rewrites::PHASE, || {
+        crate::rewrites::plan(input, outcome, &closures);
+        crate::rewrites::groups(input, outcome);
+    });
+    let nodes: Vec<&Edit> = outcome.edits.iter().filter(|edit| is_node(edit)).collect();
     for note in outcome.transforms.notes.clone() {
         if !outcome.report.notes.contains(&note) {
             outcome.report.notes.push(note);
@@ -181,6 +200,8 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
     }
     // [R92.6-1] [R92.7-1] The facts of one change make one fact, and each fact has one kind.
     crate::diffmap::shape(outcome, trees, &mut map, &indices);
+    // [R97.4-1] The nodes of each statement `#[rewrite]` make an entry of their own.
+    semilla_core::timing::phase(crate::rewrites::PHASE, || crate::rewrites::split_statements(outcome, trees, &mut AstMapRef(&mut map), &indices));
     let nodes: Vec<&Edit> = outcome.edits.iter().filter(|edit| is_node(edit)).collect();
     let mut not_mapped = BTreeSet::new();
     for (edit, entry) in nodes.iter().zip(&map.entries) {
@@ -197,6 +218,11 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
     outcome.report.ast = Some(map);
     // [R87.1-1] The forms of each template for the gate.
     outcome.templates.asks.extend(pending.asks);
+    // [R97.8-1] The templates of the closure form: a "not mapped" entry and a group.
+    semilla_core::timing::phase(crate::rewrites::PHASE, || {
+        crate::rewrites::open_templates(input, outcome);
+        crate::rewrites::attach(outcome);
+    });
 }
 
 /// [R79.3-6] An added or a removed container (an impl block, a trait, a module) and a member with
@@ -454,7 +480,7 @@ fn claim_anchors(input: &StepInput, outcome: &StepOutcome, data: &CompiledClaims
                         }
                         let mut found: [Option<String>; 2] = [None, None];
                         let mut stop = false;
-                        for link in semilla_intent::heads::scope_links(&head.kind, k, scope) {
+                        for link in semilla_intent::heads::head_links(head, k, scope) {
                             let side = usize::from(link.starts_with(facade(1)));
                             let Some(Some(def)) = data.links.get(&link) else { continue };
                             let def = def.strip_prefix(facade(side)).unwrap_or(def).to_string();
@@ -538,7 +564,7 @@ fn claim_anchors(input: &StepInput, outcome: &StepOutcome, data: &CompiledClaims
                     let mut texts: [BTreeSet<String>; 2] = Default::default();
                     let mut stop = false;
                     for (k, scope) in head.scope.iter().enumerate().take(2) {
-                        for link in semilla_intent::heads::scope_links(&head.kind, k, scope) {
+                        for link in semilla_intent::heads::head_links(head, k, scope) {
                             let side = usize::from(link.starts_with(facade(1)));
                             let Some(Some(def)) = data.links.get(&link) else { continue };
                             texts[side].insert(plain(def, side));

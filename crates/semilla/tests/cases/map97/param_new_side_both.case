@@ -1,0 +1,56 @@
+note: the parameter `b` binds only in the new body, to an argument that the two bodies have: one site
+rule+: R97.2-3
+option: --intent
+option: .semilla/intent/step.rs
+must_match: holds: the closure pair fits 1 site\(s\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub fn f(x: u32, y: u32) -> u32 {
+    x.wrapping_mul(3) ^ y
+}
+=== new src/lib.rs
+pub fn f(x: u32, y: u32) -> u32 {
+    y.wrapping_mul(3) ^ y
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite(after::shop::f)]
+fn other() {
+    (|a: u32, b: u32| a.wrapping_mul(3), |a: u32, b: u32| b.wrapping_mul(3))
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `fn other` (the closure form, .semilla/intent/step.rs) (holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::f` (src/lib.rs:2))
+      places: shop::f/tail/lhs/recv
+      entries, in the list below: f1
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  · i1 `#[rewrite(shop::f)] fn other()` (.semilla/intent/step.rs:3): hint: the check of `--same 'rewrite fn other in .semilla/intent/step.rs'` holds (fact a1 of the agent: holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::f` (src/lib.rs:2)); a hint pairs the old and the new code and explains no body: a claim states the behavior
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+      MIR changes with no claim: `shop::f` (src/lib.rs:1): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(x: u32, y: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  real edits:
+  item `shop::f`:
+  ◆ f1 replace (a1; R97.3-1, the closure pair of `fn other` fits 1 site(s): `shop::f` (src/lib.rs:2); at the first site the parameter `a` binds to `x`; a real edit that the statement states (statement 1)): changed path `x` → `y` at `shop::f/tail/lhs/recv` [semantics · code different]
+      affected bodies: shop::f
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::f (src/lib.rs:1): same graph (the edit keeps the control flow); MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (a1; R97.3-1, the closure pair of `fn other` fits 1 site(s): `shop::f` (src/lib.rs:2); at the first site the parameter `a` binds to `x`; a real edit that the statement states (statement 1)): changed path `x` → `y` at `shop::f/tail/lhs/recv` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

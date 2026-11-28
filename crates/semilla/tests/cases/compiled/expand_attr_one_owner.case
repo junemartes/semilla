@@ -102,17 +102,20 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   item `shop::Cart::double`:
   ◆ f1 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics · code different]
       not stated (shop/src/lib.rs:16, shop/src/lib.rs:-16); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::double=TEXT'; if it does not change, --same 'rewrite 2 => 4'
+      no template: the node has no MIR element inside it or around it on each side (a pattern or a binding is not an expression of the closure form) (the same line for f2, f3)
       affected bodies: shop::Cart::double
       equivalence: MIR changes
       expansion: `#[depot_macros::helper]` at `shop::impl Cart` (shop/src/lib.rs:5): expansion changed: changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics]; changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics]; changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics] (also the change of f2, f3)
   item `shop::Cart::half`:
   ◆ f2 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics · code different]
       not stated (shop/src/lib.rs:12, shop/src/lib.rs:-12); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::half=TEXT'; if it does not change, --same 'rewrite 2 => 3'
+      no template: the same line as f1
       affected bodies: shop::Cart::half
       equivalence: MIR changes
   item `shop::Cart::total`:
   ◆ f3 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics · code different]
       not stated (shop/src/lib.rs:8, shop/src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::total=TEXT'; if it does not change, --same 'rewrite 1 => 2'
+      no template: the same line as f1
       affected bodies: shop::Cart::total
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact

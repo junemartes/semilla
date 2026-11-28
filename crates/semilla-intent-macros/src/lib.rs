@@ -76,7 +76,8 @@ claim_attributes! {
     rename => Versions::Both;
     /// `#[moved(A, B)]`: a hint for the pairing (an old place and a new place).
     moved => Versions::Both;
-    /// `#[rewrite(A, B)]`: a hint for the pairing (text patterns, not paths).
+    /// `#[rewrite(A, B)]`: a hint for the pairing (text patterns, not paths). The closure form
+    /// `#[rewrite(SCOPE)] fn NAME() { (|…| OLD, |…| NEW) }` (design 97) has one scope path.
     rewrite => Versions::None;
     /// `#[extract(before::BODY, into = after::CALLEE)]`: a region of the old body is the new
     /// callee (design 94).
@@ -90,6 +91,11 @@ fn claim(kind: &str, versions: Versions, attr: TokenStream, item: TokenStream) -
     let name = function_name(&item).unwrap_or_else(|| "item".to_string());
     let mut body = Vec::new();
     let args = split_commas(attr);
+    // [R97.1-1] The closure form of `rewrite` (design 97): one scope path (the body), resolved
+    // as the scope of `same`. The text form has two text patterns and no code.
+    if kind == "rewrite" && args.len() == 1 {
+        scope_code("same", Versions::Both, &args[0], &mut body);
+    }
     for (index, arg) in args.iter().enumerate() {
         // `rename(A, B)` and `moved(A, B)`: the first path is old, the second path is new.
         let versions = match (kind, index) {
@@ -103,6 +109,23 @@ fn claim(kind: &str, versions: Versions, attr: TokenStream, item: TokenStream) -
         scope_code(kind, versions, arg, &mut body);
     }
     let mut out: Vec<TokenTree> = item.into_iter().collect();
+    // [R97.1-1] The body of the closure form of `rewrite` is a tuple of two closures: the
+    // function keeps it as a value of a `let`, so the function returns `()` and rustc checks
+    // each closure against its version.
+    if kind == "rewrite"
+        && let Some(TokenTree::Group(group)) = out.last()
+        && group.delimiter() == Delimiter::Brace
+        && !group.stream().is_empty()
+    {
+        let span = group.span();
+        let mut inner: Vec<TokenTree> = parse("let _ =");
+        inner.push(TokenTree::Group(Group::new(Delimiter::Brace, group.stream())));
+        inner.extend(parse(";"));
+        let mut wrapped = Group::new(Delimiter::Brace, inner.into_iter().collect());
+        wrapped.set_span(span);
+        let last = out.len() - 1;
+        out[last] = TokenTree::Group(wrapped);
+    }
     if !body.is_empty() {
         // `#[doc(hidden)] #[allow(…)] fn __semilla_scope_KIND_NAME() { … }`. Each path of the
         // scope is a doc link of the function: the resolver of rustc resolves it with no type

@@ -24,6 +24,9 @@ enum Same {
     Rename(String, String),
     Move(String, String),
     Rewrite(String, String),
+    /// [R97.1-1] `rewrite fn NAME in FILE`: the closure form of `#[rewrite]` of an intent file
+    /// (design 97).
+    Closure(String, String),
     /// [R94.6-1] `extract BODY CALLEE`: a region of the old body `BODY` is the new callee
     /// `CALLEE` (the short form of `#[extract(before::BODY, into = after::CALLEE)]`).
     Extract(String, String),
@@ -71,6 +74,10 @@ fn parse_same(text: &str) -> Result<Same, String> {
     match kind {
         "rename" => sides(false).map(|(old, new)| Same::Rename(old, new)).ok_or_else(|| format!("`--same '{text}'`: write `rename OLD NEW` (for a path with a space: `rename OLD => NEW`)")),
         "move" => sides(false).map(|(old, new)| Same::Move(old, new)).ok_or_else(|| format!("`--same '{text}'`: write `move FROM TO` (for a path with a space: `move FROM => TO`)")),
+        "rewrite" if rest.starts_with("fn ") && !rest.contains(" => ") => {
+            let (name, file) = rest["fn ".len()..].split_once(" in ").ok_or_else(|| format!("`--same '{text}'`: the closure form is `rewrite fn NAME in FILE` (a statement of an intent file)"))?;
+            Ok(Same::Closure(name.trim().to_string(), file.trim().to_string()))
+        }
         "rewrite" => {
             let (from, to) = sides(true).ok_or_else(|| format!("`--same '{text}'`: write `rewrite FROM => TO`, with a space on each side of `=>`"))?;
             // Design 54.16: a form error gives the correct form, if a repair of the text has one.
@@ -107,6 +114,30 @@ fn transformation(check: &Check, plan: &crate::transforms::Plan, inline: bool, b
     let left = if applied.left == 0 { String::new() } else { format!("; {} element place(s) differ: a real edit of its own", applied.left) };
     result.result = format!("holds: the MIR of `{callee}` put in at the call explains {} element place(s) of the {} body{left} ({})", applied.explained, if inline { "new" } else { "old" }, crate::transforms::RULE_STATEMENT);
     (0..check.units.len()).filter(|unit| check.units[*unit].edit.is_some_and(|edit| applied.edits.contains(&edit))).collect()
+}
+
+/// [R97.2-2] [R97.5-1] The check of a closure form of `#[rewrite]` (design 97): the statement
+/// holds when its closure pair fits at least one site, and the nodes of its sites are below it.
+/// A statement with no site (or with an error of its closures) is false, with the nearest
+/// candidates.
+fn closure_statement(check: &Check, plan: &crate::transforms::Plan, name: &str, file: &str, result: &mut AgentFact) -> Vec<usize> {
+    result.text = format!("rewrite `fn {name}` (the closure form, {file})");
+    let Some(statement) = plan.rewrites.statements.iter().find(|statement| statement.function == name && statement.file == file) else {
+        result.result = format!("false: the intent file `{file}` has no closure form `fn {name}` of `#[rewrite]` ({})", crate::rewrites::RULE_FORM);
+        return Vec::new();
+    };
+    if let Some(cause) = &statement.error {
+        let near = if statement.nearest.is_empty() { String::new() } else { format!("; the nearest candidates: {}", statement.nearest.join("; ")) };
+        result.result = format!("false: {cause}{near}");
+        return Vec::new();
+    }
+    result.holds = true;
+    let same = statement.sites.iter().filter(|site| site.same).count();
+    let sites: Vec<String> = statement.sites.iter().map(|site| format!("`{}` ({}:{})", site.body, site.file, site.line)).collect();
+    let kept = if statement.kept.is_empty() { String::new() } else { format!("; {} place(s) keep the old form with no edit ({})", statement.kept.len(), crate::rewrites::RULE_KEPT) };
+    let same = if same == 0 { String::new() } else { format!("; {same} with the same compiled code ({})", crate::rewrites::RULE_ENTRY) };
+    result.result = format!("holds: the closure pair fits {} site(s), each with one binding ({}): {}{same}{kept}", statement.sites.len(), crate::rewrites::RULE_SITE, sites.join(", "));
+    (0..check.units.len()).filter(|unit| check.units[*unit].edit.is_some_and(|edit| statement.edits.contains(&edit))).collect()
 }
 
 /// The text of an option value for a shell: in single quote marks.
@@ -1180,6 +1211,7 @@ pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
                 result.text = format!("rewrite `{from}` => `{to}`");
                 check.rewrite(&from, &to, &mut result)
             }
+            Ok(Same::Closure(name, file)) => closure_statement(&check, transforms, &name, &file, &mut result),
             Ok(Same::Extract(body, callee)) => transformation(&check, transforms, false, &body, &callee, &mut result),
             Ok(Same::Inline(body, callee)) => transformation(&check, transforms, true, &body, &callee, &mut result),
             Err(error) => {

@@ -102,6 +102,8 @@ The decisions of batch 10n for each list of the audit are in design 65.3 and 65.
 | `crates/semilla-verify/src/owners.rs` | `fn remote_form "path"` | tool | the kinds of the nodes of the syntax tree of Semilla |
 | `crates/semilla-verify/src/positions.rs` | `const DELIMITERS` | language | the delimiter tokens of the Rust language |
 | `crates/semilla-verify/src/positions.rs` | `fn assign "["` | language | the tokens before an expression in a list |
+| `crates/semilla-verify/src/rewrites.rs` | `const STD_CRATES` | tool | the crates of the standard library (`std`, `alloc`, `core`): the printer of the driver gives an item of the standard library the path that the printing crate sees (`std::ops::Range` in the intent crate, `core::ops::Range` in a crate with only `core`), so the checks of a site read the three names as one (design 97, R97.2-4) |
+| `crates/semilla-verify/src/rewrites.rs` | `const SYMMETRIC` | language | the MIR operators whose two operands can swap (`Add`, `Mul`, `Eq`, …): the list of `semilla-normal/src/elements.rs` again, for the two orders of the operands of a closure of `#[rewrite]` (design 97, R97.6-1) |
 | `crates/semilla-verify/src/scope.rs` | `const PLAIN_TYPES` | tool | the modules of the standard library whose types hold no code (no trait object, no function pointer); a type outside the list can hold code (the safe side) |
 | `crates/semilla-verify/src/scope.rs` | `const STD_NO_IO` | default mode | the modules of the standard library with no input or output; each other function of `std` counts as I/O (the safe side); the compiled mode: the effect summary of each call (R64.3-1) |
 | `crates/semilla-verify/src/sites.rs` | `fn block_path "crate"` | language | the path keywords of the Rust language (`crate`, `self`, `super`) |

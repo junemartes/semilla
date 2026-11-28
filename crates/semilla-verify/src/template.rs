@@ -508,6 +508,18 @@ fn apply(outcome: &mut StepOutcome, pending: &Pending, result: &BTreeMap<String,
         };
         note.replace_range(at.., &text);
     }
+    // [R97.8-1] The template of the closure form of an entry (design 97).
+    for fact in outcome.report.facts.iter_mut() {
+        let Some(text) = fact.template.as_mut() else { continue };
+        let Some(at) = text.find(NOTE_MARK) else { continue };
+        let template = text[at + NOTE_MARK.len()..].to_string();
+        let verdict = match result.get(&template) {
+            Some((form, None)) => format!("template: `{form}`"),
+            Some((_, Some(cause))) => format!("no template: {cause}"),
+            None => "no template: the step has no compiled trees for the check of the intent files".to_string(),
+        };
+        text.replace_range(at.., &verdict);
+    }
     let verdict = |template: &str| result.get(template).cloned();
     for (at, offer) in &pending.offers {
         if let Some(cover) = outcome.report.coverage.get_mut(*at) {

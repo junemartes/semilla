@@ -1012,6 +1012,41 @@ fn template_problems(work: &mut Work, folder: &Path, state: &str) -> Result<Vec<
     Ok(Vec::new())
 }
 
+/// [R97.8-1] The templates of the closure form of `#[rewrite]` in an output (design 97): each text
+/// in back quotes that starts with `#[rewrite`.
+fn closure_templates_of(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for line in text.lines() {
+        for piece in line.split('`').filter(|piece| piece.starts_with("#[rewrite") && piece.contains("fn ") && piece.contains('|')) {
+            if !found.iter().any(|known| known == piece) {
+                found.push(piece.to_string());
+            }
+        }
+    }
+    found
+}
+
+/// Property 17 (R97.8-1, design 97): each template of the closure form that the step output
+/// prints passes `semilla intent check` as it is (no text changes), all in one intent file.
+fn closure_template_problems(work: &mut Work, folder: &Path, output: &str, state: &str) -> Result<Vec<String>, String> {
+    let found = closure_templates_of(output);
+    if found.is_empty() {
+        return Ok(Vec::new());
+    }
+    CLOSURE_TEMPLATES.fetch_add(found.len(), Ordering::SeqCst);
+    let file = folder.join("closures.rs");
+    let text = format!("use semilla_intent::prelude::*;\n\n{}\n", found.join("\n"));
+    std::fs::write(&file, &text).map_err(|error| error.to_string())?;
+    let check = work.semilla(folder, &["intent".to_string(), "check".to_string(), file.display().to_string()])?;
+    if check.code != 0 {
+        return Ok(vec![format!("{state}: the {} template(s) of the closure form do not pass `semilla intent check` as they are:\n{}\n{}", found.len(), text, check.all().lines().filter(|line| line.starts_with("error") || line.contains("-->")).collect::<Vec<_>>().join("\n"))]);
+    }
+    Ok(Vec::new())
+}
+
+/// The count of the templates of the closure form that property 17 checked.
+static CLOSURE_TEMPLATES: AtomicUsize = AtomicUsize::new(0);
+
 /// [R90.5-3] The counts of the coverage line of the map of the diff: "changed nodes: N in M
 /// entries; K real edits (S stated by the agent); J not mapped" (design 90).
 fn map_counts(line: &str) -> Option<[usize; 5]> {
@@ -1052,9 +1087,9 @@ fn map_problems(work: &mut Work, folder: &Path, output: &str, state: &str, refac
         // [R94.3-2] [R94.4-3] A transformation whose parts depend on each other has the mark
         // "the order can matter" after its kind.
         let kind = ENTRY_KINDS.iter().find(|kind| rest.starts_with(&format!("{kind} (")) || rest.starts_with(&format!("{kind}, syntax only (")) || rest.starts_with(&format!("{kind}, the order can matter (")));
-        // [R92.4-1] [R92.3-1] [R94.1-1] [R95.1-1] The rules of designs 92, 94, and 95 check an
-        // entry too.
-        let checked = rest.split_once("): ").is_some_and(|(head, _)| head.contains("; R90.") || head.contains("; R92.") || head.contains("; R94.") || head.contains("; R95."));
+        // [R92.4-1] [R92.3-1] [R94.1-1] [R95.1-1] [R97.3-1] The rules of designs 92, 94, 95, and 97
+        // check an entry too.
+        let checked = rest.split_once("): ").is_some_and(|(head, _)| head.contains("; R90.") || head.contains("; R92.") || head.contains("; R94.") || head.contains("; R95.") || head.contains("; R97."));
         if kind.is_none() || !checked {
             problems.push(format!("{state}: the entry `{}` has no kind, no source, or no check", line.chars().take(120).collect::<String>()));
         }
@@ -1767,6 +1802,10 @@ fn check(case: &Case) -> Result<Outcome, String> {
                 work.fail("templates", problem);
             }
         }
+        // Property 17 (R97.8-1): each template of the closure form passes the check as it is.
+        for problem in closure_template_problems(&mut work, &first, &output, state)? {
+            work.fail("closure_templates", problem);
+        }
     }
 
     // Property 3: a second run in a new copy gives the same result.
@@ -2206,6 +2245,7 @@ fn each_case_gives_its_expected_text_and_keeps_the_properties() {
     println!("property 15 (the stored items, R91.3-1): {} file(s) from the store, {} step(s) after a step", ITEM_FILES.load(Ordering::SeqCst), NEXT_STEPS.load(Ordering::SeqCst));
     println!("property 15 (an empty database, R91.7-1): {} command(s) with an empty database", EMPTY_CHECKS.load(Ordering::SeqCst));
     println!("property 15 (the body records, R93.3-2): {} record file(s) of a step after a step", RECORD_FILES.load(Ordering::SeqCst));
+    println!("property 17 (the closure templates, R97.8-1): {} template(s) checked as they are", CLOSURE_TEMPLATES.load(Ordering::SeqCst));
     assert!(problems.is_empty(), "{} problem(s) in the case set:\n{}", problems.len(), problems.join("\n"));
 }
 

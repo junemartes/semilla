@@ -72,7 +72,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 3 in 2 entries; 2 real edits (1 stated by the agent); 0 not mapped
   real edits:
   item `depot::a`:
-  ◆ f1 replace (a1; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+  ◆ f1 replace (a1; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `depot::a` (src/lib.rs:6), `depot::b` (src/lib.rs:7); 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+      template: `#[rewrite] fn a_rewrite() { (|c: &before::depot::Cart| c.total, |c: &after::depot::Cart| c.total()) }`
       in: depot::a, depot::b
       affected bodies: depot::a, depot::b
       control flow: + call `Cart::total` (src/lib.rs:6): return → check `overflow: c.total() + 1`
@@ -94,7 +95,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (a1; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
+◆ f1 replace (a1; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `depot::a` (src/lib.rs:6), `depot::b` (src/lib.rs:7); 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
     lines: src/lib.rs:6-7, src/lib.rs:-6-7
 ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
     lines: src/lib.rs:11, src/lib.rs:-11

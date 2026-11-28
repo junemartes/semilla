@@ -89,6 +89,9 @@ pub struct Plan {
     /// [R94.1-3] The notes of the ties, and the templates of each candidate.
     pub notes: Vec<String>,
     pub templates: Vec<String>,
+    /// [R97.2-2] [R97.7-1] The statements `#[rewrite]` of the closure form, the groups of the
+    /// repeated edits, and the templates of the closure form (design 97).
+    pub rewrites: crate::rewrites::Plan,
 }
 
 fn kind_of(inline: bool) -> EntryKind {
