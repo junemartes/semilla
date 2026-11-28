@@ -236,6 +236,10 @@ pub(crate) enum Kind {
     /// [R91.1-1] The stored result of one item of a phase (design 91): the key text starts
     /// with the name of the phase.
     Item,
+    /// [R93.1-1] The stored result of a step check (design 93.1).
+    Step,
+    /// [R93.3-1] The record of one body by its key (design 93.3).
+    Body,
 }
 
 impl Kind {
@@ -246,6 +250,8 @@ impl Kind {
             Kind::Metadata => b'm',
             Kind::Opaque => b'o',
             Kind::Item => b'r',
+            Kind::Step => b't',
+            Kind::Body => b'b',
         }
     }
 }
@@ -346,6 +352,56 @@ impl Db {
     }
 }
 
+/// [R93.2-1] A variable for the tests only: with it, a process makes no steady point in the
+/// background (the test of the wait before the file grows).
+pub(crate) const NO_BACKGROUND_SYNC: &str = "SEMILLA_TEST_NO_BACKGROUND_SYNC";
+
+/// [R93.2-1] The phase name of the steady points of the database in the timing lines.
+pub(crate) const SYNC_PHASE: &str = "the steady point of the database (a thread of its own)";
+
+impl Db {
+    /// [R93.2-1] Makes a steady point: the data of the earlier commands goes to the disk, and the
+    /// pages that they freed can serve the writes of this command. A commit does not sync
+    /// (`SafeNoSync`), and libmdbx makes a steady point before its file grows: then the write
+    /// waits for the sync of each page that is not on the disk yet. libmdbx writes the pages
+    /// first with no lock (a pre-sync), so a write of this command does not wait for them. An
+    /// error changes nothing: the next steady point syncs the data.
+    pub(crate) fn steady_point(&self) {
+        let started = std::time::Instant::now();
+        let synced = self.env.sync(true).is_ok();
+        semilla_core::timing::add(SYNC_PHASE, started);
+        semilla_core::timing::count(SYNC_PHASE, if synced { "steady points" } else { "failed steady points" }, 1);
+    }
+}
+
+impl Db {
+    /// [R93.3-1] The key texts of each entry of a kind, in one read transaction.
+    pub(crate) fn key_texts(&self, kind: Kind) -> Vec<String> {
+        let started = std::time::Instant::now();
+        let found = (|| -> Result<Vec<String>> {
+            let txn = self.env.begin_ro_txn()?;
+            let table = txn.open_table(None)?;
+            let mut found = Vec::new();
+            let mut cursor = txn.cursor(&table)?;
+            for entry in cursor.iter_from::<std::borrow::Cow<'_, [u8]>, std::borrow::Cow<'_, [u8]>>(&[kind.byte()]) {
+                let (key, value) = entry?;
+                if key.first() != Some(&kind.byte()) {
+                    break;
+                }
+                if let Some(((_, text), _)) = split_value(&value)
+                    && let Ok(text) = std::str::from_utf8(text)
+                {
+                    found.push(text.to_string());
+                }
+            }
+            Ok(found)
+        })()
+        .unwrap_or_default();
+        semilla_core::timing::add(DB_PHASE, started);
+        found
+    }
+}
+
 impl Db {
     /// [R89.4-1, R89.4-2] Removes each entry of a kind whose key text `remove` accepts, in one write
     /// transaction (a stop in the middle leaves each entry). The result is the count of the
@@ -401,6 +457,9 @@ fn folder_prefix(db: &Db, folder: &Path) -> String {
 pub(crate) struct Live {
     pub(crate) pairs: std::collections::BTreeSet<String>,
     pub(crate) texts: std::collections::BTreeSet<String>,
+    /// [R93.4-1] The keys of the body records of the records folders of the trees of the stored
+    /// steps (the pointer lists, [`BODIES_FILE`]).
+    pub(crate) bodies: std::collections::BTreeSet<String>,
 }
 
 /// [R89.4-2] `semilla cache --clean`: removes each entry of the database that no folder of the
@@ -418,6 +477,10 @@ pub(crate) fn clean_database(cache: &Path, live: &Live) -> Result<usize> {
     count += db.remove_where(Kind::Syntax, &|key| !key.ends_with(&format!(" {identity}")))?;
     count += db.remove_where(Kind::Opaque, &|key| !keeps(key, &identity, live))?;
     count += db.remove_where(Kind::Item, &|key| !keeps(key, &identity, live))?;
+    // [R93.4-1] The stored step results of a pair of trees that no stored step has, and each
+    // body record that no records folder of a tree of a stored step uses.
+    count += db.remove_where(Kind::Step, &|key| !keeps(key, &identity, live))?;
+    count += db.remove_where(Kind::Body, &|key| !key.strip_prefix(BODY_PHASE).and_then(|rest| rest.strip_prefix(' ')).is_some_and(|body| live.bodies.contains(body)))?;
     Ok(count)
 }
 
@@ -430,6 +493,8 @@ fn keeps(key: &str, identity: &str, live: &Live) -> bool {
         ["opaque", _, binary, pair, _] => *binary == identity && live.pairs.contains(*pair),
         // `file-syntax TEXT CONTEXT BINARY` (R91.2-1).
         [FILE_PHASE, text, _, binary] => *binary == identity && live.texts.contains(*text),
+        // `step OLD:NEW DIGEST BINARY` (R93.1-1).
+        [STEP_PHASE, pair, _, binary] => *binary == identity && live.pairs.contains(*pair),
         _ => false,
     }
 }
@@ -581,22 +646,180 @@ pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     semilla_normal::index::digest_bytes(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// [R93.1-1] The name of the kind of a stored step result in its key text.
+pub(crate) const STEP_PHASE: &str = "step";
+
+/// [R93.1-1] The format key of a stored step result: the JSON of the stored form (the result of
+/// the check, the configurations of the step, and the records folders that the check read).
+pub(crate) const STEP_FORMAT: &str = "semilla-step-1";
+
+/// [R93.1-1] The key text of a stored step result: the pair of trees of the step (for the
+/// clean), the digest of each other input of the check, and the identity of the Semilla binary.
+pub(crate) fn step_key(before: &str, after: &str, inputs: &str) -> String {
+    format!("{STEP_PHASE} {before}:{after} {} {}", hex_digest(inputs.as_bytes()), crate::store::binary_identity())
+}
+
+/// [R93.3-1] The name of the kind of a body record in its key text: `body KEY`. The key of the
+/// driver has each input of the record, also the driver and the tool chain (design 93.3).
+pub(crate) const BODY_PHASE: &str = "body";
+
+/// [R93.3-1] The format key of a body record: the JSON line of the record.
+pub(crate) const BODY_FORMAT: &str = "semilla-body-1";
+
+/// [R93.4-1] The mark of a records folder with the keys of its body records (its pointer list),
+/// one key for each line.
+pub(crate) const BODIES_FILE: &str = ".bodies";
+
+/// [R93.6-1] The phase name of the body records of the store in the timing lines.
+pub(crate) const BODY_STORE_PHASE: &str = "the body records of the store (design 93)";
+
+/// [R93.3-1] The keys of the body records of the store: the file of the known keys of a build.
+pub(crate) fn known_bodies(db: &Db) -> String {
+    let mut text = String::new();
+    for key in db.key_texts(Kind::Body) {
+        if let Some(body) = key.strip_prefix(BODY_PHASE).and_then(|rest| rest.strip_prefix(' ')) {
+            text.push_str(body);
+            text.push('\n');
+        }
+    }
+    text
+}
+
+/// [R93.3-1] An error of a record file of a build with the keys on: a pointer line whose record
+/// the store does not have. The build runs again with no keys.
+#[derive(Debug)]
+pub(crate) struct MissingBody(pub(crate) String);
+
+impl std::fmt::Display for MissingBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the store has no body record with the key {}", self.0)
+    }
+}
+
+impl std::error::Error for MissingBody {}
+
+/// [R93.3-1] Makes a record file of a build with the keys on into a full record file: each
+/// pointer line gets the stored record of its key, and the last line (the keys) goes. Each new
+/// record with a key goes into the store, in one write transaction. The keys of the lines of
+/// the file go to `keys` (the pointer list of the file). A file with no keys line (a fresh
+/// unit, or a build with no keys) does not change.
+pub(crate) fn resolve_bodies(db: &Db, file: &Path, keys: &Path) -> Result<()> {
+    use std::io::{BufRead as _, Write as _};
+    // [R93.7-1] A stream of the lines: the file is read two times (the place of the last line,
+    // then each line), and no text of the whole file is in memory.
+    let mut last = 0u64;
+    let mut count = 0usize;
+    {
+        let mut reader = std::io::BufReader::new(std::fs::File::open(file)?);
+        let mut line = Vec::new();
+        let mut at = 0u64;
+        loop {
+            line.clear();
+            let read = reader.read_until(b'\n', &mut line)?;
+            if read == 0 {
+                break;
+            }
+            last = at;
+            at += read as u64;
+            count += 1;
+        }
+    }
+    let tail = {
+        use std::io::{Read as _, Seek as _};
+        let mut handle = std::fs::File::open(file)?;
+        handle.seek(std::io::SeekFrom::Start(last))?;
+        let mut text = String::new();
+        handle.read_to_string(&mut text)?;
+        text
+    };
+    let Ok(serde_json::Value::Object(tail)) = serde_json::from_str::<serde_json::Value>(tail.trim_end()) else { return Ok(()) };
+    let Some(serde_json::Value::Array(list)) = tail.get(KEYS_MEMBER) else { return Ok(()) };
+    let list: Vec<Option<String>> = list.iter().map(|key| key.as_str().map(str::to_string)).collect();
+    // The first line is the unit record; each other line but the last is a body line.
+    if count != list.len() + 2 {
+        anyhow::bail!("the keys line of {} does not have one key for each body line", file.display());
+    }
+    let temporary = file.with_extension("resolve");
+    let mut out = std::io::BufWriter::new(std::fs::File::create(&temporary)?);
+    let mut reader = std::io::BufReader::new(std::fs::File::open(file)?);
+    let mut puts: Vec<Put> = Vec::new();
+    let (mut from_store, mut new, mut written, mut waiting) = (0u64, 0u64, 0u64, 0usize);
+    let mut line = String::new();
+    for at in 0..count - 1 {
+        line.clear();
+        reader.read_line(&mut line)?;
+        let text = line.trim_end_matches('\n');
+        let key = at.checked_sub(1).and_then(|at| list[at].clone());
+        let pointer = text.starts_with(&format!("{{\"{POINTER_MEMBER}\"")).then(|| serde_json::from_str::<serde_json::Value>(text).ok().and_then(|value| value.get(POINTER_MEMBER).and_then(|key| key.as_str()).map(str::to_string))).flatten();
+        match (pointer, key) {
+            (Some(pointer), _) => {
+                let found = db.get(Kind::Body, &format!("{BODY_PHASE} {pointer}"), BODY_FORMAT, |payload| out.write_all(payload).ok());
+                if found.is_none() {
+                    drop(out);
+                    let _ = std::fs::remove_file(&temporary);
+                    return Err(MissingBody(pointer).into());
+                }
+                from_store += 1;
+            }
+            (None, Some(key)) => {
+                out.write_all(text.as_bytes())?;
+                puts.push((Kind::Body, format!("{BODY_PHASE} {key}"), BODY_FORMAT, text.as_bytes().to_vec()));
+                new += 1;
+                written += text.len() as u64;
+                // [R93.7-1] A batch of 4 MB is one write transaction now.
+                waiting += text.len();
+                if waiting > MOST_WAITING {
+                    db.put(std::mem::take(&mut puts))?;
+                    waiting = 0;
+                }
+            }
+            (None, None) => out.write_all(text.as_bytes())?,
+        }
+        out.write_all(b"\n")?;
+    }
+    db.put(puts)?;
+    out.flush()?;
+    drop(out);
+    std::fs::rename(&temporary, file)?;
+    if let Some(parent) = keys.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(keys, list.iter().map(|key| format!("{}\n", key.as_deref().unwrap_or("-"))).collect::<String>())?;
+    semilla_core::timing::count(BODY_STORE_PHASE, "records from the store", from_store);
+    semilla_core::timing::count(BODY_STORE_PHASE, "records written", new);
+    semilla_core::timing::count(BODY_STORE_PHASE, "bytes written", written);
+    Ok(())
+}
+
+/// [R93.3-1] The member of a pointer line of the driver.
+const POINTER_MEMBER: &str = "semilla-body";
+
+/// [R93.3-1] The member of the keys line of the driver.
+const KEYS_MEMBER: &str = "semilla-keys";
+
 /// [R91.2-1] The name of the phase of the stored syntax data of one file.
 pub(crate) const FILE_PHASE: &str = "file-syntax";
 
 /// [R91.2-1] The store of the syntax data of each file in the database of a cache folder. A read
-/// is one read transaction; the parts of the parsed files of one load are one write
-/// transaction ([`FileSyntaxDb::finish`]).
+/// is one read transaction; the parts of the parsed files of one load are written in batches of
+/// at most [`MOST_WAITING`] bytes, each one write transaction (R93.7-1), and the last batch at
+/// [`FileSyntaxDb::finish`].
 pub(crate) struct FileSyntaxDb {
     db: Arc<Db>,
     puts: std::cell::RefCell<Vec<Put>>,
+    /// [R93.7-1] The bytes of the parts that wait for a write.
+    waiting: std::cell::Cell<usize>,
     counts: std::cell::Cell<(u64, u64)>,
 }
+
+/// [R93.7-1] The most bytes of the parts of the files that wait for a write: a larger batch is
+/// one write transaction now, so the memory of a cold load does not hold the parts of each file.
+const MOST_WAITING: usize = 4 << 20;
 
 impl FileSyntaxDb {
     /// The store of the database of a cache folder, or `None` (no database).
     pub(crate) fn of(cache: &Path) -> Option<FileSyntaxDb> {
-        Some(FileSyntaxDb { db: database_for(cache)?, puts: Default::default(), counts: Default::default() })
+        Some(FileSyntaxDb { db: database_for(cache)?, puts: Default::default(), waiting: Default::default(), counts: Default::default() })
     }
 
     /// [R91.2-1] The key text of the part of a file: the name of the phase, the digest of the
@@ -621,7 +844,12 @@ impl semilla_syntax::load::FileSyntaxStore for FileSyntaxDb {
     }
 
     fn put(&self, context: &str, text: &str, bytes: Vec<u8>) {
+        self.waiting.set(self.waiting.get() + bytes.len());
         self.puts.borrow_mut().push((Kind::Item, FileSyntaxDb::key(context, text), semilla_syntax::stored::FILE_FORMAT, bytes));
+        if self.waiting.get() > MOST_WAITING {
+            self.waiting.set(0);
+            let _ = self.db.put(self.puts.take());
+        }
     }
 
     fn count(&self, from_store: bool) {
@@ -641,7 +869,16 @@ pub(crate) fn open_database(cache: &Path) -> Option<Arc<Db>> {
         return db.clone();
     }
     let db = match Db::open(cache) {
-        Ok(db) => Some(Arc::new(db)),
+        Ok(db) => {
+            let db = Arc::new(db);
+            // [R93.2-1] The steady point of the data of the earlier commands runs in a thread of
+            // its own, while this command does its other work.
+            if std::env::var_os(NO_BACKGROUND_SYNC).is_none() {
+                let background = Arc::clone(&db);
+                std::thread::spawn(move || background.steady_point());
+            }
+            Some(db)
+        }
         Err(error) => {
             eprintln!("note: Semilla cannot open the database of the store in {} ({error:#}); it reads the record files with no index", cache.display());
             None
@@ -1333,7 +1570,7 @@ mod tests {
         // construction).
         let own = format!("opaque 00 {} a:b 0", crate::store::binary_identity());
         db.put(vec![(Kind::Opaque, own.clone(), OPAQUE_FORMAT, b"x".to_vec())]).unwrap();
-        let live = Live { pairs: ["a:b".to_string()].into_iter().collect(), texts: Default::default() };
+        let live = Live { pairs: ["a:b".to_string()].into_iter().collect(), texts: Default::default(), bodies: Default::default() };
         assert_eq!(clean_database(dir.path(), &live).unwrap(), 0);
         assert_eq!(index_entries(&db, "index "), 1);
         assert!(db.get(Kind::Opaque, &own, OPAQUE_FORMAT, |_| Some(())).is_some());
@@ -1360,7 +1597,7 @@ mod tests {
         let other = format!("opaque 00 other-binary a:b 0");
         db.put(vec![(Kind::Opaque, gone.clone(), OPAQUE_FORMAT, b"x".to_vec()), (Kind::Opaque, other.clone(), OPAQUE_FORMAT, b"x".to_vec())]).unwrap();
         let file = file_entry(&db, "pub fn gone() {}\n");
-        let live = Live { pairs: ["a:b".to_string()].into_iter().collect(), texts: [hex_digest(b"pub fn kept() {}\n")].into_iter().collect() };
+        let live = Live { pairs: ["a:b".to_string()].into_iter().collect(), texts: [hex_digest(b"pub fn kept() {}\n")].into_iter().collect(), bodies: Default::default() };
         assert_eq!(clean_database(dir.path(), &live).unwrap(), 3);
         for (kind, key, format) in [(Kind::Opaque, &gone, OPAQUE_FORMAT), (Kind::Opaque, &other, OPAQUE_FORMAT), (Kind::Item, &file, semilla_syntax::stored::FILE_FORMAT)] {
             assert!(db.get(kind, key, format, |_| Some(())).is_none(), "{key}");
@@ -1377,7 +1614,7 @@ mod tests {
         let kept = format!("opaque 00 {} a:b 3", crate::store::binary_identity());
         db.put(vec![(Kind::Opaque, kept.clone(), OPAQUE_FORMAT, b"x".to_vec())]).unwrap();
         let file = file_entry(&db, "pub fn kept() {}\n");
-        let live = Live { pairs: ["a:b".to_string()].into_iter().collect(), texts: [hex_digest(b"pub fn kept() {}\n")].into_iter().collect() };
+        let live = Live { pairs: ["a:b".to_string()].into_iter().collect(), texts: [hex_digest(b"pub fn kept() {}\n")].into_iter().collect(), bodies: Default::default() };
         assert_eq!(clean_database(dir.path(), &live).unwrap(), 0);
         assert!(db.get(Kind::Opaque, &kept, OPAQUE_FORMAT, |_| Some(())).is_some());
         assert!(db.get(Kind::Item, &file, semilla_syntax::stored::FILE_FORMAT, |_| Some(())).is_some());
@@ -1494,5 +1731,197 @@ mod tests {
         assert_eq!(payload.iter().map(|byte| u64::from(*byte)).sum::<u64>(), sum);
         let grown = file_pages().saturating_sub(before);
         assert!(grown > 32 << 10, "the map keeps only {grown} kB");
+    }
+
+    /// A record file of a build with the keys on: the unit line, a pointer line, a new record
+    /// with a key, a record with no key, and the keys line.
+    fn keyed_file(dir: &Path, pointer: &str) -> PathBuf {
+        let file = dir.join("k.lib.1.jsonl");
+        let lines = [
+            r#"{"unit":{"target":"k.lib.1","cfg":[],"files":[]}}"#.to_string(),
+            format!(r#"{{"{POINTER_MEMBER}":"{pointer}"}}"#),
+            r#"{"name":"k::new","level":"n0","text":"fn new() {}"}"#.to_string(),
+            r#"{"name":"k::plain","level":"n0","text":"fn plain() {}"}"#.to_string(),
+            format!(r#"{{"{KEYS_MEMBER}":["{pointer}","00ff",null]}}"#),
+        ];
+        std::fs::write(&file, lines.join("\n") + "\n").unwrap();
+        file
+    }
+
+    // [R93.3-1] A pointer line of the driver gets the stored record of its key, the keys line
+    // goes, each new record with a key goes into the store, and the keys of the lines are the
+    // pointer list of the file.
+    // rule+ R93.3-2
+    #[test]
+    fn a_pointer_line_gets_the_stored_record_of_its_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let stored = r#"{"name":"k::old","level":"n0","text":"fn old() {}"}"#;
+        db.put(vec![(Kind::Body, format!("{BODY_PHASE} aa11"), BODY_FORMAT, stored.as_bytes().to_vec())]).unwrap();
+        let file = keyed_file(dir.path(), "aa11");
+        let keys = dir.path().join("keys/k.lib.1.jsonl");
+        resolve_bodies(&db, &file, &keys).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 4, "{text}");
+        assert_eq!(lines[1], stored);
+        assert!(lines[2].contains("k::new") && lines[3].contains("k::plain"), "{text}");
+        assert!(db.get(Kind::Body, &format!("{BODY_PHASE} 00ff"), BODY_FORMAT, |payload| Some(payload.to_vec())).is_some_and(|payload| payload == lines[2].as_bytes()));
+        assert_eq!(std::fs::read_to_string(&keys).unwrap(), "aa11\n00ff\n-\n");
+        // A file with no keys line does not change.
+        resolve_bodies(&db, &file, &keys).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+    }
+
+    // [R93.3-1] The negative case: a pointer whose record the store does not have is an error
+    // (the build runs again with no keys), and the file does not change.
+    // rule- R93.3-2
+    #[test]
+    fn a_pointer_with_no_stored_record_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let file = keyed_file(dir.path(), "bb22");
+        let before = std::fs::read_to_string(&file).unwrap();
+        let error = resolve_bodies(&db, &file, &dir.path().join("keys/k")).unwrap_err();
+        assert!(error.downcast_ref::<MissingBody>().is_some(), "{error:#}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+    }
+
+    // [R93.4-1] `cache --clean` removes each stored step result of a pair that no stored step
+    // has (or of another binary), and each body record that no pointer list of a tree of a
+    // stored step has.
+    // rule+ R93.4-1
+    #[test]
+    fn the_clean_removes_the_step_results_and_the_body_records_that_no_stored_step_uses() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let identity = crate::store::binary_identity();
+        let steps = [format!("{STEP_PHASE} old:new 00 {identity}"), format!("{STEP_PHASE} a:b 00 other-binary")];
+        for key in &steps {
+            db.put(vec![(Kind::Step, key.clone(), STEP_FORMAT, b"{}".to_vec())]).unwrap();
+        }
+        db.put(vec![(Kind::Body, format!("{BODY_PHASE} dead"), BODY_FORMAT, b"{}".to_vec())]).unwrap();
+        let live = Live { pairs: ["a:b".to_string()].into_iter().collect(), bodies: ["kept".to_string()].into_iter().collect(), ..Live::default() };
+        assert_eq!(clean_database(dir.path(), &live).unwrap(), 3);
+        for key in &steps {
+            assert!(db.get(Kind::Step, key, STEP_FORMAT, |_| Some(())).is_none(), "{key}");
+        }
+        assert!(db.get(Kind::Body, &format!("{BODY_PHASE} dead"), BODY_FORMAT, |_| Some(())).is_none());
+    }
+
+    // rule- R93.4-1
+    #[test]
+    fn the_clean_keeps_the_step_results_and_the_body_records_of_the_stored_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let step = step_key("a", "b", "inputs");
+        db.put(vec![(Kind::Step, step.clone(), STEP_FORMAT, b"{}".to_vec()), (Kind::Body, format!("{BODY_PHASE} kept"), BODY_FORMAT, b"{}".to_vec())]).unwrap();
+        let live = Live { pairs: ["a:b".to_string()].into_iter().collect(), bodies: ["kept".to_string()].into_iter().collect(), ..Live::default() };
+        assert_eq!(clean_database(dir.path(), &live).unwrap(), 0);
+        assert!(db.get(Kind::Step, &step, STEP_FORMAT, |_| Some(())).is_some());
+        assert!(db.get(Kind::Body, &format!("{BODY_PHASE} kept"), BODY_FORMAT, |_| Some(())).is_some());
+    }
+
+    // [R93.1-1] The key text of a stored step result has the pair of trees, the digest of the
+    // inputs, and the binary: other inputs give another key text, and a read with another key
+    // text gives no result.
+    // rule+ R93.1-3
+    #[test]
+    fn a_stored_step_result_is_read_with_its_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let key = step_key("a", "b", "inputs");
+        assert!(key.starts_with(&format!("{STEP_PHASE} a:b ")) && key.ends_with(&crate::store::binary_identity()), "{key}");
+        db.put(vec![(Kind::Step, key.clone(), STEP_FORMAT, b"{}".to_vec())]).unwrap();
+        assert!(db.get(Kind::Step, &key, STEP_FORMAT, |_| Some(())).is_some());
+    }
+
+    // rule- R93.1-3
+    #[test]
+    fn another_input_or_format_gives_no_stored_step_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_database(dir.path()).unwrap();
+        let key = step_key("a", "b", "inputs");
+        db.put(vec![(Kind::Step, key.clone(), STEP_FORMAT, b"{}".to_vec())]).unwrap();
+        for other in [step_key("a", "c", "inputs"), step_key("a", "b", "inputs 2")] {
+            assert_ne!(other, key);
+            assert!(db.get(Kind::Step, &other, STEP_FORMAT, |_| Some(())).is_none(), "{other}");
+        }
+        assert!(db.get(Kind::Step, &key, "semilla-step-0", |_| Some(())).is_none());
+    }
+
+    /// The child of the test of the steady point: it opens a database, waits, and ends with the
+    /// count of its steady points as its exit code.
+    #[test]
+    fn child_of_the_steady_point() {
+        let Ok(dir) = std::env::var("SEMILLA_RECSTORE_TEST_DIR") else { return };
+        if !std::env::var(CHILD).is_ok_and(|role| role == "steady") {
+            return;
+        }
+        let _db = open_database(Path::new(&dir)).unwrap();
+        let mut count = 0;
+        for _ in 0..100 {
+            count = semilla_core::timing::total(SYNC_PHASE).counts.get("steady points").copied().unwrap_or(0);
+            if count > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        std::process::exit(count as i32);
+    }
+
+    fn steady_points(no_sync: bool) -> i32 {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "recstore::tests::child_of_the_steady_point", "--nocapture", "--test-threads", "1"]).env(CHILD, "steady").env("SEMILLA_RECSTORE_TEST_DIR", dir.path());
+        command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        if no_sync {
+            command.env(NO_BACKGROUND_SYNC, "1");
+        } else {
+            command.env_remove(NO_BACKGROUND_SYNC);
+        }
+        command.status().unwrap().code().unwrap()
+    }
+
+    // [R93.2-1] A process that opens the database makes a steady point in a thread of its own:
+    // the write of the command does not wait for the sync of the data of earlier commands.
+    // rule+ R93.2-1
+    #[test]
+    fn a_process_makes_a_steady_point_in_a_thread_of_its_own() {
+        assert_eq!(steady_points(false), 1);
+    }
+
+    // rule- R93.2-1
+    #[test]
+    fn with_no_background_sync_the_process_makes_no_steady_point() {
+        assert_eq!(steady_points(true), 0);
+    }
+
+    // [R93.7-1] The parts of the files of a load wait for a write only up to a limit of bytes:
+    // a larger batch goes into the store at once, so a cold load does not hold each part.
+    // rule+ R93.7-1
+    #[test]
+    fn a_large_batch_of_file_parts_goes_into_the_store_at_once() {
+        use semilla_syntax::load::FileSyntaxStore as _;
+        let dir = tempfile::tempdir().unwrap();
+        let _db = open_database(dir.path()).unwrap();
+        let store = FileSyntaxDb::of(dir.path()).unwrap();
+        store.put("context", "fn a() {}", vec![7; MOST_WAITING + 1]);
+        assert!(store.get("context", "fn a() {}").is_some());
+        assert!(store.puts.borrow().is_empty());
+    }
+
+    // rule- R93.7-1
+    #[test]
+    fn a_small_part_waits_for_the_end_of_the_load() {
+        use semilla_syntax::load::FileSyntaxStore as _;
+        let dir = tempfile::tempdir().unwrap();
+        let _db = open_database(dir.path()).unwrap();
+        let store = FileSyntaxDb::of(dir.path()).unwrap();
+        store.put("context", "fn b() {}", vec![7; 16]);
+        assert!(store.get("context", "fn b() {}").is_none());
+        store.finish();
+        let again = FileSyntaxDb::of(dir.path()).unwrap();
+        assert!(again.get("context", "fn b() {}").is_some());
     }
 }

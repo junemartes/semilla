@@ -63,7 +63,7 @@ pub(crate) const OTHER_CHANGE: &str = "the step has a second change: ";
 use semilla_syntax::{Edit, Workspace};
 
 /// The MIR status of one body (design section 8.2).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum BodyStatus {
     /// Equal at a normal form level (`n0` to `n4`). `proof` holds the rule chain for N4.
     Equal { level: String, proof: Vec<String> },
@@ -74,7 +74,7 @@ pub enum BodyStatus {
 }
 
 /// The comparison of one MIR body between the two snapshots of a step.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BodyComparison {
     /// The MIR def path (after the renames), for example `demo::cart::Cart::total`.
     pub name: String,
@@ -110,7 +110,7 @@ pub struct BodyComparison {
 pub type MirPlace = (String, usize, usize);
 
 /// One MIR element that differs (design 40.3).
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct MirElement {
     /// The range of the tokens of the element. `None`: no source range.
     pub tokens: Option<MirPlace>,
@@ -136,14 +136,14 @@ pub struct MirElement {
 /// The element has a cause only if each group that does not follow it has one; with no such
 /// group, one group that follows it (the local that it writes, a temporary that it reads)
 /// needs one.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub struct MirGroup {
     pub follows: bool,
     pub sources: Vec<MirSource>,
 }
 
 /// A source of the difference of a MIR element (design 45). The side is 0 (old) or 1 (new).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MirSource {
     /// A declaration range of a changed local: the edits at this place.
     Declaration(usize, MirPlace),
@@ -153,7 +153,7 @@ pub enum MirSource {
 
 /// A symbol that a MIR element or a definition names (design 44): the def path, and the place
 /// of the definition in a file of the workspace (the file and the byte range).
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Sym {
     pub path: String,
     pub place: Option<MirPlace>,
@@ -171,7 +171,7 @@ pub struct Def {
 }
 
 /// The MIR elements that differ in a changed body, in each checked configuration together.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MirDiff {
     pub old: Vec<MirElement>,
     pub new: Vec<MirElement>,
@@ -202,7 +202,7 @@ pub struct MirDiff {
 
 /// [R94.1-1] [R94.2-1] The check of one candidate of an extract or an inline (design 94): the
 /// MIR of a callee put in at its call, then the alignment with the other version of the body.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MirTransform {
     /// True for an inline (the old body calls the callee), false for an extract.
     pub inline: bool,
@@ -235,7 +235,7 @@ pub struct MirTransform {
 }
 
 /// [R94.4-2] A new order of the same parts of a body pair (design 94).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MirReorder {
     /// The count of the pairs of elements whose order changes.
     pub flips: usize,
@@ -252,7 +252,7 @@ pub struct MirReorder {
 }
 
 /// One compile unit of a checked build, from the record of the compiler (batch 5t, part A).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Unit {
     /// The name of the unit. Each body record of the unit has it as its target.
     pub target: String,
@@ -269,7 +269,7 @@ pub struct Unit {
 
 /// The true settings of one checked build configuration, by the compiler (batch 5s, B2;
 /// batch 5t, part A).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConfigTruth {
     /// The name of the configuration, for example `release, all features`.
     pub name: String,
@@ -670,7 +670,7 @@ pub enum NameState {
 
 /// A feature selection that Semilla adds for a proof (batch 5u, part C): a build with these
 /// features is a checked configuration of the step, in the two profiles.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct Selection {
     /// True: the default features are off (`--no-default-features`).
     pub no_default: bool,
@@ -768,7 +768,10 @@ pub struct StepInput<'s, 'w> {
 }
 
 /// Everything the verifier computed for one step. The views use it too.
-#[derive(Clone)]
+///
+/// [R93.1-1] The stored form (`semilla_core::stored::lossless`) has each member: a later
+/// command takes the result of an equal step check from the store (design 93.1).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct StepOutcome {
     pub report: StepReport,
     pub edits: Vec<Edit>,
@@ -795,6 +798,10 @@ pub struct StepOutcome {
     pub verdicts: BTreeMap<String, Vec<(String, equiv::Verdict)>>,
     /// [R77.1-1] The claims of the intent files and the answers of the oracle (`intent::check`,
     /// before the gap list).
+    ///
+    /// [R93.1-1] Not in the stored form: `intent::apply` takes the value in the check, and a
+    /// result with a value is not stored (`StepOutcome::storable`).
+    #[serde(skip)]
     pub intent_answers: Option<(Vec<intent::Query>, Option<Vec<intent::Answer>>)>,
     /// [R77.1-3] The items whose changed bodies proved claims explain: no line of the gap list.
     pub explained: BTreeSet<String>,
@@ -802,9 +809,21 @@ pub struct StepOutcome {
     /// not mapped: the coverage shows the fact next to the proof result (it changes no result).
     pub not_mapped: BTreeSet<String>,
     /// [R87.1-1] The templates of the step that wait for the gate (design 87).
+    ///
+    /// [R93.1-1] Not in the stored form: the gate takes the value in the check, and a result
+    /// with a value is not stored (`StepOutcome::storable`).
+    #[serde(skip)]
     pub templates: template::Pending,
     /// [R94.1-1] The transformations of the map of the step (design 94).
     pub transforms: transforms::Plan,
+}
+
+impl StepOutcome {
+    /// [R93.1-1] True if the stored form has each part of the result: the members that the
+    /// stored form leaves out are empty.
+    pub fn storable(&self) -> bool {
+        self.intent_answers.is_none() && self.templates.asks.is_empty() && self.templates.offers.is_empty()
+    }
 }
 
 /// Checks one step with the old protocol: an edit with no claim and no type-level fact is

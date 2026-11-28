@@ -1258,7 +1258,6 @@ pub fn borrow_kind_text(kind: &BorrowKind) -> &'static str {
 /// Returns a word that no other call returns, in this process or in another process. Use it for
 /// a part that the printer cannot see, so that the body is never equal to another body.
 pub fn unique(what: &str) -> String {
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|time| time.as_nanos())
@@ -1266,6 +1265,16 @@ pub fn unique(what: &str) -> String {
     format!(
         "unknown_{what}#{}.{}.{nanos}",
         std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
+        UNIQUE.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+/// The counter of [`unique`].
+static UNIQUE: AtomicUsize = AtomicUsize::new(0);
+
+/// [R93.5-2] The count of the calls of [`unique`] in this process: a memo of the driver keeps
+/// only a result whose work called no [`unique`], so that a later text is the text of a full
+/// run.
+pub fn unique_count() -> usize {
+    UNIQUE.load(Ordering::Relaxed)
 }

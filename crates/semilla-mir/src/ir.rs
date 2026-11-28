@@ -1119,6 +1119,18 @@ fn assert_name(msg: &AssertMessage) -> String {
 /// the check, design 61, C3). Also the form of each instance of a generic function of the
 /// workspace that the body calls (with the arguments of the instance, design 61, part B).
 pub fn std_callees(ir: &Ir, body: &Body) -> BTreeMap<String, Ir> {
+    // [R93.5-2] The form of a callee is a function of its instance (or of the key of a closure
+    // of an instance) in one compile: the driver builds it one time, and each caller gets a
+    // copy. A form whose build called `unique` is built again for each caller, as before.
+    #[derive(PartialEq, Eq, Hash)]
+    enum FormKey {
+        Closure(String),
+        Instance(rustc_public::mir::mono::Instance),
+    }
+    thread_local! {
+        static FORMS: std::cell::RefCell<HashMap<FormKey, Option<(Body, Ir)>>> = std::cell::RefCell::new(HashMap::new());
+    }
+    let memo = |key: FormKey, make: &dyn Fn() -> Option<(Body, Ir)>| -> Option<(Body, Ir)> { FORMS.with(|forms| crate::parts::kept(forms, key, make)) };
     let mut found: BTreeMap<String, Ir> = BTreeMap::new();
     let mut todo: Vec<(Body, usize)> = vec![(body.clone(), 0)];
     let _ = ir;
@@ -1130,14 +1142,18 @@ pub fn std_callees(ir: &Ir, body: &Body) -> BTreeMap<String, Ir> {
             if let Some((info, _)) = crate::guarded(|| closure_call(&current, func)).flatten() {
                 if info.instance
                     && !found.contains_key(&info.key)
-                    && let Some(callee) = crate::guarded(|| closure_body(&info)).flatten()
+                    && let Some((callee, form)) = memo(FormKey::Closure(info.key.clone()), &|| {
+                        let callee = crate::guarded(|| closure_body(&info)).flatten()?;
+                        let in_std = info.std;
+                        (callee.blocks.len() <= if in_std { MAX_STD_BLOCKS } else { MAX_BLOCKS }).then(|| {
+                            let form = build(&callee, None, rustc_middle::ty::tls::with(|tcx| Some(Gen::of_session(tcx))));
+                            (callee, form)
+                        })
+                    })
                 {
-                    let in_std = info.std;
-                    if callee.blocks.len() <= if in_std { MAX_STD_BLOCKS } else { MAX_BLOCKS } {
-                        found.insert(info.key.clone(), build(&callee, None, rustc_middle::ty::tls::with(|tcx| Some(Gen::of_session(tcx)))));
-                        if depth < 1 {
-                            todo.push((callee, depth + 1));
-                        }
+                    found.insert(info.key.clone(), form);
+                    if depth < 1 {
+                        todo.push((callee, depth + 1));
                     }
                 }
                 continue;
@@ -1159,11 +1175,15 @@ pub fn std_callees(ir: &Ir, body: &Body) -> BTreeMap<String, Ir> {
             if found.contains_key(&text) {
                 continue;
             }
-            let Some(callee) = crate::safe::instance_body(&instance) else { continue };
-            if callee.blocks.len() > if in_std { MAX_STD_BLOCKS } else { MAX_BLOCKS } {
+            let Some((callee, form)) = memo(FormKey::Instance(instance.clone()), &|| {
+                let callee = crate::safe::instance_body(&instance)?;
+                (callee.blocks.len() <= if in_std { MAX_STD_BLOCKS } else { MAX_BLOCKS }).then(|| {
+                    let form = build(&callee, None, Gen::of_instance(&instance));
+                    (callee, form)
+                })
+            }) else {
                 continue;
-            }
-            let form = build(&callee, None, Gen::of_instance(&instance));
+            };
             found.insert(text, form);
             if depth < 1 {
                 todo.push((callee, depth + 1));

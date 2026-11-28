@@ -227,7 +227,9 @@ fn a_warm_step_starts_no_check_of_the_templates_again() {
     let text = run(&repo, &["status", "--verbose"], 0);
     // The same step in a new session with the same cache: the stored verdicts, no compile.
     std::fs::remove_dir_all(repo.join(".semilla")).unwrap();
-    let second = command(&repo).args(["step", "the change"]).env("SEMILLA_TIMING", "1").output().unwrap();
+    // [R93.1-2] Another intent text: the result of the step is not in the store, so the check
+    // runs, with the stored verdicts of the gate.
+    let second = command(&repo).args(["step", "the change, again"]).env("SEMILLA_TIMING", "1").output().unwrap();
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(stderr.contains("[timing] the gate of the claim templates (from the cache)"), "{stderr}");
     assert_eq!(templates_of(&run(&repo, &["status", "--verbose"], 0)), templates_of(&text));

@@ -16,6 +16,7 @@ pub mod names;
 pub mod ops;
 pub mod report;
 pub mod run;
+pub mod stored;
 pub mod text;
 pub mod timing;
 pub mod view;

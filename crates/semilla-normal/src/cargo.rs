@@ -1342,7 +1342,7 @@ const ICE_TEXT: &str = "internal compiler error";
 /// driver, of the time of the driver, and of the time in rustc after the driver, the time of
 /// the compiles of the members (the union of their times, a parallel build counts one time),
 /// and the time of the cargo command.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DriverSplit {
     pub crates: u64,
     pub before: u64,
@@ -1350,6 +1350,9 @@ pub struct DriverSplit {
     pub after: u64,
     pub members: u64,
     pub total: u64,
+    /// [R93.5-1] The parts of the time of the driver: the name, the sum of the times
+    /// (nanoseconds), and the sum of the counts over the crates, in the order of the driver.
+    pub parts: Vec<(String, u64, u64)>,
 }
 
 impl DriverSplit {
@@ -1369,6 +1372,11 @@ impl DriverSplit {
             split.driver += numbers[3];
             split.after += numbers[4];
             spans.push((numbers[0], numbers[1].max(numbers[0])));
+            // [R93.5-1] The field `parts=NAME:NANOS:COUNT,…` (a line of the driver of 14h has
+            // none).
+            if let Some(field) = parts.iter().find_map(|part| part.strip_prefix("parts=")) {
+                split.add_parts(field);
+            }
         }
         spans.sort();
         let mut end = 0;
@@ -1380,6 +1388,57 @@ impl DriverSplit {
         }
         split
     }
+
+    /// [R93.5-1] Adds the parts of one timing line. A part of another form does not count.
+    fn add_parts(&mut self, field: &str) {
+        for part in field.split(',') {
+            let words: Vec<&str> = part.split(':').collect();
+            let [name, nanos, count] = words.as_slice() else { continue };
+            let (Ok(nanos), Ok(count)) = (nanos.parse::<u64>(), count.parse::<u64>()) else { continue };
+            match self.parts.iter_mut().find(|(known, _, _)| known == name) {
+                Some(found) => {
+                    found.1 += nanos;
+                    found.2 += count;
+                }
+                None => self.parts.push((name.to_string(), nanos, count)),
+            }
+        }
+    }
+
+    /// The sum of two splits.
+    fn join(&mut self, other: &DriverSplit) {
+        self.crates += other.crates;
+        self.before += other.before;
+        self.driver += other.driver;
+        self.after += other.after;
+        self.members += other.members;
+        self.total += other.total;
+        for (name, nanos, count) in &other.parts {
+            self.add_parts(&format!("{name}:{nanos}:{count}"));
+        }
+    }
+}
+
+/// [R93.3-1] The file of the known keys of the store of Semilla for the next build in a target
+/// folder (design 93.3): the driver writes a pointer line for a body with a known key.
+static KNOWN_FILES: std::sync::Mutex<Vec<(PathBuf, PathBuf)>> = std::sync::Mutex::new(Vec::new());
+
+/// [R93.3-1] The variable of the driver with the path of the file of the known keys.
+pub const KNOWN_ENV: &str = "SEMILLA_MIR_KNOWN";
+
+/// [R93.3-1] Gives the builds in a target folder the file of the known keys (`None`: no file).
+pub fn set_known_file(target_dir: &Path, file: Option<&Path>) {
+    let target = std::fs::canonicalize(target_dir).unwrap_or_else(|_| target_dir.to_path_buf());
+    let mut all = KNOWN_FILES.lock().unwrap_or_else(|error| error.into_inner());
+    all.retain(|(folder, _)| *folder != target);
+    if let Some(file) = file {
+        all.push((target, file.to_path_buf()));
+    }
+}
+
+fn known_keys_file(target_dir: &Path) -> Option<PathBuf> {
+    let all = KNOWN_FILES.lock().unwrap_or_else(|error| error.into_inner());
+    all.iter().find(|(folder, _)| folder == target_dir).map(|(_, file)| file.clone())
 }
 
 /// [R91.5-1] The split of each `cargo check` of this process, by target folder.
@@ -1395,8 +1454,7 @@ pub fn take_driver_split(target_dir: &Path) -> Option<DriverSplit> {
         if *folder != target {
             return true;
         }
-        let sum = found.get_or_insert_with(DriverSplit::default);
-        *sum = DriverSplit { crates: sum.crates + split.crates, before: sum.before + split.before, driver: sum.driver + split.driver, after: sum.after + split.after, members: sum.members + split.members, total: sum.total + split.total };
+        found.get_or_insert_with(DriverSplit::default).join(split);
         false
     });
     found
@@ -1475,6 +1533,11 @@ fn run_check_once(
     if trait_table {
         command.env("SEMILLA_TRAIT_TABLE", &out);
     }
+    // [R93.3-1] The known keys of the store, at N0 only. Cargo does not track the variable, so
+    // it changes no fingerprint of a unit.
+    if let Some(file) = known_keys_file(&target_dir).filter(|_| level == "n0") {
+        command.env(KNOWN_ENV, file);
+    }
     // [R91.5-1] With the timing lines on, the driver writes one timing line for each member
     // crate that it compiles, in the folder of the temporary files of the build (the sandbox
     // lets the build write there). The variable changes no record: cargo does not track it.
@@ -1543,7 +1606,7 @@ mod build_check_tests {
         let end = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(10_000);
         let lines = "semilla-driver-timing a.lib.1.jsonl 2000 5000 1000 1500 500 7\nsemilla-driver-timing b.lib.2.jsonl 4000 6000 800 1000 200 8\n";
         let split = DriverSplit::of(lines, start, end);
-        assert_eq!(split, DriverSplit { crates: 2, before: 1800, driver: 2500, after: 700, members: 4000, total: 9000 });
+        assert_eq!(split, DriverSplit { crates: 2, before: 1800, driver: 2500, after: 700, members: 4000, total: 9000, parts: Vec::new() });
     }
 
     /// [R91.5-1] The negative case: a line of another form (an error text, a cut line) does not
@@ -1555,6 +1618,29 @@ mod build_check_tests {
         let end = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(500);
         let lines = "error: something\nsemilla-driver-timing a.lib.1.jsonl 10 20 x 1 1 2\nsemilla-driver-timing cut 10\n";
         assert_eq!(DriverSplit::of(lines, start, end), DriverSplit { total: 500, ..DriverSplit::default() });
+    }
+
+    /// [R93.5-1] The parts of the driver of each timing line are sums over the crates, in the
+    /// order of the first line.
+    // rule+ R93.5-1
+    #[test]
+    fn the_parts_of_the_driver_are_sums_over_the_crates() {
+        let start = std::time::UNIX_EPOCH;
+        let end = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(100);
+        let lines = "semilla-driver-timing a.lib.1.jsonl 10 20 1 2 3 7 parts=mir:5:2,text:7:1\nsemilla-driver-timing b.lib.2.jsonl 10 20 1 2 3 8 parts=text:3:4,mir:1:1\n";
+        let split = DriverSplit::of(lines, start, end);
+        assert_eq!(split.parts, vec![("mir".to_string(), 6, 3), ("text".to_string(), 10, 5)]);
+    }
+
+    /// [R93.5-1] The negative case: a part of another form does not count, and a line of 14h
+    /// (no parts) has no parts.
+    // rule- R93.5-1
+    #[test]
+    fn a_part_of_another_form_does_not_count() {
+        let start = std::time::UNIX_EPOCH;
+        let end = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(100);
+        let lines = "semilla-driver-timing a.lib.1.jsonl 10 20 1 2 3 7 parts=mir:x:2,text,key:1:1\nsemilla-driver-timing b.lib.2.jsonl 10 20 1 2 3 8\n";
+        assert_eq!(DriverSplit::of(lines, start, end).parts, vec![("key".to_string(), 1, 1)]);
     }
 
     fn words(list: &[&str]) -> Vec<String> {

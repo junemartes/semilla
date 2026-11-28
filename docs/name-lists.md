@@ -30,6 +30,7 @@ The decisions of batch 10n for each list of the audit are in design 65.3 and 65.
 | `crates/semilla-mir/src/ir.rs` | `fn modeled "core::option::Option"` | tool | the types of the standard library that the model of the check has (`Option`, `Result`, `Ordering`, `ControlFlow`, `Range`); each other type of the standard library is opaque |
 | `crates/semilla-mir/src/main.rs` | `const TRACKED_ENV` | tool | the environment variables of the driver itself |
 | `crates/semilla-mir/src/main.rs` | `fn inherited_checks ""` | tool | the texts of a true value of an environment variable of Semilla |
+| `crates/semilla-mir/src/parts.rs` | `const NAMES` | tool | the words of the parts of the time of the driver in its timing line (R93.5-1; the own data of Semilla: the driver and its reader in Semilla read the words, and a word changes no record) |
 | `crates/semilla-mir/src/rival.rs` | `const KEEP` | tool | the names of the fields of a record of the driver that the rival check keeps (its own data) |
 | `crates/semilla-mir/src/term.rs` | `fn rvalue "eq"` | language | the comparison operators of the MIR (`eq`, `le`, `ge`) with a symmetric form |
 | `crates/semilla-normal/src/cargo.rs` | `fn run_check_once "n0"` | tool | the levels of the compiled check of Semilla (its own data) |

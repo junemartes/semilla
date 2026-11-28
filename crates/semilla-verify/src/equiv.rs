@@ -30,7 +30,7 @@ pub struct Query {
 }
 
 /// The result of one check.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Verdict {
     /// A proof: the method (`equal MIR`, `SMT`, `SMT after inlining …`).
     Equivalent(String),

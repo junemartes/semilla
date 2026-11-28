@@ -29,7 +29,7 @@ pub fn is_doc_line(line: &str) -> bool {
 }
 
 /// The kind of an edit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EditKind {
     ItemAdded,
@@ -96,14 +96,68 @@ pub struct Edit {
     pub refactor: Option<Refactor>,
 }
 
+/// [R93.1-1] The read form of an [`Edit`] (the stored form of a step result, design 93.1): the
+/// node kinds are texts, and the read keeps each text one time.
+#[derive(serde::Deserialize)]
+struct EditRead {
+    kind: EditKind,
+    view: View,
+    before: Option<Anchor>,
+    after: Option<Anchor>,
+    node_before: Option<String>,
+    node_after: Option<String>,
+    text_before: Option<String>,
+    text_after: Option<String>,
+    attr_before: Option<String>,
+    attr_after: Option<String>,
+    source_before: Option<String>,
+    source_after: Option<String>,
+    block_like: bool,
+    file: Option<String>,
+    line: usize,
+    note: Option<String>,
+    refactor: Option<Refactor>,
+}
+
+impl<'de> serde::Deserialize<'de> for Edit {
+    fn deserialize<D: serde::Deserializer<'de>>(reader: D) -> Result<Edit, D::Error> {
+        <EditRead as serde::Deserialize>::deserialize(reader).map(Edit::from)
+    }
+}
+
+impl From<EditRead> for Edit {
+    fn from(read: EditRead) -> Edit {
+        let kind = |text: Option<String>| text.map(|text| semilla_core::stored::static_text(&text));
+        Edit {
+            kind: read.kind,
+            view: read.view,
+            before: read.before,
+            after: read.after,
+            node_before: kind(read.node_before),
+            node_after: kind(read.node_after),
+            text_before: read.text_before,
+            text_after: read.text_after,
+            attr_before: read.attr_before,
+            attr_after: read.attr_after,
+            source_before: read.source_before,
+            source_after: read.source_after,
+            block_like: read.block_like,
+            file: read.file,
+            line: read.line,
+            note: read.note,
+            refactor: read.refactor,
+        }
+    }
+}
+
 /// The refactoring of an edit (design 41).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Refactor {
     /// A moved statement. `jumped`: the places of the statements that the move passes over, on
     /// the old side and on the new side (design 41.7).
     Moved {
-        #[serde(skip)]
+        #[serde(default, skip_serializing_if = "semilla_core::stored::output_only")]
         jumped: [Vec<(Pos, Pos)>; 2],
     },
     /// A part of an extracted variable: its new `let`, or a use. `expr` is the display text of
@@ -112,14 +166,14 @@ pub enum Refactor {
     Extract {
         var: String,
         expr: String,
-        #[serde(skip)]
+        #[serde(default, skip_serializing_if = "semilla_core::stored::output_only")]
         region: [Vec<(Pos, Pos)>; 2],
     },
     /// A part of an inlined variable: its removed `let`, or a use.
     Inline {
         var: String,
         expr: String,
-        #[serde(skip)]
+        #[serde(default, skip_serializing_if = "semilla_core::stored::output_only")]
         region: [Vec<(Pos, Pos)>; 2],
     },
     /// A match arm that the step adds, removes, moves, or changes in its parts (R72.1-1, part
@@ -127,9 +181,9 @@ pub enum Refactor {
     /// point where the arm comes in or goes out (a place of no length). `passed`: the arms that
     /// a move passes over.
     Arm {
-        #[serde(skip)]
+        #[serde(default, skip_serializing_if = "semilla_core::stored::output_only")]
         region: [Vec<(Pos, Pos)>; 2],
-        #[serde(skip)]
+        #[serde(default, skip_serializing_if = "semilla_core::stored::output_only")]
         passed: [Vec<(Pos, Pos)>; 2],
     },
 }
@@ -161,11 +215,12 @@ pub struct BodyMaps {
 
 /// One node pair of the tree compare (design 59, B-d): the places of the two nodes, and the
 /// state of their tokens.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NodePair {
     /// The first place and the place after the end, on the old side and on the new side.
     pub ranges: [(Pos, Pos); 2],
     /// The kinds of the two nodes.
+    #[serde(deserialize_with = "semilla_core::stored::read_static_pair")]
     pub kinds: [&'static str; 2],
     /// True if the two nodes have equal tokens.
     pub equal: bool,
@@ -213,7 +268,7 @@ impl Edit {
 }
 
 /// The renames that the claims declare. They are applied to the "before" side.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Renames {
     /// Item paths: before to after (from `rename` and `move-item`).
     pub items: BTreeMap<String, String>,
@@ -238,7 +293,7 @@ pub struct Renames {
 }
 
 /// The count of the places of one renamed item, by class (design 51.2).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SiteCount {
     /// The places that the syntax tree resolves to the item.
     pub sure: usize,

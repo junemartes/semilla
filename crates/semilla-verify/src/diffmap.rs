@@ -33,7 +33,7 @@ pub const RULE_NO_PARTNER: &str = "R92.3-1";
 pub const RULE_NO_EDIT: &str = "R92.4-1";
 
 /// The kind of one changed node, with the mark "syntax only" and the check.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct NodeKind {
     pub kind: EntryKind,
     pub syntax_only: bool,
@@ -43,6 +43,24 @@ pub struct NodeKind {
     pub check: String,
     /// [R94.3-2] [R94.4-3] The cause of the mark "the order can matter" (design 94).
     pub order: Option<String>,
+}
+
+/// [R93.1-1] The read form of a [`NodeKind`] (the stored form of a step result): the rule is
+/// a text, and the read keeps each text one time.
+#[derive(serde::Deserialize)]
+struct NodeKindRead {
+    kind: EntryKind,
+    syntax_only: bool,
+    rule: String,
+    check: String,
+    order: Option<String>,
+}
+
+impl<'de> serde::Deserialize<'de> for NodeKind {
+    fn deserialize<D: serde::Deserializer<'de>>(reader: D) -> Result<NodeKind, D::Error> {
+        let read = <NodeKindRead as serde::Deserialize>::deserialize(reader)?;
+        Ok(NodeKind { kind: read.kind, syntax_only: read.syntax_only, rule: semilla_core::stored::static_text(&read.rule), check: read.check, order: read.order })
+    }
 }
 
 impl NodeKind {

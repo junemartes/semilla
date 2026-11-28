@@ -247,7 +247,7 @@ fn hint_text(list: &[Features]) -> String {
 }
 
 /// The configurations of one compared step (batch 5s, B1): the data of the output.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct StepConfigs {
     /// The names of the checked configurations.
     pub checked: Vec<String>,
@@ -271,6 +271,10 @@ pub struct StepConfigs {
 /// The configurations of each compared step, by the two trees of the step.
 pub type ConfigLog = std::sync::Arc<std::sync::Mutex<BTreeMap<(String, String), StepConfigs>>>;
 
+
+/// [R93.3-1] A variable for the tests only: with it, the driver runs in full (no keys of the
+/// store), as the driver of batch 14h.
+pub(crate) const FULL_DRIVER: &str = "SEMILLA_TEST_FULL_DRIVER";
 
 /// The file of the records cache that holds the error of a build with a compile error. The
 /// same tree, configuration, and settings give the same error.
@@ -398,8 +402,42 @@ pub fn build_warnings() -> Vec<String> {
     no_sandbox_warning().into_iter().chain(other_files_warning()).collect()
 }
 
+/// [R93.1-2] The records folders that the process read, in order: a stored step result has
+/// the folders that its check read, and a later command reads their state again
+/// ([`note_folders`]).
+static NOTED: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// [R93.1-2] The count of the folders that the process read: the start of the list of one
+/// step check.
+pub(crate) fn noted_count() -> usize {
+    NOTED.lock().map(|noted| noted.len()).unwrap_or(0)
+}
+
+/// [R93.1-2] The folders that the process read since `start`, each one time.
+pub(crate) fn noted_since(start: usize) -> Vec<std::path::PathBuf> {
+    let noted = NOTED.lock().map(|noted| noted.clone()).unwrap_or_default();
+    let mut found: Vec<std::path::PathBuf> = Vec::new();
+    for folder in noted.into_iter().skip(start) {
+        if !found.contains(&folder) {
+            found.push(folder);
+        }
+    }
+    found
+}
+
+/// [R93.1-2] Reads the sandbox state and the other files of the folders of a stored step
+/// result: the warnings of the output are the warnings of a new check.
+pub(crate) fn note_folders(folders: &[std::path::PathBuf]) {
+    for folder in folders {
+        note_sandbox(folder);
+    }
+}
+
 /// Reads the sandbox state and the other files of a records folder.
 fn note_sandbox(cache: &std::path::Path) {
+    if let Ok(mut noted) = NOTED.lock() {
+        noted.push(cache.to_path_buf());
+    }
     if let Ok(line) = std::fs::read_to_string(cache.join(NO_SANDBOX_FILE))
         && let Ok(mut state) = NO_SANDBOX.lock()
     {
@@ -765,7 +803,8 @@ impl NormalOracle {
         std::fs::create_dir_all(root.join("target"))?;
         let started = std::time::Instant::now();
         self.repo.checkout_build(&build, tree)?;
-        let built = match semilla_normal::run_cargo_check_delta_config(&build, level, &records, &target, config) {
+        let keys = base.join(format!("{name}-records.bodies"));
+        let built = match self.build_with_bodies(&build, level, &records, &target, &keys, config) {
             Ok(built) => built,
             Err(error) => {
                 let text = format!("{error:#}");
@@ -790,6 +829,11 @@ impl NormalOracle {
         for file in &built.records {
             store.put_file(&cache, file, &records.join(file))?;
         }
+        // [R93.4-1] The pointer list of the folder: the key of each body record of its files.
+        if level == "n0" {
+            let list: String = built.records.iter().map(|file| std::fs::read_to_string(keys.join(file)).unwrap_or_default()).collect();
+            store.set_mark(&cache, crate::recstore::BODIES_FILE, &list)?;
+        }
         // [R78.1-2] The intent crate (design 78) compiles against the metadata of the N0 build.
         // The build of the other tree in the same folder writes a file with the same name, so
         // the metadata of each member goes into the cache.
@@ -811,6 +855,40 @@ impl NormalOracle {
         lock.unlock()?;
         note_sandbox(&cache);
         read_cached(&cache)
+    }
+
+    /// [R93.3-1] The delta build of a tree with the body records of the store (design 93.3): the
+    /// driver gets the keys of the stored records, writes a pointer line for a body with a
+    /// known key, and Semilla puts the stored record in its place. A pointer whose record the
+    /// store does not have (a clean of another process) gives a new build with no keys.
+    fn build_with_bodies(&self, build: &std::path::Path, level: &str, records: &std::path::Path, target: &std::path::Path, keys: &std::path::Path, config: &Configuration) -> Result<semilla_normal::Built> {
+        let db = crate::recstore::database_for(&self.repo.cache_dir()).filter(|_| level == "n0" && std::env::var_os(FULL_DRIVER).is_none());
+        let Some(db) = db else {
+            return semilla_normal::run_cargo_check_delta_config(build, level, records, target, config);
+        };
+        let file = target.join("tmp").join(format!("semilla-known-{}.txt", std::process::id()));
+        std::fs::create_dir_all(target.join("tmp"))?;
+        std::fs::write(&file, semilla_core::timing::phase(crate::recstore::BODY_STORE_PHASE, || crate::recstore::known_bodies(&db)))?;
+        semilla_normal::cargo::set_known_file(target, Some(&file));
+        let built = semilla_normal::run_cargo_check_delta_config(build, level, records, target, config);
+        semilla_normal::cargo::set_known_file(target, None);
+        let _ = std::fs::remove_file(&file);
+        let built = built?;
+        let resolved: Result<()> = semilla_core::timing::phase(crate::recstore::BODY_STORE_PHASE, || built.records.iter().try_for_each(|name| crate::recstore::resolve_bodies(&db, &records.join(name), &keys.join(name))));
+        match resolved {
+            Ok(()) => Ok(built),
+            Err(error) if error.downcast_ref::<crate::recstore::MissingBody>().is_some() => {
+                for folder in [target, records] {
+                    match std::fs::remove_dir_all(folder) {
+                        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+                        _ => {}
+                    }
+                }
+                let _ = std::fs::remove_dir_all(keys);
+                semilla_normal::run_cargo_check_delta_config(build, level, records, target, config)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// The records of both trees at some levels. Each level runs in its own thread.
@@ -1010,6 +1088,11 @@ pub(crate) fn split_line(build: &str, split: &semilla_normal::cargo::DriverSplit
         semilla_core::timing::add_nanos(phase, nanos);
     }
     semilla_core::timing::count(BUILD_MEMBERS, "member crates", split.crates);
+    if semilla_core::timing::enabled() && !split.parts.is_empty() {
+        // [R93.5-1] The parts of the time of the driver, sums over the member crates.
+        let parts: Vec<String> = split.parts.iter().map(|(name, nanos, count)| format!("{name} {:.2} s ({count} times)", seconds(*nanos))).collect();
+        eprintln!("[timing] the parts of the driver of {build}: {}", parts.join(", "));
+    }
     if semilla_core::timing::enabled() {
         eprintln!(
             "[timing] the split of {build}: the compiles of {} member crates {:.2} s (rustc before the driver {:.2} s, the driver {:.2} s, rustc after the driver {:.2} s), the dependencies and cargo {:.2} s",
