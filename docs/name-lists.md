@@ -121,3 +121,4 @@ The decisions of batch 10n for each list of the audit are in design 65.3 and 65.
 | `crates/semilla/src/onestep.rs` | `const CLAIMS` | tool | the names of the claims of the one-step command (its own options) |
 | `crates/semilla/src/onestep.rs` | `const STORED_CLAIMS` | tool | the names of the stored claims of the one-step command (its own options) |
 | `crates/semilla/src/plan.rs` | `fn collapse_expression_claims "replace-expression"` | tool | the names of the claim operations of Semilla (its own options) |
+| `crates/semilla/src/relocate.rs` | `const NO_PLACE` | tool | the members of the body record of the Semilla driver with no place (its own record format, design 99.8) |

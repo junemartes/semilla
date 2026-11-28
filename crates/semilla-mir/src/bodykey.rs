@@ -21,7 +21,10 @@
 //! - the places: the source ranges of its elements and of the symbols that they name (`el`),
 //!   its span, its macro call, the lines of its names, and the place (the span of the
 //!   definition) of each local item that it can reach. The stable hash of a span is relative
-//!   to its item, so a line above the item does not change the MIR hash.
+//!   to its item, so a line above the item does not change the MIR hash. [R99.8-1] Each place
+//!   is relative to the innermost item of the unit that holds it (`anchors.rs`, design 99.8):
+//!   a line above an item does not change the key, and Semilla moves the places of a stored
+//!   record by the start of each item in the new tree.
 //!
 //! A body whose work calls `print::unique` gets no key: its text is never equal to another.
 
@@ -36,6 +39,17 @@ use sha2::{Digest as _, Sha256};
 
 /// The variable with the path of the file of the known keys.
 pub(crate) const KNOWN_ENV: &str = "SEMILLA_MIR_KNOWN";
+
+thread_local! {
+    /// [R99.8-1] The table of the items of the unit of this compile, for the last line of the
+    /// record file.
+    static ANCHOR_TEXT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// [R99.8-1] The JSON text of the table of the items of the unit (one time).
+pub(crate) fn take_anchor_text() -> Option<String> {
+    ANCHOR_TEXT.with(|text| text.borrow_mut().take())
+}
 
 /// The keys of one compile.
 pub(crate) struct Keys {
@@ -53,6 +67,10 @@ pub(crate) struct Keys {
     /// The crates of the workspace that this crate uses (each one has an interface file): the
     /// walk of a key goes into their MIR.
     workspace: HashSet<rustc_span::def_id::CrateNum>,
+    /// [R99.8-1] The items of the unit: a place of a key is relative to its item (design 99.8).
+    anchors: crate::anchors::Table,
+    /// [R99.8-1] The columns of the start and of the end of each item of `anchors`.
+    columns: Vec<Vec<(usize, usize)>>,
 }
 
 /// The stable hash of a value.
@@ -81,7 +99,77 @@ impl Keys {
         let text = std::fs::read_to_string(path).ok()?;
         let known: HashSet<String> = text.lines().filter(|line| !line.is_empty()).map(str::to_string).collect();
         let (unit, implementors, workspace) = crate::guarded(|| unit_hash(tcx, level))?;
-        Some(Keys { known, unit, mir: Default::default(), mentions: Default::default(), items: Default::default(), reach: Default::default(), implementors, workspace })
+        let (anchors, columns) = crate::guarded(|| anchor_table(tcx)).unwrap_or_default();
+        ANCHOR_TEXT.with(|text| *text.borrow_mut() = serde_json::to_string(&anchors).ok());
+        Some(Keys { known, unit, mir: Default::default(), mentions: Default::default(), items: Default::default(), reach: Default::default(), implementors, workspace, anchors: crate::anchors::Table::new(anchors), columns })
+    }
+
+    /// [R99.8-1] A place of a key: the item that holds it (its identity and the columns of its
+    /// start and end) and the offset in the item, or the place itself if no item holds it.
+    fn relative(&self, kind: crate::anchors::Kind, file: &str, at: i64) -> String {
+        match self.anchors.find(kind, file, at) {
+            Some(found) => {
+                let anchor = self.anchors.anchor(found);
+                let (start, end) = self.columns[found.0][found.1];
+                format!("{}:{start}:{end}+{}", anchor.id, at - crate::anchors::Table::start(anchor, kind))
+            }
+            None => at.to_string(),
+        }
+    }
+
+    /// [R99.8-1] A line of a key in the file `file` (see [`Keys::relative`]).
+    pub(crate) fn relative_line(&self, file: &str, line: i64) -> String {
+        self.relative(crate::anchors::Kind::Line, file, line)
+    }
+
+    /// [R93.3-1, R99.8-1] The place of a span in a key: for each span of its chain of macro
+    /// calls, the file, the start and the end (as written), the line and the column of each, and
+    /// the definition of the macro; each offset and line relative to its item (design 99.8).
+    fn place(&self, tcx: TyCtxt<'_>, span: rustc_span::Span) -> String {
+        use crate::anchors::Kind;
+        let map = tcx.sess.source_map();
+        let mut out = String::new();
+        let mut current = span;
+        for _ in 0..16 {
+            if current.is_dummy() {
+                out.push_str("- ");
+                break;
+            }
+            let lo = map.lookup_byte_offset(current.lo());
+            let hi = map.lookup_byte_offset(current.hi());
+            let (lo_file, hi_file) = (table_name(&lo.sf), table_name(&hi.sf));
+            let (start, end) = (lo.sf.original_relative_byte_pos(current.lo()).0 as i64, hi.sf.original_relative_byte_pos(current.hi()).0 as i64);
+            let (first, last) = (line_column(&lo.sf, current.lo()), line_column(&hi.sf, current.hi()));
+            out.push_str(&format!(
+                "{} {} {} {} {} {} {} {}; ",
+                file_name(&lo.sf),
+                self.relative(Kind::Byte, &lo_file, start),
+                hi.sf.start_pos == lo.sf.start_pos,
+                self.relative(Kind::Byte, &hi_file, end),
+                self.relative(Kind::Line, &lo_file, first.0),
+                first.1,
+                self.relative(Kind::Line, &hi_file, last.0),
+                last.1
+            ));
+            if !current.from_expansion() {
+                break;
+            }
+            let data = current.ctxt().outer_expn_data();
+            out.push_str(&format!("from {} ", self.place_short(tcx, data.def_site)));
+            current = data.call_site;
+        }
+        out
+    }
+
+    /// [R99.8-1] The place of the definition of a macro in a key.
+    fn place_short(&self, tcx: TyCtxt<'_>, span: rustc_span::Span) -> String {
+        if span.is_dummy() {
+            return "-".into();
+        }
+        let lo = tcx.sess.source_map().lookup_byte_offset(span.lo());
+        let name = table_name(&lo.sf);
+        let (start, end) = (lo.sf.original_relative_byte_pos(span.lo()).0 as i64, lo.sf.original_relative_byte_pos(span.hi()).0 as i64);
+        format!("{} {} {}", file_name(&lo.sf), self.relative(crate::anchors::Kind::Byte, &name, start), self.relative(crate::anchors::Kind::Byte, &name, end))
     }
 
     /// True if the store has a record with this key.
@@ -114,7 +202,7 @@ impl Keys {
     /// callee that the compiler resolves (from the mentions).
     pub(crate) fn places(&self, tcx: TyCtxt<'_>, def: DefId) -> Option<String> {
         let mentions = self.mentions(tcx, def);
-        places_key(tcx, def, &mentions, &|item| self.item(tcx, item).3)
+        places_key(self, tcx, def, &mentions, &|item| self.item(tcx, item).3)
     }
 
     /// [R93.3-1] The hash of the items that `def` reaches (itself too), to any depth: for each
@@ -220,7 +308,14 @@ impl Keys {
         if let Some(found) = self.items.borrow().get(&def) {
             return found.clone();
         }
-        let found = (tcx.def_path_hash(def).0, tcx.is_closure_like(def), tcx.generics_of(def).requires_monomorphization(tcx), std::rc::Rc::from(place_of(tcx, tcx.def_span(def))));
+        // [R99.8-1] The head of the definition (the place of a closure name), and for a local
+        // definition its full range (the symbol table of a record, `symbols.rs`).
+        let mut place = self.place(tcx, tcx.def_span(def));
+        if let Some(local) = def.as_local() {
+            place.push_str("full ");
+            place.push_str(&self.place(tcx, tcx.source_span(local).source_callsite()));
+        }
+        let found = (tcx.def_path_hash(def).0, tcx.is_closure_like(def), tcx.generics_of(def).requires_monomorphization(tcx), std::rc::Rc::from(place));
         self.items.borrow_mut().insert(def, found.clone());
         found
     }
@@ -305,8 +400,6 @@ fn extern_body<'tcx>(tcx: TyCtxt<'tcx>, def: DefId, workspace: &HashSet<rustc_sp
     Some(tcx.optimized_mir(def))
 }
 
-/// [R93.3-1] The place of a span as the record writes it: the file, the offsets in the file as
-/// written, and the line; with the place of each macro call that it comes from.
 /// The name of a source file, one text for each file in a compile.
 fn file_name(file: &rustc_span::SourceFile) -> std::rc::Rc<str> {
     thread_local! {
@@ -315,36 +408,71 @@ fn file_name(file: &rustc_span::SourceFile) -> std::rc::Rc<str> {
     NAMES.with(|names| names.borrow_mut().entry(file.start_pos.0).or_insert_with(|| std::rc::Rc::from(format!("{:?}", file.name))).clone())
 }
 
-pub(crate) fn place_of(tcx: TyCtxt<'_>, span: rustc_span::Span) -> String {
-    let map = tcx.sess.source_map();
-    let mut out = String::new();
-    let mut current = span;
-    for _ in 0..16 {
-        if current.is_dummy() {
-            out.push_str("- ");
-            break;
-        }
-        let lo = map.lookup_byte_offset(current.lo());
-        let hi = map.lookup_byte_offset(current.hi());
-        let line = map.lookup_line(current.lo()).map(|found| found.line).unwrap_or(0);
-        out.push_str(&format!("{} {} {} {} {line}; ", file_name(&lo.sf), lo.sf.original_relative_byte_pos(current.lo()).0, hi.sf.start_pos == lo.sf.start_pos, hi.sf.original_relative_byte_pos(current.hi()).0));
-        if !current.from_expansion() {
-            break;
-        }
-        let data = current.ctxt().outer_expn_data();
-        out.push_str(&format!("from {:?} ", place_short(tcx, data.def_site)));
-        current = data.call_site;
-    }
-    out
+/// [R99.8-1] The line (from 1) of a position, and its column in bytes from the start of the
+/// line: a cheaper search than the column in characters.
+fn line_column(file: &rustc_span::SourceFile, pos: rustc_span::BytePos) -> (i64, u32) {
+    let line = file.lookup_line(file.relative_position(pos)).map_or(0, |line| line as i64 + 1);
+    (line, (pos - file.line_begin_pos(pos)).0)
 }
 
-fn place_short(tcx: TyCtxt<'_>, span: rustc_span::Span) -> String {
-    if span.is_dummy() {
-        return "-".into();
+/// [R99.8-1] The name of a source file in the table of the items: the path from the root of
+/// the workspace (as in the places of a record), or empty for a file that is not real.
+fn table_name(file: &rustc_span::SourceFile) -> String {
+    match &file.name {
+        rustc_span::FileName::Real(name) => name.local_path().map(crate::workspace_path).unwrap_or_default(),
+        _ => String::new(),
     }
+}
+
+/// [R99.8-1] The table of the items of the unit (design 99.8): each local definition with a
+/// place in a file of the workspace (not a generic parameter or a `use`), with its full range
+/// (at the macro call for a definition from an expansion), and the columns of its start and end.
+fn anchor_table(tcx: TyCtxt<'_>) -> (Vec<crate::anchors::FileAnchors>, Vec<Vec<(usize, usize)>>) {
+    use rustc_hir::def::DefKind;
     let map = tcx.sess.source_map();
-    let lo = map.lookup_byte_offset(span.lo());
-    format!("{} {} {}", file_name(&lo.sf), lo.sf.original_relative_byte_pos(span.lo()).0, lo.sf.original_relative_byte_pos(span.hi()).0)
+    let mut files: Vec<crate::anchors::FileAnchors> = Vec::new();
+    let mut columns: Vec<Vec<(usize, usize)>> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for local in tcx.hir_crate_items(()).definitions() {
+        if matches!(tcx.def_kind(local), DefKind::TyParam | DefKind::LifetimeParam | DefKind::ConstParam | DefKind::Use | DefKind::ExternCrate | DefKind::ForeignMod | DefKind::GlobalAsm) {
+            continue;
+        }
+        let span = tcx.source_span(local).source_callsite();
+        if span.is_dummy() || span.hi() < span.lo() {
+            continue;
+        }
+        let lo = map.lookup_byte_offset(span.lo());
+        if !lo.sf.contains(span.hi()) {
+            continue;
+        }
+        let rustc_span::FileName::Real(name) = &lo.sf.name else { continue };
+        let Some(local_path) = name.local_path() else { continue };
+        let path = crate::workspace_path(local_path);
+        if path.is_empty() || std::path::Path::new(&path).is_absolute() {
+            continue;
+        }
+        let at = *index.entry(path.clone()).or_insert_with(|| {
+            let mut names = vec![path.clone()];
+            let given = local_path.display().to_string();
+            if given != path {
+                names.push(given);
+            }
+            files.push(crate::anchors::FileAnchors { names, anchors: Vec::new() });
+            columns.push(Vec::new());
+            files.len() - 1
+        });
+        let (first, last) = (map.lookup_char_pos(span.lo()), map.lookup_char_pos(span.hi()));
+        let hash = bytes(tcx.def_path_hash(local.to_def_id()).0);
+        files[at].anchors.push(crate::anchors::Anchor {
+            id: hash.iter().map(|byte| format!("{byte:02x}")).collect(),
+            lo: lo.sf.original_relative_byte_pos(span.lo()).0 as i64,
+            hi: lo.sf.original_relative_byte_pos(span.hi()).0 as i64,
+            line_lo: first.line as i64,
+            line_hi: last.line as i64,
+        });
+        columns[at].push((first.col.0, last.col.0));
+    }
+    (files, columns)
 }
 
 /// [R93.3-1] The places that the record of a body reads, with no print (the part of the key in
@@ -352,7 +480,7 @@ fn place_short(tcx: TyCtxt<'_>, span: rustc_span::Span) -> String {
 /// MIR (with its macro calls and definitions), the line of its span, and the place of each
 /// definition that its MIR names (with the variants and the fields of a type, and the callee of
 /// a resolved call).
-fn places_key<'tcx>(tcx: TyCtxt<'tcx>, def: DefId, extra: &[DefId], place: &dyn Fn(DefId) -> std::rc::Rc<str>) -> Option<String> {
+fn places_key<'tcx>(keys: &Keys, tcx: TyCtxt<'tcx>, def: DefId, extra: &[DefId], place: &dyn Fn(DefId) -> std::rc::Rc<str>) -> Option<String> {
     let body = body_of(tcx, def)?;
     let map = tcx.sess.source_map();
     let mut spans: Vec<rustc_span::Span> = vec![body.span];
@@ -365,10 +493,13 @@ fn places_key<'tcx>(tcx: TyCtxt<'tcx>, def: DefId, extra: &[DefId], place: &dyn 
     spans.extend(body.local_decls.iter().map(|decl| decl.source_info.span));
     spans.extend(body.var_debug_info.iter().map(|info| info.source_info.span));
     spans.extend(body.user_type_annotations.iter().map(|annotation| annotation.span));
-    let mut places: BTreeSet<String> = spans.into_iter().map(|span| place_of(tcx, span)).collect();
+    let mut places: BTreeSet<String> = spans.into_iter().map(|span| keys.place(tcx, span)).collect();
+    // [R99.8-1] The lines of the span of the record, in the file of the span as the record
+    // names it.
     let lo = map.lookup_char_pos(body.span.lo());
     let hi = map.lookup_char_pos(body.span.hi());
-    places.insert(format!("lines {} {} {}", lo.line, lo.col.0, hi.line));
+    let file = table_name(&lo.file);
+    places.insert(format!("lines {} {} {}", keys.relative_line(&file, lo.line as i64), lo.col.0, keys.relative_line(&file, hi.line as i64)));
     // The definitions that the MIR names (the resolved callees come from the mentions of the
     // key, [`Keys::places`]).
     let mut named: HashSet<DefId> = HashSet::new();

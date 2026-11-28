@@ -343,13 +343,27 @@ fn a_step_after_a_step_writes_only_the_new_body_records() {
 
 // rule- R93.3-1
 #[test]
-fn a_line_above_each_body_gives_each_body_a_new_record() {
+fn a_changed_body_gives_a_new_record() {
     let dir = common::TestDir::new();
-    // The new tree has a line above each body: each place changes, so no key is known.
+    // The new tree changes one body: its key is new, so its record is written.
+    let repo = repository(dir.path(), OLD, ONE);
+    let (code, first) = step(&repo, "one");
+    assert_eq!(code, Some(0), "{first}");
+    let counts = phase_counts(&first, "the body records of the store (design 93)");
+    assert!(counts.get("records written").is_some_and(|count| *count >= 1), "{first}");
+}
+
+// [R99.8-1] A line above each body keeps each key (each place is relative to its item, design
+// 99.8): each record of the new tree comes from the store, at the places of the new tree, and
+// no record is written.
+// rule+ R99.8-1
+#[test]
+fn a_line_above_each_body_moves_the_stored_records() {
+    let dir = common::TestDir::new();
     let repo = repository(dir.path(), OLD, &format!("// a new first line\n{OLD}"));
     let (code, first) = step(&repo, "one");
     assert_eq!(code, Some(0), "{first}");
     let counts = phase_counts(&first, "the body records of the store (design 93)");
-    assert_eq!(counts.get("records from the store").copied().unwrap_or(0), 0, "{first}");
-    assert!(counts.get("records written").is_some_and(|count| *count >= 2), "{first}");
+    assert!(counts.get("records from the store").is_some_and(|count| *count >= 2), "{first}");
+    assert!(counts.get("stored records moved to new places").is_some_and(|count| *count >= 2), "{first}");
 }

@@ -29,6 +29,7 @@ mod oracle;
 mod plan;
 mod replay;
 mod recstore;
+mod relocate;
 mod store;
 
 use std::path::PathBuf;
@@ -586,8 +587,11 @@ fn main() -> ExitCode {
     recstore::async_writes();
     let cli = Cli::parse();
     let result = run(cli);
+    // [R99.7-1] The end of a command is on the time line (design 99).
+    let end_span = semilla_core::tasks::span("the end of the command");
     // [R96.9-2] The end of a command waits for the writes of the store in their own threads.
     recstore::join_writes();
+    drop(end_span);
     semilla_core::tasks::print_line();
     match result {
         Ok(code) => code,
@@ -765,7 +769,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             // newest other entries. A failure of the clean is not a failure of the step.
             // The build check has its own folder (design 53).
             let started = std::time::Instant::now();
+            let clean_span = semilla_core::tasks::span("the clean of the build code cache");
             let _ = app.clean_build_code(app::BUILD_CODE_KEEP);
+            drop(clean_span);
             timing("clean the build code cache", started);
             if !stored {
                 // A return runs `Drop`: it removes the temporary cache folder of `--fresh`.

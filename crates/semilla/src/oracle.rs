@@ -826,6 +826,8 @@ impl NormalOracle {
             }
         };
         crate::timing(&format!("cargo check {name} of tree {}", &tree[..8.min(tree.len())]), started);
+        // [R99.7-1] The end of the build (the copy to the cache, the marks) is on the time line.
+        let _end_span = semilla_core::tasks::span("the end of a build");
         // [R91.5-1] The split of the build from the timing lines of the driver.
         if let Some(split) = semilla_normal::cargo::take_driver_split(&target) {
             split_line(&format!("cargo check {name} of tree {}", &tree[..8.min(tree.len())]), &split);
@@ -1051,25 +1053,80 @@ impl NormalOracle {
     /// asks again and gets the error.
     pub(crate) fn start_step(&self, step: &Step) {
         semilla_core::tasks::delay("the builds of a step");
-        let checked = {
-            let _span = semilla_core::tasks::span("the builds of a step");
-            match self.checked(step) {
-                Ok(checked) => checked,
-                Err(_) => return,
-            }
-        };
-        let missing: Vec<Configuration> = checked.iter().filter(|config| !self.has_sides(step, config)).cloned().collect();
-        if !missing.is_empty() && missing.len() <= MOST_SIDES {
-            semilla_core::tasks::delay("read the records of a step");
-            let _span = semilla_core::tasks::span("read the records of a step");
-            self.read_each_side(step, &missing);
-        }
+        let checked = std::thread::scope(|scope| {
+            // [R99.1-1] The records of the tree before the step exist before its builds: their
+            // read is a task that runs while the tree after the step builds (design 99). The
+            // read is the read of the check (the same function and the same memory of the
+            // store), and the task ends before each other read of the records of the step.
+            let early = scope.spawn(|| self.read_old_side(step));
+            let checked = {
+                let _span = semilla_core::tasks::span("the builds of a step");
+                self.checked(step)
+            };
+            let _ = early.join();
+            checked
+        });
+        let Ok(checked) = checked else { return };
         let dev = Configuration::DEV;
         let built = |tree: &str| crate::git::is_empty_tree(tree) || self.cache_folder(tree, "n0", &dev).is_ok_and(|(_, cache, _, _)| crate::recstore::store().is_complete(&cache));
-        if !step.agent.intent.is_empty() && built(&step.tree_before) && built(&step.tree_after) {
-            semilla_core::tasks::delay("the pair of the intent check");
-            let _span = semilla_core::tasks::span("the pair of the intent check");
-            let _ = crate::intentcrate::shared_pair(self, &step.tree_before, &step.tree_after);
+        let intent = !step.agent.intent.is_empty() && built(&step.tree_before) && built(&step.tree_after);
+        std::thread::scope(|scope| {
+            // [R99.4-2] The pair of the intent check reads the builds, not the records: it starts
+            // when the builds end, while the records of the step are read (design 99). The
+            // compile of the intent files reads the pair and the intent files only: it starts
+            // when the pair ends, and the AST pass and the check of the claims read its memo
+            // (R79.2-1).
+            if intent {
+                scope.spawn(|| {
+                    semilla_core::tasks::delay("the pair of the intent check");
+                    let pair = {
+                        let _span = semilla_core::tasks::span("the pair of the intent check");
+                        crate::intentcrate::shared_pair(self, &step.tree_before, &step.tree_after)
+                    };
+                    if pair.is_ok() {
+                        semilla_core::tasks::delay("the early compile of the intent files");
+                        let _span = semilla_core::tasks::span("the early compile of the intent files");
+                        let sources: Vec<semilla_normal::intent::Source> = step.agent.intent.iter().map(|file| semilla_normal::intent::Source { path: file.path.clone(), text: file.text.clone() }).collect();
+                        let _ = self.intent_compile(step, &sources);
+                    }
+                });
+            }
+            let missing: Vec<Configuration> = checked.iter().filter(|config| !self.has_sides(step, config)).cloned().collect();
+            if !missing.is_empty() && missing.len() <= MOST_SIDES {
+                semilla_core::tasks::delay("read the records of a step");
+                let _span = semilla_core::tasks::span("read the records of a step");
+                self.read_each_side(step, &missing);
+            }
+        });
+    }
+
+    /// [R99.1-1] Reads the records of the tree before the step in each configuration of the
+    /// list whose folder is complete (design 99): the read of the check finds them in the memory
+    /// of the store. A folder that is not complete, or an error, reads nothing: the check reads
+    /// the records after the builds, as before.
+    fn read_old_side(&self, step: &Step) {
+        let configs: Vec<Configuration> = match self.list_of(step) {
+            Ok(None) => self.configurations_with(&step.tree_before, &step.tree_after, &[]).map(|(found, _)| found).unwrap_or_default(),
+            Ok(Some(list)) => self.configurations_of(&step.tree_before, &step.tree_after, &list).0,
+            Err(_) => Vec::new(),
+        }
+        .into_iter()
+        .map(|(config, _)| config)
+        .collect();
+        let store = crate::recstore::store();
+        for config in configs {
+            // Only a complete folder that the read of the check reads as it is: no mark that
+            // makes the check remove the folder or give its error. So this task changes no
+            // folder while the builds run.
+            let ready = self.cache_folder(&step.tree_before, "n0", &config).is_ok_and(|(_, cache, marked, _)| {
+                store.is_complete(&cache) && (marked || store.mark(&cache, BUILD_CODE_FILE).is_none()) && store.mark(&cache, FAILED_FILE).is_none()
+            });
+            if !ready || crate::git::is_empty_tree(&step.tree_before) {
+                continue;
+            }
+            semilla_core::tasks::delay("the read of the records before the step");
+            let _span = semilla_core::tasks::span("the read of the records before the step");
+            let _ = self.records_with(&step.tree_before, "n0", &config);
         }
     }
 
@@ -1160,14 +1217,22 @@ impl NormalOracle {
 }
 
 /// [R96.2-1] The unit tasks of one build (design 96): the reader of the messages of cargo gives
-/// each record file of a finished unit to a pool of [`semilla_core::tasks::limit`] threads. A
-/// thread resolves the pointer lines of the file and makes its index. `finish` waits for each
-/// given file, so no task writes in the records folder when cargo ends.
-pub(crate) struct UnitWork<'a> {
-    db: &'a crate::recstore::Db,
-    records: &'a std::path::Path,
-    keys: &'a std::path::Path,
-    queue: std::sync::Mutex<Option<std::sync::mpsc::Sender<String>>>,
+/// each record file of a finished unit to the pool of the tasks (R99.5-1: long-lived threads, at
+/// most [`semilla_core::tasks::limit`]). A job resolves the pointer lines of the file and makes
+/// its index. `finish` waits for each given file, so no task writes in the records folder when
+/// cargo ends.
+pub(crate) struct UnitWork {
+    db: std::sync::Arc<crate::recstore::Db>,
+    records: std::path::PathBuf,
+    keys: std::path::PathBuf,
+    /// True while the build runs: a message after the end gives no job.
+    accepting: std::sync::Mutex<bool>,
+    jobs: std::sync::Arc<UnitJobs>,
+}
+
+/// [R99.5-1] The state that the jobs of the units of one build share.
+#[derive(Default)]
+struct UnitJobs {
     /// The count of the given files with no end yet.
     open: std::sync::Mutex<usize>,
     ended: std::sync::Condvar,
@@ -1175,73 +1240,77 @@ pub(crate) struct UnitWork<'a> {
     missing: std::sync::Mutex<Option<String>>,
 }
 
-impl UnitWork<'_> {
-    /// Runs `build` with the unit tasks. The result is the result of `build` and the first
-    /// missing pointer of a task.
-    pub(crate) fn run<T>(db: &crate::recstore::Db, records: &std::path::Path, keys: &std::path::Path, build: impl FnOnce(&UnitWork) -> T) -> (T, Option<String>) {
-        crate::recstore::forget_unit_tasks(records);
-        let (sender, receiver) = std::sync::mpsc::channel::<String>();
-        let receiver = std::sync::Mutex::new(receiver);
-        let work = UnitWork { db, records, keys, queue: std::sync::Mutex::new(Some(sender)), open: std::sync::Mutex::new(0), ended: std::sync::Condvar::new(), missing: std::sync::Mutex::new(None) };
-        let built = std::thread::scope(|scope| {
-            for _ in 0..semilla_core::tasks::limit() {
-                scope.spawn(|| {
-                    loop {
-                        let next = receiver.lock().unwrap_or_else(|error| error.into_inner()).recv();
-                        let Ok(name) = next else { break };
-                        work.one(&name);
-                    }
-                });
-            }
-            let built = build(&work);
-            // The end of the queue ends the threads.
-            *work.queue.lock().unwrap_or_else(|error| error.into_inner()) = None;
-            built
-        });
-        let missing = work.missing.into_inner().unwrap_or_else(|error| error.into_inner());
-        (built, missing)
+impl UnitJobs {
+    /// Waits for the end of each given file.
+    fn wait(&self) {
+        let mut open = self.open.lock().unwrap_or_else(|error| error.into_inner());
+        while *open > 0 {
+            open = self.ended.wait(open).unwrap_or_else(|error| error.into_inner());
+        }
     }
 
-    /// The task of one record file.
-    fn one(&self, name: &str) {
-        semilla_core::tasks::delay("a unit task");
-        let span = semilla_core::tasks::span("a unit task");
-        let done = crate::recstore::unit_task(self.db, &self.records.join(name), &self.keys.join(name));
-        drop(span);
-        if let Err(error) = done {
-            // Another error stays for the end of the build: the file is not resolved, so the
-            // end resolves it again and gives the error.
-            if let Some(missing) = error.downcast_ref::<crate::recstore::MissingBody>() {
-                self.missing.lock().unwrap_or_else(|error| error.into_inner()).get_or_insert_with(|| missing.0.clone());
-            }
-        }
+    /// The end of one given file.
+    fn end(&self) {
         let mut open = self.open.lock().unwrap_or_else(|error| error.into_inner());
         *open = open.saturating_sub(1);
         self.ended.notify_all();
     }
 }
 
-impl semilla_normal::cargo::UnitListener for UnitWork<'_> {
+impl UnitWork {
+    /// Runs `build` with the unit tasks. The result is the result of `build` and the first
+    /// missing pointer of a task. Each given file ends before the return.
+    pub(crate) fn run<T>(db: &std::sync::Arc<crate::recstore::Db>, records: &std::path::Path, keys: &std::path::Path, build: impl FnOnce(&UnitWork) -> T) -> (T, Option<String>) {
+        crate::recstore::forget_unit_tasks(records);
+        let work = UnitWork { db: db.clone(), records: records.to_path_buf(), keys: keys.to_path_buf(), accepting: std::sync::Mutex::new(true), jobs: Default::default() };
+        let built = build(&work);
+        *work.accepting.lock().unwrap_or_else(|error| error.into_inner()) = false;
+        work.jobs.wait();
+        let missing = work.jobs.missing.lock().unwrap_or_else(|error| error.into_inner()).take();
+        (built, missing)
+    }
+
+    /// The job of one record file, on the pool of the tasks.
+    fn one(db: &std::sync::Arc<crate::recstore::Db>, file: &std::path::Path, keys: &std::path::Path, jobs: &UnitJobs) {
+        semilla_core::tasks::delay("a unit task");
+        let span = semilla_core::tasks::span("a unit task");
+        let done = crate::recstore::unit_task(db, file, keys);
+        drop(span);
+        if let Err(error) = done {
+            // Another error stays for the end of the build: the file is not resolved, so the
+            // end resolves it again and gives the error.
+            if let Some(missing) = error.downcast_ref::<crate::recstore::MissingBody>() {
+                jobs.missing.lock().unwrap_or_else(|error| error.into_inner()).get_or_insert_with(|| missing.0.clone());
+            }
+        }
+    }
+}
+
+impl semilla_normal::cargo::UnitListener for UnitWork {
     fn line(&self, line: &str) {
         for name in semilla_normal::cargo::message_units(line) {
-            if !self.records.join(&name).is_file() {
+            let file = self.records.join(&name);
+            if !file.is_file() {
                 continue;
             }
-            let queue = self.queue.lock().unwrap_or_else(|error| error.into_inner());
-            let Some(queue) = queue.as_ref() else { return };
-            *self.open.lock().unwrap_or_else(|error| error.into_inner()) += 1;
-            if queue.send(name).is_err() {
-                let mut open = self.open.lock().unwrap_or_else(|error| error.into_inner());
-                *open = open.saturating_sub(1);
+            let accepting = self.accepting.lock().unwrap_or_else(|error| error.into_inner());
+            if !*accepting {
+                return;
             }
+            *self.jobs.open.lock().unwrap_or_else(|error| error.into_inner()) += 1;
+            drop(accepting);
+            let (db, keys, jobs) = (self.db.clone(), self.keys.join(&name), self.jobs.clone());
+            // [R99.5-1] The job owns its data; the receiver of its result is not read (the job
+            // gives its result through the memory of the store and `jobs`).
+            let _ = semilla_core::tasks::submit(move || {
+                UnitWork::one(&db, &file, &keys, &jobs);
+                jobs.end();
+            });
         }
     }
 
     fn finish(&self) {
-        let mut open = self.open.lock().unwrap_or_else(|error| error.into_inner());
-        while *open > 0 {
-            open = self.ended.wait(open).unwrap_or_else(|error| error.into_inner());
-        }
+        self.jobs.wait();
     }
 }
 

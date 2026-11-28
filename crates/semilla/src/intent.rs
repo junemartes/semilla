@@ -90,18 +90,27 @@ struct One {
     lines: Vec<String>,
 }
 
+/// [R99.4-2] The keys of the compiles of the intent crate that run now (see
+/// [`NormalOracle::intent_compile`]).
+static INTENT_COMPILES: semilla_core::tasks::Keyed<(String, String, u64), ()> = semilla_core::tasks::Keyed::new();
+
 impl NormalOracle {
     /// [R79.2-1] The compile of the intent crate of a step, one time for each set of intent files:
     /// the AST pass (the anchors) and the check of the claims read the same compile.
     pub(crate) fn intent_compile(&self, step: &Step, sources: &[semilla_normal::intent::Source]) -> Arc<std::result::Result<crate::intentcrate::Check, String>> {
         let texts: String = sources.iter().map(|source| format!("{}\n{}\n", source.path, source.text)).collect();
         let key = (step.tree_before.clone(), step.tree_after.clone(), semilla_normal::intent::fnv(texts.as_bytes()));
-        if let Some(found) = self.added.lock().unwrap_or_else(|error| error.into_inner()).intent_checks.get(&key) {
-            return found.clone();
-        }
-        let found = Arc::new(crate::intentcrate::check_shared(self, &step.tree_before, &step.tree_after, sources).map_err(|error| format!("the intent crate does not compile: {error:#}")));
-        self.added.lock().unwrap_or_else(|error| error.into_inner()).intent_checks.insert(key, found.clone());
-        found
+        // [R99.4-2] One compile of a key at a time in this process: the early compile of the task
+        // of the builds (design 99) and the AST pass ask for the same key, and the second one
+        // waits for the first one and reads its memo.
+        INTENT_COMPILES.alone(&key, || {
+            if let Some(found) = self.added.lock().unwrap_or_else(|error| error.into_inner()).intent_checks.get(&key) {
+                return found.clone();
+            }
+            let found = Arc::new(crate::intentcrate::check_shared(self, &step.tree_before, &step.tree_after, sources).map_err(|error| format!("the intent crate does not compile: {error:#}")));
+            self.added.lock().unwrap_or_else(|error| error.into_inner()).intent_checks.insert(key.clone(), found.clone());
+            found
+        })
     }
 
     /// The check of the claims of a step (design 67).

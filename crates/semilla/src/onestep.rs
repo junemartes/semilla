@@ -324,6 +324,15 @@ impl App {
 
     /// Runs one `step` command. Returns the text and true if the step is stored.
     pub fn step_once(&mut self, request: &StepRequest) -> Result<(String, bool)> {
+        // [R99.3-1] The tree of the working files of this command is for this command only: a
+        // next command (a tool call of the MCP server) writes its own tree.
+        let result = self.step_once_with(request);
+        self.work_tree = None;
+        result
+    }
+
+    /// The work of [`App::step_once`].
+    fn step_once_with(&mut self, request: &StepRequest) -> Result<(String, bool)> {
         if request.intent.trim().is_empty() {
             bail!("the intent has no text. The reviewer reads the intent: say what the step does, for example `semilla step \"rename the field\"`");
         }
@@ -345,7 +354,10 @@ impl App {
             closed = session.tagged.take();
             session = Session::default();
         }
+        // [R99.3-1] One write of the tree of the working files for the step (design 99): the
+        // check, the stored step, and the build check read this tree.
         let tree = self.repo.write_tree()?;
+        self.work_tree = Some(tree.clone());
         drop(start_span);
         let before = if session.changeset.steps.is_empty() {
             let head = self.repo.commit_tree("HEAD").context("the repository has no commit; commit the base first")?;
@@ -463,6 +475,9 @@ impl App {
         let check_span = semilla_core::tasks::span("the check of the step");
         let mut result = self.check(Some(index), false);
         drop(check_span);
+        // [R99.7-1] The end of the step command (the build check, the text, the stored step) is
+        // on the time line (design 99).
+        let _end_span = semilla_core::tasks::span("the end of the step command");
         // A candidate pair for a derived identity: only phase 2 can derive it (design 24.2, rule 4).
         if !full && !no_bodies && result.as_ref().is_ok_and(|r| r.report.steps.first().is_some_and(|s| s.identity_candidates)) {
             full = true;
@@ -1154,6 +1169,22 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::split_words;
+
+    // [R99.3-1] The tree of a step command is for that command only: each return of
+    // `step_once` (here an early error) clears it, so a later command of one process (a replay
+    // of the MCP server, a check of an open step) writes its own tree.
+    // rule- R99.3-1
+    #[test]
+    fn a_step_command_leaves_no_tree_for_a_later_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new("git").current_dir(dir.path()).args(["init", "-q"]).status().unwrap();
+        assert!(status.success());
+        let mut app = crate::app::App::open(dir.path()).unwrap();
+        app.work_tree = Some("a tree of an earlier command".into());
+        let request = super::StepRequest { intent: " ".into(), ..Default::default() };
+        assert!(app.step_once(&request).is_err());
+        assert!(app.work_tree.is_none());
+    }
 
     #[test]
     fn a_claim_accepts_each_anchor_that_semilla_prints() {

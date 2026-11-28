@@ -1447,7 +1447,11 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     // The map of a rename is a map of the references to the item (design section 51).
     sites::resolve(&mut renames, input.before, input.after);
     let renames = renames;
+    // [R99.7-1] Each part of the main chain is a task on the time line (design 99).
+    let diff_span = semilla_core::tasks::span("the syntax diff of the step");
     let (edits, body_maps) = semilla_syntax::diff_maps(input.before, input.after, &renames);
+    drop(diff_span);
+    let compare_span = semilla_core::tasks::span("the compare of the bodies of the step");
 
     // 2. The MIR bodies.
     let added: Vec<String> = step.claims.iter().flat_map(checks::declared_new_items).collect();
@@ -1550,6 +1554,8 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
             Err(error) => break Err(error),
         }
     };
+    drop(compare_span);
+    let _facts_span = semilla_core::tasks::span("the facts of the core check");
     let mut build_failed = false;
     let mut bodies = match settled {
         Ok(bodies) => bodies,
@@ -3740,6 +3746,21 @@ pub fn verify_changeset_cached(
     options: Options,
     cache: &mut dyn StepCache,
 ) -> (Report, Vec<StepOutcome>) {
+    verify_changeset_shared(set, &mut |tree| load(tree).map(std::sync::Arc::new), bodies, exprs, options, cache)
+}
+
+/// [R99.6-1] [`verify_changeset_cached`] with shared workspaces (design 99). The check of a step
+/// gets its own copy of its two workspaces (it puts the name records into the copy, design 70),
+/// and the rest of the work of that step reads the copy, as before. A step with a result in the
+/// cache reads the shared workspaces: their name cell is empty, as in a new copy.
+pub fn verify_changeset_shared(
+    set: &ChangeSet,
+    load: &mut dyn FnMut(&str) -> anyhow::Result<std::sync::Arc<Workspace>>,
+    bodies: &dyn BodyOracle,
+    exprs: &dyn ExprOracle,
+    options: Options,
+    cache: &mut dyn StepCache,
+) -> (Report, Vec<StepOutcome>) {
     let mut report = Report::default();
     let mut outcomes = Vec::new();
     let mut pair_items: BTreeMap<String, semilla_syntax::Item> = BTreeMap::new();
@@ -3757,7 +3778,18 @@ pub fn verify_changeset_cached(
         previous_tree = step.tree_after.clone();
         let loaded = load(&step.tree_before).and_then(|before| Ok((before, load(&step.tree_after)?)));
         match loaded {
-            Ok((before, after)) => {
+            Ok((shared_before, shared_after)) => {
+                let stored_span = semilla_core::tasks::span("a step result from the memo or the store");
+                let found = cache.get(step);
+                drop(stored_span);
+                let own: (Workspace, Workspace);
+                let (before, after): (&Workspace, &Workspace) = match found {
+                    Some(_) => (&shared_before, &shared_after),
+                    None => {
+                        own = ((*shared_before).clone(), (*shared_after).clone());
+                        (&own.0, &own.1)
+                    }
+                };
                 for claim in &step.claims {
                     let found = match (claim.op.as_str(), &claim.at) {
                         ("remove-item", Some(at)) => before.items.get(&at.item),
@@ -3767,13 +3799,14 @@ pub fn verify_changeset_cached(
                     if let Some(item) = found {
                         pair_items.insert(claim.id.clone(), item.clone());
                         let added = claim.op == "add-item";
-                        name_targets.insert((added, item.path.clone()), (item.text.clone(), identity::name_targets(item, if added { &after } else { &before })));
+                        name_targets.insert((added, item.path.clone()), (item.text.clone(), identity::name_targets(item, if added { after } else { before })));
                     }
                 }
-                let outcome = match cache.get(step) {
+                let outcome = match found {
                     Some(outcome) => outcome,
                     None => {
-                        let outcome = verify_step_with(&StepInput { step, before: &before, after: &after }, bodies, exprs, options.derive_edits);
+                        let outcome = verify_step_with(&StepInput { step, before, after }, bodies, exprs, options.derive_edits);
+                        let _put_span = semilla_core::tasks::span("the write of a step result");
                         cache.put(step, &outcome);
                         outcome
                     }
@@ -3783,7 +3816,7 @@ pub fn verify_changeset_cached(
                 // warning. Phase 1 gives no warning for such a pair. A syntax-only check (R62.5-3,
                 // R83.1-3) has its final result now: its pair warning shows.
                 if !step.syntax_only && outcome.report.identity_candidates && outcome.bodies.is_empty() && matches!(bodies.facts(step), Ok(None)) {
-                    pending_pairs.extend(identity::candidates(&before, &after).0.into_iter().map(|pair| (pair.old, pair.new)));
+                    pending_pairs.extend(identity::candidates(before, after).0.into_iter().map(|pair| (pair.old, pair.new)));
                 }
                 // The removed and added items of the derived facts are pair candidates too.
                 for (edit, fact) in outcome.edits.iter().zip(&outcome.fact_of) {
@@ -3794,11 +3827,11 @@ pub fn verify_changeset_cached(
                     let id = format!("step {} {}", step.index, fact.id);
                     match edit.kind {
                         semilla_syntax::EditKind::ItemRemoved => if let Some(item) = edit.before.as_ref().and_then(|a| before.items.get(&a.item)) {
-                            name_targets.insert((false, item.path.clone()), (item.text.clone(), identity::name_targets(item, &before)));
+                            name_targets.insert((false, item.path.clone()), (item.text.clone(), identity::name_targets(item, before)));
                             fact_pairs.push((id, false, item.clone()))
                         },
                         semilla_syntax::EditKind::ItemAdded => if let Some(item) = edit.after.as_ref().and_then(|a| after.items.get(&a.item)) {
-                            name_targets.insert((true, item.path.clone()), (item.text.clone(), identity::name_targets(item, &after)));
+                            name_targets.insert((true, item.path.clone()), (item.text.clone(), identity::name_targets(item, after)));
                             fact_pairs.push((id, true, item.clone()))
                         },
                         _ => {}
@@ -3824,6 +3857,8 @@ pub fn verify_changeset_cached(
             report.organization.push("the last step does not end at the head tree".to_string());
         }
     }
+    // [R99.7-1] The organization of a change set is on the time line (design 99).
+    let _organize_span = semilla_core::tasks::span("the organization of a change set");
     report.steps = outcomes.iter().map(|outcome| outcome.report.clone()).collect();
     for step in &report.steps {
         for item in &step.spotlight {
@@ -3903,3 +3938,5 @@ mod tests92;
 mod tests94;
 #[cfg(test)]
 mod tests98;
+#[cfg(test)]
+mod tests99;

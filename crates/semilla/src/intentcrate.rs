@@ -148,6 +148,8 @@ pub(crate) fn check_shared(oracle: &crate::oracle::NormalOracle, before: &str, a
 fn finish(oracle: &crate::oracle::NormalOracle, made: &Pair, heads: Vec<(String, Vec<semilla_intent::heads::Head>)>, findings: Vec<semilla_intent::heads::Finding>, files: &[Source]) -> Result<Check> {
     let prepared = &made.prepared;
     let sources = compile_sources(files, &heads, &findings);
+    // [R99.4-1] The parts of the gate and of the intent check are on the time line (design 99).
+    let _span = semilla_core::tasks::span("the compile of the intent crate");
     let mut compiled = compile(prepared, &sources, &oracle.repo.root)?;
     clean_panic(&mut compiled, &heads, &sources, &|sources| compile(prepared, sources, &oracle.repo.root).ok());
     let mut findings = findings;
@@ -161,6 +163,7 @@ fn pair(oracle: &crate::oracle::NormalOracle, before: &str, after: &str) -> Resu
     let started = Instant::now();
     let config = semilla_normal::Configuration::DEV;
     let mut libraries = Vec::new();
+    let builds_span = semilla_core::tasks::span("the builds of the pair of the intent check");
     let mut keys = String::new();
     for tree in [before, after] {
         oracle.records_or_build(tree, "n0", &config, false)?;
@@ -171,6 +174,7 @@ fn pair(oracle: &crate::oracle::NormalOracle, before: &str, after: &str) -> Resu
         keys.push_str(&format!("{}\n{time}\n", cache.display()));
         libraries.push(found);
     }
+    drop(builds_span);
     let build = started.elapsed();
     let checking = Instant::now();
     let key = format!("{:016x}", fnv(keys.as_bytes()));
@@ -181,6 +185,7 @@ fn pair(oracle: &crate::oracle::NormalOracle, before: &str, after: &str) -> Resu
     let renamed = if names.is_empty() {
         None
     } else {
+        let _span = semilla_core::tasks::span("the second build of the old tree");
         let started = Instant::now();
         let (root, _, _, name) = oracle.cache_folder(before, "n0", &config)?;
         let base = root.join("build");
@@ -202,7 +207,9 @@ fn pair(oracle: &crate::oracle::NormalOracle, before: &str, after: &str) -> Resu
         second = Some((started.elapsed(), built));
         Some(libraries)
     };
+    let facades_span = semilla_core::tasks::span("the facades of the intent check");
     let prepared = prepare(&oracle.repo.cache_dir(), &key, &libraries[0], &libraries[1], renamed.as_ref())?;
+    drop(facades_span);
     if let Some(fast) = fast_file(&oracle.repo.cache_dir(), before, after) {
         let _ = std::fs::write(fast, prepared.folder.display().to_string());
     }
