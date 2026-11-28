@@ -33,7 +33,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::total` (src/lib.rs:1)
-  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   transformations:
   item `depot::total`:
   ◆ f1 extract (Semilla; R94.3-1, equal MIR after the normal form (the copy and move chains of a local); 2 nodes): extracted variable `s` = `a * 3 + b` (1 use) at `depot::total/S0` [move · code equal]

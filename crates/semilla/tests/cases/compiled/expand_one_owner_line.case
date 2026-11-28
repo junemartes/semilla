@@ -65,27 +65,40 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+  changed bodies: 0 equal MIR, 0 explained by claims, 5 MIR changes with no claim
     MIR changes with no claim: `<shop::Meters as std::convert::From<u32>>::from` (src/lib.rs:4): no template: the step pairs `<shop::Meters as core::convert::From<u32>>::from` with `<shop::Meters as core::convert::From<u64>>::from` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
     MIR changes with no claim: `<shop::Meters as std::convert::From<u64>>::from` (src/lib.rs:4): the template of `<shop::Meters as std::convert::From<u32>>::from` covers its item `shop::<Meters as From>::from`
-  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+    MIR changes with no claim: `shop::Meters` (src/lib.rs:1): the full compare: `#[same(shop::Meters)] fn meters_same() {}`; a difference: `#[change(shop::Meters)] fn meters_change() -> bool { … }` or `#[different(shop::Meters)] fn meters_different() -> bool { … }`
+    MIR changes with no claim: `shop::one` (src/lib.rs:16): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
+    MIR changes with no claim: `shop::two` (src/lib.rs:22): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
+  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 6 in the section of R92.4-1
   real edits:
   item `shop::<Meters as From>::from`:
   ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): type `u32` → `u64` in 2 places: parameter `v` of `shop::<Meters as From>::from`, `shop::Meters.0` (the public API can change: a different crate can use the item) [declaration · code different]
       not stated (src/lib.rs:1, src/lib.rs:4-6, src/lib.rs:-1, src/lib.rs:-4); to state it: --change 'shop::<Meters as From>::from=TEXT'
       affected bodies: shop::<Meters as From>::from, shop::Meters, shop::one, shop::two
-      control flow: − graph of `<shop::Meters as std::convert::From<u32>>::from`: 2 points, 1 arrow (semilla expand --step 0)
-      control flow: + graph of `<shop::Meters as std::convert::From<u64>>::from`: 2 points, 1 arrow (semilla expand --step 0)
+      graph: same graph (the edit keeps the control flow)
       ! public API: the compare does not cover the code of a different crate
   item `shop::impl <Meters as From>`:
   ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): generics of `shop::impl <Meters as From>`: `impl From<u32> for Meters { }` → `impl From<u64> for Meters { }` (the public API can change: a different crate can use the item); generic arguments go by position: 3 site(s) in 3 other item(s) [declaration · code different]
       not stated (src/lib.rs:3, src/lib.rs:-3); to state it: --change 'shop::impl <Meters as From>=TEXT'
       affected bodies: shop::<Meters as From>::from, shop::one, shop::two
+      graph: same graph (the edit keeps the control flow)
       ! public API: the compare does not cover the code of a different crate
+  compiled code that changes with no edit:
+  body `<shop::Meters as std::convert::From<u32>>::from` (src/lib.rs:4): graph: −1 body, −1 return, −1 arrow (no entry: no changed node, R98.4-1)
+      control flow: − entry (src/lib.rs:-4): → return
+      control flow: − return (src/lib.rs:-4)
+  body `<shop::Meters as std::convert::From<u64>>::from` (src/lib.rs:4): graph: +1 body, +1 return, +1 arrow (no entry: no changed node, R98.4-1)
+      control flow: + entry (src/lib.rs:4): → return
+      control flow: + return (src/lib.rs:6)
   cover: each of the 8 changed line(s) is in a fact
-  control flow: 2 bodies
+  control flow: 5 bodies
     <shop::Meters as std::convert::From<u32>>::from (src/lib.rs:4): graph removed: 2 points, 1 arrow; no edit in the body
     <shop::Meters as std::convert::From<u64>>::from (src/lib.rs:4): graph added: 2 points, 1 arrow; no edit in the body
+    shop::Meters (src/lib.rs:1): same graph; no edit in the body; MIR changes
+    shop::one (src/lib.rs:16): same graph; no edit in the body; MIR changes; the expansion of `#[test]` changes (semilla expand src/lib.rs:15 --step 0)
+    shop::two (src/lib.rs:22): same graph; no edit in the body; MIR changes; the expansion of `#[test]` changes (semilla expand src/lib.rs:21 --step 0)
   expansions: 5 changed
     2 calls: expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes: `shop::one`, `shop::two` (semilla expand --step 0)
     3 calls: expansion changed: `macro_rules! check_here` (src/lib.rs:9): only the context of the call changes: a value that the macro makes at the call (`concat!("failed at ", file!(), ":", line!())`); the context of the call changes: `shop::one/S1`, `shop::two/S1`, `shop::two/S2` (semilla expand --step 0)

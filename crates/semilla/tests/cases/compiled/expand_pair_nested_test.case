@@ -79,34 +79,41 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::base` (src/lib.rs:5): the full compare: `#[same(shop::base)] fn base_same() {}`; a difference: `#[change(shop::base)] fn base_change(v: u32) -> bool { … }` or `#[different(shop::base)] fn base_different() -> bool { … }`
     MIR changes with no claim: `shop::keep` (src/lib.rs:4): the full compare: `#[same(shop::keep)] fn keep_same() {}`; a difference: `#[change(shop::keep)] fn keep_change(v: u32) -> bool { … }` or `#[different(shop::keep)] fn keep_different() -> bool { … }`
     MIR changes with no claim: `shop::pick` (src/lib.rs:3): the full compare: `#[same(shop::pick)] fn pick_same() {}`; a difference: `#[change(shop::pick)] fn pick_change(v: u32) -> bool { … }` or `#[different(shop::pick)] fn pick_different() -> bool { … }`
-  changed nodes: 5 in 5 entries; 4 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 5 in 5 entries; 4 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 12 in entries (12 implicit), 1 in the section of R92.4-1
   real edits:
   item `shop::keep`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `v` at `shop::keep/tail` [semantics · code different]
       not stated (src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::keep=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f3)
       affected bodies: shop::keep (with 1 other edit of this body)
-      control flow: − arrow entry (src/lib.rs:-4) → return (src/lib.rs:-4)
+      graph: no graph change of its own
       equivalence: MIR changes
   ◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): added macro statement `bump!(v)` at `shop::keep/tail` [semantics · code different]
       not stated (src/lib.rs:4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::keep=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f3)
       affected bodies: shop::keep (with 1 other edit of this body)
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: v + 2` (src/lib.rs:4): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:4)
       control flow: + arrow entry (src/lib.rs:4) → check `overflow: v + 2` (src/lib.rs:4)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
   item `shop::pick`:
   ◆ f4 replace (Semilla; R90.2-2, 2 changed MIR elements): deleted statement `bump!(v)` at `shop::pick/tail` [semantics · code different]
       not stated (src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f4, f5)
       affected bodies: shop::pick (with 1 other edit of this body)
+      graph: −1 overflow check (implicit), −1 panic (implicit), +1 arrow (implicit), −3 arrows (implicit)
       control flow: − check `overflow: v + 1` (src/lib.rs:-3): ok → return, fail → panic `overflow`
       control flow: − panic `overflow` (src/lib.rs:-3)
-      control flow: − arrow entry (src/lib.rs:-3) → check `overflow: v + 1` (src/lib.rs:-3)
+      control flow: + arrow entry (src/lib.rs:3) → return (src/lib.rs:3)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
   ◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `v` at `shop::pick/tail` [semantics · code different]
       not stated (src/lib.rs:3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f4, f5)
       affected bodies: shop::pick (with 1 other edit of this body)
-      control flow: + arrow entry (src/lib.rs:3) → return (src/lib.rs:3)
+      graph: no graph change of its own
       equivalence: MIR changes
+  compiled code that changes with no edit:
+  body `shop::base` (src/lib.rs:5): graph: 1 changed check (`overflow: v + 1` → `overflow: v + 2`, implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
+      control flow: ~ check `overflow: v + 1` → `overflow: v + 2` (src/lib.rs:-5, src/lib.rs:5)
   syntax only:
   item `shop::bump!`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `bump`: `macro_rules! bump { ($v:expr) => { $v + 1 } }` → `macro_rules! bump { ($v:expr) => { $v + 2 } }` [declaration · code different]

@@ -26,13 +26,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::util::helper` (src/util.rs:1): no template: the item is in a binary target, and the intent crate links the libraries only (design 78)
-  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot (bin "depot")::util::helper`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes): 2 site(s): changed literal `2` → `3` [semantics · code different]
       not stated (src/util.rs:2, src/util.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot (bin "depot")::util::helper,depot::util::helper=TEXT'; if it does not change, --same 'rewrite 2 => 3' (one statement for 2 places: f1)
       in: depot (bin "depot")::util::helper, depot::util::helper
       affected bodies: depot (bin "depot")::util::helper
+      graph: same structure: 1 changed check (`overflow: n * 2` → `overflow: n * 3`, implicit)
       control flow: ~ check `overflow: n * 2` → `overflow: n * 3` (src/util.rs:-2, src/util.rs:2)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact

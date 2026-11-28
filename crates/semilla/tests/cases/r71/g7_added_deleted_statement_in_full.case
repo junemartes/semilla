@@ -87,7 +87,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::other` (src/lib.rs:5): the full compare: `#[same(shop::other)] fn other_same() {}`; a difference: `#[change(shop::other)] fn other_change(x: u32) -> bool { … }` or `#[different(shop::other)] fn other_different() -> bool { … }`
     MIR changes with no claim: `shop::table` (src/lib.rs:1): the full compare: `#[same(shop::table)] fn table_same() {}`; a difference: `#[change(shop::table)] fn table_change(x: u32) -> bool { … }` or `#[different(shop::table)] fn table_different() -> bool { … }`
-  changed nodes: 6 in 6 entries; 6 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 6 in 6 entries; 6 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 204 in entries (204 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::other`:
   ◆ f1 add (Semilla; R90.2-3, 48 new MIR elements): added `let` [1] at `shop::other/S0` [semantics · code different]
@@ -119,14 +119,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
             ];
       not stated (src/lib.rs:4-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::other=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::other (with 2 other edits of this body)
+      graph: +24 overflow checks (implicit), +24 panics (implicit), +49 arrows (implicit), −1 arrow (implicit)
+      control flow: + check `overflow: 0 * x` (src/lib.rs:7): ok → check `overflow: 1 * x`, fail → panic `overflow`
+      control flow: + check `overflow: 1 * x` (src/lib.rs:8): ok → check `overflow: 2 * x`, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:7)
+      control flow: … 47 more (semilla expand --step 0)
       equivalence: MIR changes
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `x` at `shop::other/tail` [semantics · code different]
       not stated (src/lib.rs:-30-32); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::other=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::other (with 2 other edits of this body)
+      graph: no graph change of its own
       equivalence: MIR changes
   ◆ f3 add (Semilla; R90.2-3, 3 new MIR elements): added statement `cells[5]` at `shop::other/tail` [semantics · code different]
       not stated (src/lib.rs:32); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::other=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::other (with 2 other edits of this body)
+      graph: +1 bounds check (implicit), +1 panic (implicit), +2 arrows (implicit)
       control flow: + check `bounds: cells[5]` (src/lib.rs:32): ok → return, fail → panic `bounds`
       control flow: + panic `bounds` (src/lib.rs:32)
       equivalence: MIR changes
@@ -160,15 +167,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
             ];
       not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::table=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f4, f5, f6)
       affected bodies: shop::table (with 2 other edits of this body)
+      graph: −24 overflow checks (implicit), −24 panics (implicit), +1 arrow (implicit), −49 arrows (implicit)
+      control flow: − check `overflow: 0 * x` (src/lib.rs:-3): ok → check `overflow: 1 * x`, fail → panic `overflow`
+      control flow: − check `overflow: 1 * x` (src/lib.rs:-4): ok → check `overflow: 2 * x`, fail → panic `overflow`
+      control flow: − panic `overflow` (src/lib.rs:-3)
+      control flow: … 47 more (semilla expand --step 0)
       equivalence: MIR changes
   ◆ f5 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `x` at `shop::table/tail` [semantics · code different]
       not stated (src/lib.rs:2-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::table=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f4, f5, f6)
       affected bodies: shop::table (with 2 other edits of this body)
-      control flow: + arrow entry (src/lib.rs:1) → return (src/lib.rs:3)
+      graph: no graph change of its own
       equivalence: MIR changes
   ◆ f6 delete (Semilla; R90.2-3, 3 removed MIR elements): deleted statement `rows[3]` at `shop::table/tail` [semantics · code different]
       not stated (src/lib.rs:-28-29); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::table=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f4, f5, f6)
       affected bodies: shop::table (with 2 other edits of this body)
+      graph: −1 bounds check (implicit), −1 panic (implicit), −2 arrows (implicit)
       control flow: − check `bounds: rows[3]` (src/lib.rs:-28): ok → return, fail → panic `bounds`
       control flow: − panic `bounds` (src/lib.rs:-28)
       equivalence: MIR changes

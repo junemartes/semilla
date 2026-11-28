@@ -43,12 +43,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     ✗ false: i1 `#[rewrite(shop::f)] fn swap()`: the check of `--same 'rewrite fn swap in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the check refuses 1 place(s): `shop::f` (src/lib.rs:2): a tie of 2 bindings of the closure pair at one site (R97.6-1): no site, and Semilla does not use the order)
     changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
       MIR changes with no claim: `shop::f` (src/lib.rs:1): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(x: u32, y: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::f`:
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `(x ^ y).rotate_left(3)` → `(y ^ x).rotate_left(3) | 1` at `shop::f/tail` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::f=TEXT'; if it does not change, --same 'rewrite ($a ^ $b).rotate_left(3) => ($b ^ $a).rotate_left(3) | 1'
       affected bodies: shop::f
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

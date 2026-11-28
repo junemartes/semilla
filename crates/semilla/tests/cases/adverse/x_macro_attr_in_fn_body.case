@@ -31,7 +31,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `depot::f` (src/lib.rs:2)
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   transformations:
   item `depot::f`:
   ◆ f1 same code (Semilla; R90.2-1, equal MIR): replace macro input `table!( A = 1, #[cfg(unix)] B = 2, );` → `table!( A = 1, #[cfg(windows)] B = 2, );` at `depot::f/S0` [macro · no compare]

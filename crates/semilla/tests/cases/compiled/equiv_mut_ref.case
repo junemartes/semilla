@@ -22,12 +22,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::bump` (src/lib.rs:1): the full compare: `#[same(shop::bump)] fn bump_same() {}`; a difference: `#[change(shop::bump)] fn bump_change(mut x_before: u32, mut x_after: u32, n: u32) -> bool { … }` or `#[different(shop::bump)] fn bump_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::bump`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::bump/S0/rhs/args[0]` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::bump=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: shop::bump
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

@@ -363,6 +363,14 @@ impl<'a> MirMap<'a> {
         Ok(Mapped { file: file.clone(), start: tree.lines.pos(from), end: tree.lines.pos(to), text, block_free })
     }
 
+    /// [R98.3-1] The edit of the smallest changed node that holds a place on one side (rule 1 of
+    /// the owner rule), else the first edit whose node is inside the node of the place (rule 1b):
+    /// the entry of an implicit graph change (design 98).
+    pub fn holder(&mut self, side: usize, place: &MirPlace) -> Option<usize> {
+        let node = self.node(side, place)?;
+        self.owner(side, &node).or_else(|| self.inner(side, &node).first().copied())
+    }
+
     /// The smallest edit whose node contains a node on one side.
     fn owner(&self, side: usize, node: &Mapped) -> Option<usize> {
         self.owner_place(side, node).map(|place| place.edit)

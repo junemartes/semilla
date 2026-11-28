@@ -33,19 +33,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 15 in entries (12 implicit, 15 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::total`:
   ◆ f1 inline (Semilla; R94.2-1, the MIR of `depot::part` put in at the call is the MIR of the new code (3 element place(s) explained)): changed expression `part(a, b)` → `a * 3 + b` at `depot::total/S0/init` [semantics · code different]
       affected bodies: depot::total
-      control flow: + check `overflow: a * 3` (src/lib.rs:2): ok → check `overflow: a * 3 + b`, fail → panic `overflow`
-      control flow: + check `overflow: a * 3 + b` (src/lib.rs:2): ok → check `overflow: s + 1`, fail → panic `overflow`
-      control flow: + panic `overflow` (src/lib.rs:2)
-      control flow: … 3 more (semilla expand --step 0)
+      graph: no change after the check: the check of the inline explains 15 graph change(s)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::total (src/lib.rs:1): graph changes: +2 checks, +2 panics, −1 call, +5 arrows, −2 arrows; MIR changes
+    depot::total (src/lib.rs:1): graph changes: +2 checks, +2 panics, −1 call, 1 changed check, +6 arrows, −3 arrows; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

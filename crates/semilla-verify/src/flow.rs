@@ -1,25 +1,24 @@
 //! The control flow graph of each body: the pair of the two graphs, the structural diff, and
-//! the lines of the output (design 60, parts B and C).
+//! the lines of the output (design 60, parts B and C; design 98).
 //!
-//! The driver gives the graph of each body (`semilla-mir/src/graph.rs`). This module pairs the
-//! points of the old graph and of the new graph of a body:
-//!
-//! 1. through the node pairs of the tree compare: two points pair if the smallest node pair
-//!    that holds their nodes is the same pair, and the kinds are equal. In one node pair, the
-//!    points of one kind pair by their text (a longest common subsequence), then in source
-//!    order;
-//! 2. the points with no pair: equal kind and equal text, in source order (a longest common
-//!    subsequence);
-//! 3. the other points have no pair.
+//! The driver gives the graph of each body (`semilla-mir/src/graph.rs`). [R98.1-1] The points of
+//! the old graph and of the new graph of a body pair through the MIR alignment of design 90
+//! (`flowalign.rs`): a point pairs with the point whose MIR elements the alignment pairs with its
+//! elements. A point whose elements the alignment does not pair is an added or a removed point.
+//! No other rule pairs two points (the rules R60.3-1 and R60.3-2 are gone).
 //!
 //! An arrow is shared if its two ends pair and its labels are equal. The result of a body is
 //! `same graph` (each point pairs, each arrow is shared, each point text is equal), `same
 //! structure` (each point pairs and each arrow is shared, a point text changes), or `graph
 //! changes` with the diff. "Same graph" is a proof: Semilla says it only when the pair exists.
+//!
+//! [R98.2-1] Each changed point and each arrow that is not shared is a graph change. The step keeps
+//! the graph changes of each body (`BodyChanges`) for the map of design 98 (`flowmap.rs`): each
+//! graph change goes to one entry of the map.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use semilla_core::report::{FlowBody, FlowReport, Position};
+use semilla_core::report::{FlowBody, FlowReport};
 use semilla_syntax::Workspace;
 
 use crate::MirPlace;
@@ -235,120 +234,21 @@ impl GraphDiff {
     }
 }
 
-/// The most cells of one longest common subsequence. A larger list pairs equal texts in order.
-const LCS_CELLS: usize = 4_000_000;
-
 /// The words of a constant whose value has a part that the driver cannot compute (R66.11-4): the
 /// check does not know if it changes.
 pub const CANNOT_COMPARE: &str = "reads a constant that the check cannot compare";
 
-/// The pairs of a longest common subsequence of two lists, by `equal`.
-fn lcs(a: &[usize], b: &[usize], equal: &dyn Fn(usize, usize) -> bool) -> Vec<(usize, usize)> {
-    if a.is_empty() || b.is_empty() {
-        return Vec::new();
-    }
-    if a.len() * b.len() > LCS_CELLS {
-        // A greedy pair in order.
-        let mut out = Vec::new();
-        let mut from = 0;
-        for &x in a {
-            if let Some(found) = (from..b.len()).find(|&j| equal(x, b[j])) {
-                out.push((x, b[found]));
-                from = found + 1;
-            }
-        }
-        return out;
-    }
-    let (n, m) = (a.len(), b.len());
-    let mut table = vec![0u32; (n + 1) * (m + 1)];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            table[i * (m + 1) + j] = if equal(a[i], b[j]) { table[(i + 1) * (m + 1) + j + 1] + 1 } else { table[(i + 1) * (m + 1) + j].max(table[i * (m + 1) + j + 1]) };
-        }
-    }
-    let (mut i, mut j) = (0, 0);
-    let mut out = Vec::new();
-    while i < n && j < m {
-        if equal(a[i], b[j]) {
-            out.push((a[i], b[j]));
-            i += 1;
-            j += 1;
-        } else if table[(i + 1) * (m + 1) + j] >= table[i * (m + 1) + j + 1] {
-            i += 1;
-        } else {
-            j += 1;
-        }
-    }
-    out
-}
-
-/// The source order of the points of a graph: by the place, the longer place first; a point
-/// with no place keeps its index, after the points with a place.
-fn source_order(graph: &FlowGraph, list: &mut [usize]) {
-    list.sort_by_key(|&index| match graph.points[index].place() {
-        Some(place) => (0, place.0.clone(), place.1, usize::MAX - place.2, index),
-        None => (1, String::new(), 0, 0, index),
-    });
-}
-
-/// The diff of two graphs. `holder(side, point)` gives the smallest node pair of the tree
-/// compare that holds the node of a point (0: old, 1: new), or `None`.
-pub fn diff(old: &FlowGraph, new: &FlowGraph, holder: &dyn Fn(usize, usize) -> Option<usize>) -> GraphDiff {
-    diff_with(old, new, holder, &|_, _| None)
-}
-
-/// [`diff`] with the source text of the node of each point. In a set of candidates, the
-/// points with an equal text and an equal source text pair first (Decided by Claude): the tree
-/// compare does not keep a pair of each node (the arms of a `match`), and two calls of one
-/// function in one node pair then pair by their source.
-pub fn diff_with(old: &FlowGraph, new: &FlowGraph, holder: &dyn Fn(usize, usize) -> Option<usize>, source: &dyn Fn(usize, usize) -> Option<String>) -> GraphDiff {
-    let graphs = [old, new];
-    let sources: [Vec<Option<String>>; 2] = [(0..old.points.len()).map(|point| source(0, point)).collect(), (0..new.points.len()).map(|point| source(1, point)).collect()];
-    let same_source = |a: usize, b: usize| sources[0][a].is_some() && sources[0][a] == sources[1][b];
+/// [R98.1-1] The diff of two graphs from the point pairs of the alignment (`flowalign::align`).
+/// [R98.6-2] A pair with a different text, mark, or callees is a changed point, also when its
+/// MIR elements are equal (a renamed local in a condition, a changed value of an operand that
+/// an element with no point computes): the check of a transformation explains it (R98.6-1).
+pub fn diff_pairs(old: &FlowGraph, new: &FlowGraph, pairs: &[(usize, usize)]) -> GraphDiff {
     let mut partner: [Vec<Option<usize>>; 2] = [vec![None; old.points.len()], vec![None; new.points.len()]];
-    // Rule 1: the node pairs.
-    let mut buckets: BTreeMap<(usize, &str), [Vec<usize>; 2]> = BTreeMap::new();
-    for side in 0..2 {
-        for (index, point) in graphs[side].points.iter().enumerate() {
-            if let Some(pair) = holder(side, index) {
-                buckets.entry((pair, point.kind.as_str())).or_default()[side].push(index);
-            }
+    for (a, b) in pairs {
+        if *a < old.points.len() && *b < new.points.len() && partner[0][*a].is_none() && partner[1][*b].is_none() && old.points[*a].kind == new.points[*b].kind {
+            partner[0][*a] = Some(*b);
+            partner[1][*b] = Some(*a);
         }
-    }
-    let set = |partner: &mut [Vec<Option<usize>>; 2], a: usize, b: usize| {
-        partner[0][a] = Some(b);
-        partner[1][b] = Some(a);
-    };
-    for lists in buckets.values_mut() {
-        if lists[0].is_empty() || lists[1].is_empty() {
-            continue;
-        }
-        source_order(old, &mut lists[0]);
-        source_order(new, &mut lists[1]);
-        let same_text = |a: usize, b: usize| old.points[a].same_text(&new.points[b]);
-        for (a, b) in lcs(&lists[0], &lists[1], &|a, b| same_text(a, b) && same_source(a, b)) {
-            set(&mut partner, a, b);
-        }
-        let open: [Vec<usize>; 2] = [lists[0].iter().copied().filter(|a| partner[0][*a].is_none()).collect(), lists[1].iter().copied().filter(|b| partner[1][*b].is_none()).collect()];
-        for (a, b) in lcs(&open[0], &open[1], &same_text) {
-            set(&mut partner, a, b);
-        }
-        let rest: [Vec<usize>; 2] = [lists[0].iter().copied().filter(|a| partner[0][*a].is_none()).collect(), lists[1].iter().copied().filter(|b| partner[1][*b].is_none()).collect()];
-        for (a, b) in rest[0].iter().zip(&rest[1]) {
-            set(&mut partner, *a, *b);
-        }
-    }
-    // Rule 2: equal kind and equal text, in source order.
-    let mut rest: [Vec<usize>; 2] = [(0..old.points.len()).filter(|a| partner[0][*a].is_none()).collect(), (0..new.points.len()).filter(|b| partner[1][*b].is_none()).collect()];
-    source_order(old, &mut rest[0]);
-    source_order(new, &mut rest[1]);
-    let same_point = |a: usize, b: usize| old.points[a].kind == new.points[b].kind && old.points[a].same_text(&new.points[b]);
-    for (a, b) in lcs(&rest[0], &rest[1], &|a, b| same_point(a, b) && same_source(a, b)) {
-        set(&mut partner, a, b);
-    }
-    let rest: [Vec<usize>; 2] = [rest[0].iter().copied().filter(|a| partner[0][*a].is_none()).collect(), rest[1].iter().copied().filter(|b| partner[1][*b].is_none()).collect()];
-    for (a, b) in lcs(&rest[0], &rest[1], &same_point) {
-        set(&mut partner, a, b);
     }
     let mut out = GraphDiff::default();
     for (a, b) in partner[0].iter().enumerate() {
@@ -488,21 +388,124 @@ fn arrow_text(graph: &FlowGraph, label: &str, to: usize, short: bool) -> String 
 
 /// One element of a diff, for the lines of a fact and of `status --verbose`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Element {
+pub(crate) struct Element {
     /// The side of the place (0: old, 1: new) and the places of the element on its sides.
     places: Vec<(usize, MirPlace)>,
     /// The text of the line.
-    text: String,
+    pub(crate) text: String,
     /// The arrows that the line shows (to skip them as arrow lines): side and index.
     arrows: Vec<(usize, usize)>,
     /// The lines of `status --verbose`: one line for the point, and one line for each arrow.
-    details: Vec<String>,
+    pub(crate) details: Vec<String>,
     /// True if a fact holds the element only when it holds each place (an arrow between two
     /// points that pair): else one place is enough.
     all: bool,
     /// The side and the index of the point of a point element (R71.2-1: a point that moves to a
     /// different body of its item).
     point: Option<(usize, usize)>,
+    /// [R98.2-1] The anchor of the element for its entry (design 98).
+    pub(crate) anchor: Anchor,
+    /// [R98.2-2] One part of the summary of an entry for each line of `details`: the point, then
+    /// each arrow. Empty: no graph change (a line of a renamed text).
+    pub(crate) parts: Vec<Part>,
+}
+
+/// [R98.2-1] The anchor of a graph change for its entry (design 98): the places of the MIR
+/// elements of its point (the projection of design 90 reads them), the places of the point
+/// itself (for an implicit change, R98.3-1), and the mark "implicit".
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Anchor {
+    /// The side (0: old, 1: new) and the place (the tokens, or the macro call) of each MIR element
+    /// of the point.
+    pub elements: Vec<(usize, MirPlace)>,
+    /// The side and the place of each point of the change.
+    pub points: Vec<(usize, MirPlace)>,
+    /// [R98.3-1] True for a point that the source has no node for: a check, the panic of a check,
+    /// a point of the expansion of a macro of another crate (no tokens in the workspace).
+    pub implicit: bool,
+}
+
+/// [R98.2-2] One graph change in the summary of an entry: the group (0: an added point, 1: a
+/// removed point, 2: a changed point, 3: an added arrow, 4: a removed arrow), the word of the
+/// kind (`branch`, `bounds check`, `changed condition`), and the short text of the point.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Part {
+    pub group: u8,
+    pub label: String,
+    pub text: String,
+}
+
+/// A graph change for a unit test: its line, its anchor, and its parts (one line of `status
+/// --verbose` for each part).
+#[cfg(test)]
+pub(crate) fn test_element(text: &str, anchor: Anchor, parts: Vec<Part>) -> Element {
+    Element { places: Vec::new(), text: text.into(), arrows: Vec::new(), details: parts.iter().map(|_| text.to_string()).collect(), all: false, point: None, anchor, parts }
+}
+
+/// [R98.1-1] The places of the MIR elements of each point of each side (design 98): empty for a
+/// point with no element in the table, and for a body with no table.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Links {
+    places: [Vec<Vec<MirPlace>>; 2],
+}
+
+impl Links {
+    fn of(&self, side: usize, point: usize) -> &[MirPlace] {
+        self.places[side].get(point).map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
+/// [R98.3-1] True for a point that the source has no node for (design 98): a check (the compiler
+/// adds it for an operation), the panic point of a check, and a point with no tokens in the
+/// workspace in a macro call (the expansion of a macro of another crate).
+fn implicit_point(graph: &FlowGraph, roles: &[crate::flowalign::Role], point: usize) -> bool {
+    let found = &graph.points[point];
+    found.kind == "check" || roles.get(point) == Some(&crate::flowalign::Role::CheckPanic) || (found.tokens.is_none() && found.call.is_some())
+}
+
+/// The anchor of one point of one side.
+fn point_anchor(graph: &FlowGraph, roles: &[crate::flowalign::Role], links: &Links, side: usize, point: usize) -> Anchor {
+    Anchor {
+        elements: links.of(side, point).iter().map(|place| (side, place.clone())).collect(),
+        points: graph.points[point].place().map(|place| (side, place.clone())).into_iter().collect(),
+        implicit: implicit_point(graph, roles, point),
+    }
+}
+
+/// The word of the kind of a point in the summary of an entry: `bounds check` for a check,
+/// `panic` for the panic of a check, else the kind.
+fn point_word(graph: &FlowGraph, point: usize) -> String {
+    let found = &graph.points[point];
+    match found.kind.as_str() {
+        "check" => format!("{} check", found.text.split(':').next().unwrap_or("").trim()),
+        // The entry of a body pairs with the entry of the other body (R98.1-1): only a body that
+        // one tree has adds or removes an entry, and the summary names it as a body.
+        "entry" => "body".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// [R98.2-2] The text of a point in the summary of an entry: the source text of a branch, a loop, a
+/// construct, and the panic of a macro, and the short callee of a call. A check, the panic of a
+/// check, the entry, and a return have their kind only.
+fn summary_text(point: &FlowPoint) -> String {
+    match point.kind.as_str() {
+        "check" | "entry" | "return" => String::new(),
+        "panic" if point.calls.is_empty() => String::new(),
+        _ => point.short_text(),
+    }
+}
+
+/// The noun of a changed point of one kind (design 60, R60.4-2).
+fn changed_noun(kind: &str) -> String {
+    match kind {
+        "branch" => "condition".to_string(),
+        "call" => "call target".to_string(),
+        "panic" => "panic call".to_string(),
+        "check" => "check".to_string(),
+        "loop" => "loop".to_string(),
+        other => format!("`{other}` point"),
+    }
 }
 
 /// The line of one arrow: `+ arrow branch `x > 3` (src/lib.rs:6) → return (src/lib.rs:9) (true)`.
@@ -514,7 +517,7 @@ fn arrow_line(sign: &str, graph: &FlowGraph, side: usize, index: usize, lines: &
 
 /// The element of one point with its arrows that are not shared. The text of the fact line has
 /// the short labels; the lines of `status --verbose` have the full texts.
-fn point_element(sign: &str, graph: &FlowGraph, side: usize, point: usize, arrows: Vec<usize>, lines: &mut Lines) -> Element {
+fn point_element(sign: &str, graph: &FlowGraph, side: usize, point: usize, arrows: Vec<usize>, lines: &mut Lines, anchor: Anchor) -> Element {
     let shown: Vec<String> = arrows.iter().map(|index| arrow_text(graph, &graph.arrows[*index].2, graph.arrows[*index].1, true)).collect();
     let head = format!("{sign} {}", named(lines, side, graph, point, true));
     let text = if shown.is_empty() { head.clone() } else { format!("{head}: {}", shown.join(", ")) };
@@ -523,12 +526,16 @@ fn point_element(sign: &str, graph: &FlowGraph, side: usize, point: usize, arrow
     let callees = if calls.is_empty() { String::new() } else { format!("; callees {}", calls.iter().map(|text| format!("`{text}`")).collect::<Vec<_>>().join(", ")) };
     let mut details = vec![format!("{sign} {}{callees}", named(lines, side, graph, point, false))];
     details.extend(arrows.iter().map(|index| arrow_line(sign, graph, side, *index, lines, false)));
-    Element { places: graph.points[point].place().cloned().map(|at| (side, at)).into_iter().collect(), text, arrows: arrows.into_iter().map(|index| (side, index)).collect(), details, all: false, point: Some((side, point)) }
+    let (group, arrow_group) = if side == 1 { (0, 3) } else { (1, 4) };
+    let mut parts = vec![Part { group, label: point_word(graph, point), text: summary_text(&graph.points[point]) }];
+    parts.extend(arrows.iter().map(|_| Part { group: arrow_group, label: "arrow".into(), text: String::new() }));
+    Element { places: graph.points[point].place().cloned().map(|at| (side, at)).into_iter().collect(), text, arrows: arrows.into_iter().map(|index| (side, index)).collect(), details, all: false, point: Some((side, point)), anchor, parts }
 }
 
 /// The elements of a diff: each changed point and each arrow that is not shared.
-fn elements(old: &FlowGraph, new: &FlowGraph, diff: &GraphDiff, lines: &mut Lines) -> Vec<Element> {
+fn elements(old: &FlowGraph, new: &FlowGraph, diff: &GraphDiff, lines: &mut Lines, links: &Links) -> Vec<Element> {
     let graphs = [old, new];
+    let roles = [crate::flowalign::roles(old), crate::flowalign::roles(new)];
     let mut out = Vec::new();
     let place = |graph: &FlowGraph, point: usize| graph.points[point].place().cloned();
     for (side, list, sign) in [(1usize, &diff.added, "+"), (0usize, &diff.removed, "−")] {
@@ -536,7 +543,8 @@ fn elements(old: &FlowGraph, new: &FlowGraph, diff: &GraphDiff, lines: &mut Line
         let changed_arrows = if side == 1 { &diff.added_arrows } else { &diff.removed_arrows };
         for &point in list {
             let arrows: Vec<usize> = changed_arrows.iter().copied().filter(|index| graph.arrows[*index].0 == point).collect();
-            out.push(point_element(sign, graph, side, point, arrows, lines));
+            let anchor = point_anchor(graph, &roles[side], links, side, point);
+            out.push(point_element(sign, graph, side, point, arrows, lines, anchor));
         }
     }
     for &(a, b) in &diff.changed {
@@ -562,9 +570,39 @@ fn elements(old: &FlowGraph, new: &FlowGraph, diff: &GraphDiff, lines: &mut Line
         let text = changed(true);
         let detail = changed(false);
         let places = [place(old, a).map(|at| (0, at)), place(new, b).map(|at| (1, at))].into_iter().flatten().collect();
-        out.push(Element { places, details: vec![detail], text, arrows: Vec::new(), all: false, point: None });
+        let mut anchor = point_anchor(old, &roles[0], links, 0, a);
+        let other = point_anchor(new, &roles[1], links, 1, b);
+        anchor.elements.extend(other.elements);
+        anchor.points.extend(other.points);
+        anchor.implicit &= other.implicit;
+        let words = if x.short_text() != y.short_text() { format!("`{}` → `{}`", x.short_text(), y.short_text()) } else { format!("`{}`", y.short_text()) };
+        let parts = vec![Part { group: 2, label: format!("changed {}", changed_noun(&y.kind)), text: words }];
+        out.push(Element { places, details: vec![detail], text, arrows: Vec::new(), all: false, point: None, anchor, parts });
     }
     let shown: BTreeSet<(usize, usize)> = out.iter().flat_map(|element| element.arrows.iter().copied()).collect();
+    let paired: [BTreeSet<usize>; 2] = [diff.pairs.iter().map(|(a, _)| *a).collect(), diff.pairs.iter().map(|(_, b)| *b).collect()];
+    let partner: [BTreeMap<usize, usize>; 2] = [diff.pairs.iter().copied().collect(), diff.pairs.iter().map(|(a, b)| (*b, *a)).collect()];
+    // [R98.2-1] The anchor point of an arrow that is not shared: an end with no pair (the first
+    // end first); else the new target of the same arrow on the other side (an arrow of the
+    // partner of its first point with the same label, to a point with no pair); else the point
+    // that selects the arrow (its first end), or its second end for an arrow of the entry.
+    let arrow_anchor = |side: usize, index: usize| -> (usize, usize) {
+        let (from, to, label) = &graphs[side].arrows[index];
+        if !paired[side].contains(from) {
+            return (side, *from);
+        }
+        if !paired[side].contains(to) {
+            return (side, *to);
+        }
+        let other = 1 - side;
+        let list = if other == 1 { &diff.added_arrows } else { &diff.removed_arrows };
+        if let Some(start) = partner[side].get(from)
+            && let Some(found) = list.iter().map(|at| &graphs[other].arrows[*at]).find(|(a, b, name)| a == start && name == label && !paired[other].contains(b))
+        {
+            return (other, found.1);
+        }
+        if graphs[side].points[*from].kind == "entry" { (side, *to) } else { (side, *from) }
+    };
     for (side, list, sign) in [(1usize, &diff.added_arrows, "+"), (0usize, &diff.removed_arrows, "−")] {
         let graph = graphs[side];
         for &index in list {
@@ -579,9 +617,12 @@ fn elements(old: &FlowGraph, new: &FlowGraph, diff: &GraphDiff, lines: &mut Line
             let single = if side == 1 { &diff.added } else { &diff.removed };
             let ends: Vec<usize> = [*from, *to].into_iter().filter(|end| single.contains(end)).collect();
             let all = ends.is_empty();
+            let (anchor_side, anchor_point) = arrow_anchor(side, index);
+            let anchor = point_anchor(graphs[anchor_side], &roles[anchor_side], links, anchor_side, anchor_point);
             let ends = if all { vec![*from, *to] } else { ends };
             let places = ends.into_iter().filter_map(|end| place(graph, end)).map(|at| (side, at)).collect();
-            out.push(Element { places, details: vec![detail], text, arrows: vec![(side, index)], all, point: None });
+            let parts = vec![Part { group: if side == 1 { 3 } else { 4 }, label: "arrow".into(), text: String::new() }];
+            out.push(Element { places, details: vec![detail], text, arrows: vec![(side, index)], all, point: None, anchor, parts });
         }
     }
     out
@@ -590,10 +631,13 @@ fn elements(old: &FlowGraph, new: &FlowGraph, diff: &GraphDiff, lines: &mut Line
 /// The lines of a full graph on one side (a body that only one tree has).
 fn whole(graph: &FlowGraph, side: usize, lines: &mut Lines) -> Vec<Element> {
     let sign = if side == 1 { "+" } else { "−" };
+    let roles = crate::flowalign::roles(graph);
+    let links = Links::default();
     (0..graph.points.len())
         .map(|point| {
             let arrows: Vec<usize> = (0..graph.arrows.len()).filter(|index| graph.arrows[*index].0 == point).collect();
-            point_element(sign, graph, side, point, arrows, lines)
+            let anchor = point_anchor(graph, &roles, &links, side, point);
+            point_element(sign, graph, side, point, arrows, lines, anchor)
         })
         .collect()
 }
@@ -601,30 +645,27 @@ fn whole(graph: &FlowGraph, side: usize, lines: &mut Lines) -> Vec<Element> {
 /// The most `control flow:` lines under one fact (design 60, C1).
 pub const FACT_LINES: usize = 3;
 
-/// The holder function of a body: the smallest node pair of the tree compare that holds the
-/// node of a point.
-struct Holder<'a> {
-    pairs: &'a [semilla_syntax::NodePair],
-    /// The file of the item on each side.
-    files: [Option<String>; 2],
-}
-
-impl Holder<'_> {
-    fn of(&self, map: &mut crate::mirmap::MirMap, side: usize, point: &FlowPoint) -> Option<usize> {
-        let place = point.place()?;
-        if self.files[side].as_deref() != Some(place.0.as_str()) {
-            return None;
-        }
-        let node = map.node(side, place)?;
-        self.pairs
-            .iter()
-            .enumerate()
-            .filter(|(_, pair)| pair.ranges[side].0 <= node.start && node.end <= pair.ranges[side].1)
-            // The smallest node; of two pairs of one node, the pair with equal tokens (the tree
-            // compare can try a pair first and find a better pair later).
-            .max_by(|(_, a), (_, b)| a.ranges[side].0.cmp(&b.ranges[side].0).then(b.ranges[side].1.cmp(&a.ranges[side].1)).then(a.equal.cmp(&b.equal)))
-            .map(|(index, _)| index)
-    }
+/// [R98.2-1] The graph changes of one body (the first result, the worst configuration) for the
+/// map of design 98: the step keeps them until the map is complete (`flowmap::apply`).
+#[derive(Clone, Debug, Default)]
+pub struct BodyChanges {
+    /// The MIR name (the new name of a pair of nested bodies), and the name in the output.
+    pub name: String,
+    pub shown: String,
+    pub place: String,
+    pub item: Option<String>,
+    pub old_item: Option<String>,
+    /// True if an edit of the step is in the body.
+    pub edit: bool,
+    /// [R98.6-1] The level of the normal form where the MIR is equal: the equal MIR explains each
+    /// graph change of the body.
+    pub level: Option<String>,
+    /// [R98.3-1] True if the body pair has an element table: a point with MIR elements and no
+    /// owner is implicit.
+    pub aligned: bool,
+    /// The result word of the body: `graph changes`, `graph added`, …
+    pub word: String,
+    pub(crate) elements: Vec<Element>,
 }
 
 /// True if the item has no body node on each side that has it: a `const`, a `static`, an
@@ -676,6 +717,13 @@ struct Outcome {
 
 /// The result of one body over its configurations.
 struct BodyResult {
+    /// [R98.6-1] The level of the normal form where the MIR of the body pair is equal.
+    level: Option<String>,
+    /// [R98.3-1] True if the body pair has an element table (the projection can find an owner).
+    aligned: bool,
+    /// [R98.1-1] True if the body has a line for its changed MIR (a body with no edit and the same
+    /// graph): the line says "no edit in the body".
+    kept: bool,
     /// The new item and the old item (for the facts of the body, design 61).
     item: Option<String>,
     old_item: Option<String>,
@@ -804,6 +852,13 @@ fn chart(old: &FlowGraph, new: &FlowGraph, diff: &GraphDiff, lines: &mut Lines) 
     Some(FlowChart { nodes, edges })
 }
 
+/// [R98.1-2] The element tables of a body pair: each distinct table of its diffs, else its one
+/// table.
+fn body_tables(body: &crate::BodyComparison) -> Vec<std::sync::Arc<crate::MirTable>> {
+    let Some(diff) = &body.elements else { return Vec::new() };
+    if diff.graph_tables.is_empty() { diff.table.iter().cloned().collect() } else { diff.graph_tables.clone() }
+}
+
 /// The flowchart of a full graph of one side (a body that only one tree has).
 fn whole_chart(graph: &FlowGraph, side: usize, lines: &mut Lines) -> Option<semilla_core::report::FlowChart> {
     use semilla_core::report::{FlowChart, FlowChartEdge, FlowChartNode};
@@ -835,6 +890,10 @@ struct Work {
     status: crate::BodyStatus,
     item: Option<String>,
     graphs: Vec<GraphPair>,
+    /// [R98.1-1] [R98.1-2] The element tables of the body pair (R97.2-1): one for each distinct
+    /// text of its targets and its checked configurations. Empty: no table (a body that is not
+    /// different, no element data, or a pair of nested bodies with two names).
+    tables: Vec<std::sync::Arc<crate::MirTable>>,
 }
 
 /// The kind of a nested body for its pair: the last segment of its name with no number
@@ -917,7 +976,7 @@ fn works(outcome: &crate::StepOutcome, index: &crate::checks::BodyIndex, map: &m
     let mut out: Vec<Work> = Vec::new();
     for (at, body) in bodies.iter().enumerate() {
         if root[at].is_none() {
-            out.push(Work { name: body.name.clone(), shown: body.name.clone(), place: body_place(body), status: body.status.clone(), item: items[at].clone(), graphs: body.graphs.clone() });
+            out.push(Work { name: body.name.clone(), shown: body.name.clone(), place: body_place(body), status: body.status.clone(), item: items[at].clone(), graphs: body.graphs.clone(), tables: body_tables(body) });
         }
     }
     // The nested bodies of each root body.
@@ -1058,7 +1117,13 @@ fn works(outcome: &crate::StepOutcome, index: &crate::checks::BodyIndex, map: &m
                     names.insert(bodies[old.body].name.clone(), name.clone());
                 }
             }
-            out.push(Work { name, shown, place, status, item: item.clone(), graphs: combine(old, Some(found)) });
+            // [R98.1-1] The table of the MIR compare pairs the bodies by the name: a pair of two
+            // names has no table.
+            let tables = match old {
+                Some(old) if old.body == found.body => body_tables(bodies[found.body]),
+                _ => Vec::new(),
+            };
+            out.push(Work { name, shown, place, status, item: item.clone(), graphs: combine(old, Some(found)), tables });
         }
         for (a, found) in lists[0].iter().enumerate() {
             if partner[0][a].is_some() {
@@ -1066,7 +1131,7 @@ fn works(outcome: &crate::StepOutcome, index: &crate::checks::BodyIndex, map: &m
             }
             unpaired_old.push(bodies[found.body].name.clone());
             let (shown, place) = shown(lines, 0, found);
-            out.push(Work { name: bodies[found.body].name.clone(), shown, place, status: crate::BodyStatus::BeforeOnly, item: item.clone(), graphs: combine(Some(found), None) });
+            out.push(Work { name: bodies[found.body].name.clone(), shown, place, status: crate::BodyStatus::BeforeOnly, item: item.clone(), graphs: combine(Some(found), None), tables: Vec::new() });
         }
     }
     // An old nested body with no pair whose name a new body has: its old name in a text must
@@ -1146,13 +1211,52 @@ pub(crate) fn apply(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, ou
     crate::equiv::instance_lines(outcome, lines);
 }
 
+/// [R98.1-1] The diff of the two graphs of a body (design 98), the places of the MIR elements of
+/// each point, and the cause when the pairs do not come from the element table:
+/// - with the element table of the body pair: the pairs of the alignment (`flowalign::align`);
+/// - [R98.1-2] with no table (a body whose MIR is equal, a body pair with no element data): the
+///   points pair by their index when the two graphs have one structure;
+/// - else only the entries pair. The cause is in the summary of the body.
+pub(crate) fn graph_diff(old: &FlowGraph, new: &FlowGraph, tables: &[std::sync::Arc<crate::MirTable>], status: &crate::BodyStatus) -> (GraphDiff, Links, Option<String>) {
+    use crate::flowalign::{align, entries_only, identity, link, roles, Role, TableSide};
+    let role = [roles(old), roles(new)];
+    // [R98.1-2] Of two tables (two targets or two configurations with two texts), the table that
+    // fits the two graphs: the most points of one terminator that find their terminator; a tie
+    // takes the first table.
+    let mut best: Option<(usize, [TableSide; 2], [crate::flowalign::Linked; 2], &crate::MirTable)> = None;
+    for table in tables {
+        let (Some(first), Some(second)) = (TableSide::new(&table.texts[0], &table.ranges[0], &table.same[0]), TableSide::new(&table.texts[1], &table.ranges[1], &table.same[1])) else { continue };
+        let linked = [link(old, &first), link(new, &second)];
+        let fit: usize = (0..2).map(|side| linked[side].terms.iter().zip(&role[side]).filter(|(terms, role)| matches!(role, Role::Single(_)) && !terms.is_empty()).count()).sum();
+        if best.as_ref().is_none_or(|(known, ..)| fit > *known) {
+            best = Some((fit, [first, second], linked, table));
+        }
+    }
+    if let Some((_, sides, linked, table)) = best {
+        let pairs = align([old, new], [&linked[0], &linked[1]], &table.pairs);
+        let found = diff_pairs(old, new, &pairs);
+        let places = [0usize, 1].map(|side| linked[side].elements.iter().map(|list| list.iter().filter_map(|at| crate::flowalign::place(&sides[side].ranges[*at]).cloned()).collect()).collect());
+        return (found, Links { places }, None);
+    }
+    // With no table (an equal MIR, or a body pair with no element data): two graphs of one
+    // structure (the same kinds in the same order, the arrows with the same ends) pair by the
+    // index; the alignment of an equal text is the identity.
+    if let Some(pairs) = identity(old, new) {
+        return (diff_pairs(old, new, &pairs), Links::default(), None);
+    }
+    let cause = match status {
+        crate::BodyStatus::Equal { level, .. } => format!("no element alignment: the MIR is equal at `{level}`, and the two graphs have two structures (R98.1-2)"),
+        _ => "no element alignment: the body pair has no element table, and the two graphs have two structures (R98.1-2)".to_string(),
+    };
+    (diff_pairs(old, new, &entries_only(old, new)), Links::default(), Some(cause))
+}
+
 fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcome: &mut crate::StepOutcome) {
     let (before, after) = (input.before, input.after);
     let index = crate::checks::BodyIndex::new(&outcome.bodies, after, before);
     let reverse: BTreeMap<&String, &String> = outcome.renames.items.iter().map(|(old, new)| (new, old)).collect();
     let mut map = crate::mirmap::MirMap::new(before, after, &outcome.edits);
     let mut lines = Lines::new(before, after);
-    let empty: Vec<semilla_syntax::NodePair> = Vec::new();
     let mut results: Vec<BodyResult> = Vec::new();
     let works = works(outcome, &index, &mut map, &mut lines, [before, after], &reverse);
     for body in &works {
@@ -1161,10 +1265,6 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
         let edit = match (&item, &old_item) {
             (Some(item), Some(old)) => edit_in_body(&outcome.edits, item, old, [before, after]),
             _ => false,
-        };
-        let holder = Holder {
-            pairs: old_item.as_ref().and_then(|old| outcome.node_pairs.get(old)).map(Vec::as_slice).unwrap_or(&empty),
-            files: [old_item.as_ref().and_then(|old| before.items.get(old)).map(|found| found.file.clone()), item.as_ref().and_then(|new| after.items.get(new)).map(|found| found.file.clone())],
         };
         let mut outcomes: Vec<Outcome> = Vec::new();
         // R71.2-1: the graphs of each configuration, for the first result.
@@ -1176,21 +1276,8 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
                 match (&pair.old, &pair.new) {
                     (FlowSide::Graph(old), FlowSide::Graph(new)) if old.coroutine || new.coroutine => Outcome { word: "graph not shown: coroutine".into(), summary: "the MIR of the driver is the state machine of the coroutine, not the source".into(), elements: Vec::new(), configs: Vec::new(), rank: coroutine_rank(&body.status), chart: None },
                     (FlowSide::Graph(old), FlowSide::Graph(new)) => {
-                        let ids = [0usize, 1].map(|side| [old, new][side].points.iter().map(|point| holder.of(&mut map, side, point)).collect::<Vec<_>>());
-                        let sources = [0usize, 1].map(|side| [old, new][side].points.iter().map(|point| point.place().and_then(|place| map.node(side, place)).map(|node| node.text)).collect::<Vec<_>>());
-                        let mut found = diff_with(old, new, &|side, point| ids[side][point], &|side, point| sources[side][point].clone());
-                        // A changed text that only facts of the category `rename` hold is the
-                        // rename of the fact: such a fact covers a place only if the place is
-                        // equal after its map (R49.3-1). The pair keeps its text (60.3, rule 8).
-                        let mut renamed: Vec<String> = Vec::new();
-                        found.changed.retain(|(a, b)| {
-                            let (x, y) = (&old.points[*a], &new.points[*b]);
-                            if x.mark != y.mark || x.calls != y.calls || !rename_only(&outcome.report.facts, [(0, x.place()), (1, y.place())], &mut lines) {
-                                return true;
-                            }
-                            renamed.push(format!("= {} `{}` → `{}` ({}, {}): a rename", y.kind, x.text, y.text, lines.text(0, x), lines.text(1, y)));
-                            false
-                        });
+                        // [R98.1-1] The pairs of the points come from the MIR alignment.
+                        let (found, links, cause) = graph_diff(old, new, &body.tables, &body.status);
                         let rank = found.result();
                         let word = match rank {
                             FlowResult::Same => "same graph",
@@ -1198,11 +1285,13 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
                             FlowResult::Changes => "graph changes",
                         };
                         let chart = (rank == FlowResult::Changes).then(|| chart(old, new, &found, &mut lines)).flatten();
-                        let mut elements = elements(old, new, &found, &mut lines);
+                        let elements = elements(old, new, &found, &mut lines, &links);
                         firsts.entry(pair.config.clone()).or_insert_with(|| FirstGraphs::Diff(old.clone(), new.clone(), found.clone()));
-                        // The renamed texts are lines of `status --verbose` only: no fact holds them.
-                        elements.extend(renamed.into_iter().map(|text| Element { places: Vec::new(), details: vec![text.clone()], text, arrows: Vec::new(), all: true, point: None }));
-                        Outcome { word: word.into(), summary: summary(old, new, &found), elements, configs: Vec::new(), rank, chart }
+                        let mut summary = summary(old, new, &found);
+                        if let Some(cause) = cause.filter(|_| rank != FlowResult::Same) {
+                            summary.push_str(&format!("; {cause}"));
+                        }
+                        Outcome { word: word.into(), summary, elements, configs: Vec::new(), rank, chart }
                     }
                     (FlowSide::NoBody, FlowSide::Graph(graph)) | (FlowSide::Graph(graph), FlowSide::NoBody) => {
                         let side = if matches!(pair.old, FlowSide::NoBody) { 1 } else { 0 };
@@ -1259,7 +1348,11 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
         // A body with no edit and the same graph needs no line (design 60, B6), except a body
         // that reads a changed constant: its result can change (R64.5-1), or a static whose
         // initial value changes (R73.2-1).
-        let only_statics = !edit && consts.is_empty() && outcomes.iter().all(|known| known.rank == FlowResult::Same);
+        // [R98.1-1] The line of a body does not depend on the pairs of the graph compare (design
+        // 98): a body whose MIR is not equal keeps its line and its check (the equal-MIR check of
+        // design 84 and the coverage of the changed bodies read the line).
+        let mir_changes = !matches!(&body.status, crate::BodyStatus::Equal { .. });
+        let only_statics = !edit && consts.is_empty() && outcomes.iter().all(|known| known.rank == FlowResult::Same) && !mir_changes;
         if only_statics && statics.is_empty() {
             continue;
         }
@@ -1280,7 +1373,14 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
         }
         let equal = matches!(&body.status, crate::BodyStatus::Equal { level, .. } if level == "n0") && consts.is_empty();
         let first = outcomes[0].configs.first().and_then(|config| firsts.get(config)).cloned();
-        results.push(BodyResult { item: item.clone(), old_item: old_item.clone(), pairs, equal, name: body.name.clone(), shown: body.shown.clone(), place: body.place.clone(), edit, outcomes, consts, statics, first });
+        let level = match &body.status {
+            crate::BodyStatus::Equal { level, .. } => Some(level.clone()),
+            _ => None,
+        };
+        // A body with no edit that has its line only for its changed MIR (no changed constant, no
+        // changed static, the same graph).
+        let kept = !edit && mir_changes && consts.is_empty() && statics.is_empty() && outcomes.iter().all(|known| known.rank == FlowResult::Same);
+        results.push(BodyResult { level, aligned: !body.tables.is_empty(), kept, item: item.clone(), old_item: old_item.clone(), pairs, equal, name: body.name.clone(), shown: body.shown.clone(), place: body.place.clone(), edit, outcomes, consts, statics, first });
     }
     unit_moves(&mut results);
     let mut report = FlowReport::default();
@@ -1303,7 +1403,7 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
         if result.outcomes.len() > 1 {
             line.push_str(&format!(" (in {}; {} more result(s) in other configurations: {full_step})", first.configs.join(", "), result.outcomes.len() - 1));
         }
-        if !result.edit && first.rank != FlowResult::Same {
+        if !result.edit && (first.rank != FlowResult::Same || result.kept) {
             line.push_str("; no edit in the body");
         }
         if !result.edit && !result.consts.is_empty() {
@@ -1354,45 +1454,23 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
             .collect();
         report.bodies.push(FlowBody { name: result.shown.clone(), place: result.place.clone(), line, details, chart: first.chart.clone(), list });
     }
-    // The lines of each fact: each element whose place is in a position of the fact.
-    for fact in &outcome.report.facts {
-        if fact.positions.is_empty() {
-            continue;
-        }
-        let mut found: Vec<String> = Vec::new();
-        for result in &results {
-            // The lines of the first result of the body (the worst; the step line names the
-            // other configurations).
-            let known = &result.outcomes[0];
-            let mut held = |element: &Element| {
-                let mut each = element.places.iter().map(|(side, place)| lines.span(*side, place).is_some_and(|(file, start, end)| holds(&fact.positions, *side, &file, start, end)));
-                if element.all { !element.places.is_empty() && each.all(|held| held) } else { each.any(|held| held) }
-            };
-            // A full graph of a body that one tree has: one line with the counts (design 60,
-            // B5).
-            if known.word.starts_with("graph added") || known.word.starts_with("graph removed") {
-                if known.elements.iter().any(&mut held) {
-                    let sign = if known.word.starts_with("graph added") { "+" } else { "−" };
-                    found.push(format!("{sign} graph of `{}`: {} ({full_step})", result.shown, known.summary));
-                }
-                continue;
-            }
-            for element in &known.elements {
-                if held(element) && !found.contains(&element.text) {
-                    found.push(element.text.clone());
-                }
-            }
-        }
-        if found.is_empty() {
-            continue;
-        }
-        let more = found.len().saturating_sub(FACT_LINES);
-        found.truncate(FACT_LINES);
-        if more > 0 {
-            found.push(format!("… {more} more ({full_step})"));
-        }
-        report.facts.insert(fact.id.clone(), found);
-    }
+    // [R98.2-1] The graph changes of each body go to the entries of the map of design 98 after
+    // the map is complete (`flowmap::apply`): the step keeps them here.
+    outcome.flow_changes = results
+        .iter()
+        .map(|result| BodyChanges {
+            name: result.name.clone(),
+            shown: result.shown.clone(),
+            place: result.place.clone(),
+            item: result.item.clone(),
+            old_item: result.old_item.clone(),
+            edit: result.edit,
+            level: result.level.clone(),
+            aligned: result.aligned,
+            word: result.outcomes[0].word.clone(),
+            elements: result.outcomes[0].elements.clone(),
+        })
+        .collect();
     // R68.6-2: a body with no edit that reads a changed constant or a changed static (its
     // constant values, R64.5-1, R68.6-1) is an affected body of the value fact of that item, with
     // the link "through". The MIR text of a reader of a static names the static, not its value,
@@ -1549,27 +1627,6 @@ fn unit_moves(results: &mut [BodyResult]) {
     }
 }
 
-/// True if each fact that holds a place of a point pair is a fact of the category `rename`,
-/// and one fact holds a place.
-fn rename_only(facts: &[semilla_core::Fact], places: [(usize, Option<&MirPlace>); 2], lines: &mut Lines) -> bool {
-    let spans: Vec<(usize, (String, usize, usize))> = places.iter().filter_map(|(side, place)| Some((*side, lines.span(*side, (*place)?)?))).collect();
-    let mut any = false;
-    for fact in facts {
-        if spans.iter().any(|(side, (file, start, end))| holds(&fact.positions, *side, file, *start, *end)) {
-            if fact.category != semilla_core::Category::Rename {
-                return false;
-            }
-            any = true;
-        }
-    }
-    any
-}
-
-/// True if a position of a fact holds a line range of one side.
-fn holds(positions: &[Position], side: usize, file: &str, start: usize, end: usize) -> bool {
-    positions.iter().any(|position| position.file == file && position.old == (side == 0) && position.start <= end && start <= position.end)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1583,47 +1640,13 @@ mod tests {
         FlowGraph { points, arrows: arrows.iter().map(|(a, b, label)| (*a, *b, label.to_string())).collect(), ..FlowGraph::default() }
     }
 
-    /// A holder function from a list for each side: the node pair of each point.
-    fn holders(old: Vec<Option<usize>>, new: Vec<Option<usize>>) -> impl Fn(usize, usize) -> Option<usize> {
-        move |side, point| if side == 0 { old[point] } else { new[point] }
+    /// The pairs of the points of each index in a list (the pairs that an alignment gives).
+    fn diff(old: &FlowGraph, new: &FlowGraph, pairs: &[(usize, usize)]) -> GraphDiff {
+        diff_pairs(old, new, pairs)
     }
 
-    // rule+ R60.3-1
-    // rule- R60.3-1
-    #[test]
-    fn two_points_pair_through_the_smallest_node_pair_and_not_by_an_equal_text() {
-        // Two statements keep their node pairs (0 ↔ 0, 1 ↔ 1). The calls swap their callees:
-        // each call pairs with the call of its own statement, so two call targets change. A pair
-        // by the text would give two equal calls and hide the swap of the order.
-        let old = graph(vec![point("entry", "", 0), point("call", "demo::f", 10), point("call", "demo::g", 20), point("return", "", 30)], &[(0, 1, ""), (1, 2, "return"), (2, 3, "return")]);
-        let new = graph(vec![point("entry", "", 0), point("call", "demo::g", 10), point("call", "demo::f", 20), point("return", "", 30)], &[(0, 1, ""), (1, 2, "return"), (2, 3, "return")]);
-        let found = diff(&old, &new, &holders(vec![None, Some(0), Some(1), None], vec![None, Some(0), Some(1), None]));
-        assert_eq!(found.changed, vec![(1, 1), (2, 2)]);
-        assert_eq!(found.result(), FlowResult::SameStructure);
-        // The negative case: with no node pair, the equal texts pair (rule 2), and the arrows
-        // show the new order.
-        let found = diff(&old, &new, &holders(vec![None; 4], vec![None; 4]));
-        assert!(found.changed.is_empty(), "{found:?}");
-        assert_eq!(found.result(), FlowResult::Changes);
-        // A node pair needs equal kinds: a call and a panic in one node pair do not pair.
-        let panic = graph(vec![point("entry", "", 0), point("panic", "demo::f", 10), point("call", "demo::g", 20), point("return", "", 30)], &[(0, 1, "")]);
-        let found = diff(&old, &panic, &holders(vec![None, Some(0), Some(1), None], vec![None, Some(0), Some(1), None]));
-        assert_eq!((found.removed.clone(), found.added.clone()), (vec![1], vec![1]), "{found:?}");
-    }
-
-    // rule+ R60.3-2
-    // rule- R60.3-2
-    #[test]
-    fn a_point_with_no_node_pair_pairs_by_its_kind_and_its_text_in_source_order() {
-        let old = graph(vec![point("entry", "", 0), point("call", "demo::f", 10), point("return", "", 30)], &[(0, 1, ""), (1, 2, "return")]);
-        let new = graph(vec![point("entry", "", 0), point("branch", "x > 3", 5), point("call", "demo::f", 10), point("return", "", 30)], &[(0, 1, ""), (1, 2, "true"), (1, 3, "false"), (2, 3, "return")]);
-        let found = diff(&old, &new, &holders(vec![None; 3], vec![None; 4]));
-        assert_eq!(found.pairs, vec![(0, 0), (1, 2), (2, 3)]);
-        assert_eq!(found.added, vec![1]);
-        // The negative case: a different text gives no pair.
-        let other = graph(vec![point("entry", "", 0), point("call", "demo::h", 10), point("return", "", 30)], &[(0, 1, ""), (1, 2, "return")]);
-        let found = diff(&old, &other, &holders(vec![None; 3], vec![None; 3]));
-        assert_eq!((found.removed.clone(), found.added.clone()), (vec![1], vec![1]));
+    fn same(count: usize) -> Vec<(usize, usize)> {
+        (0..count).map(|index| (index, index)).collect()
     }
 
     // rule+ R60.3-3
@@ -1631,12 +1654,12 @@ mod tests {
     #[test]
     fn an_arrow_is_shared_only_if_its_two_ends_pair_and_its_labels_are_equal() {
         let old = graph(vec![point("entry", "", 0), point("branch", "x > 3", 5), point("return", "", 30)], &[(0, 1, ""), (1, 2, "true"), (1, 2, "false")]);
-        let found = diff(&old, &old.clone(), &holders(vec![None; 3], vec![None; 3]));
+        let found = diff(&old, &old.clone(), &same(3));
         assert!(found.added_arrows.is_empty() && found.removed_arrows.is_empty());
         assert_eq!(found.result(), FlowResult::Same);
         // The negative case: the same two ends with a new label.
         let new = graph(old.points.clone(), &[(0, 1, ""), (1, 2, "true"), (1, 2, "otherwise")]);
-        let found = diff(&old, &new, &holders(vec![None; 3], vec![None; 3]));
+        let found = diff(&old, &new, &same(3));
         assert_eq!((found.removed_arrows.clone(), found.added_arrows.clone()), (vec![2], vec![2]));
         assert_eq!(found.result(), FlowResult::Changes);
     }
@@ -1646,16 +1669,16 @@ mod tests {
     #[test]
     fn the_result_of_a_body_is_same_graph_same_structure_or_graph_changes() {
         let old = graph(vec![point("entry", "", 0), point("branch", "x > 3", 5), point("return", "", 30)], &[(0, 1, ""), (1, 2, "true"), (1, 2, "false")]);
-        let same = diff(&old, &old.clone(), &holders(vec![None; 3], vec![None; 3]));
-        assert_eq!(same.result(), FlowResult::Same);
+        let found = diff(&old, &old.clone(), &same(3));
+        assert_eq!(found.result(), FlowResult::Same);
         let mut changed = old.clone();
         changed.points[1].text = "x >= 3".into();
-        let found = diff(&old, &changed, &holders(vec![None, Some(0), None], vec![None, Some(0), None]));
+        let found = diff(&old, &changed, &same(3));
         assert_eq!(found.result(), FlowResult::SameStructure);
         assert_eq!(summary(&old, &changed, &found), "1 changed condition");
-        // The negative case: a changed text with no node pair is a removed point and an added
-        // point, so the result is not `same structure`.
-        let found = diff(&old, &changed, &holders(vec![None; 3], vec![None; 3]));
+        // The negative case: a point that the alignment does not pair is a removed point and an
+        // added point, so the result is not `same structure`.
+        let found = diff(&old, &changed, &[(0, 0), (2, 2)]);
         assert_eq!(found.result(), FlowResult::Changes);
         assert_eq!(summary(&old, &changed, &found), "+1 branch, −1 branch, +3 arrows, −3 arrows");
     }
@@ -1668,12 +1691,12 @@ mod tests {
         let mut lines = Lines::new(&ws, &ws);
         let old = graph(vec![point("entry", "", 0), point("call", "demo::price", 10), point("return", "", 30)], &[(0, 1, ""), (1, 2, "return")]);
         let new = graph(vec![point("entry", "", 0), point("branch", "qty == 0", 5), point("call", "demo::price", 10), point("return", "", 30)], &[(0, 1, ""), (1, 3, "true"), (1, 2, "false"), (2, 3, "return")]);
-        let found = diff(&old, &new, &holders(vec![None; 3], vec![None; 4]));
-        let texts: Vec<String> = elements(&old, &new, &found, &mut lines).into_iter().map(|element| element.text).collect();
+        let found = diff(&old, &new, &[(0, 0), (1, 2), (2, 3)]);
+        let texts: Vec<String> = elements(&old, &new, &found, &mut lines, &Links::default()).into_iter().map(|element| element.text).collect();
         assert_eq!(texts, ["+ branch `qty == 0` (no place): true → return, false → call `price`", "+ arrow entry (no place) → branch `qty == 0` (no place)", "− arrow entry (no place) → call `price` (no place)"]);
         // The negative case: a shared arrow and a pair with an equal text have no line.
-        let found = diff(&old, &old.clone(), &holders(vec![None; 3], vec![None; 3]));
-        assert!(elements(&old, &old.clone(), &found, &mut lines).is_empty());
+        let found = diff(&old, &old.clone(), &same(3));
+        assert!(elements(&old, &old.clone(), &found, &mut lines, &Links::default()).is_empty());
     }
 
     // rule+ R60.4-7
@@ -1689,8 +1712,8 @@ mod tests {
         let changed = |from: &str, to: &str, lines: &mut Lines| {
             let old = graph(vec![point("entry", "", 0), point("call", from, 10), point("return", "", 30)], &[(0, 1, ""), (1, 2, "return")]);
             let new = graph(vec![point("entry", "", 0), point("call", to, 10), point("return", "", 30)], &[(0, 1, ""), (1, 2, "return")]);
-            let found = diff(&old, &new, &holders(vec![None, Some(0), None], vec![None, Some(0), None]));
-            elements(&old, &new, &found, lines).into_iter().map(|element| (element.text, element.details)).next().unwrap()
+            let found = diff(&old, &new, &same(3));
+            elements(&old, &new, &found, lines, &Links::default()).into_iter().map(|element| (element.text, element.details)).next().unwrap()
         };
         let (text, details) = changed("<shop::Food as shop::Tax>::rate", "<shop::Fuel as shop::Tax>::rate", &mut lines);
         assert_eq!(text, "~ call `<Food as Tax>::rate` → `<Fuel as Tax>::rate` (no place, no place)");
@@ -1708,16 +1731,16 @@ mod tests {
         let mut new = old.clone();
         old.points[1].calls = vec!["<shop::Food as std::iter::Iterator>::next".into()];
         new.points[1].calls = vec!["<shop::Fuel as std::iter::Iterator>::next".into()];
-        let found = diff(&old, &new, &holders(vec![None, Some(0), None], vec![None, Some(0), None]));
+        let found = diff(&old, &new, &same(3));
         assert_eq!(found.result(), FlowResult::SameStructure);
         assert!(!same_shape(&old, &new));
         let ws = semilla_syntax::Workspace::default();
-        let texts: Vec<String> = elements(&old, &new, &found, &mut Lines::new(&ws, &ws)).into_iter().map(|element| element.text).collect();
+        let texts: Vec<String> = elements(&old, &new, &found, &mut Lines::new(&ws, &ws), &Links::default()).into_iter().map(|element| element.text).collect();
         assert_eq!(texts, ["~ for `make()` (no place, no place): callees −`<Food as Iterator>::next` +`<Fuel as Iterator>::next`"]);
         // The negative case: equal callees keep the graph.
         new.points[1].calls = old.points[1].calls.clone();
         assert!(same_shape(&old, &new));
-        assert_eq!(diff(&old, &new, &holders(vec![None; 3], vec![None; 3])).result(), FlowResult::Same);
+        assert_eq!(diff(&old, &new, &same(3)).result(), FlowResult::Same);
     }
 
     // rule+ R72.1-1

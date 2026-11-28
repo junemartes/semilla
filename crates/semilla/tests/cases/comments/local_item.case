@@ -53,12 +53,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::fee` (src/lib.rs:8): the same MIR text; a changed callee: `shop::fee::part`; the full compare: `#[same(shop::fee)] fn fee_same() {}`; a difference: `#[change(shop::fee)] fn fee_change(x: u32) -> bool { … }` or `#[different(shop::fee)] fn fee_different() -> bool { … }`
     MIR changes with no claim: `shop::fee::part fn part(x: u32) -> u32 { x / 5 }` (src/lib.rs:10): no template: `shop::fee::part fn part(x: u32) -> u32 { x / 5 }` is no item of the syntax tree and no definition of the name record (a body that the compiler makes)
     MIR changes with no claim: `shop::price` (src/lib.rs:2): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
-  changed nodes: 3 in 4 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 4 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::fee`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed item: `/// Gives one tenth. fn part(x: u32) -> u32 { x / 10 }` → `/// Gives one tenth. fn part(x: u32) -> u32 { x / 5 }` at `shop::fee/S0` [semantics · code different]
       not stated (src/lib.rs:11, src/lib.rs:-13); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::fee=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::fee::part
+      graph: same graph (the edit keeps the control flow)
       equivalence: `shop::fee`: MIR changes: the same MIR text; a changed callee: `shop::fee::part`
       equivalence: `shop::fee::part fn part(x: u32) -> u32 { x / 5 }`: MIR changes
       docs of `shop::fee`, no edit in this step (src/lib.rs:7): `/// Gives the fee.`
@@ -68,6 +69,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `max(min(x, 100), 1)` → `min(x, 100)` at `shop::price/tail/lhs` [semantics · code different]
       not stated (src/lib.rs:5, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite max($a, 1) => min(x, 100)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f2, f3)
       affected bodies: shop::price
+      graph: −1 call (`max::<u32>`), 1 changed check (`overflow: max(min(x, 100), 1) + x / 10` → `overflow: min(x, 100) + x / 10`, implicit), +1 arrow, −2 arrows
       control flow: − call `max::<u32>` (src/lib.rs:-7): return → check `overflow: max(min(x, 100), 1) + x / 10`
       control flow: ~ check `overflow: max(min(x, 100), 1) + x / 10` → `overflow: min(x, 100) + x / 10` (src/lib.rs:-7, src/lib.rs:5)
       control flow: + arrow call `min::<u32>` (src/lib.rs:5) → check `overflow: min(x, 100) + x / 10` (src/lib.rs:5) (return)

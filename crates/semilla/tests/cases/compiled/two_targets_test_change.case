@@ -79,12 +79,13 @@ build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `probe::hash` (tests/probe.rs:1): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop (test "probe")::hash`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): change condition `10` → `12` at `shop (test "probe")::hash/S0/cond/rhs` [semantics · code different]
       not stated (tests/probe.rs:2, tests/probe.rs:-2); to state it: --change 'shop (test "probe")::hash=TEXT'
       affected bodies: shop (test "probe")::hash
+      graph: same structure: 1 changed condition (`x > 10` → `x > 12`)
       control flow: ~ branch `x > 10` → `x > 12` (tests/probe.rs:-2, tests/probe.rs:2)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact

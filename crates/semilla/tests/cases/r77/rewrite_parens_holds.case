@@ -28,11 +28,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       entries, in the list below: f1
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::f` (src/lib.rs:1): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::f`:
   ◆ f1 replace (a1; R90.2-2, 1 changed MIR element): changed call: `(a + b).min(7)` → `std::cmp::min(a + b, 7)` at `shop::f/tail` [semantics · code different]
       affected bodies: shop::f
+      graph: same structure: 1 changed call target (`impls::<impl Ord for u32>::min` → `min::<u32>`)
       control flow: ~ call `impls::<impl Ord for u32>::min` → `min::<u32>` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact

@@ -93,6 +93,8 @@ fn counts(full: &str) -> [usize; 3] {
 /// agent); J not mapped`.
 fn not_mapped(text: &str) -> usize {
     let line = text.lines().find(|line| line.trim_start().starts_with("changed nodes: ")).unwrap_or_else(|| panic!("no coverage line:\n{text}"));
+    // [R98.5-1] The part of the control-flow changes follows (design 98).
+    let line = line.split("; control-flow changes: ").next().unwrap_or(line);
     line.trim_end().strip_suffix(" not mapped").and_then(|rest| rest.rsplit(' ').next()).and_then(|number| number.parse().ok()).unwrap_or_else(|| panic!("{line}"))
 }
 

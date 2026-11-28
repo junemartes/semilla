@@ -22,11 +22,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 1 equal MIR, 0 explained by claims, 0 MIR changes with no claim
     equal MIR: `shop::total` (src/lib.rs:1)
-  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit, 1 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `shop::total`:
   ◆ f1 extract (Semilla; R94.3-1, equal MIR after the normal form (the copy and move chains of a local); 2 nodes): extracted variable `sum` = `n * p` (1 use) at `shop::total/S0` [move · code equal]
-      control flow: ~ check `overflow: n * p + 1` → `overflow: sum + 1` (src/lib.rs:-2, src/lib.rs:3)
+      graph: no change after the check: the equal MIR at `n0` explains 1 graph change(s)
       equivalence: equivalent (proved by equal MIR)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body

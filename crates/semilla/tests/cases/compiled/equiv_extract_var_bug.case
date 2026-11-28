@@ -24,25 +24,29 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::total` (src/lib.rs:1): the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(n: u32, p: u32) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 11 in entries (11 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::total`:
   ◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let sum = n + p;` at `shop::total/S0` [semantics · code different]
       not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, --same 'rewrite n * p => sum', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: shop::total (with 1 other edit of this body)
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit)
       control flow: + check `overflow: n + p` (src/lib.rs:2): ok → check `overflow: sum + 1`, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:2)
       control flow: + arrow entry (src/lib.rs:1) → check `overflow: n + p` (src/lib.rs:2)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `n * p` → `sum` at `shop::total/tail/lhs` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, --same 'rewrite n * p => sum', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: shop::total (with 1 other edit of this body)
+      graph: −1 overflow check (implicit), −1 panic (implicit), 1 changed check (`overflow: n * p + 1` → `overflow: sum + 1`, implicit), −3 arrows (implicit)
       control flow: − check `overflow: n * p` (src/lib.rs:-2): ok → check `overflow: n * p + 1`, fail → panic `overflow`
+      control flow: − panic `overflow` (src/lib.rs:-2)
       control flow: ~ check `overflow: n * p + 1` → `overflow: sum + 1` (src/lib.rs:-2, src/lib.rs:3)
-      control flow: − arrow entry (src/lib.rs:-1) → check `overflow: n * p` (src/lib.rs:-2)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    shop::total (src/lib.rs:1): graph changes: +1 check, −1 check, 1 changed check, +3 arrows, −3 arrows; MIR changes
+    shop::total (src/lib.rs:1): graph changes: +1 check, +1 panic, −1 check, −1 panic, 1 changed check, +3 arrows, −3 arrows; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

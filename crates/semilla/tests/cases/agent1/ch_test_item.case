@@ -61,11 +61,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::tests::t_limit` (src/lib.rs:19): the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`; no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `depot::tests::t_limit::{closure#0} #[test]` (src/lib.rs:19): the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`; the template of `depot::tests::t_limit` covers its item `depot::tests::t_limit`
-  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::tests::t_limit`:
   ◆ f1 add (a1; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): added macro statement `assert!(limit() > 2);` at `depot::tests::t_limit/S1` [semantics · code different]
       affected bodies: depot::tests::t_limit
+      graph: same graph (the edit keeps the control flow)
       equivalence: `depot::tests::t_limit`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`
       equivalence: `depot::tests::t_limit::{closure#0} #[test]`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`
   cover: each of the 2 changed line(s) is in a fact

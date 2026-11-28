@@ -57,7 +57,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `a::common::setup` (tests/common/mod.rs:1): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `b::common::setup` (tests/common/mod.rs:1): the template of `a::common::setup` covers its item `depot (test "a")::common::setup`
-  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot (test "a")::common::setup`:
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements; 2 nodes): 2 site(s): changed literal `1` → `2` [semantics · code different]

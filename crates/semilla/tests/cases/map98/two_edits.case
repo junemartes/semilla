@@ -1,0 +1,57 @@
+note: two edits in one body: each graph change is in the entry of its own edit, never in the entry of the other edit
+rule-: R98.2-1
+rule-: R98.4-1
+must_match: graph: same graph \(the edit keeps the control flow\)|graph: no graph change of its own|graph: \+1 branch \(`b > 5`\)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn fee(a: u32, b: u32) -> u32 {
+    let x = if a > 1 { a } else { 1 };
+    let y = b * 2;
+    x + y
+}
+=== new src/lib.rs
+pub fn fee(a: u32, b: u32) -> u32 {
+    let x = if a > 1 { a } else { 1 };
+    let y = if b > 5 { b } else { b * 2 };
+    x + y
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::fee` (src/lib.rs:1): the full compare: `#[same(depot::fee)] fn fee_same() {}`; a difference: `#[change(depot::fee)] fn fee_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::fee)] fn fee_different() -> bool { … }`
+  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 7 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::fee`:
+  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed if: `b * 2` → `if b > 5 { b } else { b * 2 }` at `depot::fee/S1/init` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::fee=TEXT'; if it does not change, --same 'rewrite $a * 2 => if $a > 5 { $a } else { $a * 2 }'
+      affected bodies: depot::fee
+      graph: +1 branch (`b > 5`), +4 arrows, −2 arrows
+      control flow: + branch `b > 5` (src/lib.rs:3): false → check `overflow: b * 2`, true → check `overflow: x + y`
+      control flow: + arrow branch `a > 1` (src/lib.rs:2) → branch `b > 5` (src/lib.rs:3) (false)
+      control flow: + arrow branch `a > 1` (src/lib.rs:2) → branch `b > 5` (src/lib.rs:3) (true)
+      control flow: … 2 more (semilla expand --step 0)
+      equivalence: MIR changes
+  compiled code that changes with no edit:
+  item `depot::fee`:
+  ◆ f2 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::fee` changes with no edit at its place: `x + y` [indirect · code different]
+      affected bodies: depot::fee
+      graph: no graph change of its own
+      note: lines 4; the cause: the edit of this body at src/lib.rs:3 (the step changes no other input of the body)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::fee (src/lib.rs:1): graph changes: +1 branch, +4 arrows, −2 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed if: `b * 2` → `if b > 5 { b } else { b * 2 }` at `depot::fee/S1/init` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-3
+◆ f2 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::fee` changes with no edit at its place: `x + y` [indirect · code different]
+    no position

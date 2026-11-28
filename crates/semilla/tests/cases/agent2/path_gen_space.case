@@ -119,11 +119,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       entries, in the list below: f1
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `<depot::money::Price as depot::money::Scale<[T; N]>>::scale` (src/lib.rs:14): the full compare: `#[same(<depot::money::Price as depot::money::Scale<[T; N]>>::scale)] fn scale_same() {}`; a difference: `#[change(<depot::money::Price as depot::money::Scale<[T; N]>>::scale)] fn scale_change() -> bool { … }` or `#[different(<depot::money::Price as depot::money::Scale<[T; N]>>::scale)] fn scale_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::money::<Price as Scale>::scale#2`:
   ◆ f1 replace (a1; R90.2-2, 1 changed MIR element): changed literal `7` → `8` at `depot::money::<Price as Scale>::scale#2/tail/args[0]/rhs` [semantics · code different]
       affected bodies: depot::money::<Price as Scale>::scale#2
+      graph: same structure: 1 changed check (`overflow: self.0 + 7` → `overflow: self.0 + 8`, implicit)
       control flow: ~ check `overflow: self.0 + 7` → `overflow: self.0 + 8` (src/lib.rs:-14, src/lib.rs:14)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact

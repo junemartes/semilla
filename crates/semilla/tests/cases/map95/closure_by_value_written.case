@@ -28,17 +28,19 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
     MIR changes with no claim: `depot::total::{closure#0} move |x: u32| x.wrapping_mul(3) ^ b` (src/lib.rs:2): the template of `depot::total` covers its item `depot::total`
-  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::total`:
   ◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let part = move |x: u32| x.wrapping_mul(3) ^ b;` at `depot::total/S0` [semantics · code different]
       not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a.wrapping_mul(3) ^ b => part($a)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: depot::total (with 1 other edit of this body)
+      graph: +1 body, +1 call (`num::<impl u32>::wrapping_mul`), +1 return, +2 arrows
       control flow: + graph of `depot::total::{closure#0} move |x: u32| x.wrapping_mul(3) ^ b`: 3 points, 2 arrows (semilla expand --step 0)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
   ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `a.wrapping_mul(3) ^ b` → `part(a)` at `depot::total/S1/init` [semantics · code different]
       not stated (src/lib.rs:4, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a.wrapping_mul(3) ^ b => part($a)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: depot::total (with 1 other edit of this body)
+      graph: same structure: 1 changed call target (`num::<impl u32>::wrapping_mul` → `part`)
       control flow: ~ call `num::<impl u32>::wrapping_mul` → `part` [closure] (src/lib.rs:-3, src/lib.rs:4)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   cover: each of the 3 changed line(s) is in a fact

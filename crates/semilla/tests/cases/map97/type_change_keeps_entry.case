@@ -56,26 +56,31 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
       MIR changes with no claim: `shop::Kind::Other` (src/lib.rs:2): the full compare: `#[same(shop::Kind::Other)] fn other_same() {}`; a difference: `#[change(shop::Kind::Other)] fn other_change() -> bool { … }` or `#[different(shop::Kind::Other)] fn other_different() -> bool { … }`
       MIR changes with no claim: `shop::err` (src/lib.rs:8): the full compare: `#[same(shop::err)] fn err_same() {}`; a difference: `#[change(shop::err)] fn err_change(input: &str, bounds: core::ops::Range<usize>) -> bool { … }` or `#[different(shop::err)] fn err_different() -> bool { … }`
-  changed nodes: 4 in 3 entries; 3 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 4 in 3 entries; 3 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 2 in entries (1 implicit), 3 in the section of R92.4-1
   real edits:
   item `shop::Kind::Other`:
   ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): the tuple fields of `shop::Kind::Other` changed: `()` → `(& 'static str)` (the public API can change: a different crate can use the item) [declaration · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: --change 'shop::Kind::Other=TEXT'
       affected bodies: shop::Kind::Other, shop::err
       through: `shop::err` (1 body)
-      control flow: + graph of `shop::Kind::Other`: 2 points, 1 arrow (semilla expand --step 0)
+      graph: same structure: 1 changed call target (`str::<impl str>::len` → `<Range<usize> as ExactSizeIterator>::len (trait default)`)
+      control flow: ~ call `str::<impl str>::len` → `<Range<usize> as ExactSizeIterator>::len (trait default)` (src/lib.rs:-9, src/lib.rs:9)
       ! public API: the compare does not cover the code of a different crate
   ◆ f2 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): changed macro or signature `Other` → `Other( )` [declaration · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: --change 'shop::Kind::Other=TEXT'
       affected bodies: shop::Kind::Other, shop::err
       through: `shop::err` (1 body)
-      control flow: + graph of `shop::Kind::Other`: 2 points, 1 arrow (semilla expand --step 0)
+      graph: no graph change of its own
   item `shop::err`:
   ◆ f3 replace (a1; R97.3-1, the closure pair of `fn bounds_len` fits 1 site(s): `shop::err` (src/lib.rs:9); at the first site the parameter `s` binds to `input`; a real edit that the statement states (statement 1)): changed path `input` → `bounds` at `shop::err/tail/args[0]/fields[len]/lhs/recv` [semantics · code different]
       affected bodies: shop::err
-      control flow: ~ call `str::<impl str>::len` → `<Range<usize> as ExactSizeIterator>::len (trait default)` (src/lib.rs:-9, src/lib.rs:9)
+      graph: same structure: 1 changed check (`overflow: input.len() - 3` → `overflow: bounds.len() - 3`, implicit)
       control flow: ~ check `overflow: input.len() - 3` → `overflow: bounds.len() - 3` (src/lib.rs:-9, src/lib.rs:9)
       equivalence: MIR changes
+  compiled code that changes with no edit:
+  body `shop::Kind::Other` (src/lib.rs:2): graph: +1 body (implicit), +1 return (implicit), +1 arrow (implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1, f2
+      control flow: + entry (src/lib.rs:2): → return
+      control flow: + return (src/lib.rs:2)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
     shop::Kind::Other (src/lib.rs:2): graph added: 2 points, 1 arrow

@@ -40,11 +40,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
     changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
       MIR changes with no claim: `shop::f` (src/lib.rs:1): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(x: u32, y: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::f`:
   ◆ f1 replace (a1; R97.3-1, the closure pair of `fn other` fits 1 site(s): `shop::f` (src/lib.rs:2); at the first site the parameter `a` binds to `x`; a real edit that the statement states (statement 1)): changed path `x` → `y` at `shop::f/tail/lhs/recv` [semantics · code different]
       affected bodies: shop::f
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

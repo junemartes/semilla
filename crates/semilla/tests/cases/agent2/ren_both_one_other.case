@@ -124,12 +124,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 1 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::start` (src/lib.rs:24): the signature changes (`fn start () -> Mode` → `fn start () -> State`): `#[same(depot::start)] fn start() -> bool { let old = before::depot::start(); let new = after::depot::start(); true }`; a difference: `#[change(depot::start)] fn start_change() -> bool { … }` or `#[different(depot::start)] fn start_different() -> bool { … }`
     equal MIR: `depot::mode_name` (src/lib.rs:23)
-  changed nodes: 1 in 5 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 5 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 4 in the section of R92.4-1
   real edits:
   item `depot::start`:
   ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `Mode::Idle` → `State::Busy` at `depot::start/tail` [semantics · code different]
       not stated (src/lib.rs:24, src/lib.rs:-24); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::start=TEXT'; if it does not change, --same 'rewrite Mode::Idle => State::Busy'
       affected bodies: depot::start
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   compiled code that changes with no edit:
   item `depot::State::Rest`:
@@ -141,10 +142,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 rename (a2; R90.2-5, the pair check holds): renamed `depot::Mode::Idle` → `depot::State::Rest` [rename · code equal]
   item `depot::Mode`:
   ◆ f1 rename (a1; R90.2-5, the pair check holds): renamed `depot::Mode` → `depot::State` [rename · code equal]
-      control flow: + arrow branch `m` (src/lib.rs:23) → return (src/lib.rs:23) (depot::State::Rest)
-      control flow: + arrow branch `m` (src/lib.rs:23) → return (src/lib.rs:23) (depot::State::Busy)
-      control flow: − arrow branch `m` (src/lib.rs:-23) → return (src/lib.rs:-23) (depot::Mode::Idle)
-      control flow: … 1 more (semilla expand --step 0)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 2 bodies
     depot::mode_name (src/lib.rs:23): graph changes: +2 arrows, −2 arrows; no edit in the body; equivalent (proved by equal MIR)

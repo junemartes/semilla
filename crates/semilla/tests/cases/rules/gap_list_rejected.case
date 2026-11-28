@@ -70,13 +70,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       Semilla sees no edit in `depot::idle`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::limit` (src/lib.rs:13): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   to state them, add these options to the command of the step: --change 'depot::far=TEXT'
   real edits:
   item `depot::limit`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
       not stated (src/lib.rs:13, src/lib.rs:-13); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
       affected bodies: depot::limit
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   syntax only:
   item `depot::far`:

@@ -1,6 +1,6 @@
 note: batch 11e, test case 1 with the compiled mode: the file fact of the path dependency owns the changed expansion and the body that holds the call (R63.9-5 by the place of the definition); before, the body got an indirect fact "an indirect change that Semilla cannot explain"
 rule+: R73.2-1
-must_match: affected bodies: shop::price\n      expansion: `depot::fee!\(v\)`
+must_match: affected bodies: shop::price\n(      graph: [^\n]*\n)?      expansion: `depot::fee!\(v\)`
 must_not_match: indirect change that Semilla cannot explain|no changed definition
 === both Cargo.toml
 [workspace]
@@ -51,14 +51,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (shop/src/lib.rs:1): no template: error[S0112]: the scope path `after::shop::price` names no item of the version
-  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 1 in the section of R92.4-1
   real edits:
   file `vendor/depot/src/lib.rs`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): vendor/depot/src/lib.rs: changed [file · code different]
       not stated (vendor/depot/src/lib.rs:2, vendor/depot/src/lib.rs:-2); to state it: --change 'vendor/depot/src/lib.rs=TEXT'
       affected bodies: shop::price
+      graph: no graph change of its own
       expansion: `depot::fee!(v)` at `shop::price/tail` (shop/src/lib.rs:1): expansion changed: changed literal `10` → `12` at `expansion/rhs` [semantics]
       ✗ spotlight: Rust code that Semilla does not parse: this file is code of the lib target `depot` of the package in `vendor/depot` (not a workspace member); it needs a reason: --reason 'vendor/depot/src/lib.rs:=…'
+  compiled code that changes with no edit:
+  body `shop::price` (shop/src/lib.rs:1): graph: 1 changed check (`overflow: v + 10` → `overflow: v + 12`, implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
+      control flow: ~ check `overflow: v + 10` → `overflow: v + 12` (shop/src/lib.rs:-1, shop/src/lib.rs:1)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     shop::price (shop/src/lib.rs:1): same structure: 1 changed check; no edit in the body; MIR changes; the expansion of `depot::fee!(v)` changes (semilla expand shop/src/lib.rs:1 --step 0)

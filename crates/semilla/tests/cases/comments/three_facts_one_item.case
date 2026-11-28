@@ -34,25 +34,28 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:2): the signature changes (`fn price (x : u32 , n : u32) -> u32` → `fn price (x : u64 , n : u64) -> u64`): a difference: `#[change(shop::price)] fn price_change() -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
-  changed nodes: 5 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 5 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::price`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/S0/init/rhs` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 10 => 5' --same 'rewrite 1 => 2' (one statement for 2 places: f2, f3)
       affected bodies: shop::price (with 4 other edits of this body)
+      graph: no graph change of its own
       equivalence: MIR changes alone; the body: MIR changes
       docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price with a tax of 10 percent.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): changed literal `1` → `2` at `shop::price/S1/init/rhs` [semantics · code different]
       not stated (src/lib.rs:5, src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 10 => 5' --same 'rewrite 1 => 2' (one statement for 2 places: f2, f3)
       affected bodies: shop::price (with 4 other edits of this body)
-      control flow: ~ check `overflow: n + 1` → `overflow: n + 2` (src/lib.rs:-5, src/lib.rs:5)
+      graph: no graph change of its own
       equivalence: MIR changes alone; the body: MIR changes
       comment above line 5, no edit in this step (src/lib.rs:4): `// One unit more for the box.`
   ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 3 nodes): type `u32` → `u64` in 3 places: parameter `x` of `shop::price`, parameter `n` of `shop::price`, return type of `shop::price` (the public API can change: a different crate can use the item) [declaration · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: --change 'shop::price=TEXT'
       affected bodies: shop::price (with 4 other edits of this body)
       through: `shop::price` (1 body)
+      graph: same structure: 1 changed check (`overflow: n + 1` → `overflow: n + 2`, implicit)
+      control flow: ~ check `overflow: n + 1` → `overflow: n + 2` (src/lib.rs:-5, src/lib.rs:5)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 6 changed line(s) is in a fact

@@ -28,21 +28,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(mut v_before: Vec<u32>, mut v_after: Vec<u32>) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 8 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::total`:
   ◆ f2 replace (Semilla; R90.2-2, 4 changed MIR elements): changed literal `1` → `2` at `depot::total/S1/args[0]` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite 1 => 2', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f2, f1) (the same line for f1)
       affected bodies: depot::total
+      graph: +1 call (`Vec::<u32>::push`), −1 call (`Vec::<u32>::push`), +3 arrows, −3 arrows
+      control flow: + call `Vec::<u32>::push` (src/lib.rs:2): return → call `Vec::<u32>::len`
+      control flow: − call `Vec::<u32>::push` (src/lib.rs:-3): return → return
       control flow: + arrow entry (src/lib.rs:1) → call `Vec::<u32>::push` (src/lib.rs:2)
+      control flow: … 3 more (semilla expand --step 0)
       equivalence: MIR changes alone; the body: MIR changes
   ◆ f1 reorder, the order can matter (Semilla; R94.4-3, a part that can panic and a part with an effect or a read through a reference, with a part of an other edit: `v.len()` and `v.push(1)`): moved statement `let n = v.len();` from `depot::total/S0` to `depot::total/S1` [semantics · code equal]
       not stated (src/lib.rs:2, src/lib.rs:-3); to state it: the same line as f2
-      control flow: + arrow entry (src/lib.rs:1) → call `Vec::<u32>::push` (src/lib.rs:2)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::total (src/lib.rs:1): graph changes: +3 arrows, −3 arrows; MIR changes
+    depot::total (src/lib.rs:1): graph changes: +1 call, −1 call, +3 arrows, −3 arrows; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

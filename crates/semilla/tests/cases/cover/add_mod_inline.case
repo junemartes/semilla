@@ -29,12 +29,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::inner::one` (src/lib.rs:8): an added body: `#[new(depot::inner::one)] fn one_new() -> bool { let new = after::depot::inner::one(); true }`
-  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 3 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::inner`:
   ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): added `depot::inner` (the public API changes: a different crate can now use the item) [added · code different]
       not stated (src/lib.rs:5-8); to state it: --change 'depot::inner=TEXT'
       affected bodies: depot::inner::one
+      graph: +1 body, +1 return, +1 arrow
       control flow: + graph of `depot::inner::one`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::inner`; it needs a reason: --reason 'depot::inner=…'

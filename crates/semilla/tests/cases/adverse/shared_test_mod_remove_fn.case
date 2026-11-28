@@ -55,18 +55,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `a::common::extra` (tests/common/mod.rs:6): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `b::common::extra` (tests/common/mod.rs:6): the template of `a::common::extra` covers its item `depot (test "a")::common::extra`
-  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot (test "a")::common::extra`:
   ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "a")::common::extra` [removed · code different]
       not stated (tests/common/mod.rs:-5-6); to state it: --change 'depot (test "a")::common::extra=TEXT'
       affected bodies: depot (test "a")::common::extra
-      control flow: − graph of `a::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
-      control flow: − graph of `b::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
   item `depot (test "b")::common::extra`:
   ◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot (test "b")::common::extra` [removed · code different]
       not stated (tests/common/mod.rs:-6); to state it: --change 'depot (test "b")::common::extra=TEXT'
       affected bodies: depot (test "a")::common::extra
+      graph: −2 bodys, −2 returns, −2 arrows
       control flow: − graph of `a::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: − graph of `b::common::extra`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 2 changed line(s) is in a fact

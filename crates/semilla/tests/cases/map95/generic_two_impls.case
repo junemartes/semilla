@@ -68,7 +68,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::taxed` (src/lib.rs:25): an added body: `#[new(depot::taxed)] fn taxed_new() -> bool { … }`
     MIR changes with no claim: `depot::total` (src/lib.rs:20): the claim template of the node n1 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
     MIR changes with no claim: `depot::taxed` (no place): no result of the equivalence check; the template of `depot::taxed` covers its item `depot::taxed`
-  changed nodes: 3 in 3 entries; 2 real edits (0 stated by the agent); 1 not mapped
+  changed nodes: 3 in 3 entries; 2 real edits (0 stated by the agent); 1 not mapped; control-flow changes: 6 in entries (0 implicit), 0 in the section of R92.4-1
     n1 not mapped [R90.6-1]: changed expression `depot::total/S0/init` (src/lib.rs:21): not mapped in f1: `u` → `f`
         template: #[same(depot::total)] fn total(f_before: &before::depot::Food, f_after: &after::depot::Food, u_before: &before::depot::Fuel, u_after: &after::depot::Fuel) -> bool { !(same(f_before, f_after) && same(u_before, u_after)) || after::depot::total(f_after, u_after) == before::depot::total(f_before, u_before) }
   real edits:
@@ -76,11 +76,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::taxed` [added · code different]
       not stated (src/lib.rs:23-26); to state it: --change 'depot::taxed=TEXT'
       affected bodies: depot::taxed
+      graph: +1 body, +1 call (`<T as Tax>::rate`), +1 return, +2 arrows
       control flow: + graph of `depot::taxed`: 3 points, 2 arrows (semilla expand --step 0)
   item `depot::total`:
   ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `f.rate()` → `taxed(u)` at `depot::total/tail/lhs` [semantics · code different]
       not stated (src/lib.rs:22, src/lib.rs:-22); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite u => f' --same 'rewrite f.rate() => taxed(u)' (one statement for 2 places: f1, f2)
       affected bodies: depot::total (with 1 other edit of this body)
+      graph: same structure: 1 changed call target (`<Food as Tax>::rate` → `taxed::<Fuel>`)
       control flow: ~ call `<Food as Tax>::rate` → `taxed::<Fuel>` (src/lib.rs:-22, src/lib.rs:22)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   not mapped:
@@ -89,6 +91,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       not stated (src/lib.rs:21, src/lib.rs:-21); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite u => f' --same 'rewrite f.rate() => taxed(u)' (one statement for 2 places: f1, f2)
       no template: the node has no MIR element inside it or around it on each side (a pattern or a binding is not an expression of the closure form)
       affected bodies: depot::total (with 1 other edit of this body)
+      graph: no graph change of its own
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   cover: each of the 8 changed line(s) is in a fact
   control flow: 3 bodies

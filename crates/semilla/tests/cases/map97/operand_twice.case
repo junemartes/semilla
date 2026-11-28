@@ -51,12 +51,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     ✗ false: i1 `#[rewrite(shop::f)] fn square()`: the check of `--same 'rewrite fn square in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1))
     changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
       MIR changes with no claim: `shop::f` (src/lib.rs:5): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(x: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::f`:
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `g(x).wrapping_mul(g(x))` → `g(x).pow(2)` at `shop::f/tail` [semantics · code different]
       not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::f=TEXT'; if it does not change, --same 'rewrite $a.wrapping_mul($a) => $a.pow(2)'
       affected bodies: shop::f
+      graph: −1 call (`g`), 1 changed call target (`num::<impl u32>::wrapping_mul` → `num::<impl u32>::pow`), +1 arrow, −2 arrows
       control flow: − call `g` (src/lib.rs:-6): return → call `num::<impl u32>::wrapping_mul`
       control flow: ~ call `num::<impl u32>::wrapping_mul` → `num::<impl u32>::pow` (src/lib.rs:-6, src/lib.rs:6)
       control flow: + arrow call `g` (src/lib.rs:6) → call `num::<impl u32>::pow` (src/lib.rs:6) (return)

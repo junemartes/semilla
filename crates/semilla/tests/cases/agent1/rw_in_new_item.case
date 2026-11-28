@@ -61,12 +61,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       no edit of the step has the old form or the new form; the old tree has the form `$a.total` at 5 place(s)
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::fresh` (src/lib.rs:10): an added body: `#[new(depot::fresh)] fn fresh_new(c: &after::depot::Cart) -> bool { let new = after::depot::fresh(c); true }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::fresh`:
   ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::fresh` (the public API changes: a different crate can now use the item) [added · code different]
       not stated (src/lib.rs:10); to state it: --change 'depot::fresh=TEXT'
       affected bodies: depot::fresh
+      graph: +1 body, +1 call (`Cart::total`), +1 return, +2 arrows
       control flow: + graph of `depot::fresh`: 3 points, 2 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 1 changed line(s) is in a fact

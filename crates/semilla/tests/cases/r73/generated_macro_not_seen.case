@@ -35,13 +35,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): build.rs: changed [build code · code different]
       not stated (build.rs:3, build.rs:-3); to state it: --change 'build.rs=TEXT'
       affected bodies: shop::price
+      graph: same graph (the edit keeps the control flow)
       ✗ spotlight: build script: this file is code of the build script of `shop`. Cargo runs it before each build of the package, and it can change the code and the result of the build; a build input: the MIR of 1 body changed with no edit of its text, and this change can reach its crate; it needs a reason: --reason 'build.rs:=…'
       diff:
         @@ line 3 @@
         -     std::fs::write(format!("{out}/mac.rs"), "macro_rules! rate { () => { 10 } }\n").unwrap();
         +     std::fs::write(format!("{out}/mac.rs"), "macro_rules! rate { () => { 12 } }\n").unwrap();
-  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::price` (src/lib.rs:3): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change() -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
+  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::price (src/lib.rs:3): same graph; no edit in the body; MIR changes; the expansion of `rate!()` changes (semilla expand src/lib.rs:4 --step 0)
   expansions: 1 changed
     `rate!()` at `shop::price/tail` (src/lib.rs:4): expansion changed: `macro rate` (crate shop): changed literal `10` → `12` at `expansion` [semantics]; the cause is not known: Semilla does not see the definition of `rate` (crate shop): the record has no hash of it
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

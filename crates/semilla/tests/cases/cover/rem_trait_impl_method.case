@@ -39,13 +39,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `<depot::Sq as depot::Sides>::m` (src/lib.rs:11): a removed body: `#[removed(<depot::Sq as depot::Sides>::m)] fn m_removed() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 3 in entries (0 implicit), 0 in the section of R92.4-1
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::<Sq as Sides>::m=TEXT'
   real edits:
   item `depot::<Sq as Sides>::m`:
   ◆ f1 delete (Semilla; R90.2-3, a body of the old MIR only): `depot::<Sq as Sides>::m` is removed: the impl now uses the default body of `depot::Sides::m`: `/// The new doc. /// One more line. #[cfg(all())] fn m(&self) -> u32 { 5 }` → `pub trait Sides { fn m(&self) -> u32 { 0 } fn n(&self) -> u32; }` [semantics · code different]
       not stated (src/lib.rs:-8-11); to state it: --change 'depot::<Sq as Sides>::m=TEXT'
       affected bodies: depot::<Sq as Sides>::m
+      graph: −1 body, −1 return, −1 arrow
       control flow: − graph of `<depot::Sq as depot::Sides>::m`: 2 points, 1 arrow (semilla expand --step 0)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body

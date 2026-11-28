@@ -67,12 +67,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
       MIR changes with no claim: `shop::Cart::total` (src/lib.rs:7): the full compare: `#[same(shop::Cart::total)] fn total_same() {}`; a difference: `#[change(shop::Cart::total)] fn total_change(this_before: &before::shop::Cart, this_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::Cart::total)] fn total_different() -> bool { … }`
       MIR changes with no claim: `shop::Cart::twice` (src/lib.rs:11): the full compare: `#[same(shop::Cart::twice)] fn twice_same() {}`; a difference: `#[change(shop::Cart::twice)] fn twice_change(this_before: &before::shop::Cart, this_after: &after::shop::Cart) -> bool { … }` or `#[different(shop::Cart::twice)] fn twice_different() -> bool { … }`
-  changed nodes: 2 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 10 in entries (2 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::Cart::total`:
   ◆ f1 replace (a1; R97.3-1, the closure pair of `fn count` fits 2 site(s): `shop::Cart::total` (src/lib.rs:8), `shop::Cart::twice` (src/lib.rs:12); at the first site the parameter `c` binds to `self`; a real edit that the statement states (statement 1); 2 nodes): 2 site(s): changed expression `self.items.len()` → `self.count` [semantics · code different]
       in: shop::Cart::total, shop::Cart::twice
       affected bodies: shop::Cart::total, shop::Cart::twice
+      graph: −2 calls, 2 changed checks (implicit), +2 arrows, −4 arrows
       control flow: − call `Vec::<u32>::len` (src/lib.rs:-8): return → check `overflow: self.items.len() + 1`
       control flow: ~ check `overflow: self.items.len() + 1` → `overflow: self.count + 1` (src/lib.rs:-8, src/lib.rs:8)
       control flow: + arrow entry (src/lib.rs:7) → check `overflow: self.count + 1` (src/lib.rs:8)

@@ -25,7 +25,9 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 0 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::a` (src/lib.rs:5): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change() -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
+  changed nodes: 0 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   to state them, add these options to the command of the step: --change 'depot::a=TEXT'
   real edits:
   item `depot::a`:
@@ -36,12 +38,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   item `depot::a`:
   ◆ f1 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `depot::a` changes with no edit at its place: `two!()` [indirect · code different]
       affected bodies: depot::a
+      graph: same graph (the edit keeps the control flow)
       note: lines 5
       ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'depot::a=…'
   transformations:
   file `src/lib.rs`:
   ◆ f3 same code (Semilla; R90.3-2, equal tokens (a new layout)): layout of `src/lib.rs`: 2 changed lines with equal tokens [layout · no code]
   cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    depot::a (src/lib.rs:5): same graph; no edit in the body; MIR changes; the expansion of `two!()` changes (semilla expand src/lib.rs:5 --step 0)
   expansions: 1 changed, 1 equal
     `two!()` at `depot::a/tail` (src/lib.rs:5): expansion changed: `macro_rules! two` (src/lib.rs:3): changed literal `2` → `3` at `expansion` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

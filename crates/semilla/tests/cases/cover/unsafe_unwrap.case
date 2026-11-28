@@ -44,12 +44,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::clear` (src/lib.rs:9): the full compare: `#[same(depot::clear)] fn clear_same() {}`; a difference: `#[change(depot::clear)] fn clear_change() -> bool { … }` or `#[different(depot::clear)] fn clear_different() -> bool { … }`
-  changed nodes: 4 in 4 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 4 in 4 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::clear`:
   ◆ f4 add (Semilla; R90.2-3, 1 new MIR element): added `unsafe` `unsafe { *p = 0 }` at `depot::clear/S0/then/S0` [semantics · code different]
       not stated (src/lib.rs:12); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::clear=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f3, f1, f4)
       affected bodies: depot::clear
+      graph: same graph (the edit keeps the control flow)
       equivalence: no result alone (the body has 3 edits; an edit of the fact adds or removes a node); the body: MIR changes (the same line for f3)
       ! unsafe code: the changed body has an `unsafe` block
       comment above line 12, added in this step: see f2

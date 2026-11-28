@@ -1,0 +1,46 @@
+note: a removed `if` removes a branch and its arrows: the graph changes are in the entry of the removed `if`
+rule+: R98.2-1
+must_match: graph: −1 branch \(`qty == 0`\)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn price(qty: u32) -> u32 {
+    if qty == 0 {
+        return 1;
+    }
+    qty + 1
+}
+=== new src/lib.rs
+pub fn price(qty: u32) -> u32 {
+    qty + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::price` (src/lib.rs:1): the full compare: `#[same(depot::price)] fn price_same() {}`; a difference: `#[change(depot::price)] fn price_change(qty: u32) -> bool { … }` or `#[different(depot::price)] fn price_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::price`:
+  ◆ f1 delete (Semilla; R90.2-3, 4 removed MIR elements): deleted statement `if qty == 0 { return 1; }` at `depot::price/S0` [semantics · code different]
+      not stated (src/lib.rs:-2-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::price=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      affected bodies: depot::price
+      graph: −1 branch (`qty == 0`), +1 arrow, −3 arrows
+      control flow: − branch `qty == 0` (src/lib.rs:-2): false → check `overflow: qty + 1`, true → return
+      control flow: + arrow entry (src/lib.rs:1) → check `overflow: qty + 1` (src/lib.rs:2)
+      control flow: − arrow entry (src/lib.rs:-1) → branch `qty == 0` (src/lib.rs:-2)
+      equivalence: MIR changes
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 1 body
+    depot::price (src/lib.rs:1): graph changes: −1 branch, +1 arrow, −3 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 delete (Semilla; R90.2-3, 4 removed MIR elements): deleted statement `if qty == 0 { return 1; }` at `depot::price/S0` [semantics · code different]
+    lines: src/lib.rs:-2-4

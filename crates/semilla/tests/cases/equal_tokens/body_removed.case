@@ -25,13 +25,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::Price::gross` (src/lib.rs:3): the full compare: `#[same(depot::Price::gross)] fn gross_same() {}`; a difference: `#[change(depot::Price::gross)] fn gross_change() -> bool { … }` or `#[different(depot::Price::gross)] fn gross_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 9 in the section of R92.4-1
   real edits:
   item `depot::Price::gross`:
   ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): body removed from `depot::Price::gross`: `{ self.net() + 2 }` [removed · code different]
       not stated (src/lib.rs:3, src/lib.rs:-3-5); to state it: --change 'depot::Price::gross=TEXT'
       affected bodies: depot::Price::gross
-      control flow: − graph of `depot::Price::gross`: 5 points, 4 arrows (semilla expand --step 0)
+      graph: no graph change of its own
+  compiled code that changes with no edit:
+  body `depot::Price::gross` (src/lib.rs:3): graph: −1 body (implicit), −1 call (`<Self as Price>::net`, implicit), −1 overflow check (implicit), −1 return (implicit), −1 panic (implicit), −4 arrows (implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
+      control flow: − entry (src/lib.rs:-3): → call `<Self as Price>::net`
+      control flow: − call `<Self as Price>::net` (src/lib.rs:-4): return → check `overflow: self.net() + 2`
+      control flow: − check `overflow: self.net() + 2` (src/lib.rs:-4): ok → return, fail → panic `overflow`
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     depot::Price::gross (src/lib.rs:3): graph removed: 5 points, 4 arrows

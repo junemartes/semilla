@@ -3079,8 +3079,10 @@ fn each_command_runs_changed_build_code_and_marks_each_proof() {
     }
     let md_text = &texts[0].1;
     assert!(md_text.contains("\\! build code changed in step 1 (crates/shop-core/build.rs). The check ran it in the sandbox.") && md_text.contains("result: **accepted**"), "{md_text}");
-    // R61.6-1: the Markdown review has the equivalence of each fact at the end of its item.
-    assert!(md_text.contains(&format!("3 edit(s) \\[rename · code equal\\] {MARK_1}; equivalence: equivalent (proved by equal MIR)\n")) && md_text.contains(&format!("- verified (proof mir) {MARK_1} · ")), "{md_text}");
+    // R61.6-1: the Markdown review has the equivalence of each fact at the end of its item. R98.8-1:
+    // the graph part of the entry comes before it (design 98).
+    let marked = format!("3 edit(s) \\[rename · code equal\\] {MARK_1}; ");
+    assert!(md_text.lines().any(|line| line.contains(&marked) && line.ends_with("; equivalence: equivalent (proved by equal MIR)")) && md_text.contains(&format!("- verified (proof mir) {MARK_1} · ")), "{md_text}");
     assert!(md_text.contains("3 edit(s) \\[rename · code equal\\]; equivalence: equivalent (proved by equal MIR)\n") && md_text.contains("- verified (proof mir) · "), "{md_text}");
     assert!(texts[1].1.contains(&format!("(1 code equal (1 {})   step 3", &MARK_1[1..])) && texts[1].1.contains(&format!("[rename · code equal] {MARK_1}   step 3")), "{}", texts[1].1);
 
@@ -6740,8 +6742,8 @@ fn a_derive_whose_else_block_has_only_made_tokens_passes_the_build_check_in_each
 /// changed macro).
 const FLOW_BASE: &str = "pub mod cart;\n\npub enum Error {\n    Empty,\n}\n\nmacro_rules! guard {\n    ($v:expr) => {\n        if $v > 9 {\n            return 0;\n        }\n    };\n}\n\npub fn price(qty: u32) -> u32 {\n    qty * 3\n}\n\npub fn order(qty: u32) -> Result<u32, Error> {\n    let total = price(qty);\n    Ok(total)\n}\n\npub fn tax(v: u32) -> u32 {\n    if v > 3 { v / 2 } else { v }\n}\n\npub fn mask(v: u32) -> u32 {\n    v ^ 1\n}\n\npub fn limit(v: u32) -> u32 {\n    guard!(v);\n    v\n}\n";
 
-// rule+ R60.3-5 R60.3-6 R60.4-1 R60.4-2 R60.4-3 R60.4-4 R61.6-3
-// rule- R60.3-5 R60.3-6 R60.4-1 R60.4-2 R60.4-4 R61.6-3
+// rule+ R60.3-5 R60.3-6 R98.2-1 R60.4-2 R60.4-3 R60.4-4 R61.6-3
+// rule- R60.3-5 R60.3-6 R98.8-1 R60.4-2 R60.4-4 R61.6-3
 #[test]
 fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_changed_graph() {
     let dir = setup();
@@ -6762,7 +6764,9 @@ fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_chan
     // R60.4-1: the line of the fact, with the changed point and its arrows. It replaces the
     // line `branches:` of design 40.4. R60.4-7: a callee has its short form in a fact line
     // (`price`), and its full form in `status --verbose` (`shop_core::price`, below).
-    assert!(without_not_stated(&out).contains("added early exit `if qty == 0 { return Err(Error::Empty); }` at `shop_core::order/S0` [semantics · code different]\n      affected bodies: shop_core::order\n      control flow: + branch `qty == 0` (crates/shop-core/src/lib.rs:23): false → call `price`, true → return\n"), "{out}");
+    // R98.8-1: the graph part of the entry comes first (design 98), then its lines.
+    assert!(without_not_stated(&out).contains("added early exit `if qty == 0 { return Err(Error::Empty); }` at `shop_core::order/S0` [semantics · code different]\n      affected bodies: shop_core::order\n      graph: +1 branch (`qty == 0`)"), "{out}");
+    assert!(without_not_stated(&out).contains("\n      control flow: + branch `qty == 0` (crates/shop-core/src/lib.rs:23): false → call `price`, true → return\n"), "{out}");
     assert!(!out.contains("branches: "), "{out}");
     // R60.4-1, the negative case: a fact with no changed point and no changed arrow at its
     // lines has no line.

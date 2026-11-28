@@ -23,12 +23,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::add` (src/lib.rs:1): the full compare: `#[same(depot::add)] fn add_same() {}`; a difference: `#[change(depot::add)] fn add_change(a: Option<u32>, b: u32) -> bool { … }` or `#[different(depot::add)] fn add_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 7 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::add`:
   ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `a.unwrap_or(0)` → `a?` at `depot::add/S0/init` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::add=TEXT'; if it does not change, --same 'rewrite $a.unwrap_or(0) => $a?'
       affected bodies: depot::add
+      graph: +1 try (`a?`), −1 call (`Option::<u32>::unwrap_or`), +3 arrows, −2 arrows
       control flow: + try `a?` (src/lib.rs:2): continue → return, exit → return
       control flow: − call `Option::<u32>::unwrap_or` (src/lib.rs:-2): return → return
       control flow: + arrow entry (src/lib.rs:1) → try `a?` (src/lib.rs:2)

@@ -29,15 +29,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:5): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (1 implicit, 5 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `shop::price`:
   ◆ f1 inline (Semilla; R94.2-1, the MIR of `shop::half` put in at the call is the MIR of the new code (1 element place(s) explained)): changed expression `half(x)` → `x / 2` at `shop::price/tail/lhs` [semantics · code different]
       affected bodies: shop::price
-      control flow: − call `half` (src/lib.rs:-6): return → check `overflow: half(x) + 3`
-      control flow: ~ check `overflow: half(x) + 3` → `overflow: x / 2 + 3` (src/lib.rs:-6, src/lib.rs:6)
-      control flow: + arrow entry (src/lib.rs:5) → check `overflow: x / 2 + 3` (src/lib.rs:6)
-      control flow: … 1 more (semilla expand --step 0)
+      graph: no change after the check: the check of the inline explains 5 graph change(s)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

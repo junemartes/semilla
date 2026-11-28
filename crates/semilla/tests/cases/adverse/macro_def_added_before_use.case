@@ -20,13 +20,17 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::a` (src/lib.rs:5): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change() -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   syntax only:
   item `depot::two!#1`:
   ◆ f1 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `depot::two!#1` (a twin of `depot::two!`) [added · code different]
       affected bodies: depot::a
       expansion: `two!()` at `depot::a/tail` (src/lib.rs:5): expansion changed: changed literal `2` → `3` at `expansion` [semantics]
   cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::a (src/lib.rs:5): same graph; no edit in the body; MIR changes; the expansion of `two!()` changes (semilla expand src/lib.rs:5 --step 0)
   expansions: 1 changed
     `two!()` at `depot::a/tail` (src/lib.rs:5): expansion changed: `macro_rules! two` (src/lib.rs:3): changed literal `2` → `3` at `expansion` [semantics]; from `macro_rules! two` (src/lib.rs:3)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

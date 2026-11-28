@@ -1,0 +1,58 @@
+note: an extract with a changed condition: the code that the check does not explain is a real edit of its own (R94.1-2), with the graph changes of its places
+rule-: R98.6-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn cost(w: u32) -> u32 {
+    let base = if w > 10 { 15 } else { 5 };
+    base + 1
+}
+=== new src/lib.rs
+fn ship(w: u32) -> u32 {
+    if w > 12 { 15 } else { 5 }
+}
+
+pub fn cost(w: u32) -> u32 {
+    let base = ship(w);
+    base + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::cost` (src/lib.rs:5): the full compare: `#[same(depot::cost)] fn cost_same() {}`; a difference: `#[change(depot::cost)] fn cost_change(w: u32) -> bool { … }` or `#[different(depot::cost)] fn cost_different() -> bool { … }`
+    MIR changes with no claim: `depot::ship` (src/lib.rs:1): an added body: `#[new(depot::ship)] fn ship_new(w: u32) -> bool { let new = after::depot::ship(w); true }`
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 13 in entries (0 implicit, 6 explained by the check of a transformation), 0 in the section of R92.4-1
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::cost=TEXT'
+  real edits:
+  item `depot::cost`:
+  ◆ f2 replace (Semilla; R94.1-2, 2 MIR element place(s) that differ after the callee is put in at the call): the code of the extract of `depot::ship` that the MIR does not explain: `w > 10` → `w > 12` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:-2); to state it: --change 'depot::cost=TEXT' (one statement for 2 places: f1, f2)
+      affected bodies: depot::cost
+      graph: +1 branch (`w > 12`), −1 branch (`w > 10`), +2 arrows, −3 arrows
+      control flow: − branch `w > 10` (src/lib.rs:-2): false → check `overflow: base + 1`, true → check `overflow: base + 1`
+      control flow: − arrow entry (src/lib.rs:-1) → branch `w > 10` (src/lib.rs:-2)
+      control flow: + branch `w > 12` (src/lib.rs:2): false → return, true → return
+  transformations:
+  item `depot::cost`:
+  ◆ f1 extract (Semilla; R94.1-1, the MIR of `depot::ship` put in at the call explains 3 element place(s); 2 element place(s) differ: a real edit of its own (R94.1-2); 2 nodes; one change (R92.6-1)): changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `depot::cost/S0/init`; added `depot::ship` [semantics · code different]
+      affected bodies: depot::cost, depot::ship
+      graph: no change after the check: the check of the extract explains 6 graph change(s)
+      equivalence: MIR changes
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::cost (src/lib.rs:5): graph changes: +1 call, −1 branch, +2 arrows, −3 arrows; MIR changes
+    depot::ship (src/lib.rs:1): graph added: 3 points, 3 arrows
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 replace (Semilla; R94.1-2, 2 MIR element place(s) that differ after the callee is put in at the call): the code of the extract of `depot::ship` that the MIR does not explain: `w > 10` → `w > 12` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f1 extract (Semilla; R94.1-1, the MIR of `depot::ship` put in at the call explains 3 element place(s); 2 element place(s) differ: a real edit of its own (R94.1-2); 2 nodes; one change (R92.6-1)): changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `depot::cost/S0/init`; added `depot::ship` [semantics · code different]
+    lines: src/lib.rs:1-4, src/lib.rs:6, src/lib.rs:-2

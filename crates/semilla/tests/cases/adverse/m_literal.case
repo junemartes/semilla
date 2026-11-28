@@ -49,22 +49,23 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::larger` (src/list/mod.rs:11): the full compare: `#[same(depot::list::larger)] fn larger_same() {}`; a difference: `#[change(depot::list::larger)] fn larger_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::list::larger)] fn larger_different() -> bool { … }`
-  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (6 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::list::larger`:
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `m` → `m + 1` at `depot::list::larger/tail` [semantics · code different]
       not stated (src/list.rs:-13, src/list/mod.rs:13); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::larger=TEXT'; if it does not change, --same 'rewrite m => m + 1'
       affected bodies: depot::list::larger
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: m + 1` (src/list/mod.rs:13): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/list/mod.rs:13)
       control flow: + arrow call `max::<u32>` (src/list/mod.rs:12) → check `overflow: m + 1` (src/list/mod.rs:13) (return)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
       docs of `depot::list::larger`, no edit in this step (src/list/mod.rs:10): `/// The larger one.`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   transformations:
   item `depot::list`:
   ◆ f2 move (Semilla; R90.2-5, the pair check holds): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move · no code]
-      control flow: − arrow call `max::<u32>` (src/list.rs:-12) → return (src/list.rs:-14) (return)
   cover: each of the 28 changed line(s) is in a fact
   control flow: 1 body
     depot::list::larger (src/list/mod.rs:11): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow; MIR changes

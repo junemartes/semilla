@@ -165,7 +165,7 @@ fn an_entry_with_no_node_and_no_changed_line_is_in_its_own_section_and_no_real_e
     assert_eq!(pair.section().map(|at| ENTRY_SECTIONS[at]), Some("transformations"));
     // The coverage line counts no such entry as a real edit.
     let map = semilla_core::AstMap { nodes: 1, ..Default::default() };
-    let line = semilla_core::report::map_coverage_line(&map, &[entry("f1", EntryKind::Replace, vec![1], Vec::new()), compiled]);
+    let line = semilla_core::report::map_coverage_line(&map, &[entry("f1", EntryKind::Replace, vec![1], Vec::new()), compiled], None);
     assert_eq!(line, "changed nodes: 1 in 2 entries; 1 real edits (1 stated by the agent); 0 not mapped");
 }
 

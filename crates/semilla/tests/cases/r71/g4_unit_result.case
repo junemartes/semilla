@@ -20,23 +20,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::F` (src/lib.rs:1): the same MIR text; a changed callee: `shop::F::{closure#0}`; the full compare: `#[same(shop::F)] fn f_same() {}`; a difference: `#[change(shop::F)] fn f_change() -> bool { … }` or `#[different(shop::F)] fn f_different() -> bool { … }`
     MIR changes with no claim: `shop::F::{closure#0} |x| if x > 4 { x } else { 0 }` (src/lib.rs:1): the template of `shop::F` covers its item `shop::F`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::F`:
   ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::F` changed: |x| if x > 3 { x } else { 0 } → |x| if x > 4 { x } else { 0 } (the public API can change: a different crate can use the item) [semantics · code different]
       not stated (src/lib.rs:1, src/lib.rs:-1); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::F=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::F
-      control flow: + branch `x > 4` (src/lib.rs:1): false → return, true → return
-      control flow: − branch `x > 3` (src/lib.rs:-1): false → return, true → return
-      control flow: + arrow entry (src/lib.rs:1) → branch `x > 4` (src/lib.rs:1)
-      control flow: … 1 more (semilla expand --step 0)
+      graph: same structure: 1 changed condition (`x > 3` → `x > 4`)
+      control flow: ~ branch `x > 3` → `x > 4` (src/lib.rs:-1, src/lib.rs:1)
       equivalence: `shop::F`: MIR changes: the same MIR text; a changed callee: `shop::F::{closure#0}`
       equivalence: `shop::F::{closure#0} |x| if x > 4 { x } else { 0 }`: MIR changes
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
     shop::F (src/lib.rs:1): same graph; MIR changes (the same MIR text; a changed callee: `shop::F::{closure#0}`)
-    shop::F::{closure#0} |x| if x > 4 { x } else { 0 } (src/lib.rs:1): graph changes: +1 branch, −1 branch, +3 arrows, −3 arrows; MIR changes
+    shop::F::{closure#0} |x| if x > 4 { x } else { 0 } (src/lib.rs:1): same structure: 1 changed condition; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

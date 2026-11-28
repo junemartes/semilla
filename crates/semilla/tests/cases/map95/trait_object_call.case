@@ -48,7 +48,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:13): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change() -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 1 not mapped
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 1 not mapped; control-flow changes: 1 in entries (0 implicit), 0 in the section of R92.4-1
     n1 not mapped [R90.6-1]: changed expression `depot::total/S0/init` (src/lib.rs:14): not mapped in f1: `d` → `f`
         no template: the type `&dyn Tax` of the parameter `d` has no form in a claim (`dyn …`)
   real edits:
@@ -56,6 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `f.0.wrapping_mul(3)` → `d.rate()` at `depot::total/tail/lhs` [semantics · code different]
       not stated (src/lib.rs:15, src/lib.rs:-15); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite d => f' --same 'rewrite f.0.wrapping_mul(3) => d.rate()' (one statement for 2 places: f1, f2)
       affected bodies: depot::total (with 1 other edit of this body)
+      graph: same structure: 1 changed call target (`num::<impl u32>::wrapping_mul` → `d.rate`)
       control flow: ~ call `num::<impl u32>::wrapping_mul` → `d.rate` [dyn] (src/lib.rs:-15, src/lib.rs:15)
       equivalence: MIR changes alone; the body: MIR changes
   not mapped:
@@ -64,6 +65,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       not stated (src/lib.rs:14, src/lib.rs:-14); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite d => f' --same 'rewrite f.0.wrapping_mul(3) => d.rate()' (one statement for 2 places: f1, f2)
       no template: the node has no MIR element inside it or around it on each side (a pattern or a binding is not an expression of the closure form)
       affected bodies: depot::total (with 1 other edit of this body)
+      graph: no graph change of its own
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body

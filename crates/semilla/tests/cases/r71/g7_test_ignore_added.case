@@ -48,14 +48,19 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::tests::two` (src/lib.rs:14): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   syntax only:
   item `shop::tests::two`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `shop::tests::two`: added `#[ignore]` [attribute · code different]
       ! the compiled code changes: shop::tests::two
+      equivalence: MIR changes
       expansion: `#[test]` at `shop::tests::two` (src/lib.rs:12): expansion changed: changed code `false,\n ignore_message: ::core::option::Option::None,\n source_file: "src/lib.rs",\n start_line: 13usize,\n start_col: 8usize,\n end_line: 13usize` → `true,\n ignore_message: ::core::option::Option::None,\n source_file: "src/lib.rs",\n start_line: 14usize,\n start_col: 8usize,\n end_line: 14usize`
       ✗ spotlight: a changed attribute that can change the behavior: `ignore`; it needs a reason: --reason 'shop::tests::two=…'
   cover: each of the 1 changed line(s) is in a fact
+  control flow: 1 body
+    shop::tests::two (src/lib.rs:14): same graph; no edit in the body; MIR changes; the expansion of `#[test]` changes (semilla expand src/lib.rs:12 --step 0)
   expansions: 1 changed, 3 equal
     `#[test]` at `shop::tests::two` (src/lib.rs:12): expansion changed: `attribute macro test` (crate core): changed code `false,\n ignore_message: ::core::option::Option::None,\n source_file: "src/lib.rs",\n start_line: 13usize,\n start_col: 8usize,\n end_line: 13usize` → `true,\n ignore_message: ::core::option::Option::None,\n source_file: "src/lib.rs",\n start_line: 14usize,\n start_col: 8usize,\n end_line: 14usize`; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

@@ -69,26 +69,27 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::sum` (src/lib.rs:20): the full compare: `#[same(depot::sum)] fn sum_same() {}`; a difference: `#[change(depot::sum)] fn sum_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::sum)] fn sum_different() -> bool { … }`
-  changed nodes: 4 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 4 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 3 in entries (3 implicit, 1 explained by the check of a transformation), 0 in the section of R92.4-1
   real edits:
   item `depot::sum`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `depot::sum/tail/rhs/rhs` [semantics · code different]
       not stated (src/lib.rs:23, src/lib.rs:-23); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::sum=TEXT'; if it does not change, --same 'rewrite 2 => 3'
       affected bodies: depot::sum
-      control flow: ~ check `overflow: part * 2` → `overflow: base * 3` (src/lib.rs:-23, src/lib.rs:23)
-      control flow: ~ check `overflow: more + part * 2` → `overflow: more + base * 3` (src/lib.rs:-23, src/lib.rs:23)
+      graph: no graph change of its own
       equivalence: MIR changes alone; the body: MIR changes
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): `depot::sum`: renamed local `part` → `base`, 3 edit(s) [rename · code equal]
       not stated (src/lib.rs:21-23, src/lib.rs:-21-23); to state it: --change 'depot::sum=TEXT'
+      graph: same structure: 2 changed checks (implicit)
       control flow: ~ check `overflow: part * 2` → `overflow: base * 3` (src/lib.rs:-23, src/lib.rs:23)
       control flow: ~ check `overflow: more + part * 2` → `overflow: more + base * 3` (src/lib.rs:-23, src/lib.rs:23)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   transformations:
   item `depot::sum`:
   ◆ f3 same code (Semilla; R90.2-1, equal MIR; 2 nodes; split by kind (R92.7-1)): changed expression `depot::sum/S0/pat`: `part` → `base`; changed expression `depot::sum/S1/init/lhs`: `part` → `base` [rename · code equal]
+      graph: no change after the check: the equal MIR of the node (same code) explains 1 graph change(s)
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body
-    depot::sum (src/lib.rs:20): same structure: 2 changed checks; MIR changes
+    depot::sum (src/lib.rs:20): same structure: 3 changed checks; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

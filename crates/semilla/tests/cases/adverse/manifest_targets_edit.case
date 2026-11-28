@@ -62,7 +62,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `list::first` (checks/list_checks.rs:2): the same MIR text; a changed callee: `list::first::{closure#0}`; no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `list::first::{closure#0} #[test]` (checks/list_checks.rs:1): the same MIR text; a changed callee: `list::first`, `list::first::{closure#0}`; the template of `list::first` covers its item `depot (test "list")::first`
     MIR changes with no claim: `tool::main` (cmd/tool.rs:1): no template: the item is in a binary target, and the intent crate links the libraries only (design 78)
-  changed nodes: 3 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot (bin "tool")::main`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element; 3 nodes): 3 site(s): changed literal `1` → `2` [semantics · code different]

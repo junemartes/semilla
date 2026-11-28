@@ -113,15 +113,20 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::Cart::level` (shop/src/lib.rs:1): no template: `shop::Cart::level` is no item of the syntax tree, and the name record has 5 definitions with its plain name
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::Cart`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): attributes of `shop::Cart`: changed `#[level(3)]` → `#[level(4)]` [attribute · code different]
       not stated (shop/src/lib.rs:2, shop/src/lib.rs:-2); to state it: --change 'shop::Cart=TEXT'
       ! the compiled code changes: shop::Cart::level
+      graph: same graph (the edit keeps the control flow)
       expansion: derived `depot::Level` of `shop::Cart`: expansion changed: change condition `3` → `4` at `shop::Cart::level/S0/cond/rhs` [semantics]
       ✗ spotlight: a changed attribute that can change the behavior: `level`; it needs a reason: --reason 'shop::Cart=…'
   cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::Cart::level (shop/src/lib.rs:1): same graph; no edit in the body; MIR changes
   expansions: 1 changed, 6 equal
     derive `depot::Level` at `shop::Cart` (shop/src/lib.rs:1): expansion changed: `derive depot::Level` (depot/src/lib.rs:6): change condition `3` → `4` at `shop::Cart::level/S0/cond/rhs` [semantics]; the input of the call changes
     2 calls: expansion not known: `proc macro depot::deep` (depot/src/lib.rs:40): not known: the printer of the compiler cannot print a tree deeper than the limit of the driver; no changed definition, no changed input of the call, and no changed file that its code reads: `shop::total/tail/lhs`, `shop::total/tail/lhs` (semilla expand --step 0)

@@ -331,6 +331,112 @@ pub struct FlowReport {
     /// The count of the macro calls with an equal expansion (design 63).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub expansions_equal: usize,
+    /// [R98.2-2] The graph part of each entry of the map (design 98), by the id of the fact.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub entries: std::collections::BTreeMap<String, EntryGraph>,
+    /// [R98.4-1] The graph changes of each body that no entry has (design 98): a line of the
+    /// section "compiled code that changes with no edit".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub no_entry: Vec<NoEntryGraph>,
+    /// [R98.5-1] The counts of the coverage line and the entry of each graph change (design 98).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<FlowCover>,
+}
+
+/// [R98.2-2] The graph part of one entry of the map (design 98): the words of design 60 for the
+/// graph changes of the entry.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryGraph {
+    /// `graph changes`, `same structure`, `same graph`, or `no change after the check`.
+    pub word: String,
+    /// The short form of the graph changes: `+1 branch (`x > 0`), +1 bounds check (implicit), +2
+    /// arrows`. Empty: no graph change.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    /// The count of the graph changes of the entry (each point and each arrow).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub changes: usize,
+    /// [R98.3-1] The count of the implicit graph changes of the entry.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub implicit: usize,
+    /// [R98.6-1] The count of the graph changes that the check of the transformation of the
+    /// entry explains (the entry lists none of them).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub explained: usize,
+    /// The words of the check that explains them: `the extract of `F``, `the equal MIR at `n2``.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub by: String,
+}
+
+impl EntryGraph {
+    /// [R98.8-1] The line of the entry: `graph: +1 branch (…), +2 arrows`, `graph: same structure: 1
+    /// changed condition (…)`, `graph: same graph (the edit keeps the control flow)`, `graph: no
+    /// change after the check: the extract of `F` explains 12 graph change(s)`.
+    pub fn line(&self) -> String {
+        let explained = if self.explained == 0 { String::new() } else { format!("{}{} explains {} graph change(s)", if self.summary.is_empty() { ": " } else { "; " }, self.by, self.explained) };
+        match (self.word.as_str(), self.summary.is_empty()) {
+            ("graph changes", false) => format!("graph: {}{explained}", self.summary),
+            (word, false) => format!("graph: {word}: {}{explained}", self.summary),
+            (word, true) => format!("graph: {word}{explained}"),
+        }
+    }
+}
+
+/// [R98.4-1] The graph changes of one body that no entry has (design 98): a body with no changed
+/// node and no entry of the section "compiled code that changes with no edit" (R92.4-1).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoEntryGraph {
+    /// The body in the output and its place.
+    pub body: String,
+    pub place: String,
+    /// The short form of the graph changes, and their count.
+    pub summary: String,
+    pub changes: usize,
+    /// The entries whose list of affected bodies has the body (the compiled code of the body).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owners: Vec<String>,
+    /// The lines of the graph changes (the short form), at most [`FLOW_NO_ENTRY_LINES`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<String>,
+}
+
+/// The most lines of the graph changes of a body with no entry in a short output.
+pub const FLOW_NO_ENTRY_LINES: usize = 3;
+
+impl NoEntryGraph {
+    /// The line of the body in the section "compiled code that changes with no edit".
+    pub fn line(&self) -> String {
+        let owners = if self.owners.is_empty() { String::new() } else { format!("; the compiled code of the body is in the list of {}", self.owners.join(", ")) };
+        format!("body `{}` ({}): graph: {} (no entry: no changed node, R98.4-1){owners}", self.body, self.place, self.summary)
+    }
+}
+
+/// [R98.5-1] The counts of the control-flow part of the coverage line (design 98), and the entry
+/// of each graph change for the full text.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowCover {
+    /// The count of the graph changes of the step.
+    pub total: usize,
+    /// The graph changes in the entries that are not in the section "compiled code that changes
+    /// with no edit", and the implicit and the explained changes among them.
+    pub entries: usize,
+    pub implicit: usize,
+    pub explained: usize,
+    /// The graph changes in the section "compiled code that changes with no edit" (R92.4-1): its
+    /// entries and the bodies with no entry (R98.4-1).
+    pub no_edit: usize,
+    /// One line for each graph change: `+ branch `x > 3` (src/lib.rs:4) in `shop::f`: in f1`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub list: Vec<String>,
+}
+
+impl FlowCover {
+    /// [R98.5-1] The second part of the coverage line: "control-flow changes: N in entries (I
+    /// implicit), K in the section of R92.4-1".
+    pub fn line(&self) -> String {
+        let explained = if self.explained == 0 { String::new() } else { format!(", {} explained by the check of a transformation", self.explained) };
+        format!("control-flow changes: {} in entries ({} implicit{explained}), {} in the section of R92.4-1", self.entries, self.implicit, self.no_edit)
+    }
 }
 
 /// One macro call whose expansion the step changes (design 63, part B).
@@ -1511,11 +1617,15 @@ impl StepReport {
 /// [R90.5-3] The coverage line of the map of the diff (design 90): "changed nodes: N in M
 /// entries; K real edits (S stated by the agent); J not mapped". It replaces the line "AST
 /// changes" of R79.6-1 and the line "not stated" of the gap list.
-pub fn map_coverage_line(map: &AstMap, facts: &[Fact]) -> String {
+///
+/// [R98.5-1] With the graph data of the map of design 98, the line has a second part: "control-flow
+/// changes: N in entries (I implicit), K in the section of R92.4-1".
+pub fn map_coverage_line(map: &AstMap, facts: &[Fact], flow: Option<&FlowReport>) -> String {
     let real: Vec<&Fact> = facts.iter().filter(|fact| fact.counts_as_real()).collect();
     let stated = real.iter().filter(|fact| !fact.not_stated).count();
     let open = map.entries.iter().filter(|entry| entry.state == AstState::NotMapped).count();
-    format!("changed nodes: {} in {} entries; {} real edits ({stated} stated by the agent); {open} not mapped", map.nodes, facts.len(), real.len())
+    let graph = flow.and_then(|flow| flow.cover.as_ref()).map(|cover| format!("; {}", cover.line())).unwrap_or_default();
+    format!("changed nodes: {} in {} entries; {} real edits ({stated} stated by the agent); {open} not mapped{graph}", map.nodes, facts.len(), real.len())
 }
 
 /// The state of a comment of a changed item (design 58.4).
@@ -2308,7 +2418,7 @@ impl StepReport {
         // [R90.5-3] The coverage line of the map of the diff replaces the line "not stated" of a
         // step (design 90). A record of an earlier version keeps its line.
         let head = match &self.ast {
-            Some(map) if self.facts.iter().any(|fact| fact.kind.is_some()) || map.entries.iter().any(|entry| entry.kind.is_some()) => Some(map_coverage_line(map, &self.facts)),
+            Some(map) if self.facts.iter().any(|fact| fact.kind.is_some()) || map.entries.iter().any(|entry| entry.kind.is_some()) => Some(map_coverage_line(map, &self.facts, self.flow.as_ref())),
             _ => self.gap_line(),
         };
         let Some(head) = head else { return Vec::new() };

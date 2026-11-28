@@ -118,12 +118,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::stock::limit` (src/lib.rs:18): no template: the step pairs `depot::limit` with `depot::stock::limit` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
     MIR changes with no claim: `depot::uses_limit` (src/lib.rs:27): the same MIR text; a changed callee: `depot::stock::limit`; the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
-  changed nodes: 3 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit, 1 explained by the check of a transformation), 0 in the section of R92.4-1
   real edits:
   item `depot::stock::limit`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::stock::limit/tail` [semantics · code different]
       not stated (src/lib.rs:18, src/lib.rs:-25); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::stock::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
       affected bodies: depot::stock::limit
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   compiled code that changes with no edit:
   item `depot::stock::limit`:
@@ -131,7 +132,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   transformations:
   item `depot::limit`:
   ◆ f1 move (a1; R90.2-5, the pair check holds; 2 nodes): moved `depot::limit` → `depot::stock::limit` [move · code equal]
-      control flow: ~ check `overflow: limit() + limit()` → `overflow: stock::limit() + stock::limit()` (src/lib.rs:-26, src/lib.rs:27)
+      graph: no change after the check: the equal MIR at `n1` explains 1 graph change(s)
       equivalence: MIR changes: the same MIR text; a changed callee: `depot::stock::limit`
   cover: each of the 5 changed line(s) is in a fact
   control flow: 2 bodies

@@ -81,15 +81,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✓ a4 change: `wrap` "the value is one more" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
       places: depot::wrap/tail
       entries, in the list below: f4
-  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+  changed bodies: 1 equal MIR, 0 explained by claims, 3 MIR changes with no claim
     MIR changes with no claim: `depot::a` (src/lib.rs:6): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
     MIR changes with no claim: `depot::b` (src/lib.rs:7): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
     MIR changes with no claim: `depot::wrap` (src/lib.rs:9): the full compare: `#[same(depot::wrap)] fn wrap_same() {}`; a difference: `#[change(depot::wrap)] fn wrap_change(x: u32) -> bool { … }` or `#[different(depot::wrap)] fn wrap_different() -> bool { … }`
-  changed nodes: 3 in 6 entries; 1 real edits (1 stated by the agent); 0 not mapped
+    equal MIR: `depot::uses_limit` (src/lib.rs:12)
+  changed nodes: 3 in 6 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 16 in entries (8 implicit, 10 explained by the check of a transformation), 1 in the section of R92.4-1
   real edits:
   item `depot::wrap`:
   ◆ f4 replace (a4; R90.2-2, 2 changed MIR elements): changed expression `x` → `x + 1` at `depot::wrap/tail` [semantics · code different]
       affected bodies: depot::wrap
+      graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + check `overflow: x + 1` (src/lib.rs:9): ok → return, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:9)
       control flow: + arrow entry (src/lib.rs:9) → check `overflow: x + 1` (src/lib.rs:9)
@@ -105,10 +107,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f3 extract (a3; R94.1-1, the MIR of `depot::Cart::total` put in at the call is the MIR of the old code (1 element place(s) explained); 2 nodes): 2 site(s): changed expression `c.total` → `c.total()` [semantics · code different]
       in: depot::a, depot::b
       affected bodies: depot::a, depot::b
-      control flow: + call `Cart::total` (src/lib.rs:6): return → check `overflow: c.total() + 1`
-      control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-6, src/lib.rs:6)
-      control flow: + arrow entry (src/lib.rs:6) → call `Cart::total` (src/lib.rs:6)
-      control flow: … 5 more (semilla expand --step 0)
+      graph: no change after the check: the check of the extract explains 10 graph change(s)
       equivalence: `depot::a`: MIR changes
       equivalence: `depot::b`: MIR changes
   item `depot::idle`:
@@ -118,9 +117,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: `assert_eq!(cap(), 10)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: changed path `limit` → `cap` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/callee` [semantics]
       note: 1 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)
   cover: each of the 18 changed line(s) is in a fact
-  control flow: 3 bodies
+  control flow: 4 bodies
     depot::a (src/lib.rs:6): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow; MIR changes
     depot::b (src/lib.rs:7): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow; MIR changes
+    depot::uses_limit (src/lib.rs:12): same structure: 1 changed check; no edit in the body; equivalent (proved by equal MIR)
     depot::wrap (src/lib.rs:9): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow; MIR changes
   expansions: 1 changed, 1 equal
     `assert_eq!(cap(), 10)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: `macro assert_eq` (crate core): changed path `limit` → `cap` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/callee` [semantics]; the input of the call changes

@@ -41,12 +41,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::size` (src/lib.rs:12): an added body: no template: error[E0433]: cannot find module or crate `alloc` in this scope
-  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::size`:
   ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::size` (the public API changes: a different crate can now use the item) [added · code different]
       not stated (src/lib.rs:11-14); to state it: --change 'depot::size=TEXT'
       affected bodies: depot::size
+      graph: +1 body, +1 call (`BTreeMap::<u32, u32>::len`), +1 return, +2 arrows
       control flow: + graph of `depot::size`: 3 points, 2 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   syntax only:

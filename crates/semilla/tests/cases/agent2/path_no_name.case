@@ -119,12 +119,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       `<Price as Display>::fmtx` names no item, no module, and no file of the old tree or the new tree
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `<depot::money::Price as std::fmt::Display>::fmt` (src/lib.rs:6): the full compare: `#[same(<depot::money::Price as core::fmt::Display>::fmt)] fn fmt_same() {}`; a difference: `#[change(<depot::money::Price as core::fmt::Display>::fmt)] fn fmt_change() -> bool { … }` or `#[different(<depot::money::Price as core::fmt::Display>::fmt)] fn fmt_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::money::<Price as fmt::Display>::fmt`:
   ◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics · code different]
       not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::money::<Price as fmt::Display>::fmt=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::money::<Price as fmt::Display>::fmt
+      graph: same structure: 1 changed `construct` point (`{}`, implicit)
       control flow: ~ construct `{}` (src/lib.rs:-6, src/lib.rs:6): callees −`Arguments::<'_>::new::<2, 1>` +`Arguments::<'_>::new::<4, 1>`
       equivalence: MIR changes
       expansion: `write!(f, "${}", self.0)` at `depot::money::<Price as fmt::Display>::fmt/tail` (src/lib.rs:6): expansion changed: changed literal `"{0}"` → `"${0}"` at `expansion/args[0]/args[0]` [semantics]

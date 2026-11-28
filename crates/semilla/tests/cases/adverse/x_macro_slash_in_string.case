@@ -21,13 +21,17 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::S` (src/lib.rs:1): no template: `depot::S` is no item of the syntax tree (a body that the compiler makes)
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   syntax only:
   item `depot::s!#0`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro call `s!( "a", "// b", )` → `s!( "a", "// c", )` (makes: `pub const S`) [declaration · code different]
       affected bodies: depot::S
       expansion: `s!( "a", "// c", )` at `depot::s!#0` (src/lib.rs:2): expansion changed: value of `depot::S` changed: &["a", "// b"] → &["a", "// c"] (the public API can change: a different crate can use the item) [semantics]
   cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::S (src/lib.rs:1): same graph; no edit in the body; MIR changes
   expansions: 1 changed
     `s!( "a", "// c", )` at `depot::s!#0` (src/lib.rs:2): expansion changed: `macro_rules! s` (src/lib.rs:1): value of `depot::S` changed: &["a", "// b"] → &["a", "// c"] (the public API can change: a different crate can use the item) [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

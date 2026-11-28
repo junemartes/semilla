@@ -33,16 +33,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::part` (src/lib.rs:6): an added body: `#[new(depot::part)] fn part_new(a: u32) -> bool { let new = after::depot::part(a); true }`
     MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 14 in entries (0 implicit, 14 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::total`:
   ◆ f1 extract (Semilla; R95.5-1, the MIR of `depot::part` put in at the call is the MIR of the old code (4 element place(s) explained); an early `return`: 2 way(s) out of the callee, 1 write(s) of `()` with no reader (R95.5-1); 2 nodes; one change (R92.6-1)): changed call: `if a > 9 { 0 } else { a.wrapping_mul(2) }` → `part(a)` at `depot::total/S0/init`; added `depot::part` [semantics · code different]
       affected bodies: depot::total, depot::part
-      control flow: − branch `a > 9` (src/lib.rs:-2): false → call `num::<impl u32>::wrapping_mul`, true → call `num::<impl u32>::wrapping_add`
-      control flow: ~ call `num::<impl u32>::wrapping_mul` → `part` (src/lib.rs:-2, src/lib.rs:2)
-      control flow: + arrow entry (src/lib.rs:1) → call `part` (src/lib.rs:2)
-      control flow: … 1 more (semilla expand --step 0)
-      control flow: + graph of `depot::part`: 4 points, 4 arrows (semilla expand --step 0)
+      graph: no change after the check: the check of the extract explains 14 graph change(s)
       equivalence: MIR changes
   cover: each of the 9 changed line(s) is in a fact
   control flow: 2 bodies

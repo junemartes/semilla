@@ -31,12 +31,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::net::tcp::port` (src/net/tcp.rs:1): the full compare: `#[same(depot::net::tcp::port)] fn port_same() {}`; a difference: `#[change(depot::net::tcp::port)] fn port_change() -> bool { … }` or `#[different(depot::net::tcp::port)] fn port_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::net::tcp::port`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `80` → `8080` at `depot::net::tcp::port/tail` [semantics · code different]
       not stated (src/net/tcp.rs:2, src/net/tcp.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::net::tcp::port=TEXT'; if it does not change, --same 'rewrite 80 => 8080'
       affected bodies: depot::net::tcp::port
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

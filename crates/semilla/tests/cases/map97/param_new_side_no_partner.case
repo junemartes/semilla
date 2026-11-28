@@ -44,16 +44,18 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     ✗ false: i1 `#[rewrite(shop::f)] fn other()`: the check of `--same 'rewrite fn other in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::f` (src/lib.rs:2): the old closure fits; at the aligned place of the new body 0 of 1 element(s) of the new closure fit; the element that differs: the body has `_2 = BitXor(_1, const u32 = 5)`, the closure has `_0 = const fn(u32, u32) -> u32 {core::num::<impl u32>::wrapping_mul}(_3, const u32 = 3) -> [return: bb?, unwind ?]` (R97.2-3))
     changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
       MIR changes with no claim: `shop::f` (src/lib.rs:1): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(x: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::f`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): added `let` `let z = x ^ 5;` at `shop::f/S0` [semantics · code different]
+  ◆ f1 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let z = x ^ 5;` at `shop::f/S0` [semantics · code different]
       not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::f=TEXT'; if it does not change, --same 'rewrite x => z', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: shop::f (with 1 other edit of this body)
+      graph: same graph (the edit keeps the control flow)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
-  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed path `x` → `z` at `shop::f/tail/recv` [semantics · code different]
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `x` → `z` at `shop::f/tail/recv` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::f=TEXT'; if it does not change, --same 'rewrite x => z', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: shop::f (with 1 other edit of this body)
+      graph: same graph (the edit keeps the control flow)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body

@@ -29,20 +29,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::sum` (src/lib.rs:1): the full compare: `#[same(depot::sum)] fn sum_same() {}`; a difference: `#[change(depot::sum)] fn sum_change(v: &[u32]) -> bool { … }` or `#[different(depot::sum)] fn sum_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::sum`:
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `v.iter()` → `v.iter().rev()` at `depot::sum/S1/iter` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::sum=TEXT'; if it does not change, --same 'rewrite $a.iter() => $a.iter().rev()'
       affected bodies: depot::sum
-      control flow: + call `<Iter<'_, u32> as Iterator>::rev (trait default)` (src/lib.rs:3): return → for `v.iter().rev()`
+      graph: +1 call (`slice::<impl [u32]>::iter`), 1 changed call target (`slice::<impl [u32]>::iter` → `<Iter<'_, u32> as Iterator>::rev (trait default)`), 1 changed `for` point (`v.iter()` → `v.iter().rev()`), +2 arrows, −1 arrow
+      control flow: + call `slice::<impl [u32]>::iter` (src/lib.rs:3): return → call `<Iter<'_, u32> as Iterator>::rev (trait default)`
+      control flow: ~ call `slice::<impl [u32]>::iter` → `<Iter<'_, u32> as Iterator>::rev (trait default)` (src/lib.rs:-3, src/lib.rs:3)
       control flow: ~ for `v.iter()` → `v.iter().rev()` (src/lib.rs:-3, src/lib.rs:3)
-      control flow: + arrow call `slice::<impl [u32]>::iter` (src/lib.rs:3) → call `<Iter<'_, u32> as Iterator>::rev (trait default)` (src/lib.rs:3) (return)
-      control flow: … 1 more (semilla expand --step 0)
+      control flow: … 2 more (semilla expand --step 0)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::sum (src/lib.rs:1): graph changes: +1 call, 1 changed `for` point, +2 arrows, −1 arrow; MIR changes
+    depot::sum (src/lib.rs:1): graph changes: +1 call, 1 changed call target, 1 changed `for` point, +2 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

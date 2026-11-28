@@ -61,17 +61,19 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✓ a1 same: rename limit cap (holds: Semilla derives the rename from the syntax tree)
       places: depot::limit, depot::cap
       entries, in the list below: f1, f3
-  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+  changed bodies: 0 equal MIR, 0 explained by claims, 4 MIR changes with no claim
     MIR changes with no claim: `depot::cap` (src/lib.rs:11): no template: the step pairs `depot::limit` with `depot::cap` (a rename or a twin pair), and one scope path names one item in the two versions: claim each version with its own claim
     MIR changes with no claim: `depot::tests::t_limit` (src/lib.rs:19): the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`; no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `depot::tests::t_limit::{closure#0} #[test]` (src/lib.rs:19): the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`; the template of `depot::tests::t_limit` covers its item `depot::tests::t_limit`
-  changed nodes: 2 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
+    MIR changes with no claim: `depot::uses_limit` (src/lib.rs:12): the same MIR text; a changed callee: `depot::cap`; the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
+  changed nodes: 2 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 1 in the section of R92.4-1
   real edits:
   item `depot::cap`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element; 2 nodes): 2 site(s): changed literal `10` → `20` [semantics · code different]
       not stated (src/lib.rs:11, src/lib.rs:19, src/lib.rs:-11, src/lib.rs:-19); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::cap=TEXT'; if it does not change, --same 'rewrite 10 => 20'
       in: depot::cap, depot::tests::t_limit
       affected bodies: depot::cap, depot::tests::t_limit
+      graph: same graph (the edit keeps the control flow)
       equivalence: `depot::cap`: MIR changes
       equivalence: `depot::tests::t_limit`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`
       equivalence: `depot::tests::t_limit::{closure#0} #[test]`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`
@@ -84,10 +86,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 rename (a1; R90.2-5, the pair check holds): renamed `depot::limit` → `depot::cap` [rename · code equal]
       note: 1 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)
   cover: each of the 6 changed line(s) is in a fact
-  control flow: 3 bodies
+  control flow: 4 bodies
     depot::cap (src/lib.rs:11): same graph (the edit keeps the control flow); MIR changes
     depot::tests::t_limit (src/lib.rs:19): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`)
     depot::tests::t_limit::{closure#0} #[test] (src/lib.rs:19): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`)
+    depot::uses_limit (src/lib.rs:12): same structure: 1 changed check; no edit in the body; MIR changes (the same MIR text; a changed callee: `depot::cap`)
   expansions: 1 changed, 1 equal
     `assert_eq!(cap(), 20)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: `macro assert_eq` (crate core): changed path `limit` → `cap` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/callee` [semantics]; changed literal `10` → `20` at `expansion/S0/body/S0/scrutinee/elems[1]/operand` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

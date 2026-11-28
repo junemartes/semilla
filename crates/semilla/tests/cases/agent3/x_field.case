@@ -114,14 +114,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ✓ a1 same: rename Cart.total Cart.sum (holds: Semilla derives the rename from the syntax tree)
       places: depot::Cart.total, depot::Cart.sum
       entries, in the list below: f1, f3
-  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+  changed bodies: 1 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::b` (src/lib.rs:31): a type of the signature changes (the type `Cart` changes: `depot::Cart`: − `total: u32`, + `sum: u32`): `#[same(depot::b)] fn b(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { !(same(c_before, c_after)) || after::depot::b(c_after) == before::depot::b(c_before) }`; a difference: `#[change(depot::b)] fn b_change() -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
-  changed nodes: 1 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
+    equal MIR: `depot::a` (src/lib.rs:30)
+  changed nodes: 1 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 1 in the section of R92.4-1
   real edits:
   item `depot::b`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `2` → `3` at `depot::b/tail/args[0]/rhs` [semantics · code different]
       not stated (src/lib.rs:31, src/lib.rs:-31); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::b=TEXT'; if it does not change, --same 'rewrite 2 => 3'
       affected bodies: depot::b
+      graph: same structure: 1 changed check (`overflow: c.total * 2` → `overflow: c.sum * 3`, implicit)
       control flow: ~ check `overflow: c.total * 2` → `overflow: c.sum * 3` (src/lib.rs:-31, src/lib.rs:31)
       equivalence: MIR changes
   compiled code that changes with no edit:
@@ -132,7 +134,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 rename (a1; R90.2-5, the pair check holds): renamed `depot::Cart.total` → `depot::Cart.sum` [rename · code equal]
       note: 2 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)
   cover: each of the 6 changed line(s) is in a fact
-  control flow: 1 body
+  control flow: 2 bodies
+    depot::a (src/lib.rs:30): same structure: 1 changed check; no edit in the body; equivalent (proved by equal MIR)
     depot::b (src/lib.rs:31): same structure: 1 changed check; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 

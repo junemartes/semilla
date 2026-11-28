@@ -138,19 +138,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `<depot::Source as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); }` (src/lib.rs:14): the template of `<depot::Source as depot::Draw<depot::Small>>::sample` covers its item `depot::<Source as Draw>::sample`
     MIR changes with no claim: `<depot::Third as depot::Draw<depot::Small>>::sample` (src/lib.rs:57): an added body: `#[new(<depot::Third as depot::Draw<depot::Small>>::sample)] fn sample_new_2() -> bool { … }`
     MIR changes with no claim: `<depot::Third as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); }` (src/lib.rs:58): the template of `<depot::Third as depot::Draw<depot::Small>>::sample` covers its item `depot::<Third as Draw>::sample`
-  changed nodes: 6 in 4 entries; 4 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 6 in 4 entries; 4 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 23 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::<Source as Draw>::sample`:
   ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics · code different]
       not stated (src/lib.rs:-14); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::<Source as Draw>::sample=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f3, f4)
       affected bodies: depot::<Source as Draw>::sample (with 1 other edit of this body)
+      graph: −1 call (`check`), +1 arrow, −2 arrows
       control flow: − call `check` (src/lib.rs:-14): return → call `Small::new`
+      control flow: + arrow entry (src/lib.rs:13) → call `Small::new` (src/lib.rs:28)
       control flow: − arrow entry (src/lib.rs:-13) → call `check` (src/lib.rs:-14)
       equivalence: MIR changes
   ◆ f4 replace (Semilla; R90.2-2, 2 changed MIR elements): added `const_block` `const { assert!(true); }` at `depot::<Source as Draw>::sample/S0` [semantics · code different]
       not stated (src/lib.rs:14-26, src/lib.rs:28); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::<Source as Draw>::sample=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f3, f4)
       affected bodies: depot::<Source as Draw>::sample (with 1 other edit of this body)
-      control flow: + arrow entry (src/lib.rs:13) → call `Small::new` (src/lib.rs:28)
+      graph: +1 body, +1 return, +1 arrow
       control flow: + graph of `<depot::Source as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); }`: 2 points, 1 arrow (semilla expand --step 0)
       equivalence: MIR changes
       ✗ spotlight of f3, f4: inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = "32")]` at src/lib.rs:18; not on this target); no checked configuration compiles the changed code (`#[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]` at src/lib.rs:22; not on this target), so Semilla did not compare the edit; it needs a reason: --reason 'depot::<Source as Draw>::sample/S0=…'
@@ -158,6 +160,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Other as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added · code different]
       not stated (src/lib.rs:27, src/lib.rs:29-54); to state it: --change 'depot::impl <Other as Draw>=TEXT'
       affected bodies: depot::<Other as Draw>::sample
+      graph: +2 bodys, +1 call (`Small::new`), +2 returns, +3 arrows
       control flow: + graph of `<depot::Other as depot::Draw<depot::Small>>::sample`: 3 points, 2 arrows (semilla expand --step 0)
       control flow: + graph of `<depot::Other as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); }`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
@@ -166,6 +169,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only; 2 nodes): trait impl `<Third as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added · code different]
       not stated (src/lib.rs:55-62); to state it: --change 'depot::impl <Third as Draw>=TEXT'
       affected bodies: depot::<Third as Draw>::sample
+      graph: +2 bodys, +1 call (`Small::new`), +2 returns, +3 arrows
       control flow: + graph of `<depot::Third as depot::Draw<depot::Small>>::sample`: 3 points, 2 arrows (semilla expand --step 0)
       control flow: + graph of `<depot::Third as depot::Draw<depot::Small>>::sample::{constant#0} { assert!(true); }`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate

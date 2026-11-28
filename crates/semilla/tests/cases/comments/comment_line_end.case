@@ -41,18 +41,20 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:1): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32, y: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::price`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `5` at `shop::price/S0/init/rhs` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 10 => 5' --same 'rewrite add => mul' (one statement for 2 places: f1, f2)
       affected bodies: shop::price (with 1 other edit of this body)
+      graph: no graph change of its own
       equivalence: MIR changes alone; the body: MIR changes
       comment at the end of line 2, no edit in this step (src/lib.rs:2): `// ten percent`
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed path `add` → `mul` at `shop::price/S1/init/callee` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite 10 => 5' --same 'rewrite add => mul' (one statement for 2 places: f1, f2)
       affected bodies: shop::price (with 1 other edit of this body)
+      graph: same structure: 1 changed call target (`add` → `mul`)
       control flow: ~ call `add` → `mul` (src/lib.rs:-3, src/lib.rs:3)
       equivalence: MIR changes alone; the body: MIR changes
       comment at the end of line 3, no edit in this step (src/lib.rs:3): `// the first line`

@@ -59,6 +59,10 @@ pub struct Left {
     pub places: [Vec<MirPlace>; 2],
     /// The edit of the node of the call.
     pub node: usize,
+    /// [R98.6-1] The id of the entry of the code left (R94.1-2): the graph changes of its places
+    /// go to it (design 98).
+    #[serde(default)]
+    pub fact: String,
 }
 
 /// One transformation of the step that the map applies (for the check of a statement).
@@ -373,7 +377,7 @@ fn apply(trees: [&Workspace; 2], outcome: &StepOutcome, nodes: &[usize], body: &
         out.joins.push((*edit, region[0]));
     }
     if !left[0].is_empty() || !left[1].is_empty() {
-        out.left.push(Left { inline: found.inline, body: body.name.clone(), callee: found.callee.clone(), places: left.clone(), node: region[0] });
+        out.left.push(Left { inline: found.inline, body: body.name.clone(), callee: found.callee.clone(), places: left.clone(), node: region[0], fact: String::new() });
     }
     out.applied.push(Applied { inline: found.inline, body: body.name.clone(), callee: found.callee.clone(), edits, explained: found.explained, left: left[0].len() + left[1].len() });
 }

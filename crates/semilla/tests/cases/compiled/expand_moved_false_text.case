@@ -26,7 +26,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 2 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::f` (src/lib.rs:6): the full compare: `#[same(depot::f)] fn f_same() {}`; a difference: `#[change(depot::f)] fn f_change() -> bool { … }` or `#[different(depot::f)] fn f_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   syntax only:
   item `depot::f`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added docs `/// Doc.` [docs · no code]
@@ -35,6 +37,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: depot::f
       expansion: `m!()` at `depot::f/tail` (src/lib.rs:6): expansion changed: changed literal `"src/lib.rs:5"` → `"src/lib.rs:6"` at `expansion` [semantics]
   cover: each of the 3 changed line(s) is in a fact
+  control flow: 1 body
+    depot::f (src/lib.rs:6): same graph; no edit in the body; MIR changes; the expansion of `m!()` changes (semilla expand src/lib.rs:6 --step 0)
   expansions: 1 changed
     `m!()` at `depot::f/tail` (src/lib.rs:6): expansion changed: `macro_rules! m` (src/lib.rs:1): changed literal `"src/lib.rs:5"` → `"src/lib.rs:6"` at `expansion` [semantics]; from `macro_rules! m` (src/lib.rs:1)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

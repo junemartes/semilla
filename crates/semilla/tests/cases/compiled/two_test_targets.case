@@ -78,7 +78,12 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 2 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `integration::suite` (lexer-core/tests/lib.rs:1): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
+    MIR changes with no claim: `integration::suite` (tests/lib.rs:1): the template of `integration::suite` covers its item `lexer (test "integration")::suite`
+    equal MIR: `integration::suite::DATA` (lexer-core/tests/lib.rs:5)
+    equal MIR: `integration::suite::DATA load!("anchored")` (tests/lib.rs:9)
+  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   file `testdata/regression.txt`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): testdata/regression.txt: changed [file · code different]
@@ -87,6 +92,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       expansion: `load!("regression")` at `lexer (test "integration")::suite/S3` (tests/lib.rs:10): expansion changed: only the context of the call changes: the file `testdata/regression.txt` (`include_bytes!(concat!("../testdata/", $name, ".txt"))`); changed code `n` → `ntwo\n`
       expansion: `load!("regression")` at `lexer_core (test "integration")::suite/S3` (lexer-core/tests/lib.rs:10): expansion changed: only the context of the call changes: the file `testdata/regression.txt` (`include_bytes!(concat!("../../testdata/", $name, ".txt"))`); changed code `n` → `ntwo\n`
   cover: each of the 1 changed line(s) is in a fact
+  control flow: 4 bodies
+    integration::suite (lexer-core/tests/lib.rs:1): same graph; no edit in the body; MIR changes
+    integration::suite (tests/lib.rs:1): same graph; no edit in the body; MIR changes
+    integration::suite::DATA (lexer-core/tests/lib.rs:5): same graph; no edit in the body; equivalent (proved by equal MIR)
+    integration::suite::DATA load!("anchored") (tests/lib.rs:9): same graph; no edit in the body; equivalent (proved by equal MIR)
   expansions: 2 changed, 6 equal
     `load!("regression")` at `lexer (test "integration")::suite/S3` (tests/lib.rs:10): expansion changed: `macro_rules! load` (tests/lib.rs:3): only the context of the call changes: the file `testdata/regression.txt` (`include_bytes!(concat!("../testdata/", $name, ".txt"))`); changed code `n` → `ntwo\n`; the code of the call reads `testdata/regression.txt`, which the step changes
     `load!("regression")` at `lexer_core (test "integration")::suite/S3` (lexer-core/tests/lib.rs:10): expansion changed: `macro_rules! load` (lexer-core/tests/lib.rs:3): only the context of the call changes: the file `testdata/regression.txt` (`include_bytes!(concat!("../../testdata/", $name, ".txt"))`); changed code `n` → `ntwo\n`; the code of the call reads `testdata/regression.txt`, which the step changes

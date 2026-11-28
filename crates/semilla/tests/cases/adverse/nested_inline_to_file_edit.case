@@ -33,12 +33,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::outer::inner::deep` (src/outer/inner.rs:2): the full compare: `#[same(depot::outer::inner::deep)] fn deep_same() {}`; a difference: `#[change(depot::outer::inner::deep)] fn deep_change() -> bool { … }` or `#[different(depot::outer::inner::deep)] fn deep_different() -> bool { … }`
-  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::outer::inner::deep`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::outer::inner::deep/tail/rhs` [semantics · code different]
       not stated (src/outer.rs:-5, src/outer/inner.rs:4); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::outer::inner::deep=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: depot::outer::inner::deep
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   transformations:
   item `depot::outer::inner`:

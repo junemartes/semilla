@@ -52,15 +52,22 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `<depot::Level as std::cmp::PartialEq>::eq` (src/lib.rs:3): the full compare: `#[same(<depot::Level as core::cmp::PartialEq>::eq)] fn eq_same() {}`; a difference: `#[change(<depot::Level as core::cmp::PartialEq>::eq)] fn eq_change() -> bool { … }` or `#[different(<depot::Level as core::cmp::PartialEq>::eq)] fn eq_different() -> bool { … }`
+    MIR changes with no claim: `<depot::Level as std::cmp::PartialOrd>::partial_cmp` (src/lib.rs:3): the full compare: `#[same(<depot::Level as core::cmp::PartialOrd>::partial_cmp)] fn partial_cmp_same() {}`; a difference: `#[change(<depot::Level as core::cmp::PartialOrd>::partial_cmp)] fn partial_cmp_change() -> bool { … }` or `#[different(<depot::Level as core::cmp::PartialOrd>::partial_cmp)] fn partial_cmp_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::Level`:
   ◆ f1 reorder, the order can matter (Semilla; R94.4-3, the MIR of 2 body(ies) reads the order of the variants: `<depot::Level as std::cmp::PartialEq>::eq`, `<depot::Level as std::cmp::PartialOrd>::partial_cmp`): member order of `depot::Level`: `Low, High` → `High, Low`; the discriminant values of the variants with no explicit value change [declaration · code different]
       not stated (src/lib.rs:4, src/lib.rs:-4); to state it: --change 'depot::Level=TEXT'
       affected bodies: <depot::Level as std::cmp::PartialEq>::eq, <depot::Level as std::cmp::PartialOrd>::partial_cmp
       through: `depot::Level` (2 bodies)
+      graph: same graph (the edit keeps the control flow)
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`PartialEq`, `PartialOrd`): the code that it makes reads the members in order; it needs a reason: --reason 'depot::Level=…'
   cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    <depot::Level as std::cmp::PartialEq>::eq (src/lib.rs:3): same graph; no edit in the body; MIR changes
+    <depot::Level as std::cmp::PartialOrd>::partial_cmp (src/lib.rs:3): same graph; no edit in the body; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'depot::Level=<why>'
 === positions

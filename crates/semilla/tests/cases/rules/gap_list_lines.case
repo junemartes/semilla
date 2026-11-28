@@ -73,7 +73,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::a` (src/lib.rs:8): the full compare: `#[same(depot::a)] fn a_same() {}`; a difference: `#[change(depot::a)] fn a_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::a)] fn a_different() -> bool { … }`
     MIR changes with no claim: `depot::b` (src/lib.rs:9): the full compare: `#[same(depot::b)] fn b_same() {}`; a difference: `#[change(depot::b)] fn b_change(c_before: &before::depot::Cart, c_after: &after::depot::Cart) -> bool { … }` or `#[different(depot::b)] fn b_different() -> bool { … }`
     MIR changes with no claim: `depot::limit` (src/lib.rs:13): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
-  changed nodes: 4 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 4 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 10 in entries (2 implicit), 0 in the section of R92.4-1
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::far=TEXT'
   real edits:
   item `depot::a`:
@@ -82,6 +82,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       template: `#[rewrite] fn a_rewrite() { (|c: &before::depot::Cart| c.total, |c: &after::depot::Cart| c.total()) }`
       in: depot::a, depot::b
       affected bodies: depot::a, depot::b
+      graph: +2 calls, 2 changed checks (implicit), +4 arrows, −2 arrows
       control flow: + call `Cart::total` (src/lib.rs:8): return → check `overflow: c.total() + 1`
       control flow: ~ check `overflow: c.total + 1` → `overflow: c.total() + 1` (src/lib.rs:-8, src/lib.rs:8)
       control flow: + arrow entry (src/lib.rs:8) → call `Cart::total` (src/lib.rs:8)
@@ -92,6 +93,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
       not stated (src/lib.rs:13, src/lib.rs:-13); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
       affected bodies: depot::limit
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   syntax only:
   item `depot::far`:

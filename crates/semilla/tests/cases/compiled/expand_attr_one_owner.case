@@ -78,7 +78,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::Cart::double` (shop/src/lib.rs:5): no template: the name record has no definition at the place of the item (code that a macro makes) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
     MIR changes with no claim: `shop::Cart::half` (shop/src/lib.rs:5): no template: the name record has no definition at the place of the item (code that a macro makes) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
     MIR changes with no claim: `shop::Cart::total` (shop/src/lib.rs:5): no template: the name record has no definition at the place of the item (code that a macro makes) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
-  changed nodes: 3 in 6 entries; 0 real edits (0 stated by the agent); 3 not mapped
+  changed nodes: 3 in 6 entries; 0 real edits (0 stated by the agent); 3 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
     n1 not mapped [R90.6-1]: changed literal `shop::Cart::double/tail/rhs` (shop/src/lib.rs:16): not mapped in f1: `2` → `4`
         no template: the name record has no definition at the place of the item (code that a macro makes)
     n2 not mapped [R90.6-1]: changed literal `shop::Cart::half/tail/rhs` (shop/src/lib.rs:12): not mapped in f2: `2` → `3`
@@ -89,14 +89,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   item `shop::Cart::double`:
   ◆ f4 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::Cart::double` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
       affected bodies: shop::Cart::double
+      graph: same graph (the edit keeps the control flow)
       note: lines 5
   item `shop::Cart::half`:
   ◆ f5 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::Cart::half` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
       affected bodies: shop::Cart::half
+      graph: same graph (the edit keeps the control flow)
       note: lines 5
   item `shop::Cart::total`:
   ◆ f6 replace (Semilla; R92.4-1, no node and no changed line of its own): the compiled code of `shop::Cart::total` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
       affected bodies: shop::Cart::total
+      graph: same graph (the edit keeps the control flow)
       note: lines 5
   not mapped:
   item `shop::Cart::double`:
@@ -104,6 +107,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       not stated (shop/src/lib.rs:16, shop/src/lib.rs:-16); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::double=TEXT'; if it does not change, --same 'rewrite 2 => 4'
       no template: the node has no MIR element inside it or around it on each side (a pattern or a binding is not an expression of the closure form) (the same line for f2, f3)
       affected bodies: shop::Cart::double
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
       expansion: `#[depot_macros::helper]` at `shop::impl Cart` (shop/src/lib.rs:5): expansion changed: changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics]; changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics]; changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics] (also the change of f2, f3)
   item `shop::Cart::half`:
@@ -111,12 +115,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       not stated (shop/src/lib.rs:12, shop/src/lib.rs:-12); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::half=TEXT'; if it does not change, --same 'rewrite 2 => 3'
       no template: the same line as f1
       affected bodies: shop::Cart::half
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   item `shop::Cart::total`:
   ◆ f3 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics · code different]
       not stated (shop/src/lib.rs:8, shop/src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Cart::total=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       no template: the same line as f1
       affected bodies: shop::Cart::total
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 3 bodies

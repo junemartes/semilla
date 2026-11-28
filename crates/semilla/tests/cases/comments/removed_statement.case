@@ -34,13 +34,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:2): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(x: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
-  changed nodes: 3 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::price`:
   ◆ f2 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `log(x)` at `shop::price/S0` [semantics · code different]
       not stated (src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f3)
       affected bodies: shop::price (with 1 other edit of this body)
+      graph: −1 call (`log`), +1 arrow, −2 arrows
       control flow: − call `log` (src/lib.rs:-4): return → call `log`
+      control flow: + arrow entry (src/lib.rs:2) → check `overflow: x + tax` (src/lib.rs:5)
       control flow: − arrow entry (src/lib.rs:-2) → call `log` (src/lib.rs:-4)
       equivalence: MIR changes
       comment that was above the removed code at old line 4, no edit in this step (src/lib.rs:3): `// Log the price for the audit.`
@@ -48,6 +50,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f3 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `log(tax)` at `shop::price/S2` [semantics · code different]
       not stated (src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f3)
       affected bodies: shop::price (with 1 other edit of this body)
+      graph: −1 call (`log`), −1 arrow
       control flow: − call `log` (src/lib.rs:-7): return → check `overflow: x + tax`
       equivalence: MIR changes
       comment above the removed code at old line 7, removed in this step: see f1

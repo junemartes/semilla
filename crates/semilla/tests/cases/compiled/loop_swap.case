@@ -34,12 +34,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::last` (src/lib.rs:1): the full compare: `#[same(shop::last)] fn last_same() {}`; a difference: `#[change(shop::last)] fn last_change(n: u32) -> bool { … }` or `#[different(shop::last)] fn last_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::last`:
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): moved statement `seen = i` from `shop::last/S2/body/S0` to `shop::last/S2/body/S1` [semantics · code different]
       not stated (src/lib.rs:6, src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::last=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::last
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

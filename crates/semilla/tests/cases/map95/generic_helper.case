@@ -31,13 +31,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `depot::larger` (src/lib.rs:6): an added body: `#[new(depot::larger)] fn larger_new() -> bool { … }`
     MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
     MIR changes with no claim: `depot::larger` (no place): no result of the equivalence check; the template of `depot::larger` covers its item `depot::larger`
-  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit, 6 explained by the check of a transformation), 0 in the section of R92.4-1
   transformations:
   item `depot::total`:
   ◆ f1 extract (Semilla; R95.3-1, the MIR of `depot::larger` put in at the call is the MIR of the old code (1 element place(s) explained); the generic arguments of the call: `T` = `u32` (R95.3-1); 2 nodes; one change (R92.6-1)): changed expression `a.max(b)` → `larger(a, b)` at `depot::total/S0/init`; added `depot::larger` [semantics · code different]
       affected bodies: depot::total, depot::larger
-      control flow: ~ call `impls::<impl Ord for u32>::max` → `larger::<u32>` (src/lib.rs:-2, src/lib.rs:2)
-      control flow: + graph of `depot::larger`: 3 points, 2 arrows (semilla expand --step 0)
+      graph: no change after the check: the check of the extract explains 6 graph change(s)
       equivalence: MIR changes
   cover: each of the 6 changed line(s) is in a fact
   control flow: 3 bodies

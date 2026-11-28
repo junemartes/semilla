@@ -121,20 +121,20 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `depot::cap` (src/lib.rs:26): an added body: `#[new(depot::cap)] fn cap_new() -> bool { let new = after::depot::cap(); true }`
     MIR changes with no claim: `depot::uses_limit` (src/lib.rs:27): the full compare: `#[same(depot::uses_limit)] fn uses_limit_same() {}`; a difference: `#[change(depot::uses_limit)] fn uses_limit_change() -> bool { … }` or `#[different(depot::uses_limit)] fn uses_limit_different() -> bool { … }`
-  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 3 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (1 implicit, 3 explained by the check of a transformation), 0 in the section of R92.4-1
   real edits:
   item `depot::cap`:
   ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::cap` (the public API changes: a different crate can now use the item) [added · code different]
       not stated (src/lib.rs:26); to state it: --change 'depot::cap=TEXT'
       affected bodies: depot::cap
+      graph: +1 body, +1 return, +1 arrow
       control flow: + graph of `depot::cap`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   transformations:
   item `depot::uses_limit`:
   ◆ f1 same code (Semilla; R90.2-1, equal MIR; 2 nodes): 2 site(s): changed path `limit` → `cap` [semantics · code equal]
       in: depot::uses_limit (2)
-      control flow: ~ call `limit` → `cap` (src/lib.rs:-26, src/lib.rs:27)
-      control flow: ~ check `overflow: limit() + limit()` → `overflow: cap() + cap()` (src/lib.rs:-26, src/lib.rs:27)
+      graph: no change after the check: the equal MIR of the node (same code) explains 3 graph change(s)
       equivalence: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies

@@ -35,12 +35,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 1 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:5): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
     equal MIR: `depot::total::{closure#0} |x: u32| x.wrapping_mul(3) ^ b` (src/lib.rs:6)
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::total`:
   ◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `a.wrapping_mul(3) ^ b` → `part(a)` at `depot::total/S1/init` [semantics · code different]
       not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a.wrapping_mul(3) ^ b => part($a)'
       affected bodies: depot::total
+      graph: same structure: 1 changed call target (`num::<impl u32>::wrapping_mul` → `part`)
       control flow: ~ call `num::<impl u32>::wrapping_mul` → `part` [closure] (src/lib.rs:-7, src/lib.rs:7)
       equivalence: `depot::total`: MIR changes
       equivalence: `depot::total::{closure#0} |x: u32| x.wrapping_mul(3) ^ b`: equivalent (proved by equal MIR)

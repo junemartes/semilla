@@ -29,7 +29,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::f` (src/lib.rs:6): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 1 in the section of R92.4-1
+  compiled code that changes with no edit:
+  body `shop::f` (src/lib.rs:6): graph: 1 changed check (`overflow: a + b` → `overflow: a * b`, implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
+      control flow: ~ check `overflow: a + b` → `overflow: a * b` (src/lib.rs:-6, src/lib.rs:6)
   syntax only:
   item `shop::calc!`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `calc`: [1] → [2] [declaration · code different]

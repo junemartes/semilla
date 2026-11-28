@@ -19,7 +19,9 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::f` (src/lib.rs:3): the full compare: `#[same(shop::f)] fn f_same() {}`; a difference: `#[change(shop::f)] fn f_change(mut a_before: Vec<u32>, mut a_after: Vec<u32>, mut b_before: Vec<u32>, mut b_after: Vec<u32>) -> bool { … }` or `#[different(shop::f)] fn f_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   syntax only:
   item `shop::log2!`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `log2`: [1] → [2] [declaration · code different]
@@ -28,6 +30,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: shop::f
       expansion: `log2!(a, b)` at `shop::f/S0` (src/lib.rs:3): expansion changed: moved statement `a.push(1)` from `expansion/S0` to `expansion/S1` [semantics]
   cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::f (src/lib.rs:3): same graph; no edit in the body; MIR changes; the expansion of `log2!(a, b)` changes (semilla expand src/lib.rs:3 --step 0)
   expansions: 1 changed
     `log2!(a, b)` at `shop::f/S0` (src/lib.rs:3): expansion changed: `macro_rules! log2` (src/lib.rs:1): moved statement `a.push(1)` from `expansion/S0` to `expansion/S1` [semantics]; from `macro_rules! log2` (src/lib.rs:1)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

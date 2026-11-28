@@ -1,6 +1,7 @@
 note: batch 12b, G4: an `.await` in the operand of an `.await` is a construct of its own: the walk of the parts of a construct stops at the code of the user. The old `get(a).await` pairs with the new inner one (equal text), and the new outer `.await` is one added point
 rule-: R76.2-2
-must_match: control flow: \+ await `get\(get\(a\)\.await\)\.await` \(src/lib.rs:6\): done → return
+note: design 98 (R98.1-1): the alignment pairs the old `.await` with the outer `.await` of the new body (the order of the source in the region), so the inner `.await` is the new point
+must_match: control flow: \+ await `get\(a\)\.await` \(src/lib.rs:6\): done → call `get`
 must_match: shop::total::\{closure#0\} .*: graph changes: \+1 await
 === both Cargo.toml
 [package]
@@ -32,21 +33,23 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::total` (src/lib.rs:5): the same MIR text; a changed callee: `shop::total::{closure#0}`; the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(a: u32) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
     MIR changes with no claim: `shop::total::{closure#0} { get(get(a).await).await }` (src/lib.rs:5): the template of `shop::total` covers its item `shop::total`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 7 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::total`:
   ◆ f1 replace (Semilla; R90.2-2, 22 changed MIR elements): changed await: `get(a).await` → `get(get(a).await).await` at `shop::total/tail` [semantics · code different]
       not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, --same 'rewrite $a.await => get($a.await).await'
       affected bodies: shop::total
+      graph: +1 await (`get(a).await`), +1 call (`get`), 1 changed `await` point (`get(a).await` → `get(get(a).await).await`), +3 arrows, −1 arrow
+      control flow: + await `get(a).await` (src/lib.rs:6): done → call `get`
       control flow: + call `get` (src/lib.rs:6): return → await `get(get(a).await).await`
-      control flow: + await `get(get(a).await).await` (src/lib.rs:6): done → return
-      control flow: + arrow await `get(a).await` (src/lib.rs:6) → call `get` (src/lib.rs:6) (done)
+      control flow: ~ await `get(a).await` → `get(get(a).await).await` (src/lib.rs:-6, src/lib.rs:6)
+      control flow: … 2 more (semilla expand --step 0)
       equivalence: `shop::total`: MIR changes: the same MIR text; a changed callee: `shop::total::{closure#0}`
       equivalence: `shop::total::{closure#0} { get(get(a).await).await }`: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
     shop::total (src/lib.rs:5): same graph; MIR changes (the same MIR text; a changed callee: `shop::total::{closure#0}`)
-    shop::total::{closure#0} { get(get(a).await).await } (src/lib.rs:5): graph changes: +1 await, +1 call, +3 arrows, −1 arrow; MIR changes
+    shop::total::{closure#0} { get(get(a).await).await } (src/lib.rs:5): graph changes: +1 await, +1 call, 1 changed `await` point, +3 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

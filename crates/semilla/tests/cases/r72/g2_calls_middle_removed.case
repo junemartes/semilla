@@ -30,16 +30,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::report` (src/lib.rs:1): the full compare: `#[same(shop::report)] fn report_same() {}`; a difference: `#[change(shop::report)] fn report_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::report)] fn report_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 10 in entries (8 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::report`:
   ◆ f1 delete (Semilla; R90.2-3, 8 removed MIR elements): deleted statement `out.push(format!("middle {} {}", a, b))` at `shop::report/S2` [semantics · code different]
       not stated (src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::report=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::report
+      graph: −1 construct (`{}`, implicit), −3 calls (2 implicit), +1 arrow (implicit), −5 arrows (4 implicit)
       control flow: − construct `{}` (src/lib.rs:-4): return → call `format`
       control flow: − call `format` (src/lib.rs:-4): return → call `must_use::<String>`
       control flow: − call `must_use::<String>` (src/lib.rs:-4): return → call `Vec::<String>::push`
-      control flow: … 2 more (semilla expand --step 0)
+      control flow: … 3 more (semilla expand --step 0)
       equivalence: MIR changes
   cover: each of the 1 changed line(s) is in a fact
   control flow: 1 body

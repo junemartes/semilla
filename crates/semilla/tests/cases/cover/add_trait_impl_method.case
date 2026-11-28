@@ -39,13 +39,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `<depot::Sq as depot::Sides>::m` (src/lib.rs:11): an added body: `#[new(<depot::Sq as depot::Sides>::m)] fn m_new() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 3 in entries (0 implicit), 0 in the section of R92.4-1
   to state them, add these options to the command of the step: --change 'depot::<Sq as Sides>::m=TEXT'
   real edits:
   item `depot::<Sq as Sides>::m`:
   ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only): `depot::<Sq as Sides>::m` now overrides the default body of `depot::Sides::m`: `pub trait Sides { fn m(&self) -> u32 { 0 } fn n(&self) -> u32; }` → `/// The new doc. /// One more line. #[cfg(all())] fn m(&self) -> u32 { 5 }` [semantics · code different]
       not stated (src/lib.rs:8-11); to state it: --change 'depot::<Sq as Sides>::m=TEXT'
       affected bodies: depot::<Sq as Sides>::m
+      graph: +1 body, +1 return, +1 arrow
       control flow: + graph of `<depot::Sq as depot::Sides>::m`: 2 points, 1 arrow (semilla expand --step 0)
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::<Sq as Sides>::m`; it needs a reason: --reason 'depot::<Sq as Sides>::m=…'
   cover: each of the 4 changed line(s) is in a fact

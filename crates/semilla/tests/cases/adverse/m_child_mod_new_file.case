@@ -59,12 +59,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::sub::value` (src/list/sub/mod.rs:1): the full compare: `#[same(depot::list::sub::value)] fn value_same() {}`; a difference: `#[change(depot::list::sub::value)] fn value_change() -> bool { … }` or `#[different(depot::list::sub::value)] fn value_different() -> bool { … }`
-  changed nodes: 1 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 3 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::list::sub::value`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `depot::list::sub::value/tail/rhs` [semantics · code different]
       not stated (src/list/sub.rs:-3, src/list/sub/mod.rs:3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::sub::value=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: depot::list::sub::value
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   transformations:
   item `depot::list::sub`:

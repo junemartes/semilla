@@ -909,6 +909,11 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     // (design 60, C1), the `control flow:` lines replace it.
     match shared.flow {
         Some(flow) => {
+            // [R98.8-1] The graph part of the entry (design 98): the words of design 60 for the
+            // graph changes of the entry, then the lines of the changes.
+            if let Some(graph) = flow.entries.get(&fact.id) {
+                put(&format!("      {}", graph.line()), true);
+            }
             // Design 38.5: a long line has a cut; `status --verbose` shows the full line.
             for line in flow.facts.get(&fact.id).into_iter().flatten() {
                 put(&format!("      control flow: {line}"), true);
@@ -1638,9 +1643,13 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool, fu
         // [R90.5-1] The one list of the entries (design 90): the real edits first, grouped by
         // item. A record of an earlier version keeps the groups of today.
         let groups = if sectioned { semilla_core::report::ENTRY_SECTIONS } else { semilla_core::report::FILLED_GROUPS };
+        // [R98.4-1] The graph changes of a body with no entry are lines of the section "compiled
+        // code that changes with no edit" (design 98).
+        let no_entry: &[semilla_core::report::NoEntryGraph] = step.flow.as_ref().map(|flow| flow.no_entry.as_slice()).unwrap_or(&[]);
         for (group, name) in groups.iter().enumerate().filter(|_| !tagged) {
             let blocks: Vec<&Block> = facts.iter().filter(|block| block.place == Err(group)).collect();
-            if blocks.is_empty() {
+            let alone = sectioned && *name == semilla_core::report::NO_EDIT_SECTION && !no_entry.is_empty();
+            if blocks.is_empty() && !alone {
                 continue;
             }
             if !sectioned {
@@ -1656,6 +1665,14 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool, fu
                     last = &block.item;
                 }
                 out.push_str(&block.text);
+            }
+            if alone {
+                for body in no_entry {
+                    put(&mut out, &format!("  {}", body.line()));
+                    for line in &body.lines {
+                        put(&mut out, &format!("      control flow: {line}"));
+                    }
+                }
             }
         }
         // Design 55.3: the facts in the groups of the tags. Each fact line is the line of a

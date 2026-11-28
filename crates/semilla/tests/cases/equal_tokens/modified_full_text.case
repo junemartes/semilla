@@ -29,12 +29,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::total` (src/lib.rs:2): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::total`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `a + g( 1, b, )` → `a - g( 1, b )` at `depot::total/tail` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:5, src/lib.rs:-3, src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a + $b => $a - $b'
       affected bodies: depot::total
+      graph: same structure: 1 changed check (`overflow: a + g( 1, b, )` → `overflow: a - g( 1, b )`, implicit)
       control flow: ~ check `overflow: a + g( 1, b, )` → `overflow: a - g( 1, b )` (src/lib.rs:-3, src/lib.rs:3)
       equivalence: MIR changes
   cover: each of the 4 changed line(s) is in a fact

@@ -57,30 +57,34 @@ accepted: step 0 "the change" stored in group G1 "the change"
 build check: passes (the build of the compiled check)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
-  changed bodies: 0 equal MIR, 0 explained by claims, 6 MIR changes with no claim
+  changed bodies: 0 equal MIR, 0 explained by claims, 7 MIR changes with no claim
     MIR changes with no claim: `depot::Cart::count` (src/lib.rs:4): a removed body: `#[removed(depot::Cart::count)] fn count_removed(this: &before::depot::Cart) -> bool { let old = before::depot::Cart::count(this); true }`
     MIR changes with no claim: `depot::limit` (src/lib.rs:10): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change() -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
     MIR changes with no claim: `depot::tests::t_fresh` (src/lib.rs:20): no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `depot::tests::t_fresh::{closure#0} #[test]` (src/lib.rs:20): the template of `depot::tests::t_fresh` covers its item `depot::tests::t_fresh`
     MIR changes with no claim: `depot::tests::t_limit` (src/lib.rs:19): the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`; no template: test, bench, or example code (the intent crate links the libraries only, design 78)
     MIR changes with no claim: `depot::tests::t_limit::{closure#0} #[test]` (src/lib.rs:19): the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`; the template of `depot::tests::t_limit` covers its item `depot::tests::t_limit`
-  changed nodes: 6 in 6 entries; 5 real edits (0 stated by the agent); 0 not mapped
+    MIR changes with no claim: `depot::wrap2` (src/lib.rs:9): the signature changes (`fn wrap2 (x : u32) -> u32` → `fn wrap2 (x : u32 , _y : u32) -> u32`): `#[same(depot::wrap2)] fn wrap2(x: u32, _y: u32) -> bool { after::depot::wrap2(x, _y) == before::depot::wrap2(x) }`; a difference: `#[change(depot::wrap2)] fn wrap2_change() -> bool { … }` or `#[different(depot::wrap2)] fn wrap2_different() -> bool { … }`
+  changed nodes: 6 in 6 entries; 5 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 15 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::Cart::count`:
   ◆ f2 delete (Semilla; R90.2-3, a body of the old MIR only): removed `depot::Cart::count` (the public API changes: a different crate can no longer use the item) [removed · code different]
       not stated (src/lib.rs:-4); to state it: --change 'depot::Cart::count=TEXT'
       affected bodies: depot::Cart::count
+      graph: −1 body, −1 call (`Vec::<u32>::len`), −1 return, −2 arrows
       control flow: − graph of `depot::Cart::count`: 3 points, 2 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   item `depot::limit`:
   ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `10` → `11` at `depot::limit/tail` [semantics · code different]
       not stated (src/lib.rs:10, src/lib.rs:-10-11); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::limit=TEXT'; if it does not change, --same 'rewrite 10 => 11'
       affected bodies: depot::limit
+      graph: same graph (the edit keeps the control flow)
       equivalence: MIR changes
   item `depot::tests::t_fresh`:
   ◆ f6 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::tests::t_fresh` [added · code different]
       not stated (src/lib.rs:20); to state it: --change 'depot::tests::t_fresh=TEXT'
       affected bodies: depot::tests::t_fresh
+      graph: +2 bodys, +2 returns, +2 calls, +4 arrows
       control flow: + graph of `depot::tests::t_fresh`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: + graph of `depot::tests::t_fresh::{closure#0} #[test]`: 4 points, 3 arrows (semilla expand --step 0)
       expansion: `#[test]` at `depot::tests::t_fresh` (src/lib.rs:20): expansion added: makes `depot::tests::test`, `depot::tests::t_fresh`
@@ -88,6 +92,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f4 replace (Semilla; R90.6-1, test code with no unique alignment; no claim names test code (R79.3-2)): changed macro: `assert_eq!(limit(), 10);` → `assert!(limit() > 9);` at `depot::tests::t_limit/S0` [semantics · code different]
       not stated (src/lib.rs:19, src/lib.rs:-19); to state it: --change 'depot::tests::t_limit=TEXT'
       affected bodies: depot::tests::t_limit
+      graph: same graph (the edit keeps the control flow)
       equivalence: `depot::tests::t_limit`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`
       equivalence: `depot::tests::t_limit::{closure#0} #[test]`: MIR changes: the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`
       expansion: `assert!(limit() > 9)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: deleted statement `{ match (&limit(), &10) { (left_val, right_val) => { if !(*left_val == *right_val) { let kind = ::core::panicking::AssertKind::Eq; ::core::panicking::assert_failed(kind, &*lef… (113 characters more; `semilla expand f4 --step 0` shows the full line) …() > 9) { ::core::panicking::panic("assertion failed: limit() > 9") }` at `expansion/S0` [semantics]
@@ -95,19 +100,22 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): parameter of `depot::wrap2` added: `_y: u32` (the public API can change: a different crate can use the item) [declaration · code different]
       not stated (src/lib.rs:9); to state it: --change 'depot::wrap2=TEXT'
       affected bodies: depot::wrap2
+      graph: same graph (the edit keeps the control flow)
+      equivalence: MIR changes
       ! public API: the compare does not cover the code of a different crate
   syntax only:
   item `depot::FRESH`:
   ◆ f5 add, syntax only (Semilla; R90.2-6, no MIR element; the matcher): added `depot::FRESH` (the public API changes: a different crate can now use the item) [added · no code]
       ! public API: the compare does not cover the code of a different crate
   cover: each of the 9 changed line(s) is in a fact
-  control flow: 6 bodies
+  control flow: 7 bodies
     depot::Cart::count (src/lib.rs:4): graph removed: 3 points, 2 arrows
     depot::limit (src/lib.rs:10): same graph (the edit keeps the control flow); MIR changes
     depot::tests::t_fresh (src/lib.rs:20): graph added: 2 points, 1 arrow
     depot::tests::t_fresh::{closure#0} #[test] (src/lib.rs:20): graph added: 4 points, 3 arrows
     depot::tests::t_limit (src/lib.rs:19): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `depot::tests::t_limit::{closure#0}`)
     depot::tests::t_limit::{closure#0} #[test] (src/lib.rs:19): same graph (the edit keeps the control flow); MIR changes (the same MIR text; a changed callee: `depot::tests::t_limit`, `depot::tests::t_limit::{closure#0}`)
+    depot::wrap2 (src/lib.rs:9): same graph; no edit in the body; MIR changes
   expansions: 1 changed, 2 added, 1 equal
     `assert!(limit() > 9)` at `depot::tests::t_limit/S0` (src/lib.rs:19): expansion changed: `macro assert` (crate core): deleted statement `{ match (&limit(), &10) { (left_val, right_val) => { if !(*left_val == *right_val) { let kind = ::core::panicking::AssertKind::Eq; ::core::panicking::assert_fa… (207 characters more; `semilla expand --step 0` shows the full line) …ansion/S0` [semantics]; the input of the call changes; the two calls are a pair by similarity (0.67)
     `#[test]` at `depot::tests::t_fresh` (src/lib.rs:20): expansion added: `attribute macro test` (crate core): makes `depot::tests::test`, `depot::tests::t_fresh`; the step adds the call or its input

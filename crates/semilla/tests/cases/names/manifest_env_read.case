@@ -23,15 +23,20 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `shop::about` (src/lib.rs:1): the full compare: `#[same(shop::about)] fn about_same() {}`; a difference: `#[change(shop::about)] fn about_change() -> bool { … }` or `#[different(shop::about)] fn about_different() -> bool { … }`
+  changed nodes: 0 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   file `Cargo.toml`:
   ◆ f1 replace (Semilla; R90.3-2, a file edit (no tree)): Cargo.toml: package.description "a shop" → "a small shop" [manifest · code different]
       not stated (Cargo.toml:5, Cargo.toml:-5); to state it: --change 'Cargo.toml=TEXT'
       affected bodies: shop::about
+      graph: same graph (the edit keeps the control flow)
       note: this body uses `env!("CARGO_PKG_DESCRIPTION")`, which Semilla did not check (`shop::about`)
       ✗ spotlight: a build input: the MIR of 1 body changed with no edit of its text, and this change can reach its crate; it needs a reason: --reason 'Cargo.toml:package.description=…'
   cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::about (src/lib.rs:1): same graph; no edit in the body; MIR changes; the expansion of `env!("CARGO_PKG_DESCRIPTION")` changes (semilla expand src/lib.rs:2 --step 0)
   expansions: 1 changed
     `env!("CARGO_PKG_DESCRIPTION")` at `shop::about/tail` (src/lib.rs:2): expansion changed: `macro env` (crate core): only the context of the call changes: the environment variable `CARGO_PKG_DESCRIPTION` (`env!("CARGO_PKG_DESCRIPTION")`); changed code `shop` → `small shop`; the context of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

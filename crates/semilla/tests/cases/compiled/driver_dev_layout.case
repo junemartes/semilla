@@ -81,12 +81,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `store::DataContainer::<Id, D, S>::next` (src/lib.rs:30): the full compare: `#[same(store::DataContainer::next)] fn next_same() {}`; a difference: `#[change(store::DataContainer::next)] fn next_change(n: usize) -> bool { … }` or `#[different(store::DataContainer::next)] fn next_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `store::DataContainer::next`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `store::DataContainer::next/tail/rhs` [semantics · code different]
       not stated (src/lib.rs:31, src/lib.rs:-31); to state it: the check did not decide if the behavior changes: if it changes, --change 'store::DataContainer::next=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: store::DataContainer::next
+      graph: same structure: 1 changed check (`overflow: n + 1` → `overflow: n + 2`, implicit)
       control flow: ~ check `overflow: n + 1` → `overflow: n + 2` (src/lib.rs:-31, src/lib.rs:31)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact

@@ -1,5 +1,5 @@
 note: an added early exit is a new branch with its arrows: `graph changes`
-rule+: R60.4-1
+rule+: R98.2-1
 === both Cargo.toml
 [package]
 name = "depot"
@@ -34,14 +34,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::order` (src/lib.rs:5): the full compare: `#[same(depot::order)] fn order_same() {}`; a difference: `#[change(depot::order)] fn order_change(q: u32) -> bool { … }` or `#[different(depot::order)] fn order_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::order`:
   ◆ f1 add (Semilla; R90.2-3, 4 new MIR elements): added early exit `if q == 0 { return None; }` at `depot::order/S0` [semantics · code different]
       not stated (src/lib.rs:6-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::order=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: depot::order
+      graph: +1 branch (`q == 0`), +3 arrows, −1 arrow
       control flow: + branch `q == 0` (src/lib.rs:6): false → call `price`, true → return
       control flow: + arrow entry (src/lib.rs:5) → branch `q == 0` (src/lib.rs:6)
+      control flow: − arrow entry (src/lib.rs:-5) → call `price` (src/lib.rs:-6)
       equivalence: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body

@@ -46,12 +46,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::pick` (src/lib.rs:1): the full compare: `#[same(shop::pick)] fn pick_same() {}`; a difference: `#[change(shop::pick)] fn pick_change(v: &[u32], i: usize, j: usize) -> bool { … }` or `#[different(shop::pick)] fn pick_different() -> bool { … }`
     MIR changes with no claim: `shop::pick::{closure#0} |k: usize| v[k]` (src/lib.rs:-2): the template of `shop::pick` covers its item `shop::pick`
     equal MIR: `shop::other::{closure#0} |k: usize| v[k]` (src/lib.rs:6)
-  changed nodes: 5 in 5 entries; 5 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 5 in 5 entries; 5 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 47 in entries (27 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::fresh`:
   ◆ f5 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::fresh` (the public API changes: a different crate can now use the item) [added · code different]
       not stated (src/lib.rs:8-12); to state it: --change 'shop::fresh=TEXT'
       affected bodies: shop::fresh
+      graph: +2 bodys, +2 calls, +2 bounds checks (implicit), +2 panics (implicit), +2 returns, +8 arrows (4 implicit)
       control flow: + graph of `shop::fresh`: 6 points, 5 arrows (semilla expand --step 0)
       control flow: + graph of `shop::fresh::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
@@ -59,21 +60,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed method_call: `get(i)` → `get(i).wrapping_add(v[0])` at `shop::other/tail` [semantics · code different]
       not stated (src/lib.rs:7, src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::other=TEXT'; if it does not change, --same 'rewrite $a($b) => $a($b).wrapping_add(v[0])'
       affected bodies: shop::other
+      graph: +1 bounds check (implicit), +1 call (`num::<impl u32>::wrapping_add`), +1 panic (implicit), +4 arrows (3 implicit), −1 arrow (implicit)
       control flow: + check `bounds: v[0]` (src/lib.rs:7): ok → call `num::<impl u32>::wrapping_add`, fail → panic `bounds`
       control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:7): return → return
       control flow: + panic `bounds` (src/lib.rs:7)
-      control flow: … 1 more (semilla expand --step 0)
+      control flow: … 2 more (semilla expand --step 0)
       equivalence: `shop::other`: MIR changes
       equivalence: `shop::other::{closure#0} |k: usize| v[k]`: equivalent (proved by equal MIR)
   item `shop::pick`:
   ◆ f2 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different]
       not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f2, f3, f4)
       affected bodies: shop::pick (with 2 other edits of this body)
-      control flow: − graph of `shop::pick::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows; moved out to `shop::pick`: 1 check, 1 panic (semilla expand --step 0)
+      graph: −1 body, −1 bounds check (implicit), −1 return, −1 panic (implicit), −3 arrows (2 implicit)
+      control flow: − graph of `shop::pick::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows (semilla expand --step 0)
       equivalence: MIR changes
-  ◆ f3 add (Semilla; R90.2-3, 1 new MIR element): added statement `v[i].wrapping_add(v[j])` at `shop::pick/tail` [semantics · code different]
+  ◆ f3 add (Semilla; R90.2-3, 3 new MIR elements): added statement `v[i].wrapping_add(v[j])` at `shop::pick/tail` [semantics · code different]
       not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f2, f3, f4)
       affected bodies: shop::pick (with 2 other edits of this body)
+      graph: +2 bounds checks (implicit), +2 panics (implicit), +5 arrows (implicit)
       control flow: moved check `bounds: v[i]` (src/lib.rs:2) from `shop::pick::{closure#0}`: ok → check `bounds: v[j]`, fail → panic `bounds`
       control flow: + check `bounds: v[j]` (src/lib.rs:2): ok → call `num::<impl u32>::wrapping_add`, fail → panic `bounds`
       control flow: moved panic `bounds` (src/lib.rs:2) from `shop::pick::{closure#0}`
@@ -82,6 +86,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f4 replace (Semilla; R90.2-2, 6 changed MIR elements): deleted statement `get(i).wrapping_add(get(j))` at `shop::pick/tail` [semantics · code different]
       not stated (src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f2, f3, f4)
       affected bodies: shop::pick (with 2 other edits of this body)
+      graph: −2 calls, −3 arrows
       control flow: − call `get` [closure] (src/lib.rs:-3): return → call `get` [closure]
       control flow: − call `get` [closure] (src/lib.rs:-3): return → call `num::<impl u32>::wrapping_add`
       control flow: − arrow entry (src/lib.rs:-1) → call `get` [closure] (src/lib.rs:-3)
@@ -103,7 +108,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     lines: src/lib.rs:7, src/lib.rs:-8
 ◆ f2 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different]
     lines: src/lib.rs:-2
-◆ f3 add (Semilla; R90.2-3, 1 new MIR element): added statement `v[i].wrapping_add(v[j])` at `shop::pick/tail` [semantics · code different]
+◆ f3 add (Semilla; R90.2-3, 3 new MIR elements): added statement `v[i].wrapping_add(v[j])` at `shop::pick/tail` [semantics · code different]
     lines: src/lib.rs:2
 ◆ f4 replace (Semilla; R90.2-2, 6 changed MIR elements): deleted statement `get(i).wrapping_add(get(j))` at `shop::pick/tail` [semantics · code different]
     lines: src/lib.rs:-3

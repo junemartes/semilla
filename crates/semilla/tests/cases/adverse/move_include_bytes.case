@@ -52,13 +52,16 @@ rejected: step 0 "the change" is not stored
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
 
-  changed nodes: 0 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::list::RAW` (src/list/mod.rs:9): the full compare: `#[same(depot::list::RAW)] fn raw_same() {}`; a difference: `#[change(depot::list::RAW)] fn raw_change() -> bool { … }` or `#[different(depot::list::RAW)] fn raw_different() -> bool { … }`
+  changed nodes: 0 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   to state them, add these options to the command of the step: --change 'depot::list=TEXT'
   real edits:
   file `src/list/raw.bin`:
   ◆ f1 add (Semilla; R90.3-2, a file edit (no tree)): src/list/raw.bin: added [file · code different]
       not stated (src/list/raw.bin:1); to state it: --change 'src/list/raw.bin=TEXT'
       affected bodies: depot::list::RAW
+      graph: same graph (the edit keeps the control flow)
       ✗ spotlight: a file that is not on the allow list of files that no tool reads to build or to test (docs, license texts, images); it needs a reason: --reason 'src/list/raw.bin:=…'
   item `depot::list`:
   ◆ f2 replace (Semilla; R90.3-2, no changed node (the fact of today)): source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 14 lines keep their tokens; the meaning of 1 node depends on the path of the file: `include_bytes!("raw.bin")` (`src/list/mod.rs:9`) [macro · no code]
@@ -69,6 +72,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
           | //! A second line.
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   cover: each of the 31 changed line(s) is in a fact
+  control flow: 1 body
+    depot::list::RAW (src/list/mod.rs:9): same graph; no edit in the body; MIR changes; the expansion of `include_bytes!("raw.bin")` changes (semilla expand src/list/mod.rs:9 --step 0)
   expansions: 1 changed
     `include_bytes!("raw.bin")` at `depot::list::RAW` (src/list/mod.rs:9): expansion changed: `macro include_bytes` (crate core): changed literal `b"abc"` → `b"xyz"` at `expansion` [semantics]; the input of the call changes; the code of the call reads `src/list/raw.bin`, which the step changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

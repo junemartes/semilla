@@ -1459,6 +1459,10 @@ fn fact_items_where(model: &Model, steps: Option<&[usize]>, full: bool, code: Op
             if let Some(why) = &fact.spotlight_why {
                 text.push_str(&format!("; spotlight: {why}; {}: {}", fact.reason_label(), fact.reason.as_deref().map(text::quoted).unwrap_or_else(|| "MISSING".into())));
             }
+            // [R98.8-1] The graph part of the entry (design 98), then the lines of its changes.
+            if let Some(graph) = flow.and_then(|flow| flow.entries.get(&fact.id)) {
+                text.push_str(&format!("; {}", graph.line()));
+            }
             for line in flow.and_then(|flow| flow.facts.get(&fact.id)).into_iter().flatten() {
                 text.push_str(&format!("; control flow: {line}"));
             }
@@ -1644,13 +1648,17 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
         // [R92.8-1] The coverage line of the map of each step (R90.5-3).
         for step in reports.iter().filter(|step| sectioned(&[**step]) && step.tags.is_empty()) {
             if let Some(map) = &step.ast {
-                let _ = writeln!(out, "Step {}: {}\n", step.step, md(&semilla_core::report::map_coverage_line(map, &step.facts)));
+                let _ = writeln!(out, "Step {}: {}\n", step.step, md(&semilla_core::report::map_coverage_line(map, &step.facts, step.flow.as_ref())));
             }
         }
     }
+    // [R98.4-1] The graph changes of a body with no entry are lines of the section "compiled
+    // code that changes with no edit" (design 98).
+    let no_entry: Vec<(usize, &semilla_core::report::NoEntryGraph)> = reports.iter().filter(|step| step.tags.is_empty()).flat_map(|step| step.flow.iter().flat_map(|flow| flow.no_entry.iter()).map(|body| (step.step, body))).collect();
     for (group, name) in groups.iter().enumerate() {
         let facts = fact_items_where(model, Some(steps), full, Some(false), &|view| fact_place(model, view) == Err(group) && !in_tagged_step(model, view));
-        if facts.is_empty() {
+        let alone = sectioned(&reports) && *name == semilla_core::report::NO_EDIT_SECTION && !no_entry.is_empty();
+        if facts.is_empty() && !alone {
             continue;
         }
         if sectioned(&reports) {
@@ -1659,6 +1667,12 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
             let _ = writeln!(out, "Filled in by Semilla, {name} ({}):\n", facts.len());
         }
         md_fact_list(out, &facts);
+        if alone {
+            for (step, body) in &no_entry {
+                let _ = writeln!(out, "- step {step}: {}", md_with_code(&body.line()));
+            }
+            out.push('\n');
+        }
     }
     // Design 58.9: the comments of the changed items, each one with its first fact.
     let comments: Vec<(usize, &semilla_core::Fact, &semilla_core::RelatedComment)> = reports.iter().flat_map(|step| step.comment_list().into_iter().map(|(fact, comment)| (step.step, fact, comment))).collect();

@@ -40,12 +40,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 1 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::T::{constant#0} if ON { M as usize + 1 } else { 1 }` (src/lib.rs:6): the full compare: `#[same(shop::T)] fn t_same() {}`; a difference: `#[change(shop::T)] fn t_change() -> bool { … }` or `#[different(shop::T)] fn t_different() -> bool { … }`
     equal MIR: `shop::T` (src/lib.rs:5)
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::T`:
   ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `shop::T` changed: `{ let d = [0u8; if ON { N as usize } else { 1 }]; d.len() }` → `{ let d = [0u8; if ON { M as usize + 1 } else { 1 }]; d.len() }` (the public API can change: a different crate can use the item) [semantics · code different]
       not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::T=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
       affected bodies: shop::T
+      graph: same graph (the edit keeps the control flow)
       equivalence: `shop::T`: equivalent (proved by equal MIR)
       equivalence: `shop::T::{constant#0} if ON { M as usize + 1 } else { 1 }`: MIR changes
       ! public API: the compare does not cover the code of a different crate

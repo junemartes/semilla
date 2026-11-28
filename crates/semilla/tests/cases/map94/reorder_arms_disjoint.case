@@ -31,7 +31,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::name` (src/lib.rs:1): the full compare: `#[same(depot::name)] fn name_same() {}`; a difference: `#[change(depot::name)] fn name_change(x: u32) -> bool { … }` or `#[different(depot::name)] fn name_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
   transformations:
   item `depot::name`:
   ◆ f1 reorder (Semilla; R94.4-1, the arms in another order; the MIR is equal under one map of the locals and the blocks: the compiled code is the same): moved match arm `0 => 10` from `depot::name/S0/arm[0].pat` to `depot::name/S0/arm[1].pat` [semantics · code different]

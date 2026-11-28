@@ -55,12 +55,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::list::first` (src/list.rs:8): the full compare: `#[same(depot::list::first)] fn first_same() {}`; a difference: `#[change(depot::list::first)] fn first_change(v: &[u32]) -> bool { … }` or `#[different(depot::list::first)] fn first_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::list::first`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `0` → `1` at `depot::list::first/tail/index` [semantics · code different]
       not stated (src/list.rs:8, src/list.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::list::first=TEXT'; if it does not change, --same 'rewrite 0 => 1'
       affected bodies: depot::list::first
+      graph: same structure: 1 changed check (`bounds: v[0]` → `bounds: v[1]`, implicit)
       control flow: ~ check `bounds: v[0]` → `bounds: v[1]` (src/list.rs:-8, src/list.rs:8)
       equivalence: MIR changes
       docs of `depot::list::first`, no edit in this step (src/list.rs:7): `/// The first element.`

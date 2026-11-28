@@ -25,12 +25,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::make` (src/lib.rs:1): the same MIR text; a changed callee: `shop::make::{closure#0}`; the full compare: `#[same(shop::make)] fn make_same() {}`; a difference: `#[change(shop::make)] fn make_change() -> bool { … }` or `#[different(shop::make)] fn make_different() -> bool { … }`
     MIR changes with no claim: `shop::make::{closure#0} async move { a + 2 }` (src/lib.rs:2): the template of `shop::make` covers its item `shop::make`
-  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (1 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::make`:
   ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): changed literal `1` → `2` at `shop::make/tail/body/tail/rhs` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::make=TEXT'; if it does not change, --same 'rewrite 1 => 2'
       affected bodies: shop::make
+      graph: same structure: 1 changed check (`overflow: a + 1` → `overflow: a + 2`, implicit)
       control flow: ~ check `overflow: a + 1` → `overflow: a + 2` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: `shop::make`: MIR changes: the same MIR text; a changed callee: `shop::make::{closure#0}`
       equivalence: `shop::make::{closure#0} async move { a + 2 }`: MIR changes

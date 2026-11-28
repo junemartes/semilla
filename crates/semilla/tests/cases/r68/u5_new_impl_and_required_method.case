@@ -54,18 +54,20 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `<shop::Cat as shop::Speak>::id` (src/lib.rs:21): an added body: `#[new(<shop::Cat as shop::Speak>::id)] fn id_new() -> bool { … }`
     MIR changes with no claim: `<shop::Cat as shop::Speak>::name` (src/lib.rs:18): an added body: `#[new(<shop::Cat as shop::Speak>::name)] fn name_new() -> bool { … }`
     MIR changes with no claim: `<shop::Dog as shop::Speak>::id` (src/lib.rs:12): an added body: `#[new(<shop::Dog as shop::Speak>::id)] fn id_new_2() -> bool { … }`
-  changed nodes: 5 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped
+  changed nodes: 5 in 3 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 9 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::<Dog as Speak>::id`:
   ◆ f2 add (Semilla; R90.2-3, a body of the new MIR only): added `shop::<Dog as Speak>::id` (the public API changes: a different crate can now use the item) [added · code different]
       not stated (src/lib.rs:11-15, src/lib.rs:-10); to state it: --change 'shop::<Dog as Speak>::id=TEXT'
       affected bodies: shop::<Dog as Speak>::id
+      graph: +1 body, +1 return, +1 arrow
       control flow: + graph of `<shop::Dog as shop::Speak>::id`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
   item `shop::impl <Cat as Speak>`:
   ◆ f1 add (Semilla; R90.2-3, a body of the new MIR only; 3 nodes): trait impl `<Cat as Speak>` added with: `fn name`, `fn id` (the public API can change: a different crate can use the item) [added · code different]
       not stated (src/lib.rs:16-24); to state it: --change 'shop::impl <Cat as Speak>=TEXT'
       affected bodies: shop::<Cat as Speak>::id, shop::<Cat as Speak>::name
+      graph: +2 bodys, +2 returns, +2 arrows
       control flow: + graph of `<shop::Cat as shop::Speak>::id`: 2 points, 1 arrow (semilla expand --step 0)
       control flow: + graph of `<shop::Cat as shop::Speak>::name`: 2 points, 1 arrow (semilla expand --step 0)
       ! public API: the compare does not cover the code of a different crate
