@@ -26,7 +26,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 7 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::add`:
-  ◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `a.unwrap_or(0)` → `a?` at `depot::add/S0/init` [semantics · code different]
+  ◆ f1 replace (Semilla; R90.2-2, 6 changed MIR elements): changed expression `a.unwrap_or(0)` → `a?` at `depot::add/S0/init` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::add=TEXT'; if it does not change, --same 'rewrite $a.unwrap_or(0) => $a?'
       affected bodies: depot::add
       graph: +1 try (`a?`), −1 call (`Option::<u32>::unwrap_or`), +3 arrows, −2 arrows
@@ -41,5 +41,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `a.unwrap_or(0)` → `a?` at `depot::add/S0/init` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 6 changed MIR elements): changed expression `a.unwrap_or(0)` → `a?` at `depot::add/S0/init` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2

@@ -25,13 +25,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::level`:
-  ◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): moved statement `x` from `depot::level/tail` to `depot::level/S0/else/tail` [semantics · code different]
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): moved statement `x` from `depot::level/tail` to `depot::level/S0/else/tail` [semantics · code different]
       not stated (src/lib.rs:2, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::level=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f1)
       affected bodies: depot::level (with 1 other edit of this body)
       graph: no graph change of its own
       equivalence: `depot::level`: no result alone (the body has 2 edits); the body: MIR changes: the same MIR text; a changed callee: `depot::level::{closure#0}` (the same line for f2)
       equivalence: `depot::level::{closure#0} { if x > 7 { 7 } else { x } }`: equivalent alone (proved by equal MIR); the body: MIR changes
-  ◆ f2 add (Semilla; R90.2-3, 3 new MIR elements): added `if` `if x > 7 { 7 } else { x }` (inner statements: 1 moved to a different place; 1 not in a deleted statement: `7`) at `depot::level/S0` [semantics · code different]
+  ◆ f2 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if x > 7 { 7 } else { x }` (inner statements: 1 moved to a different place; 1 not in a deleted statement: `7`) at `depot::level/S0` [semantics · code different]
       not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::level=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f1)
       affected bodies: depot::level (with 1 other edit of this body)
       graph: +1 branch (`x > 7`), +3 arrows, −1 arrow
@@ -47,7 +47,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 3 changed MIR elements): moved statement `x` from `depot::level/tail` to `depot::level/S0/else/tail` [semantics · code different]
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): moved statement `x` from `depot::level/tail` to `depot::level/S0/else/tail` [semantics · code different]
     lines: src/lib.rs:2, src/lib.rs:-2
-◆ f2 add (Semilla; R90.2-3, 3 new MIR elements): added `if` `if x > 7 { 7 } else { x }` (inner statements: 1 moved to a different place; 1 not in a deleted statement: `7`) at `depot::level/S0` [semantics · code different]
+◆ f2 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if x > 7 { 7 } else { x }` (inner statements: 1 moved to a different place; 1 not in a deleted statement: `7`) at `depot::level/S0` [semantics · code different]
     lines: src/lib.rs:2

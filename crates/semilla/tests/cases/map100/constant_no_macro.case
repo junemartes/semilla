@@ -1,0 +1,46 @@
+note: design 100 (R100.7-1): a body with no edit whose branch reads a changed constant: the point is not from a macro expansion, so the change stays in the section of R92.4-1
+rule-: R100.7-1
+must_not_match: [1-9][0-9]* in entries \(
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub const LIMIT: u32 = 9;
+
+pub fn clamp(v: u32) -> u32 {
+    if v > LIMIT { LIMIT } else { v }
+}
+=== new src/lib.rs
+pub const LIMIT: u32 = 10;
+
+pub fn clamp(v: u32) -> u32 {
+    if v > LIMIT { LIMIT } else { v }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::clamp` (src/lib.rs:3): the full compare: `#[same(depot::clamp)] fn clamp_same() {}`; a difference: `#[change(depot::clamp)] fn clamp_change(v: u32) -> bool { … }` or `#[different(depot::clamp)] fn clamp_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::LIMIT=TEXT'
+  real edits:
+  item `depot::LIMIT`:
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `depot::LIMIT` changed: 9 → 10 (the public API can change: a different crate can use the item) [semantics · code different]
+      not stated (src/lib.rs:1, src/lib.rs:-1); to state it: --change 'depot::LIMIT=TEXT'
+      affected bodies: depot::clamp
+      through: `depot::LIMIT` (1 body)
+      graph: same graph (the edit keeps the control flow)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::clamp (src/lib.rs:3): same graph; reads a changed constant: `depot::LIMIT` (9 → 10); MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies): value of `depot::LIMIT` changed: 9 → 10 (the public API can change: a different crate can use the item) [semantics · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1

@@ -35,12 +35,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::total` (src/lib.rs:5): the same MIR text; a changed callee: `shop::total::{closure#0}`; the full compare: `#[same(shop::total)] fn total_same() {}`; a difference: `#[change(shop::total)] fn total_change(a: u32) -> bool { … }` or `#[different(shop::total)] fn total_different() -> bool { … }`
     MIR changes with no claim: `shop::total::{closure#0} { let v = get(a).await; v }` (src/lib.rs:5): the template of `shop::total` covers its item `shop::total`
-  changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit), 0 in the section of R92.4-1
+  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::total`:
-  ◆ f1 delete (Semilla; R90.2-3, 12 removed MIR elements; 2 nodes; one change (R92.6-1)): deleted statement `let w = get(v).await;` at `shop::total/S1`; deleted statement `w` at `shop::total/tail` [semantics · code different]
-      not stated (src/lib.rs:-7-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2)
-      affected bodies: shop::total (with 1 other edit of this body)
+  ◆ f1 delete (Semilla; R90.2-3, 12 removed MIR elements): deleted statement `let w = get(v).await;` at `shop::total/S1` [semantics · code different]
+      not stated (src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
+      affected bodies: shop::total (with 2 other edits of this body)
       graph: −1 call (`get`), −1 await (`get(v).await`), +1 arrow, −3 arrows
       control flow: − call `get` (src/lib.rs:-7): return → await `get(v).await`
       control flow: − await `get(v).await` (src/lib.rs:-7): done → return
@@ -49,7 +49,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: `shop::total`: MIR changes: the same MIR text; a changed callee: `shop::total::{closure#0}`
       equivalence: `shop::total::{closure#0} { let v = get(a).await; v }`: MIR changes
   ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added statement `v` at `shop::total/tail` [semantics · code different]
-      not stated (src/lib.rs:7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2)
+      not stated (src/lib.rs:7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
+      affected bodies: shop::total (with 2 other edits of this body)
+      graph: no graph change of its own
+      equivalence: `shop::total`: MIR changes: the same MIR text; a changed callee: `shop::total::{closure#0}`
+      equivalence: `shop::total::{closure#0} { let v = get(a).await; v }`: MIR changes
+  ◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): deleted statement `w` at `shop::total/tail` [semantics · code different]
+      not stated (src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::total (with 2 other edits of this body)
       graph: no graph change of its own
       equivalence: `shop::total`: MIR changes: the same MIR text; a changed callee: `shop::total::{closure#0}`
@@ -61,7 +67,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 delete (Semilla; R90.2-3, 12 removed MIR elements; 2 nodes; one change (R92.6-1)): deleted statement `let w = get(v).await;` at `shop::total/S1`; deleted statement `w` at `shop::total/tail` [semantics · code different]
-    lines: src/lib.rs:-7-8
+◆ f1 delete (Semilla; R90.2-3, 12 removed MIR elements): deleted statement `let w = get(v).await;` at `shop::total/S1` [semantics · code different]
+    lines: src/lib.rs:-7
 ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added statement `v` at `shop::total/tail` [semantics · code different]
     lines: src/lib.rs:7
+◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): deleted statement `w` at `shop::total/tail` [semantics · code different]
+    lines: src/lib.rs:-8

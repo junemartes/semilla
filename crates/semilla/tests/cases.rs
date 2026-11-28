@@ -1299,7 +1299,8 @@ fn flow_problems(text: &str) -> Vec<String> {
                 want[if arrow { 3 } else { 0 }] += number(rest).unwrap_or(0);
             } else if let Some(rest) = part.strip_prefix('−') {
                 want[if arrow { 4 } else { 1 }] += number(rest).unwrap_or(0);
-            } else if part.contains(" changed ") {
+            } else if part.contains(" changed ") || part.contains(" moved ") {
+                // [R100.1-1] A point in a new order is a changed point of the counts.
                 want[2] += number(part).unwrap_or(0);
             }
         }

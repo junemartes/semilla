@@ -30,7 +30,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       graph: same structure: 1 changed check (`overflow: x + 1` → `overflow: x + 2`, implicit)
       control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: MIR changes
-  ◆ f2 add (Semilla; R90.2-3, 3 new MIR elements): added `if` `if cfg!(test) { x } else { x + 2 }` (inner statements: 1 with a change in a deleted statement; 1 not in a deleted statement: `x`) at `depot::level/S0` [semantics · code different]
+  ◆ f2 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if cfg!(test) { x } else { x + 2 }` (inner statements: 1 with a change in a deleted statement; 1 not in a deleted statement: `x`) at `depot::level/S0` [semantics · code different]
       not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::level=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
       affected bodies: depot::level (with 1 other edit of this body)
       graph: +1 branch (`cfg!(test)`), +3 arrows, −1 arrow
@@ -49,5 +49,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 === positions
 ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `x + 1` (an inner statement of the added `if cfg!(▫)`, except: `x + 1` → `x + 2`) at `depot::level/tail` [semantics · code different]
     lines: src/lib.rs:-2
-◆ f2 add (Semilla; R90.2-3, 3 new MIR elements): added `if` `if cfg!(test) { x } else { x + 2 }` (inner statements: 1 with a change in a deleted statement; 1 not in a deleted statement: `x`) at `depot::level/S0` [semantics · code different]
+◆ f2 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if cfg!(test) { x } else { x + 2 }` (inner statements: 1 with a change in a deleted statement; 1 not in a deleted statement: `x`) at `depot::level/S0` [semantics · code different]
     lines: src/lib.rs:2

@@ -267,6 +267,10 @@ pub struct MirTable {
     pub decls: [Vec<(i64, Option<MirPlace>)>; 2],
     /// True for each element of each side with an equal partner.
     pub same: [Vec<bool>; 2],
+    /// [R100.1-1] The pairs of two equal elements in two regions (old index, new index): an
+    /// element that moves across an anchor (design 100). Each one is also a pair of `pairs`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub moved: Vec<(usize, usize)>,
 }
 
 /// [R94.1-1] [R94.2-1] The check of one candidate of an extract or an inline (design 94): the

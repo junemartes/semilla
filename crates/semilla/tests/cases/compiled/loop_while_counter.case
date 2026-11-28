@@ -58,7 +58,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: − arrow branch `i < n` (src/lib.rs:-4) → return (src/lib.rs:-11) (false)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
-  ◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added loop [1] at `shop::count/S2` [semantics · code different]
+  ◆ f2 add (Semilla; R90.2-3, 2 new MIR elements): added loop [1] at `shop::count/S2` [semantics · code different]
         [1] loop {
                 if i >= n {
                     break;
@@ -82,5 +82,5 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 === positions
 ◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement [1] at `shop::count/S2` [semantics · code different]
     lines: src/lib.rs:-4
-◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added loop [1] at `shop::count/S2` [semantics · code different]
+◆ f2 add (Semilla; R90.2-3, 2 new MIR elements): added loop [1] at `shop::count/S2` [semantics · code different]
     lines: src/lib.rs:4-7

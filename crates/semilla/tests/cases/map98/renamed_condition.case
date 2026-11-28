@@ -34,7 +34,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: equivalent (proved by equal MIR)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    depot::tax (src/lib.rs:1): same structure: 1 changed condition; equivalent (proved by equal MIR)
+    depot::tax (src/lib.rs:1): same structure: explained by f1 (1 graph change); equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

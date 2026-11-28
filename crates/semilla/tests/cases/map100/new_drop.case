@@ -1,0 +1,54 @@
+note: design 100 (R100.6-1): a new value with drop glue gives a new drop point in the entry of the `let` that declares it
+rule+: R100.6-1
+must_match: graph: .*\+1 drop \(`names: std::vec::Vec<std::string::String>`\)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn count(n: usize) -> usize {
+    n + 1
+}
+=== new src/lib.rs
+pub fn count(n: usize) -> usize {
+    let names: Vec<String> = Vec::new();
+    n + names.len()
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::count` (src/lib.rs:1): the full compare: `#[same(depot::count)] fn count_same() {}`; a difference: `#[change(depot::count)] fn count_change(n: usize) -> bool { … }` or `#[different(depot::count)] fn count_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 11 in entries (1 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::count`:
+  ◆ f1 add (Semilla; R90.2-3, 2 new MIR elements): added `let` `let names: Vec<String> = Vec::new();` at `depot::count/S0` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::count=TEXT'; if it does not change, --same 'rewrite 1 => names.len()', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
+      affected bodies: depot::count (with 1 other edit of this body)
+      graph: +1 call (`Vec::<String>::new`), +1 drop (`names: std::vec::Vec<std::string::String>`), +4 arrows, −2 arrows
+      control flow: + call `Vec::<String>::new` (src/lib.rs:2): return → call `Vec::<String>::len`
+      control flow: + drop `names: std::vec::Vec<std::string::String>` (src/lib.rs:4): → return
+      control flow: + arrow entry (src/lib.rs:1) → call `Vec::<String>::new` (src/lib.rs:2)
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
+  ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `1` → `names.len()` at `depot::count/tail/rhs` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::count=TEXT'; if it does not change, --same 'rewrite 1 => names.len()', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
+      affected bodies: depot::count (with 1 other edit of this body)
+      graph: +1 call (`Vec::<String>::len`), 1 changed check (`overflow: n + 1` → `overflow: n + names.len()`, implicit), +1 arrow
+      control flow: + call `Vec::<String>::len` (src/lib.rs:3): return → check `overflow: n + names.len()`
+      control flow: ~ check `overflow: n + 1` → `overflow: n + names.len()` (src/lib.rs:-2, src/lib.rs:3)
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 1 body
+    depot::count (src/lib.rs:1): graph changes: +2 calls, +1 drop, 1 changed check, +5 arrows, −2 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 add (Semilla; R90.2-3, 2 new MIR elements): added `let` `let names: Vec<String> = Vec::new();` at `depot::count/S0` [semantics · code different]
+    lines: src/lib.rs:2
+◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `1` → `names.len()` at `depot::count/tail/rhs` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-2

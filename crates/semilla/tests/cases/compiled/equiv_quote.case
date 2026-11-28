@@ -54,7 +54,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    shop::quote (src/lib.rs:1): same structure: 1 changed condition, 1 changed check; MIR changes
+    shop::quote (src/lib.rs:1): same structure: 1 changed condition (`t > 100` → `total >= 100`); explained by f3 (1 graph change); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

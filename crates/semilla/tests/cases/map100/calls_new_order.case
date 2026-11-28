@@ -1,0 +1,55 @@
+note: design 100 (R100.1-2): two calls of the user in a new order: each call pairs with the call of its own callee (the same callee first, then the order), so the step gives new arrows, not two changed call targets
+rule+: R100.1-2
+must_match: graph: \+3 arrows, −3 arrows
+must_not_match: changed call target
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn log(n: u32) -> u32 { n + 1 }
+pub fn count(n: u32) -> u32 { n * 2 }
+
+pub fn run(v: u32) -> u32 {
+    let a = log(v);
+    let b = count(v);
+    a + b
+}
+=== new src/lib.rs
+pub fn log(n: u32) -> u32 { n + 1 }
+pub fn count(n: u32) -> u32 { n * 2 }
+
+pub fn run(v: u32) -> u32 {
+    let b = count(v);
+    let a = log(v);
+    a + b
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::run` (src/lib.rs:4): the full compare: `#[same(depot::run)] fn run_same() {}`; a difference: `#[change(depot::run)] fn run_change(v: u32) -> bool { … }` or `#[different(depot::run)] fn run_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 6 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::run`:
+  ◆ f1 reorder, the order can matter (Semilla; R94.4-3, two parts that each can panic: `log(v)` and `count(v)`): moved statement `let a = log(v);` from `depot::run/S0` to `depot::run/S1` [semantics · code different]
+      not stated (src/lib.rs:6, src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      affected bodies: depot::run
+      graph: +3 arrows, −3 arrows
+      control flow: + arrow entry (src/lib.rs:4) → call `count` (src/lib.rs:5)
+      control flow: + arrow call `count` (src/lib.rs:5) → call `log` (src/lib.rs:6) (return)
+      control flow: + arrow call `log` (src/lib.rs:6) → check `overflow: a + b` (src/lib.rs:7) (return)
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::run (src/lib.rs:4): graph changes: +3 arrows, −3 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 reorder, the order can matter (Semilla; R94.4-3, two parts that each can panic: `log(v)` and `count(v)`): moved statement `let a = log(v);` from `depot::run/S0` to `depot::run/S1` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-5

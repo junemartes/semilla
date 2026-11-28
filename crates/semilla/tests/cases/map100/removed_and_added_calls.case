@@ -1,0 +1,80 @@
+note: design 100 (R100.2-1): two removed calls and two added calls of other callees in one region, each with a place of its own (no partner in the map of the locals): removed and added calls, not two changed call targets by the order of the region
+rule-: R100.2-1
+must_not_match: ~ call
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn ping(n: u32) -> u32 { n + 1 }
+pub fn pong(n: u32) -> u32 { n + 2 }
+pub fn tick(n: u32) -> u32 { n + 3 }
+pub fn tock(n: u32) -> u32 { n + 4 }
+
+pub fn run(v: u32) -> u32 {
+    let a = ping(v);
+    let b = pong(v);
+    a ^ b
+}
+=== new src/lib.rs
+pub fn ping(n: u32) -> u32 { n + 1 }
+pub fn pong(n: u32) -> u32 { n + 2 }
+pub fn tick(n: u32) -> u32 { n + 3 }
+pub fn tock(n: u32) -> u32 { n + 4 }
+
+pub fn run(v: u32) -> u32 {
+    let c = tick(v);
+    let d = tock(v);
+    c | d
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::run` (src/lib.rs:6): the full compare: `#[same(depot::run)] fn run_same() {}`; a difference: `#[change(depot::run)] fn run_change(v: u32) -> bool { … }` or `#[different(depot::run)] fn run_different() -> bool { … }`
+  changed nodes: 5 in 4 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 10 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::run`:
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed path `ping` → `tick` at `depot::run/S0/init/callee` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, --same 'rewrite ping => tick' --same 'rewrite pong => tock' --same 'rewrite a ^ b => c | d' (one statement for 3 places: f2, f3, f4)
+      affected bodies: depot::run (with 2 other edits of this body)
+      graph: +1 call (`tick`), −1 call (`ping`), +2 arrows, −2 arrows
+      control flow: + call `tick` (src/lib.rs:7): return → call `tock`
+      control flow: − call `ping` (src/lib.rs:-7): return → call `pong`
+      control flow: + arrow entry (src/lib.rs:6) → call `tick` (src/lib.rs:7)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes alone; the body: MIR changes
+  ◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): changed path `pong` → `tock` at `depot::run/S1/init/callee` [semantics · code different]
+      not stated (src/lib.rs:8, src/lib.rs:-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, --same 'rewrite ping => tick' --same 'rewrite pong => tock' --same 'rewrite a ^ b => c | d' (one statement for 3 places: f2, f3, f4)
+      affected bodies: depot::run (with 2 other edits of this body)
+      graph: +1 call (`tock`), −1 call (`pong`), +1 arrow, −1 arrow
+      control flow: + call `tock` (src/lib.rs:8): return → return
+      control flow: − call `pong` (src/lib.rs:-8): return → return
+      equivalence: MIR changes alone; the body: MIR changes
+  ◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `a ^ b` → `c | d` at `depot::run/tail` [semantics · code different]
+      not stated (src/lib.rs:9, src/lib.rs:-9); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, --same 'rewrite ping => tick' --same 'rewrite pong => tock' --same 'rewrite a ^ b => c | d' (one statement for 3 places: f2, f3, f4)
+      affected bodies: depot::run (with 2 other edits of this body)
+      graph: no graph change of its own
+      equivalence: MIR changes alone; the body: MIR changes
+  transformations:
+  item `depot::run`:
+  ◆ f1 same code (Semilla; R90.2-1, equal MIR; 2 nodes): `depot::run`: renamed locals `a` → `c`, `b` → `d`, 2 edit(s) [rename · code equal]
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 1 body
+    depot::run (src/lib.rs:6): graph changes: +2 calls, −2 calls, +3 arrows, −3 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed path `ping` → `tick` at `depot::run/S0/init/callee` [semantics · code different]
+    lines: src/lib.rs:7, src/lib.rs:-7
+◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): changed path `pong` → `tock` at `depot::run/S1/init/callee` [semantics · code different]
+    lines: src/lib.rs:8, src/lib.rs:-8
+◆ f4 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `a ^ b` → `c | d` at `depot::run/tail` [semantics · code different]
+    lines: src/lib.rs:9, src/lib.rs:-9
+◆ f1 same code (Semilla; R90.2-1, equal MIR; 2 nodes): `depot::run`: renamed locals `a` → `c`, `b` → `d`, 2 edit(s) [rename · code equal]
+    lines: src/lib.rs:7-8, src/lib.rs:-7-8

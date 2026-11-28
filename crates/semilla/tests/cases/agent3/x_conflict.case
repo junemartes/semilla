@@ -150,7 +150,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   cover: each of the 5 changed line(s) is in a fact
   control flow: 2 bodies
     depot::cap (src/lib.rs:25): graph added: 2 points, 1 arrow
-    depot::uses_limit (src/lib.rs:27): same structure: 1 changed call target, 1 changed check; MIR changes
+    depot::uses_limit (src/lib.rs:27): same structure: explained by f2 (2 graph changes); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change' --same 'rename limit top'

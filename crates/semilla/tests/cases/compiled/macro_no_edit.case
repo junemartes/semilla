@@ -42,17 +42,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::limit` (src/lib.rs:12): the full compare: `#[same(depot::limit)] fn limit_same() {}`; a difference: `#[change(depot::limit)] fn limit_change(v: u32) -> bool { … }` or `#[different(depot::limit)] fn limit_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 5 in the section of R92.4-1
-  compiled code that changes with no edit:
-  body `depot::limit` (src/lib.rs:12): graph: +1 branch (`guard!(v): v == 5`), +3 arrows, −1 arrow (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
-      control flow: + branch `guard!(v): v == 5` (src/lib.rs:13): false → return, true → return
-      control flow: + arrow branch `guard!(v): v > 9` (src/lib.rs:13) → branch `guard!(v): v == 5` (src/lib.rs:13) (false)
-      control flow: − arrow branch `guard!(v): v > 9` (src/lib.rs:-10) → return (src/lib.rs:-12) (false)
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 5 in entries (0 implicit), 0 in the section of R92.4-1
   syntax only:
   item `depot::guard!`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `guard`: `macro_rules! guard { ($v:expr) => { if $v > 9 { return 0; } }; }` → [1] [declaration · code different]
         [1] macro_rules! guard { ($v:expr) => { if $v > 9 { return 0; } if $v == 5 { return 5; } }; }
       affected bodies: depot::limit
+      graph: +1 branch (`guard!(v): v == 5`), +3 arrows, −1 arrow
+      control flow: + branch `guard!(v): v == 5` (src/lib.rs:13): false → return, true → return
+      control flow: + arrow branch `guard!(v): v > 9` (src/lib.rs:13) → branch `guard!(v): v == 5` (src/lib.rs:13) (false)
+      control flow: − arrow branch `guard!(v): v > 9` (src/lib.rs:-10) → return (src/lib.rs:-12) (false)
       expansion: `guard!(v)` at `depot::limit/S0` (src/lib.rs:13): expansion changed: added early exit `if v == 5 { return 5; }` at `expansion/S1` [semantics]
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body

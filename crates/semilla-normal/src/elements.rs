@@ -228,6 +228,9 @@ pub struct Table {
     /// True for each element of each side with an equal partner (a folded copy has the state of
     /// its use).
     pub same: [Vec<bool>; 2],
+    /// [R100.1-1] The pairs of equal elements in two regions (old index, new index): the element
+    /// moved across an anchor (design 100). Each one is also a pair of `pairs` (not equal).
+    pub moved: Vec<(usize, usize)>,
 }
 
 impl ElementDiff {
@@ -650,13 +653,25 @@ const MOST_CELLS: usize = 4_000_000;
 /// `anchored` counts two times (the two places have the same length and the same offset from
 /// the start or from the end of the body). The common start and end with anchored pairs align first.
 pub(crate) fn align(old: &[String], new: &[String], anchored: impl Fn(usize, usize) -> bool) -> Vec<(usize, usize)> {
-    let start = (0..old.len().min(new.len())).take_while(|&i| old[i] == new[i] && anchored(i, i)).count();
-    let end = (0..(old.len() - start).min(new.len() - start)).take_while(|&k| old[old.len() - 1 - k] == new[new.len() - 1 - k] && anchored(old.len() - 1 - k, new.len() - 1 - k)).count();
+    align_weighted(old, new, anchored, |_, _| None)
+}
+
+/// [R100.5-1] [`align`] with the source node of each pair (design 100): `node(i, j)` is
+/// `Some(true)` when the two places are the same source node (the same layout of the element
+/// places around them, [`fingerprints`]), `Some(false)` when they are two other nodes, and `None`
+/// when no layout is known. A pair of the same source node counts two times more, so the parts of
+/// one construct (the state machine of one `.await`) pair with the parts of the same construct,
+/// not with an equal construct at the same offset from the end of the body. The common start and
+/// end align first only with pairs that are not of two other nodes.
+pub(crate) fn align_weighted(old: &[String], new: &[String], anchored: impl Fn(usize, usize) -> bool, node: impl Fn(usize, usize) -> Option<bool>) -> Vec<(usize, usize)> {
+    let fixed = |i: usize, j: usize| anchored(i, j) && node(i, j) != Some(false);
+    let start = (0..old.len().min(new.len())).take_while(|&i| old[i] == new[i] && fixed(i, i)).count();
+    let end = (0..(old.len() - start).min(new.len() - start)).take_while(|&k| old[old.len() - 1 - k] == new[new.len() - 1 - k] && fixed(old.len() - 1 - k, new.len() - 1 - k)).count();
     let mut pairs: Vec<(usize, usize)> = (0..start).map(|i| (i, i)).collect();
     let (a, b) = (&old[start..old.len() - end], &new[start..new.len() - end]);
     if !a.is_empty() && !b.is_empty() && (a.len() + 1).saturating_mul(b.len() + 1) <= MOST_CELLS {
         let width = b.len() + 1;
-        let weight = |i: usize, j: usize| if anchored(start + i, start + j) { 2 } else { 1 };
+        let weight = |i: usize, j: usize| 1 + u32::from(anchored(start + i, start + j)) + 2 * u32::from(node(start + i, start + j) == Some(true));
         let mut table = vec![0u32; (a.len() + 1) * width];
         for i in (0..a.len()).rev() {
             for j in (0..b.len()).rev() {
@@ -759,6 +774,72 @@ fn source_order(blocks: &[usize], ranges: &[(Option<Place>, Option<Place>)], fol
     keyed.into_iter().map(|(_, index)| index).collect()
 }
 
+/// [R100.5-1] The source node of each element (design 100): a hash of the layout of the element
+/// places around its place, or `None`. The container of a place is the smallest element place
+/// that holds it (the place itself included) and holds at least two other element places; the
+/// key is the length of the place, its offset in the container, and the layout of the container
+/// (its length and the offsets of each element place inside it). Two places with equal keys have
+/// the same shape of code around them: the same source node, read from the places of the
+/// compiler only (no source text). A container that is the whole body, or no container, gives
+/// `None`: the layout of the body changes with each edit. The cost is the sum of the inner places
+/// of each place: no search.
+fn fingerprints(blocks: &[usize], ranges: &[(Option<Place>, Option<Place>)], bounds: &Option<(String, usize, usize)>) -> Vec<Option<u64>> {
+    use std::hash::{Hash, Hasher};
+    let Some((file, body_start, body_end)) = bounds else { return vec![None; ranges.len()] };
+    let own: Vec<Option<(usize, usize)>> = (0..ranges.len()).map(|index| place_of(&ranges[near(blocks, ranges, index)]).filter(|place| place.file == *file).map(|place| (place.start, place.end))).collect();
+    let mut places: Vec<(usize, usize)> = own.iter().flatten().copied().collect();
+    places.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    places.dedup();
+    let count = places.len();
+    let mut inner = vec![0usize; count];
+    let mut shape = vec![0u64; count];
+    let mut parent: Vec<Option<usize>> = vec![None; count];
+    let mut stack: Vec<usize> = Vec::new();
+    for at in 0..count {
+        let (start, end) = places[at];
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (end - start).hash(&mut hasher);
+        for other in at + 1..count {
+            let (from, to) = places[other];
+            if from >= end {
+                break;
+            }
+            if to <= end {
+                (from - start, to - start).hash(&mut hasher);
+                inner[at] += 1;
+            }
+        }
+        shape[at] = hasher.finish();
+        while let Some(&top) = stack.last() {
+            if places[top].0 <= start && end <= places[top].1 {
+                break;
+            }
+            stack.pop();
+        }
+        parent[at] = stack.last().copied();
+        stack.push(at);
+    }
+    let key = |at: usize| -> Option<u64> {
+        let mut container = at;
+        let mut steps = 0;
+        while inner[container] < 2 {
+            container = parent[container]?;
+            steps += 1;
+            if steps > 64 {
+                return None;
+            }
+        }
+        if places[container] == (*body_start, *body_end) {
+            return None;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (places[at].1 - places[at].0, places[at].0 - places[container].0, shape[container]).hash(&mut hasher);
+        Some(hasher.finish())
+    };
+    let keys: BTreeMap<(usize, usize), Option<u64>> = (0..count).map(|at| (places[at], key(at))).collect();
+    own.iter().map(|place| place.and_then(|place| keys.get(&place).copied().flatten())).collect()
+}
+
 /// A one-to-one map of numbers.
 #[derive(Default)]
 struct Bijection {
@@ -824,6 +905,18 @@ pub type OrderKey = (String, Vec<(usize, usize)>);
 /// places of the output stay the places of the ranges. A side with keys has no anchored pairs
 /// (the offsets of its places are not the offsets of one body).
 pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), order: [Option<&[OrderKey]>; 2]) -> Option<ElementDiff> {
+    diff_inner(old, new, order, [&BTreeSet::new(), &BTreeSet::new()])
+}
+
+/// [R100.3-1] [`diff`] with the elements that the check of a transformation explains (design
+/// 100): the elements of each side whose token place is in `explained` leave the rest of their
+/// region before it pairs (R100.1-1 to R100.1-3), so the rest pairs only with the elements that no
+/// transformation explains. The equal pairs (step (a) of R90.1-1) do not change.
+pub fn diff_explained(old: (&str, &RecordElements), new: (&str, &RecordElements), explained: [&BTreeSet<Place>; 2]) -> Option<ElementDiff> {
+    diff_inner(old, new, [None, None], explained)
+}
+
+fn diff_inner(old: (&str, &RecordElements), new: (&str, &RecordElements), order: [Option<&[OrderKey]>; 2], explained: [&BTreeSet<Place>; 2]) -> Option<ElementDiff> {
     let no_symbols = old.1.v == 0 || new.1.v == 0;
     let (old_record, new_record) = (old.1, new.1);
     let texts = [old.0, new.0];
@@ -872,8 +965,17 @@ pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), or
         let same_length = x.end - x.start == y.end - y.start;
         x.file == *file_a && y.file == *file_b && same_length && (x.start.checked_sub(*start_a) == y.start.checked_sub(*start_b) || end_a.checked_sub(x.end) == end_b.checked_sub(y.end))
     };
+    // [R100.5-1] The source node of each element (the plain diff only: a side with keys has no
+    // places of one body).
+    let nodes: [Vec<Option<u64>>; 2] = if free { [fingerprints(&old_blocks, &old_ranges, &old_bounds), fingerprints(&new_blocks, &new_ranges, &new_bounds)] } else { [Vec::new(), Vec::new()] };
+    let node = |a: usize, b: usize| -> Option<bool> {
+        match (nodes[0].get(a).copied().flatten(), nodes[1].get(b).copied().flatten()) {
+            (Some(x), Some(y)) => Some(x == y),
+            _ => None,
+        }
+    };
     let ordered = |order: &[usize], keys: &[(String, Vec<Number>)]| -> Vec<String> { order.iter().map(|index| keys[*index].0.clone()).collect() };
-    let pairs: Vec<(usize, usize)> = align(&ordered(&old_order, &old_keys), &ordered(&new_order, &new_keys), |i, j| anchored(old_order[i], new_order[j])).into_iter().map(|(i, j)| (old_order[i], new_order[j])).collect();
+    let pairs: Vec<(usize, usize)> = align_weighted(&ordered(&old_order, &old_keys), &ordered(&new_order, &new_keys), |i, j| anchored(old_order[i], new_order[j]), |i, j| node(old_order[i], new_order[j])).into_iter().map(|(i, j)| (old_order[i], new_order[j])).collect();
     // Step 3: the map of the locals by votes. Each pair votes for the pairs of its locals; the
     // pairs with the most votes win, one-to-one, with equal types.
     let mut locals = Bijection::default();
@@ -917,7 +1019,7 @@ pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), or
     };
     let old_concrete = concrete(&old_order, &old_keys, &|local| locals.forward.get(&local).copied());
     let new_concrete = concrete(&new_order, &new_keys, &|local| locals.back.contains_key(&local).then_some(local));
-    let pairs: Vec<(usize, usize)> = align(&old_concrete, &new_concrete, |i, j| anchored(old_order[i], new_order[j])).into_iter().map(|(i, j)| (old_order[i], new_order[j])).collect();
+    let pairs: Vec<(usize, usize)> = align_weighted(&old_concrete, &new_concrete, |i, j| anchored(old_order[i], new_order[j]), |i, j| node(old_order[i], new_order[j])).into_iter().map(|(i, j)| (old_order[i], new_order[j])).collect();
     vote(&pairs, &mut locals);
     // Pass 1: a pair fits if each of its locals has its partner in the map. The partner of
     // each element of the old side, and the block targets of the pair.
@@ -1002,7 +1104,27 @@ pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), or
     // [R90.1-1] Step 5: the elements that differ, paired inside each aligned region.
     let kinds: [Vec<u8>; 2] = [(0..old.elements.len()).map(|index| element_kind(&old, index)).collect(), (0..new.elements.len()).map(|index| element_kind(&new, index)).collect()];
     let element_texts: [Vec<&str>; 2] = [old.elements.iter().map(|(text, _)| *text).collect(), new.elements.iter().map(|(text, _)| *text).collect()];
-    let changed_pairs = region_pairs([old_order.as_slice(), new_order.as_slice()], &partner, [same.as_slice(), same_new.as_slice()], [symbols[0].as_slice(), symbols[1].as_slice()], [kinds[0].as_slice(), kinds[1].as_slice()], [element_texts[0].as_slice(), element_texts[1].as_slice()]);
+    // [R100.3-1] The elements that the check of a transformation explains: by their token place.
+    let left_out = |ranges: &[(Option<Place>, Option<Place>)], blocks: &[usize], places: &BTreeSet<Place>| -> BTreeSet<usize> {
+        if places.is_empty() {
+            return BTreeSet::new();
+        }
+        (0..ranges.len()).filter(|index| ranges[near(blocks, ranges, *index)].0.as_ref().is_some_and(|place| places.contains(place))).collect()
+    };
+    let out_of_rest = [left_out(&old_ranges, &old_blocks, explained[0]), left_out(&new_ranges, &new_blocks, explained[1])];
+    let rest = Rest {
+        order: [old_order.as_slice(), new_order.as_slice()],
+        partner: &partner,
+        same: [same.as_slice(), same_new.as_slice()],
+        symbols: [symbols[0].as_slice(), symbols[1].as_slice()],
+        kinds: [kinds[0].as_slice(), kinds[1].as_slice()],
+        texts: [element_texts[0].as_slice(), element_texts[1].as_slice()],
+        keys: [old_keys.as_slice(), new_keys.as_slice()],
+        locals: &locals.forward,
+        explained: [&out_of_rest[0], &out_of_rest[1]],
+        types: [&old.locals, &new.locals],
+    };
+    let (changed_pairs, moved_pairs) = region_pairs(&rest);
     let changed: Vec<(Place, Place)> = changed_pairs
         .iter()
         .copied()
@@ -1037,6 +1159,7 @@ pub fn diff_keyed(old: (&str, &RecordElements), new: (&str, &RecordElements), or
             locals: locals.forward.iter().map(|(a, b)| (*a, *b)).collect(),
             decls: [decls(old_record), decls(new_record)],
             same: [same.clone(), same_new.clone()],
+            moved: moved_pairs.clone(),
         }));
         out.graph_tables = out.table.iter().cloned().collect();
     }
@@ -1107,20 +1230,55 @@ fn element_kind(parsed: &Parsed, index: usize) -> u8 {
     }
 }
 
-/// [R90.1-1] The pairs of the elements that differ, inside each aligned region (design 90).
+/// [R90.1-1] [R100.1-1] The data of the rest of a diff: the elements that differ, for
+/// [`region_pairs`] (design 100).
+struct Rest<'a> {
+    /// The order of the source of each side (the indices of the elements).
+    order: [&'a [usize]; 2],
+    /// The equal partner of each old element.
+    partner: &'a [Option<usize>],
+    /// True for each element with an equal partner.
+    same: [&'a [bool]; 2],
+    symbols: [&'a [Vec<Symbol>]; 2],
+    kinds: [&'a [u8]; 2],
+    texts: [&'a [&'a str]; 2],
+    /// The key of each element (the text without its numbers, and the numbers).
+    keys: [&'a [(String, Vec<Number>)]; 2],
+    /// The map of the locals (old to new).
+    locals: &'a BTreeMap<usize, usize>,
+    /// [R100.3-1] The elements that the check of a transformation explains.
+    explained: [&'a BTreeSet<usize>; 2],
+    /// The type of each local of each side.
+    types: [&'a BTreeMap<usize, &'a str>; 2],
+}
+
+/// [R90.1-1] The pairs of the elements that differ (design 90, changed by design 100).
 ///
 /// The equal pairs of the alignment are the anchors. They are in the order of the source on
 /// the two sides (the alignment is a common subsequence), so they cut the two element lists
-/// into regions. In each region, the elements that differ pair first by the definitions that
-/// they name (an equal list of symbols that is not empty), one to one in the order of the
-/// source, and then the rest by their order. An element with no partner is new or removed
-/// code. The cost is at most the product of the sizes of each region: no search.
+/// into regions. An element with no partner after the three steps is new or removed code:
 ///
-/// [R98.1-3] The rest of a region pairs by the order of the source with the elements of its
-/// own kind only (`element_kind`: a statement with a statement, a terminator with a terminator
-/// of its class): a call never pairs with a `goto` (design 98). Two calls of one callee pair
-/// first.
-fn region_pairs(order: [&[usize]; 2], partner: &[Option<usize>], same: [&[bool]; 2], symbols: [&[Vec<Symbol>]; 2], kinds: [&[u8]; 2], texts: [&[&str]; 2]) -> Vec<(usize, usize)> {
+/// 1. [R100.1-1] two elements with an equal text (the key with the locals of the map; a local
+///    with no partner is `?`) pair, in the order of the source, anywhere in the body pair, also
+///    across regions. A text with a local that has no partner pairs only when it is the only one
+///    of its text on each side. Then two elements with an equal key (the text with no numbers)
+///    pair when each is the only open element of its key on its side. A pair of two regions is
+///    "moved": the second list of the output.
+/// 2. [R100.1-2] in each region, two elements that name the same definitions (an equal list of
+///    symbols that is not empty), then two elements of one kind with the same callee (the text
+///    in the braces of the operand: a callee of the standard library has no symbol), then two
+///    elements of one kind that write the same place by the map of the locals;
+/// 3. [R100.1-3] in each region, the elements that are left pair by their order with an element
+///    of their own kind (`element_kind`, R98.1-3). [R100.2-1] Two calls of two callees pair only
+///    when each is the only call that is left in the region on its side (the anchors on the two
+///    sides of the call pair) and the values of the two calls have one type.
+///
+/// [R100.3-1] An element that the check of a transformation explains is in no step: it leaves
+/// the region first. The cost is at most the product of the sizes of each region and the count
+/// of the elements: no search.
+fn region_pairs(rest: &Rest) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+    let Rest { order, partner, same, symbols, kinds, texts, keys, locals, explained, types } = *rest;
+    let back: BTreeSet<usize> = locals.values().copied().collect();
     let new_place: BTreeMap<usize, usize> = order[1].iter().enumerate().map(|(place, index)| (*index, place)).collect();
     // The anchors in the order of the source: the place in each order list.
     let mut anchors: Vec<(usize, usize)> = Vec::new();
@@ -1130,49 +1288,145 @@ fn region_pairs(order: [&[usize]; 2], partner: &[Option<usize>], same: [&[bool];
             anchors.push((place, *found));
         }
     }
-    let mut out = Vec::new();
+    // The open elements of each region of each side, in the order of the source.
+    let mut regions: Vec<[Vec<usize>; 2]> = Vec::with_capacity(anchors.len() + 1);
+    let mut region_of: [BTreeMap<usize, usize>; 2] = [BTreeMap::new(), BTreeMap::new()];
     let mut start = (0, 0);
     for end in anchors.iter().copied().chain(std::iter::once((order[0].len(), order[1].len()))) {
-        let olds: Vec<usize> = order[0][start.0..end.0].iter().copied().filter(|index| !same[0][*index]).collect();
-        let news: Vec<usize> = order[1][start.1..end.1].iter().copied().filter(|index| !same[1][*index]).collect();
-        let mut used = vec![false; news.len()];
-        let mut left = Vec::new();
-        for a in olds {
-            let named = symbols[0].get(a).filter(|list| !list.is_empty());
-            let found = named.and_then(|list| (0..news.len()).find(|&k| !used[k] && symbols[1].get(news[k]) == Some(list)));
-            match found {
-                Some(k) => {
-                    used[k] = true;
-                    out.push((a, news[k]));
-                }
-                None => left.push(a),
+        let at = regions.len();
+        let mut region: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+        for (side, (from, to)) in [(0usize, (start.0, end.0)), (1usize, (start.1, end.1))] {
+            for index in order[side][from..to].iter().copied().filter(|index| !same[side][*index] && !explained[side].contains(index)) {
+                region[side].push(index);
+                region_of[side].insert(index, at);
             }
         }
-        let rest: Vec<usize> = news.iter().zip(&used).filter(|(_, used)| !**used).map(|(b, _)| *b).collect();
-        let kind = |side: usize, index: usize| kinds[side].get(index).copied().unwrap_or(0);
-        let mut by_kind: BTreeMap<u8, [Vec<usize>; 2]> = BTreeMap::new();
-        for a in left {
-            by_kind.entry(kind(0, a)).or_default()[0].push(a);
-        }
-        for b in rest {
-            by_kind.entry(kind(1, b)).or_default()[1].push(b);
-        }
-        for (kind, [olds, mut news]) in by_kind {
-            // [R98.1-3] Two calls of one callee (the text in the braces of the operand, also a
-            // callee of the standard library, which has no symbol) pair first, in order.
-            let mut left = Vec::new();
-            for a in olds {
-                let callee = (kind == 8).then(|| callee_text(texts[0].get(a).copied().unwrap_or(""))).flatten();
-                match callee.and_then(|callee| news.iter().position(|b| callee_text(texts[1].get(*b).copied().unwrap_or("")) == Some(callee))) {
-                    Some(at) => out.push((a, news.remove(at))),
-                    None => left.push(a),
-                }
-            }
-            out.extend(left.into_iter().zip(news));
-        }
+        regions.push(region);
         start = (end.0 + 1, end.1 + 1);
     }
-    out
+    let mut taken: [BTreeSet<usize>; 2] = [BTreeSet::new(), BTreeSet::new()];
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    let mut moved: Vec<(usize, usize)> = Vec::new();
+    // Step 1: the equal texts of the whole body pair.
+    let concrete = |side: usize, index: usize| -> Option<(String, bool)> {
+        let (key, numbers) = keys[side].get(index)?;
+        let mut unknown = false;
+        let numbers: Vec<String> = numbers
+            .iter()
+            .map(|number| match number {
+                Number::Local(local) => {
+                    let found = if side == 0 { locals.get(local).copied() } else { back.contains(local).then_some(*local) };
+                    found.map_or_else(
+                        || {
+                            unknown = true;
+                            "?".to_string()
+                        },
+                        |found| found.to_string(),
+                    )
+                }
+                Number::Block(_) => "b".to_string(),
+            })
+            .collect();
+        Some((format!("{key}|{}", numbers.join(",")), unknown))
+    };
+    let open = |side: usize| -> Vec<usize> { order[side].iter().copied().filter(|index| region_of[side].contains_key(index)).collect() };
+    let mut texts_of: [BTreeMap<String, Vec<(usize, bool)>>; 2] = [BTreeMap::new(), BTreeMap::new()];
+    for side in 0..2 {
+        for index in open(side) {
+            if let Some((text, unknown)) = concrete(side, index) {
+                texts_of[side].entry(text).or_default().push((index, unknown));
+            }
+        }
+    }
+    for (text, olds) in &texts_of[0] {
+        let Some(news) = texts_of[1].get(text) else { continue };
+        let unique = olds.len() == 1 && news.len() == 1;
+        for ((a, unknown), (b, _)) in olds.iter().zip(news) {
+            if *unknown && !unique {
+                break;
+            }
+            taken[0].insert(*a);
+            taken[1].insert(*b);
+            out.push((*a, *b));
+            if region_of[0].get(a) != region_of[1].get(b) {
+                moved.push((*a, *b));
+            }
+        }
+    }
+    // The second part of step 1: an equal key (the text with no numbers) that is the only one
+    // of its key on each side among the open elements. The map of the locals can bind a local
+    // to a wrong partner when two parts swap (`&mut (*_1)` of the first call pairs with the one
+    // of the second call by its place), so the numbers can differ.
+    let mut keys_of: [BTreeMap<&str, Vec<usize>>; 2] = [BTreeMap::new(), BTreeMap::new()];
+    for side in 0..2 {
+        for index in open(side).into_iter().filter(|index| !taken[side].contains(index)) {
+            if let Some((key, _)) = keys[side].get(index) {
+                keys_of[side].entry(key.as_str()).or_default().push(index);
+            }
+        }
+    }
+    for (key, olds) in &keys_of[0] {
+        let (Some(news), [a]) = (keys_of[1].get(key), olds.as_slice()) else { continue };
+        let [b] = news.as_slice() else { continue };
+        taken[0].insert(*a);
+        taken[1].insert(*b);
+        out.push((*a, *b));
+        if region_of[0].get(a) != region_of[1].get(b) {
+            moved.push((*a, *b));
+        }
+    }
+    let kind = |side: usize, index: usize| kinds[side].get(index).copied().unwrap_or(0);
+    let callee = |side: usize, index: usize| -> Option<&str> { (kind(side, index) == 8).then(|| callee_text(texts[side].get(index).copied().unwrap_or(""))).flatten() };
+    let writes = |side: usize, index: usize| written(texts[side].get(index).copied().unwrap_or(""));
+    for region in &regions {
+        let left = |side: usize, taken: &[BTreeSet<usize>; 2]| -> Vec<usize> { region[side].iter().copied().filter(|index| !taken[side].contains(index)).collect() };
+        // Step 2: the same definitions, the same callee, the same written place.
+        let tests: [&dyn Fn(usize, usize) -> bool; 3] = [
+            &|a, b| symbols[0].get(a).is_some_and(|list| !list.is_empty() && symbols[1].get(b) == Some(list)),
+            &|a, b| kind(0, a) == kind(1, b) && callee(0, a).is_some() && callee(0, a) == callee(1, b),
+            &|a, b| kind(0, a) == kind(1, b) && writes(0, a).is_some_and(|x| locals.get(&x).copied() == writes(1, b)),
+        ];
+        for test in tests {
+            let news = left(1, &taken);
+            for a in left(0, &taken) {
+                if let Some(b) = news.iter().copied().find(|b| !taken[1].contains(b) && test(a, *b)) {
+                    taken[0].insert(a);
+                    taken[1].insert(b);
+                    out.push((a, b));
+                }
+            }
+        }
+        // Step 3: the rest by order, with an element of its own kind.
+        let (olds, news) = (left(0, &taken), left(1, &taken));
+        let calls = |side: usize, list: &[usize]| -> Vec<usize> { list.iter().copied().filter(|index| kind(side, *index) == 8).collect() };
+        // The value of the two calls has one type (the written locals), so the new call takes the
+        // place of the old call.
+        let one_call = match (calls(0, &olds).as_slice(), calls(1, &news).as_slice()) {
+            ([a], [b]) => match (writes(0, *a), writes(1, *b)) {
+                (Some(x), Some(y)) => types[0].get(&x).is_some() && types[0].get(&x) == types[1].get(&y),
+                (None, None) => true,
+                _ => false,
+            },
+            _ => false,
+        };
+        let mut by_kind: BTreeMap<u8, [Vec<usize>; 2]> = BTreeMap::new();
+        for a in olds {
+            by_kind.entry(kind(0, a)).or_default()[0].push(a);
+        }
+        for b in news {
+            by_kind.entry(kind(1, b)).or_default()[1].push(b);
+        }
+        for (kind, [olds, news]) in by_kind {
+            // [R100.2-1] Two calls of two callees: a changed call only in the same place.
+            if kind == 8 && !one_call {
+                continue;
+            }
+            out.extend(olds.into_iter().zip(news));
+        }
+    }
+    out.sort_unstable();
+    moved.sort_unstable();
+    (out, moved)
 }
 
 /// The data of one side of a diff for the dependence rule (design 45).
@@ -1776,6 +2030,110 @@ mod tests {
         let diff = super::diff((&old, &record_at(&[0, 10, 20, 30])), (&new, &record_at(&[0, 8, 10, 20, 30]))).unwrap();
         let starts: Vec<(usize, usize)> = diff.changed.iter().map(|(a, b)| (a.start, b.start)).collect();
         assert_eq!(starts, vec![(10, 10)], "{diff:?}");
+    }
+
+    /// The callee of each pair of two calls of a diff: (old callee, new callee).
+    fn call_pairs(diff: &ElementDiff) -> Vec<(String, String)> {
+        let table = diff.table.as_ref().expect("a table");
+        let element = |side: usize, index: usize| -> String {
+            let text = table.texts[side].lines().filter_map(|line| line.strip_prefix("        ")).nth(index).unwrap_or("");
+            callee_text(text).unwrap_or("").to_string()
+        };
+        table.pairs.iter().map(|(a, b, _)| (element(0, *a), element(1, *b))).filter(|(x, y)| !x.is_empty() && !y.is_empty()).collect()
+    }
+
+    const CALL_F: &str = "_3 = const fn(u32) -> u32 {demo::f}(_1) -> [return: bb1, unwind continue]";
+    const CALL_G: &str = "_3 = const fn(u32) -> u32 {demo::g}(_1) -> [return: bb2, unwind continue]";
+
+    // rule+ R100.1-1
+    // rule- R100.1-1
+    #[test]
+    fn an_equal_text_pairs_across_two_regions_and_is_moved() {
+        // Two calls in a new order around an anchor: each call pairs with the call of its own
+        // callee, also in an other region, and the pair is "moved".
+        let swap = |text: &str| text.replace("bb1, unwind", "bbX, unwind").replace("bb2, unwind", "bb1, unwind").replace("bbX, unwind", "bb2, unwind");
+        let old = blocks(&[&["_2 = Add(_1, const u32 = 1)", CALL_F], &["_2 = Mul(_2, const u32 = 3)", CALL_G], &["_0 = _2", "return"]]);
+        let new = blocks(&[&["_2 = Add(_1, const u32 = 1)", &swap(CALL_G)], &["_2 = Mul(_2, const u32 = 3)", &swap(CALL_F)], &["_0 = _2", "return"]]);
+        let diff = super::diff((&old, &record_at(&[0, 10, 20, 30, 40, 42])), (&new, &record_at(&[0, 10, 20, 30, 40, 42]))).unwrap();
+        let pairs = call_pairs(&diff);
+        assert!(pairs.iter().all(|(x, y)| x == y), "{pairs:?}");
+        let table = diff.table.as_ref().unwrap();
+        assert!(!table.moved.is_empty(), "{table:?}");
+        // The negative case: two calls of two callees in two regions do not pair, and no pair
+        // is moved.
+        let new = blocks(&[&["_2 = Add(_1, const u32 = 1)", &CALL_F.replace("demo::f", "demo::h")], &["_2 = Mul(_2, const u32 = 3)", &CALL_G.replace("demo::g", "demo::k")], &["_0 = _2", "return"]]);
+        let diff = super::diff((&old, &record_at(&[0, 10, 20, 30, 40, 42])), (&new, &record_at(&[0, 10, 20, 30, 40, 42]))).unwrap();
+        assert!(diff.table.as_ref().unwrap().moved.is_empty(), "{diff:?}");
+    }
+
+    // rule+ R100.1-2
+    // rule- R100.1-2
+    #[test]
+    fn the_rest_of_a_region_pairs_by_the_callee_before_the_order() {
+        // In one region, two calls with new arguments in a new order: each pairs with the call
+        // of the same callee (the order would pair `f` with `g`).
+        let old = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_3 = const fn(u32) -> u32 {demo::f}(_2, const u32 = 1) -> [return: bb1, unwind continue]"], &["_3 = const fn(u32) -> u32 {demo::g}(_3, const u32 = 1) -> [return: bb2, unwind continue]"], &["_0 = _3", "return"]]);
+        let new = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_3 = const fn(u32) -> u32 {demo::g}(_2, const u32 = 2) -> [return: bb1, unwind continue]"], &["_3 = const fn(u32) -> u32 {demo::f}(_3, const u32 = 2) -> [return: bb2, unwind continue]"], &["_0 = _3", "return"]]);
+        let diff = super::diff((&old, &record_at(&[0, 10, 20, 30, 32])), (&new, &record_at(&[0, 10, 20, 30, 32]))).unwrap();
+        let pairs = call_pairs(&diff);
+        assert!(!pairs.is_empty() && pairs.iter().all(|(x, y)| x == y), "{pairs:?}");
+        // The negative case: step 2 runs inside each region. The call of `g` is equal and moves
+        // across the anchor `_0 = Mul(…)`; the two calls of `f` with new arguments are in two
+        // regions, so they do not pair.
+        let old = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_3 = const fn(u32) -> u32 {demo::f}(_2, const u32 = 1) -> [return: bb1, unwind continue]"], &["_0 = Mul(_2, const u32 = 3)", "_3 = const fn(u32) -> u32 {demo::g}(_2) -> [return: bb2, unwind continue]"], &["return"]]);
+        let new = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_3 = const fn(u32) -> u32 {demo::g}(_2) -> [return: bb1, unwind continue]"], &["_0 = Mul(_2, const u32 = 3)", "_3 = const fn(u32) -> u32 {demo::f}(_2, const u32 = 2) -> [return: bb2, unwind continue]"], &["return"]]);
+        let diff = super::diff((&old, &record_at(&[0, 10, 20, 30, 40])), (&new, &record_at(&[0, 10, 20, 30, 40]))).unwrap();
+        assert!(!call_pairs(&diff).iter().any(|(x, y)| x == "demo::f" && y == "demo::f"), "{diff:?}");
+    }
+
+    // rule+ R100.1-3
+    // rule- R100.1-3
+    #[test]
+    fn the_last_rest_of_a_region_pairs_by_order_with_its_own_kind() {
+        // Two changed statements of one region pair by their order.
+        let old = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_3 = Add(_2, const u32 = 4)", "_0 = Mul(_3, const u32 = 2)", "return"]]);
+        let new = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_3 = Sub(_2, const u32 = 5)", "_0 = Div(_3, const u32 = 3)", "return"]]);
+        let diff = super::diff((&old, &record_at(&[0, 10, 20, 30])), (&new, &record_at(&[0, 10, 20, 30]))).unwrap();
+        let starts: Vec<(usize, usize)> = diff.changed.iter().map(|(a, b)| (a.start, b.start)).collect();
+        assert_eq!(starts, vec![(10, 10), (20, 20)], "{diff:?}");
+        // The negative case: a statement never pairs with a terminator of the region.
+        let new = blocks(&[&["_2 = Add(_1, const u32 = 1)", "switchInt(_2) -> [0: bb1, otherwise: bb2]"], &["_0 = const u32 = 1", "return"], &["_0 = const u32 = 2", "return"]]);
+        let diff = super::diff((&old, &record_at(&[0, 10, 20, 30])), (&new, &record_at(&[0, 10, 20, 30, 40, 50]))).unwrap();
+        assert!(!diff.changed.iter().any(|(a, b)| a.start == 10 && b.start == 10), "{diff:?}");
+    }
+
+    // rule+ R100.2-1
+    // rule- R100.2-1
+    #[test]
+    fn a_call_of_a_new_callee_is_a_changed_call_only_in_the_same_place() {
+        // One call in the region on each side: the call of `g` is the changed call of `f`.
+        let old = blocks(&[&["_2 = Add(_1, const u32 = 1)", CALL_F], &["_0 = _2", "return"]]);
+        let new = blocks(&[&["_2 = Add(_1, const u32 = 1)", &CALL_F.replace("demo::f", "demo::g")], &["_0 = _2", "return"]]);
+        let diff = super::diff((&old, &record_at(&[0, 10, 20, 22])), (&new, &record_at(&[0, 10, 20, 22]))).unwrap();
+        assert_eq!(call_pairs(&diff), vec![("demo::f".to_string(), "demo::g".to_string())], "{diff:?}");
+        // The negative case: two calls of two other callees in one region, each with a place of
+        // its own (`_2`, `_3` with no partner in the map): a removed call and an added call.
+        let old = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_4 = const fn(u32) -> u32 {demo::f}(_2) -> [return: bb1, unwind continue]"], &["_5 = const fn(u32) -> u32 {demo::g}(_2) -> [return: bb2, unwind continue]"], &["_0 = _2", "return"]]);
+        let new = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_4 = const fn(u32) -> u32 {demo::h}(_2) -> [return: bb1, unwind continue]"], &["_5 = const fn(u32) -> u32 {demo::k}(_2) -> [return: bb2, unwind continue]"], &["_0 = _2", "return"]]);
+        let diff = super::diff((&old, &record_at(&[0, 10, 20, 30, 32])), (&new, &record_at(&[0, 10, 20, 30, 32]))).unwrap();
+        assert!(call_pairs(&diff).is_empty(), "{diff:?}");
+    }
+
+    // rule+ R100.3-1
+    // rule- R100.3-1
+    #[test]
+    fn an_element_that_a_check_explains_leaves_the_rest_of_its_region() {
+        // The old statement at 10 is code of the new callee (the check explains it): the new
+        // statement at 10 does not pair with it.
+        let old = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_3 = Mul(_2, const u32 = 3)", "_0 = Add(_3, const u32 = 9)", "return"]]);
+        let new = blocks(&[&["_2 = Add(_1, const u32 = 1)", "_3 = Sub(_2, const u32 = 7)", "_0 = Add(_3, const u32 = 9)", "return"]]);
+        let (old_record, new_record) = (record_at(&[0, 10, 20, 30]), record_at(&[0, 10, 20, 30]));
+        let explained = BTreeSet::from([Place { file: "src/lib.rs".into(), start: 10, end: 15 }]);
+        let diff = super::diff_explained((&old, &old_record), (&new, &new_record), [&explained, &BTreeSet::new()]).unwrap();
+        assert!(!diff.changed.iter().any(|(a, _)| a.start == 10), "{diff:?}");
+        // The negative case: with no explained element, the two statements pair.
+        let diff = super::diff_explained((&old, &old_record), (&new, &new_record), [&BTreeSet::new(), &BTreeSet::new()]).unwrap();
+        assert!(diff.changed.iter().any(|(a, b)| a.start == 10 && b.start == 10), "{diff:?}");
     }
 
     #[test]

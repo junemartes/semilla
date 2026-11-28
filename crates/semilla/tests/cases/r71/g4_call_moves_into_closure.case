@@ -41,7 +41,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x.wrapping_add(1)` → `helper(x.wrapping_add(1))` at `shop::run/S0/init/body` [semantics · code different]
       not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::run=TEXT'; if it does not change, --same 'rewrite $a.wrapping_add(1) => helper($a.wrapping_add(1))' --same 'rewrite helper($a) => h(v)' (one statement for 2 places: f1, f2)
       affected bodies: shop::run (with 1 other edit of this body)
-      graph: +1 call (`helper`), +2 arrows, −1 arrow
+      graph: +1 call moved in (`helper`), +2 arrows, −1 arrow
       control flow: moved call `helper` (src/lib.rs:6) from `shop::run`: return → return
       control flow: + arrow call `num::<impl u32>::wrapping_add` (src/lib.rs:6) → call `helper` (src/lib.rs:6) (return)
       control flow: − arrow call `num::<impl u32>::wrapping_add` (src/lib.rs:-6) → return (src/lib.rs:-6) (return)
@@ -50,7 +50,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed call: `helper(h(v))` → `h(v)` at `shop::run/tail` [semantics · code different]
       not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::run=TEXT'; if it does not change, --same 'rewrite $a.wrapping_add(1) => helper($a.wrapping_add(1))' --same 'rewrite helper($a) => h(v)' (one statement for 2 places: f1, f2)
       affected bodies: shop::run (with 1 other edit of this body)
-      graph: −1 call (`helper`), +1 arrow, −2 arrows
+      graph: −1 call moved out (`helper`), +1 arrow, −2 arrows
       control flow: moved call `helper` (src/lib.rs:-7) to `shop::run::{closure#0}`: return → return
       control flow: + arrow call `h` [closure] (src/lib.rs:7) → return (src/lib.rs:8) (return)
       control flow: − arrow call `h` [closure] (src/lib.rs:-7) → call `helper` (src/lib.rs:-7) (return)

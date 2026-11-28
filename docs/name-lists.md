@@ -35,7 +35,7 @@ The decisions of batch 10n for each list of the audit are in design 65.3 and 65.
 | `crates/semilla-mir/src/term.rs` | `fn rvalue "eq"` | language | the comparison operators of the MIR (`eq`, `le`, `ge`) with a symmetric form |
 | `crates/semilla-normal/src/cargo.rs` | `fn run_check_once "n0"` | tool | the levels of the compiled check of Semilla (its own data) |
 | `crates/semilla-normal/src/elements.rs` | `const SYMMETRIC` | language | the MIR operators whose two operands can swap (`Add`, `Mul`, `Eq`, …) |
-| `crates/semilla-normal/src/elements.rs` | `fn diff_keyed "return"` | language | the MIR terminators that end a body (`return`, `resume`, `unreachable`) |
+| `crates/semilla-normal/src/elements.rs` | `fn diff_inner "return"` | language | the MIR terminators that end a body (`return`, `resume`, `unreachable`) |
 | `crates/semilla-normal/src/transform.rs` | `const BORROWS` | tool | the texts of a borrow in the canonical MIR text of the driver (`&shared`, `&mut`, `&raw Mut`, `reborrow Mut`, …): a mention of a local after one of them is a borrow (design 94) |
 | `crates/semilla-normal/src/transform.rs` | `const PRIMITIVES` | language | the primitive types of the language (`bool`, `char`, `str`, the integers, the floats): a generic parameter with such a name hides the type in the text (R95.3-1), a scalar has no destructor (R95.3-1), and a symmetric operation of an integer, `bool`, or `char` has the order of the printer (R95.6-1) |
 | `crates/semilla-normal/src/transform.rs` | `fn class "return"` | language | the MIR terminators that jump with no value (`return`, `resume`, `unreachable`, `abort`): a part of a new order that is a jump depends on each other part (R94.4-3) |

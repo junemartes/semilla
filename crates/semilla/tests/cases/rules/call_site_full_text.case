@@ -64,7 +64,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed nodes: 3 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 15 in entries (11 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::uses_limit`:
-  ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): added operand `+ 1` at `depot::uses_limit/tail` [semantics · code different]
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added operand `+ 1` at `depot::uses_limit/tail` [semantics · code different]
       not stated (src/lib.rs:12, src/lib.rs:-12); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::uses_limit=TEXT'; if it does not change, --same 'rewrite $a + $a => $a + $a + 1'
       affected bodies: depot::uses_limit
       graph: +1 overflow check (implicit), +1 panic (implicit), +3 arrows (implicit), −1 arrow (implicit)
@@ -94,7 +94,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): added operand `+ 1` at `depot::uses_limit/tail` [semantics · code different]
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): added operand `+ 1` at `depot::uses_limit/tail` [semantics · code different]
     lines: src/lib.rs:12, src/lib.rs:-12
 ◆ f1 type change (Semilla; R90.2-2, 4 changed MIR elements; a use of a changed declaration (R90.2-4, R92.6-1); 2 nodes): parameter of `depot::wrap` added: `by: u32` (the public API can change: a different crate can use the item) [declaration · code different]
     lines: src/lib.rs:8-9, src/lib.rs:-8-9

@@ -69,7 +69,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::both (src/lib.rs:8): same structure: 1 changed call target, 1 changed check; MIR changes
+    depot::both (src/lib.rs:8): same structure: explained by f1 (2 graph changes); MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

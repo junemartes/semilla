@@ -1,0 +1,52 @@
+note: design 100 (R100.6-1): a new value with no drop glue (a `u64`) gives no drop point
+rule-: R100.6-1
+must_not_match: drop
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn count(n: u64) -> u64 {
+    n + 1
+}
+=== new src/lib.rs
+pub fn count(n: u64) -> u64 {
+    let step: u64 = n % 7;
+    n + step
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::count` (src/lib.rs:1): the full compare: `#[same(depot::count)] fn count_same() {}`; a difference: `#[change(depot::count)] fn count_change(n: u64) -> bool { … }` or `#[different(depot::count)] fn count_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 10 in entries (10 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::count`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): added `let` `let step: u64 = n % 7;` at `depot::count/S0` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::count=TEXT'; if it does not change, --same 'rewrite 1 => step', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
+      affected bodies: depot::count (with 1 other edit of this body)
+      graph: no graph change of its own
+      equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `1` → `step` at `depot::count/tail/rhs` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::count=TEXT'; if it does not change, --same 'rewrite 1 => step', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
+      affected bodies: depot::count (with 1 other edit of this body)
+      graph: +1 overflow check (implicit), +1 panic (implicit), −1 overflow check (implicit), −1 panic (implicit), +3 arrows (implicit), −3 arrows (implicit)
+      control flow: + check `overflow: n + step` (src/lib.rs:3): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:3)
+      control flow: − check `overflow: n + 1` (src/lib.rs:-2): ok → return, fail → panic `overflow`
+      control flow: … 3 more (semilla expand --step 0)
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 1 body
+    depot::count (src/lib.rs:1): graph changes: +1 check, +1 panic, −1 check, −1 panic, +3 arrows, −3 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): added `let` `let step: u64 = n % 7;` at `depot::count/S0` [semantics · code different]
+    lines: src/lib.rs:2
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed expression `1` → `step` at `depot::count/tail/rhs` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-2

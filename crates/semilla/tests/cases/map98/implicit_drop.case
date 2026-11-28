@@ -1,6 +1,7 @@
-note: a new value with a destructor adds an implicit drop: a drop is not a point of the graph (R60.2-4), so only the call of the new value is a graph change
+note: a new value with a destructor adds a drop: design 100 (R100.6-1) makes a drop a point of the graph, and the new drop is in the entry of the `let` that declares the value (it has an owner, so it is not implicit)
 rule-: R98.3-1
-must_not_match: drop
+rule+: R100.6-1
+must_match: graph: .*\+1 drop \(`text: std::string::String`\)
 === both Cargo.toml
 [package]
 name = "depot"
@@ -23,28 +24,29 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `depot::size` (src/lib.rs:1): the full compare: `#[same(depot::size)] fn size_same() {}`; a difference: `#[change(depot::size)] fn size_change(n: usize) -> bool { … }` or `#[different(depot::size)] fn size_different() -> bool { … }`
-  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 10 in entries (4 implicit), 0 in the section of R92.4-1
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 12 in entries (4 implicit), 0 in the section of R92.4-1
   real edits:
   item `depot::size`:
   ◆ f1 add (Semilla; R90.2-3, 2 new MIR elements): added `let` `let text = String::from("x");` at `depot::size/S0` [semantics · code different]
       not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::size=TEXT'; if it does not change, --same 'rewrite n => n + text.len()', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: depot::size (with 1 other edit of this body)
-      graph: +1 call (`<String as From<&str>>::from`), +2 arrows, −1 arrow
+      graph: +1 call (`<String as From<&str>>::from`), +1 drop (`text: std::string::String`), +3 arrows, −1 arrow
       control flow: + call `<String as From<&str>>::from` (src/lib.rs:2): return → call `String::len`
+      control flow: + drop `text: std::string::String` (src/lib.rs:4): → return
       control flow: + arrow entry (src/lib.rs:1) → call `<String as From<&str>>::from` (src/lib.rs:2)
-      control flow: − arrow entry (src/lib.rs:-1) → return (src/lib.rs:-3)
+      control flow: … 1 more (semilla expand --step 0)
       equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
   ◆ f2 replace (Semilla; R90.2-2, 5 changed MIR elements): changed expression `n` → `n + text.len()` at `depot::size/tail` [semantics · code different]
       not stated (src/lib.rs:3, src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::size=TEXT'; if it does not change, --same 'rewrite n => n + text.len()', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
       affected bodies: depot::size (with 1 other edit of this body)
       graph: +1 call (`String::len`), +1 overflow check (implicit), +1 panic (implicit), +3 arrows (2 implicit)
       control flow: + call `String::len` (src/lib.rs:3): return → check `overflow: n + text.len()`
-      control flow: + check `overflow: n + text.len()` (src/lib.rs:3): ok → return, fail → panic `overflow`
+      control flow: + check `overflow: n + text.len()` (src/lib.rs:3): ok → drop `text: std::string::String`, fail → panic `overflow`
       control flow: + panic `overflow` (src/lib.rs:3)
       equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    depot::size (src/lib.rs:1): graph changes: +2 calls, +1 check, +1 panic, +5 arrows, −1 arrow; MIR changes
+    depot::size (src/lib.rs:1): graph changes: +2 calls, +1 check, +1 drop, +1 panic, +6 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

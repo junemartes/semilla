@@ -24,14 +24,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
   changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
     MIR changes with no claim: `shop::price` (src/lib.rs:3): the full compare: `#[same(shop::price)] fn price_same() {}`; a difference: `#[change(shop::price)] fn price_change(v: u32) -> bool { … }` or `#[different(shop::price)] fn price_different() -> bool { … }`
-  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 1 in the section of R92.4-1
-  compiled code that changes with no edit:
-  body `shop::price` (src/lib.rs:3): graph: 1 changed check (`overflow: v + 10` → `overflow: v + 12`, implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
-      control flow: ~ check `overflow: v + 10` → `overflow: v + 12` (src/lib.rs:-3, src/lib.rs:3)
+  changed nodes: 1 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (0 implicit), 0 in the section of R92.4-1
   syntax only:
   item `shop::base!`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `base`: `macro_rules! base { ($v:expr) => { $v + 10 } }` → `macro_rules! base { ($v:expr) => { $v + 12 } }` [declaration · code different]
       affected bodies: shop::price
+      graph: same structure: 1 changed check (`overflow: v + 10` → `overflow: v + 12`)
+      control flow: ~ check `overflow: v + 10` → `overflow: v + 12` (src/lib.rs:-3, src/lib.rs:3)
       expansion: `base!(v)` at `shop::price/tail` (src/lib.rs:3): expansion changed: changed literal `10` → `12` at `expansion/rhs` [semantics]
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body

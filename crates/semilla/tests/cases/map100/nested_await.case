@@ -1,0 +1,56 @@
+note: design 100 (R100.5-1): two nested `.await` in a coroutine body: the old `.await` pairs with the inner `.await` of the same source node, and the outer `.await` is the new point
+rule+: R100.5-1
+must_match: \+ await `fetch\(fetch\(a\)\.await\)\.await`
+must_not_match: ~ await
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub async fn fetch(x: u32) -> u32 {
+    x + 3
+}
+
+pub async fn sum(a: u32) -> u32 {
+    fetch(a).await + 1
+}
+=== new src/lib.rs
+pub async fn fetch(x: u32) -> u32 {
+    x + 3
+}
+
+pub async fn sum(a: u32) -> u32 {
+    fetch(fetch(a).await).await + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::sum` (src/lib.rs:5): the same MIR text; a changed callee: `shop::sum::{closure#0}`; the full compare: `#[same(shop::sum)] fn sum_same() {}`; a difference: `#[change(shop::sum)] fn sum_change(a: u32) -> bool { … }` or `#[different(shop::sum)] fn sum_different() -> bool { … }`
+    MIR changes with no claim: `shop::sum::{closure#0} { fetch(fetch(a).await).await + 1 }` (src/lib.rs:5): the template of `shop::sum` covers its item `shop::sum`
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 7 in entries (1 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `shop::sum`:
+  ◆ f1 replace (Semilla; R90.2-2, 16 changed MIR elements): changed expression `fetch(a).await` → `fetch(fetch(a).await).await` at `shop::sum/tail/lhs` [semantics · code different]
+      not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::sum=TEXT'; if it does not change, --same 'rewrite $a.await => fetch($a.await).await'
+      affected bodies: shop::sum
+      graph: +1 call (`fetch`), +1 await (`fetch(fetch(a).await).await`), 1 changed check (`overflow: fetch(a).await + 1` → `overflow: fetch(fetch(a).await).await + 1`, implicit), +3 arrows, −1 arrow
+      control flow: + call `fetch` (src/lib.rs:6): return → await `fetch(fetch(a).await).await`
+      control flow: + await `fetch(fetch(a).await).await` (src/lib.rs:6): done → check `overflow: fetch(fetch(a).await).await + 1`
+      control flow: ~ check `overflow: fetch(a).await + 1` → `overflow: fetch(fetch(a).await).await + 1` (src/lib.rs:-6, src/lib.rs:6)
+      control flow: … 2 more (semilla expand --step 0)
+      equivalence: `shop::sum`: MIR changes: the same MIR text; a changed callee: `shop::sum::{closure#0}`
+      equivalence: `shop::sum::{closure#0} { fetch(fetch(a).await).await + 1 }`: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::sum (src/lib.rs:5): same graph; MIR changes (the same MIR text; a changed callee: `shop::sum::{closure#0}`)
+    shop::sum::{closure#0} { fetch(fetch(a).await).await + 1 } (src/lib.rs:5): graph changes: +1 await, +1 call, 1 changed check, +3 arrows, −1 arrow; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 16 changed MIR elements): changed expression `fetch(a).await` → `fetch(fetch(a).await).await` at `shop::sum/tail/lhs` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6

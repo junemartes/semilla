@@ -33,10 +33,12 @@ pub enum Term {
     Call,
     Assert,
     Return,
+    /// [R100.6-1] A `drop` terminator (design 100).
+    Drop,
 }
 
-/// The class of a terminator text. `None`: a terminator that is never a point: a `goto`, a
-/// `drop`, and a terminator with no target (an `unreachable`, a `resume`, an `abort`).
+/// The class of a terminator text. `None`: a terminator that is never a point: a `goto` and a
+/// terminator with no target (an `unreachable`, a `resume`, an `abort`).
 pub fn term_class(text: &str) -> Option<Term> {
     let text = text.trim().trim_end_matches(';');
     if text.starts_with("switchInt(") {
@@ -45,7 +47,9 @@ pub fn term_class(text: &str) -> Option<Term> {
         Some(Term::Assert)
     } else if text == "return" {
         Some(Term::Return)
-    } else if text.starts_with("goto ") || text.starts_with("drop(") {
+    } else if text.starts_with("drop(") {
+        Some(Term::Drop)
+    } else if text.starts_with("goto ") {
         None
     } else if text.contains(" -> ") {
         // A call: its arguments, then its targets.
@@ -147,6 +151,7 @@ pub fn roles(graph: &FlowGraph) -> Vec<Role> {
             "branch" => Role::Single(Term::Switch),
             "check" => Role::Single(Term::Assert),
             "return" | "yield" => Role::Single(Term::Return),
+            "drop" => Role::Single(Term::Drop),
             _ => Role::Group,
         })
         .collect()

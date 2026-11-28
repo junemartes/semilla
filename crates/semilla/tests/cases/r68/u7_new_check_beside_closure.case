@@ -71,13 +71,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 delete (Semilla; R90.2-3, 2 removed MIR elements): deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different]
       not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f2, f3, f4)
       affected bodies: shop::pick (with 2 other edits of this body)
-      graph: −1 body, −1 bounds check (implicit), −1 return, −1 panic (implicit), −3 arrows (2 implicit)
+      graph: −1 body, −1 bounds check moved out (implicit), −1 return, −1 panic moved out (implicit), −3 arrows (2 implicit)
       control flow: − graph of `shop::pick::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows (semilla expand --step 0)
       equivalence: MIR changes
   ◆ f3 add (Semilla; R90.2-3, 3 new MIR elements): added statement `v[i].wrapping_add(v[j])` at `shop::pick/tail` [semantics · code different]
       not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f2, f3, f4)
       affected bodies: shop::pick (with 2 other edits of this body)
-      graph: +2 bounds checks (implicit), +2 panics (implicit), +5 arrows (implicit)
+      graph: +1 bounds check moved in (implicit), +1 bounds check (implicit), +1 panic moved in (implicit), +1 panic (implicit), +5 arrows (implicit)
       control flow: moved check `bounds: v[i]` (src/lib.rs:2) from `shop::pick::{closure#0}`: ok → check `bounds: v[j]`, fail → panic `bounds`
       control flow: + check `bounds: v[j]` (src/lib.rs:2): ok → call `num::<impl u32>::wrapping_add`, fail → panic `bounds`
       control flow: moved panic `bounds` (src/lib.rs:2) from `shop::pick::{closure#0}`

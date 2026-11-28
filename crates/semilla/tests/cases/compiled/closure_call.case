@@ -32,8 +32,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::apply (src/lib.rs:1): graph changes: +1 call, +2 arrows, −1 arrow; MIR changes
-    depot::apply::{closure#0} |x: u32| x ^ 1 (src/lib.rs:2): graph added: 2 points, 1 arrow
+    depot::apply (src/lib.rs:1): graph changes: explained by f1 (4 graph changes); MIR changes
+    depot::apply::{closure#0} |x: u32| x ^ 1 (src/lib.rs:2): graph added: 2 points, 1 arrow; explained by f1 (3 graph changes)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

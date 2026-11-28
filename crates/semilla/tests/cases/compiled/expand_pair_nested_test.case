@@ -79,7 +79,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::base` (src/lib.rs:5): the full compare: `#[same(shop::base)] fn base_same() {}`; a difference: `#[change(shop::base)] fn base_change(v: u32) -> bool { … }` or `#[different(shop::base)] fn base_different() -> bool { … }`
     MIR changes with no claim: `shop::keep` (src/lib.rs:4): the full compare: `#[same(shop::keep)] fn keep_same() {}`; a difference: `#[change(shop::keep)] fn keep_change(v: u32) -> bool { … }` or `#[different(shop::keep)] fn keep_different() -> bool { … }`
     MIR changes with no claim: `shop::pick` (src/lib.rs:3): the full compare: `#[same(shop::pick)] fn pick_same() {}`; a difference: `#[change(shop::pick)] fn pick_change(v: u32) -> bool { … }` or `#[different(shop::pick)] fn pick_different() -> bool { … }`
-  changed nodes: 5 in 5 entries; 4 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 12 in entries (12 implicit), 1 in the section of R92.4-1
+  changed nodes: 5 in 5 entries; 4 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 13 in entries (12 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::keep`:
   ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `v` at `shop::keep/tail` [semantics · code different]
@@ -111,13 +111,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: shop::pick (with 1 other edit of this body)
       graph: no graph change of its own
       equivalence: MIR changes
-  compiled code that changes with no edit:
-  body `shop::base` (src/lib.rs:5): graph: 1 changed check (`overflow: v + 1` → `overflow: v + 2`, implicit) (no entry: no changed node, R98.4-1); the compiled code of the body is in the list of f1
-      control flow: ~ check `overflow: v + 1` → `overflow: v + 2` (src/lib.rs:-5, src/lib.rs:5)
   syntax only:
   item `shop::bump!`:
   ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): changed macro `bump`: `macro_rules! bump { ($v:expr) => { $v + 1 } }` → `macro_rules! bump { ($v:expr) => { $v + 2 } }` [declaration · code different]
       affected bodies: shop::base
+      graph: same structure: 1 changed check (`overflow: v + 1` → `overflow: v + 2`)
+      control flow: ~ check `overflow: v + 1` → `overflow: v + 2` (src/lib.rs:-5, src/lib.rs:5)
       expansion: `bump!(v)` at `shop::base/tail` (src/lib.rs:5): expansion changed: changed literal `1` → `2` at `expansion/rhs` [semantics]
   cover: each of the 6 changed line(s) is in a fact
   control flow: 3 bodies

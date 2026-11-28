@@ -103,27 +103,28 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     MIR changes with no claim: `shop::sat` (src/lib.rs:9): the full compare: `#[same(shop::sat)] fn sat_same() {}`; a difference: `#[change(shop::sat)] fn sat_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::sat)] fn sat_different() -> bool { … }`
     MIR changes with no claim: `shop::sat_sub` (src/lib.rs:13): the full compare: `#[same(shop::sat_sub)] fn sat_sub_same() {}`; a difference: `#[change(shop::sat_sub)] fn sat_sub_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::sat_sub)] fn sat_sub_different() -> bool { … }`
     MIR changes with no claim: `shop::wrap` (src/lib.rs:22): the full compare: `#[same(shop::wrap)] fn wrap_same() {}`; a difference: `#[change(shop::wrap)] fn wrap_change(a: u32, b: u32) -> bool { … }` or `#[different(shop::wrap)] fn wrap_different() -> bool { … }`
-  changed nodes: 19 in 19 entries; 19 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 75 in entries (12 implicit), 0 in the section of R92.4-1
+  changed nodes: 19 in 19 entries; 19 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 81 in entries (12 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::chk`:
-  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different]
+  ◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different]
       not stated (src/lib.rs:-18); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::chk=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::chk (with 2 other edits of this body)
-      graph: same structure: 1 changed call target (`num::<impl u32>::checked_add` → `num::<impl u32>::overflowing_add`)
-      control flow: ~ call `num::<impl u32>::checked_add` → `num::<impl u32>::overflowing_add` (src/lib.rs:-18, src/lib.rs:18)
+      graph: −1 call (`num::<impl u32>::checked_add`), −2 arrows
+      control flow: − call `num::<impl u32>::checked_add` (src/lib.rs:-18): return → return
+      control flow: − arrow entry (src/lib.rs:-17) → call `num::<impl u32>::checked_add` (src/lib.rs:-18)
       equivalence: MIR changes
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added `let` `let (v, o) = a.overflowing_add(b);` at `shop::chk/S0` [semantics · code different]
+  ◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let (v, o) = a.overflowing_add(b);` at `shop::chk/S0` [semantics · code different]
       not stated (src/lib.rs:18); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::chk=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::chk (with 2 other edits of this body)
-      graph: no graph change of its own
+      graph: +1 call (`num::<impl u32>::overflowing_add`), +2 arrows
+      control flow: + call `num::<impl u32>::overflowing_add` (src/lib.rs:18): return → branch `o`
+      control flow: + arrow entry (src/lib.rs:17) → call `num::<impl u32>::overflowing_add` (src/lib.rs:18)
       equivalence: MIR changes
   ◆ f3 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if o { None } else { Some(v) }` at `shop::chk/S1` [semantics · code different]
       not stated (src/lib.rs:19); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::chk=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
       affected bodies: shop::chk (with 2 other edits of this body)
-      graph: +1 branch (`o`), +3 arrows, −1 arrow
+      graph: +1 branch (`o`), +2 arrows
       control flow: + branch `o` (src/lib.rs:19): false → return, true → return
-      control flow: + arrow call `num::<impl u32>::overflowing_add` (src/lib.rs:18) → branch `o` (src/lib.rs:19) (return)
-      control flow: − arrow call `num::<impl u32>::checked_add` (src/lib.rs:-18) → return (src/lib.rs:-19) (return)
       equivalence: MIR changes
   item `shop::diff`:
   ◆ f4 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `a.abs_diff(b)` at `shop::diff/tail` [semantics · code different]
@@ -228,19 +229,20 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
   item `shop::sat`:
-  ◆ f15 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.saturating_add(b)` at `shop::sat/tail` [semantics · code different]
+  ◆ f15 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `a.saturating_add(b)` at `shop::sat/tail` [semantics · code different]
       not stated (src/lib.rs:-10); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::sat=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f15, f16)
       affected bodies: shop::sat (with 1 other edit of this body)
-      graph: same structure: 1 changed call target (`num::<impl u32>::saturating_add` → `num::<impl u32>::checked_add`)
-      control flow: ~ call `num::<impl u32>::saturating_add` → `num::<impl u32>::checked_add` (src/lib.rs:-10, src/lib.rs:10)
+      graph: −1 call (`num::<impl u32>::saturating_add`), −2 arrows
+      control flow: − call `num::<impl u32>::saturating_add` (src/lib.rs:-10): return → return
+      control flow: − arrow entry (src/lib.rs:-9) → call `num::<impl u32>::saturating_add` (src/lib.rs:-10)
       equivalence: MIR changes
-  ◆ f16 add (Semilla; R90.2-3, 5 new MIR elements): added `match` `match a.checked_add(b) { Some(v) => v, None => u32::MAX }` at `shop::sat/S0` [semantics · code different]
+  ◆ f16 add (Semilla; R90.2-3, 7 new MIR elements): added `match` `match a.checked_add(b) { Some(v) => v, None => u32::MAX }` at `shop::sat/S0` [semantics · code different]
       not stated (src/lib.rs:10); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::sat=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f15, f16)
       affected bodies: shop::sat (with 1 other edit of this body)
-      graph: +1 branch (`a.checked_add(b)`), +3 arrows, −1 arrow
+      graph: +1 call (`num::<impl u32>::checked_add`), +1 branch (`a.checked_add(b)`), +4 arrows
+      control flow: + call `num::<impl u32>::checked_add` (src/lib.rs:10): return → branch `a.checked_add(b)`
       control flow: + branch `a.checked_add(b)` (src/lib.rs:10): std::option::Option::None → return, std::option::Option::Some → return
-      control flow: + arrow call `num::<impl u32>::checked_add` (src/lib.rs:10) → branch `a.checked_add(b)` (src/lib.rs:10) (return)
-      control flow: − arrow call `num::<impl u32>::saturating_add` (src/lib.rs:-10) → return (src/lib.rs:-11) (return)
+      control flow: + arrow entry (src/lib.rs:9) → call `num::<impl u32>::checked_add` (src/lib.rs:10)
       equivalence: MIR changes
   item `shop::wrap`:
   ◆ f19 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `a.wrapping_sub(b)` → `a.wrapping_add(b.wrapping_neg())` at `shop::wrap/tail` [semantics · code different]
@@ -254,22 +256,22 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: MIR changes
   cover: each of the 21 changed line(s) is in a fact
   control flow: 10 bodies
-    shop::chk (src/lib.rs:17): graph changes: +1 branch, 1 changed call target, +3 arrows, −1 arrow; MIR changes
+    shop::chk (src/lib.rs:17): graph changes: +1 branch, +1 call, −1 call, +4 arrows, −2 arrows; MIR changes
     shop::diff (src/lib.rs:26): graph changes: +1 branch, +2 checks, +2 panics, −1 call, +7 arrows, −2 arrows; MIR changes
     shop::fit (src/lib.rs:30): graph changes: +2 branches, −1 call, +5 arrows, −2 arrows; MIR changes
     shop::has (src/lib.rs:34): same structure: 1 changed call target; MIR changes
     shop::hi (src/lib.rs:5): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; MIR changes
     shop::lo (src/lib.rs:1): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; MIR changes
     shop::or_zero (src/lib.rs:38): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; MIR changes
-    shop::sat (src/lib.rs:9): graph changes: +1 branch, 1 changed call target, +3 arrows, −1 arrow; MIR changes
+    shop::sat (src/lib.rs:9): graph changes: +1 branch, +1 call, −1 call, +4 arrows, −2 arrows; MIR changes
     shop::sat_sub (src/lib.rs:13): graph changes: +1 branch, +1 check, +1 panic, −1 call, +5 arrows, −2 arrows; MIR changes
     shop::wrap (src/lib.rs:22): graph changes: +1 call, 1 changed call target, +2 arrows, −1 arrow; MIR changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different]
+◆ f1 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different]
     lines: src/lib.rs:-18
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added `let` `let (v, o) = a.overflowing_add(b);` at `shop::chk/S0` [semantics · code different]
+◆ f2 add (Semilla; R90.2-3, 1 new MIR element): added `let` `let (v, o) = a.overflowing_add(b);` at `shop::chk/S0` [semantics · code different]
     lines: src/lib.rs:18
 ◆ f3 add (Semilla; R90.2-3, 4 new MIR elements): added `if` `if o { None } else { Some(v) }` at `shop::chk/S1` [semantics · code different]
     lines: src/lib.rs:19
@@ -299,9 +301,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     lines: src/lib.rs:-14
 ◆ f18 add (Semilla; R90.2-3, 6 new MIR elements): added `if` `if a > b { a - b } else { 0 }` at `shop::sat_sub/S0` [semantics · code different]
     lines: src/lib.rs:14
-◆ f15 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `a.saturating_add(b)` at `shop::sat/tail` [semantics · code different]
+◆ f15 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `a.saturating_add(b)` at `shop::sat/tail` [semantics · code different]
     lines: src/lib.rs:-10
-◆ f16 add (Semilla; R90.2-3, 5 new MIR elements): added `match` `match a.checked_add(b) { Some(v) => v, None => u32::MAX }` at `shop::sat/S0` [semantics · code different]
+◆ f16 add (Semilla; R90.2-3, 7 new MIR elements): added `match` `match a.checked_add(b) { Some(v) => v, None => u32::MAX }` at `shop::sat/S0` [semantics · code different]
     lines: src/lib.rs:10
 ◆ f19 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `a.wrapping_sub(b)` → `a.wrapping_add(b.wrapping_neg())` at `shop::wrap/tail` [semantics · code different]
     lines: src/lib.rs:23, src/lib.rs:-22

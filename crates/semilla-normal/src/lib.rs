@@ -1021,6 +1021,26 @@ fn transforms(before: &Side, after: &Side, results: &mut [BodyComparison]) {
         }
         transform::mark_ties(&mut found);
         found.truncate(transform::MOST_CANDIDATES);
+        // [R100.3-1] The elements that the check of a transformation explains leave the rest of
+        // their region (design 100): the alignment pairs the rest of the region again without
+        // them, so the code that the transformation leaves pairs only with code that no check
+        // explains. The other side of a check has the region, the side of the call has the call.
+        let mut explained: [BTreeSet<elements::Place>; 2] = [BTreeSet::new(), BTreeSet::new()];
+        // Only a check that holds: a candidate that does not hold can be a call of an other
+        // callee that the step keeps.
+        for candidate in found.iter().filter(|candidate| candidate.holds && !candidate.tie) {
+            let (at, other) = if candidate.kind == transform::Kind::Extract { (1, 0) } else { (0, 1) };
+            explained[other].extend(candidate.region.iter().cloned());
+            explained[at].extend(candidate.call.iter().cloned());
+        }
+        let one_table = diff.graph_tables.len() <= 1 && diff.table.as_ref().is_some_and(|table| table.texts[0] == old.0 && table.texts[1] == new.0);
+        if one_table && explained.iter().any(|set| !set.is_empty())
+            && let Some(again) = elements::diff_explained(old, new, [&explained[0], &explained[1]])
+        {
+            diff.changed = again.changed;
+            diff.table = again.table;
+            diff.graph_tables = again.graph_tables;
+        }
         diff.transforms = found;
         diff.reorder = transform::permutation_with(old, new, [facts[0].as_ref(), facts[1].as_ref()], Some(diff));
     }

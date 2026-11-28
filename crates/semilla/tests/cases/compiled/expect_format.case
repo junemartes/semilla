@@ -20,7 +20,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
     MIR changes with no claim: `shop::first` (src/lib.rs:1): the full compare: `#[same(shop::first)] fn first_same() {}`; a difference: `#[change(shop::first)] fn first_change(o: Option<u32>) -> bool { … }` or `#[different(shop::first)] fn first_different() -> bool { … }`
     MIR changes with no claim: `shop::show` (src/lib.rs:2): the full compare: `#[same(shop::show)] fn show_same() {}`; a difference: `#[change(shop::show)] fn show_change(x: u32) -> bool { … }` or `#[different(shop::show)] fn show_different() -> bool { … }`
-  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 11 in entries (7 implicit), 0 in the section of R92.4-1
+  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 8 in entries (6 implicit), 0 in the section of R92.4-1
   real edits:
   item `shop::first`:
   ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `o.unwrap_or(0)` → `o.expect("none")` at `shop::first/tail` [semantics · code different]
@@ -30,26 +30,25 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: ~ call `Option::<u32>::unwrap_or` → `Option::<u32>::expect` (src/lib.rs:-1, src/lib.rs:1)
       equivalence: MIR changes
   item `shop::show`:
-  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `String::new()` at `shop::show/tail` [semantics · code different]
+  ◆ f2 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `String::new()` at `shop::show/tail` [semantics · code different]
       not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::show=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f3)
       affected bodies: shop::show (with 1 other edit of this body)
-      graph: −1 call (`String::new`), −2 arrows
-      control flow: − call `String::new` (src/lib.rs:-2): return → return
-      control flow: − arrow entry (src/lib.rs:-2) → call `String::new` (src/lib.rs:-2)
+      graph: same structure: 1 changed call target (`String::new` → `must_use::<String>`)
+      control flow: ~ call `String::new` → `must_use::<String>` (src/lib.rs:-2, src/lib.rs:2)
       equivalence: MIR changes
-  ◆ f3 add (Semilla; R90.2-3, 3 new MIR elements): added macro statement `format!("{x}")` at `shop::show/tail` [semantics · code different]
+  ◆ f3 add (Semilla; R90.2-3, 4 new MIR elements): added macro statement `format!("{x}")` at `shop::show/tail` [semantics · code different]
       not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::show=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f3)
       affected bodies: shop::show (with 1 other edit of this body)
-      graph: +1 construct (`{x}`, implicit), +2 calls (implicit), +4 arrows (implicit)
+      graph: +1 construct (`{x}`, implicit), +1 call (`format`, implicit), +3 arrows (implicit), −1 arrow (implicit)
       control flow: + construct `{x}` (src/lib.rs:2): return → call `format`
       control flow: + call `format` (src/lib.rs:2): return → call `must_use::<String>`
-      control flow: + call `must_use::<String>` (src/lib.rs:2): return → return
+      control flow: + arrow entry (src/lib.rs:2) → construct `{x}` (src/lib.rs:2)
       control flow: … 1 more (semilla expand --step 0)
       equivalence: MIR changes
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
     shop::first (src/lib.rs:1): same structure: 1 changed call target; MIR changes
-    shop::show (src/lib.rs:2): graph changes: +2 calls, +1 construct, −1 call, +4 arrows, −2 arrows; MIR changes
+    shop::show (src/lib.rs:2): graph changes: +1 call, +1 construct, 1 changed call target, +3 arrows, −1 arrow; MIR changes
   expansions: 1 added
     `format!("{x}")` at `shop::show/tail` (src/lib.rs:2): expansion added: `macro format` (crate alloc): 1 line(s) of code; the step adds the call or its input
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
@@ -57,7 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
 === positions
 ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed method_call: `o.unwrap_or(0)` → `o.expect("none")` at `shop::first/tail` [semantics · code different]
     lines: src/lib.rs:1, src/lib.rs:-1
-◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `String::new()` at `shop::show/tail` [semantics · code different]
+◆ f2 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `String::new()` at `shop::show/tail` [semantics · code different]
     lines: src/lib.rs:-2
-◆ f3 add (Semilla; R90.2-3, 3 new MIR elements): added macro statement `format!("{x}")` at `shop::show/tail` [semantics · code different]
+◆ f3 add (Semilla; R90.2-3, 4 new MIR elements): added macro statement `format!("{x}")` at `shop::show/tail` [semantics · code different]
     lines: src/lib.rs:2

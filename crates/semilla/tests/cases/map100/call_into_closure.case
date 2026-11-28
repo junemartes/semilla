@@ -1,0 +1,68 @@
+note: design 100 (R100.4-1): a call moves from the body into its closure: the graph part of each entry has the mark "moved in" or "moved out" (a closure follows the same rules)
+rule+: R100.4-1
+must_match: graph: .*call moved in \(`helper`\)
+must_match: moved in from `depot::run`
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn helper(x: u32) -> u32 {
+    x.wrapping_mul(5)
+}
+
+pub fn run(v: u32) -> u32 {
+    let h = |x: u32| x.wrapping_sub(2);
+    h(helper(v))
+}
+=== new src/lib.rs
+pub fn helper(x: u32) -> u32 {
+    x.wrapping_mul(5)
+}
+
+pub fn run(v: u32) -> u32 {
+    let h = |x: u32| helper(x).wrapping_sub(2);
+    h(v)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::run` (src/lib.rs:5): the full compare: `#[same(depot::run)] fn run_same() {}`; a difference: `#[change(depot::run)] fn run_change(v: u32) -> bool { … }` or `#[different(depot::run)] fn run_different() -> bool { … }`
+    MIR changes with no claim: `depot::run::{closure#0} |x: u32| helper(x).wrapping_sub(2)` (src/lib.rs:6): the template of `depot::run` covers its item `depot::run`
+  changed nodes: 2 in 2 entries; 2 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 8 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `depot::run`:
+  ◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `helper(x)` at `depot::run/S0/init/body/recv` [semantics · code different]
+      not stated (src/lib.rs:6, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, --same 'rewrite x => helper(x)' --same 'rewrite helper($a) => v' (one statement for 2 places: f1, f2)
+      affected bodies: depot::run (with 1 other edit of this body)
+      graph: +1 call moved in (`helper`), +2 arrows, −1 arrow
+      control flow: moved call `helper` (src/lib.rs:6) from `depot::run`: return → call `num::<impl u32>::wrapping_sub`
+      control flow: + arrow entry (src/lib.rs:6) → call `helper` (src/lib.rs:6)
+      control flow: − arrow entry (src/lib.rs:-6) → call `num::<impl u32>::wrapping_sub` (src/lib.rs:-6)
+      equivalence: `depot::run`: MIR changes alone: the same MIR text; a changed callee: `depot::run::{closure#0}`; the body: MIR changes
+      equivalence: `depot::run::{closure#0} |x: u32| helper(x).wrapping_sub(2)`: MIR changes alone; the body: MIR changes
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `helper(v)` → `v` at `depot::run/tail/args[0]` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::run=TEXT'; if it does not change, --same 'rewrite x => helper(x)' --same 'rewrite helper($a) => v' (one statement for 2 places: f1, f2)
+      affected bodies: depot::run (with 1 other edit of this body)
+      graph: −1 call moved out (`helper`), +1 arrow, −2 arrows
+      control flow: moved call `helper` (src/lib.rs:-7) to `depot::run::{closure#0}`: return → call `h` [closure]
+      control flow: + arrow entry (src/lib.rs:5) → call `h` [closure] (src/lib.rs:7)
+      control flow: − arrow entry (src/lib.rs:-5) → call `helper` (src/lib.rs:-7)
+      equivalence: `depot::run`: MIR changes alone; the body: MIR changes
+      equivalence: `depot::run::{closure#0} |x: u32| helper(x).wrapping_sub(2)`: equivalent alone (proved by equal MIR); the body: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::run (src/lib.rs:5): graph changes: +1 arrow, −2 arrows; moved out to `depot::run::{closure#0}`: 1 call; MIR changes
+    depot::run::{closure#0} |x: u32| helper(x).wrapping_sub(2) (src/lib.rs:6): graph changes: +2 arrows, −1 arrow; moved in from `depot::run`: 1 call; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `x` → `helper(x)` at `depot::run/S0/init/body/recv` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `helper(v)` → `v` at `depot::run/tail/args[0]` [semantics · code different]
+    lines: src/lib.rs:7, src/lib.rs:-7
