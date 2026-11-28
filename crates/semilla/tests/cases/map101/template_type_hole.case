@@ -1,0 +1,57 @@
+note: a group of repeated edits in generic bodies: the template has a type hole for the generic parameter, and it passes the check
+rule+: R101.8-1
+must_match: template: `#\[rewrite\] fn first_rewrite<T>\(\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub fn first<T>(v: &Vec<T>) -> usize {
+    v.len() + 1
+}
+
+pub fn second<T>(w: &Vec<T>) -> usize {
+    w.len() * 2
+}
+=== new src/lib.rs
+pub fn first<T>(v: &Vec<T>) -> usize {
+    v.capacity() + 1
+}
+
+pub fn second<T>(w: &Vec<T>) -> usize {
+    w.capacity() * 2
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `shop::first` (src/lib.rs:1): the full compare: `#[same(shop::first)] fn first_same() {}`; a difference: `#[change(shop::first)] fn first_change() -> bool { … }` or `#[different(shop::first)] fn first_different() -> bool { … }`
+    MIR changes with no claim: `shop::second` (src/lib.rs:5): the full compare: `#[same(shop::second)] fn second_same() {}`; a difference: `#[change(shop::second)] fn second_change() -> bool { … }` or `#[different(shop::second)] fn second_different() -> bool { … }`
+  changed nodes: 2 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 4 in entries (2 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `shop::first`:
+  ◆ f1 replace (Semilla; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `shop::first` (src/lib.rs:2), `shop::second` (src/lib.rs:6); 2 nodes; one change (R92.6-1)): changed expression `v.len()` → `v.capacity()` at `shop::first/tail/lhs`; changed expression `w.len()` → `w.capacity()` at `shop::second/tail/lhs` [semantics · code different]
+      not stated (src/lib.rs:2, src/lib.rs:6, src/lib.rs:-2, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::first,shop::second=TEXT'; if it does not change, --same 'rewrite $a.len() => $a.capacity()' (one statement for 2 places: f1)
+      template: `#[rewrite] fn first_rewrite<T>() { (|v1: &std::vec::Vec<T>| v1.len(), |v1: &std::vec::Vec<T>| v1.capacity()) }`
+      affected bodies: shop::first, shop::second
+      graph: same structure: 2 changed call targets, 2 changed checks (implicit)
+      control flow: ~ call `Vec::<T>::len` → `Vec::<T>::capacity` (src/lib.rs:-2, src/lib.rs:2)
+      control flow: ~ check `overflow: v.len() + 1` → `overflow: v.capacity() + 1` (src/lib.rs:-2, src/lib.rs:2)
+      control flow: ~ call `Vec::<T>::len` → `Vec::<T>::capacity` (src/lib.rs:-6, src/lib.rs:6)
+      control flow: … 1 more (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::first (src/lib.rs:1): same structure: 1 changed call target, 1 changed check; MIR changes
+    shop::second (src/lib.rs:5): same structure: 1 changed call target, 1 changed check; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R97.7-1, the same edit at 2 sites: the old and the new MIR are equal after a rename of the locals: `shop::first` (src/lib.rs:2), `shop::second` (src/lib.rs:6); 2 nodes; one change (R92.6-1)): changed expression `v.len()` → `v.capacity()` at `shop::first/tail/lhs`; changed expression `w.len()` → `w.capacity()` at `shop::second/tail/lhs` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:6, src/lib.rs:-2, src/lib.rs:-6

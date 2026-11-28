@@ -846,6 +846,10 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     if let Some(template) = fact.template.as_ref().filter(|text| !text.is_empty()) {
         lines.push(format!("      {template}"));
     }
+    // [R101.6-1] The case table of a statement `#[rewrite]` (design 101).
+    for case in &fact.cases {
+        lines.push(format!("      {case}"));
+    }
     // The line of each shown line before its cut (R76.1-1): the compare of R71.1-2 reads it, so
     // that two facts with numbers of a different length share an equal line.
     let mut raws: Vec<String> = lines.clone();
@@ -912,7 +916,10 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
             // [R98.8-1] The graph part of the entry (design 98): the words of design 60 for the
             // graph changes of the entry, then the lines of the changes.
             if let Some(graph) = flow.entries.get(&fact.id) {
-                put(&format!("      {}", graph.line()), true);
+                // [R101.7-1] The graph changes of the sites of a statement: the case table says
+                // how the meaning converts.
+                let see = if fact.cases.iter().any(|case| case.starts_with("case ")) && graph.changes > 0 { "; see the case table" } else { "" };
+                put(&format!("      {}{see}", graph.line()), true);
             }
             // Design 38.5: a long line has a cut; `status --verbose` shows the full line.
             for line in flow.facts.get(&fact.id).into_iter().flatten() {

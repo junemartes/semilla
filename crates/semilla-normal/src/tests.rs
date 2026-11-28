@@ -38,6 +38,7 @@ fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
         sv: Vec::new(),
         inst: Vec::new(),
         dyn_casts: Vec::new(),
+        callee_texts: Vec::new(),
         unit: String::new(),
         known: Default::default(),
     }

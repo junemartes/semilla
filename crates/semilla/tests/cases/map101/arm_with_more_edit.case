@@ -1,0 +1,109 @@
+note: one arm of the body has one more edit: the pattern does not fit, the statement is false with the nearest candidates, and the edit keeps its own entry
+rule-: R101.1-1
+rule-: R101.3-1
+rule-: R101.7-1
+exit: 1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: false: no site
+must_match: the nearest candidates
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub fn first(r: Result<u32, ()>, log: &mut u32) -> u32 {
+    match r {
+        Ok(v) => v,
+        Err(_) => {
+            *log += 1;
+            unsafe { core::hint::unreachable_unchecked() }
+        }
+    }
+}
+=== new src/lib.rs
+pub fn first(r: Result<u32, ()>, log: &mut u32) -> u32 {
+    let _ = log;
+    unsafe { r.unwrap_unchecked() }
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite]
+fn ok_or_unreachable<T, E>() {
+    (
+        |r: Result<T, E>| match r {
+            Ok(v) => v,
+            Err(_) => unsafe { core::hint::unreachable_unchecked() },
+        },
+        |r: Result<T, E>| unsafe { r.unwrap_unchecked() },
+    )
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  ✗ fact a1 of the agent is false: `--same 'rewrite fn ok_or_unreachable in .semilla/intent/step.rs'`
+  ✗ the intent claim i1 `#[rewrite()] fn ok_or_unreachable()` (.semilla/intent/step.rs:3): false: the check of `--same 'rewrite fn ok_or_unreachable in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::first` (src/lib.rs:2): 2 of 8 element(s) fit; the element that differs: the body has `_4 = CheckedAdd((*_2), const u32 = 1)`, the closure has `_5 = const unsafe fn() -> ! {core::hint::unreachable_unchecked}() -> [no return, unwind ?]`)
+
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✗ a1 same: rewrite `fn ok_or_unreachable` (the closure form, .semilla/intent/step.rs) (false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::first` (src/lib.rs:2): 2 of 8 element(s) fit; the element that differs: the body has `_4 = CheckedAdd((*_2), const u32 = 1)`, the closure has `_5 = const unsafe fn() -> ! {core::hint::unreachable_unchecked}() -> [no return, unwind ?]`)
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  ✗ i1 `#[rewrite()] fn ok_or_unreachable()` (.semilla/intent/step.rs:3): false: the check of `--same 'rewrite fn ok_or_unreachable in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::first` (src/lib.rs:2): 2 of 8 element(s) fit; the element that differs: the body has `_4 = CheckedAdd((*_2), const u32 = 1)`, the closure has `_5 = const unsafe fn() -> ! {core::hint::unreachable_unchecked}() -> [no return, unwind ?]`)
+      the input is an exact input of the two versions: correct the claim or the code
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    ✗ false: i1 `#[rewrite()] fn ok_or_unreachable()`: the check of `--same 'rewrite fn ok_or_unreachable in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::first` (src/lib.rs:2): 2 of 8 element(s) fit; the element that differs: the body has `_4 = CheckedAdd((*_2), const u32 = 1)`, the closure has `_5 = const unsafe fn() -> ! {core::hint::unreachable_unchecked}() -> [no return, unwind ?]`)
+      n2 not mapped [R79.5-1]: added `let` `shop::first/S0` (src/lib.rs:2): not mapped in f2: `let _ = log;`
+          template: #[same(shop::first)] fn first(r: Result<u32, ()>, mut log_before: u32, mut log_after: u32) -> bool { !(same(&log_before, &log_after)) || { let old = before::shop::first(r, &mut log_before); let new = after::shop::first(r, &mut log_after); new == old && same(&log_before, &log_after) } }
+    changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+      MIR changes with no claim: `shop::first` (src/lib.rs:1): the claim template of the node n2 of the AST map (semilla expand --step 0) [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+  changed nodes: 3 in 3 entries; 2 real edits (0 stated by the agent); 1 not mapped; control-flow changes: 12 in entries (4 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `shop::first`:
+  ◆ f1 delete (Semilla; R90.2-3, 7 removed MIR elements): deleted statement [1] at `shop::first/S0` [semantics · code different]
+        [1] match r {
+                Ok(v) => v,
+                Err(_) => {
+                    *log += 1;
+                    unsafe { core::hint::unreachable_unchecked() }
+                }
+            }
+      not stated (src/lib.rs:-2-8); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::first=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
+      affected bodies: shop::first (with 2 other edits of this body)
+      graph: −1 branch (`r`), −1 overflow check (implicit), −2 panics (1 implicit), −5 arrows (2 implicit)
+      control flow: − branch `r` (src/lib.rs:-2): std::result::Result::Ok → return, std::result::Result::Err → check `overflow: *log += 1`
+      control flow: − check `overflow: *log += 1` (src/lib.rs:-5): ok → panic `unreachable_unchecked`, fail → panic `overflow`
+      control flow: − panic `unreachable_unchecked` (src/lib.rs:-6)
+      control flow: … 2 more (semilla expand --step 0)
+      equivalence: MIR changes
+      ! unsafe code: the changed body has an `unsafe` block
+  ◆ f3 add (Semilla; R90.2-3, 1 new MIR element): added `unsafe` `unsafe { r.unwrap_unchecked() }` at `shop::first/S1` [semantics · code different]
+      not stated (src/lib.rs:3); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::first=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
+      affected bodies: shop::first (with 2 other edits of this body)
+      graph: +1 call (`Result::<u32, ()>::unwrap_unchecked`), +2 arrows
+      control flow: + call `Result::<u32, ()>::unwrap_unchecked` (src/lib.rs:3): return → return
+      control flow: + arrow entry (src/lib.rs:1) → call `Result::<u32, ()>::unwrap_unchecked` (src/lib.rs:3)
+      equivalence: MIR changes
+      ! unsafe code: the changed body has an `unsafe` block
+  not mapped:
+  item `shop::first`:
+  ◆ f2 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): added `let` `let _ = log;` at `shop::first/S0` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::first=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 3 places: f1, f2, f3)
+      no template: the node has no MIR element inside it or around it on each side (a pattern or a binding is not an expression of the closure form)
+      affected bodies: shop::first (with 2 other edits of this body)
+      graph: no graph change of its own
+      equivalence: MIR changes
+      ! unsafe code: the changed body has an `unsafe` block
+  cover: each of the 9 changed line(s) is in a fact
+  control flow: 1 body
+    shop::first (src/lib.rs:1): graph changes: +1 call, −1 branch, −1 check, −2 panics, +2 arrows, −5 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: unsafe code: shop::first/S0
+  ! spotlight: unsafe code: shop::first/S1
+no command can succeed without a code change: fix the cause, then run the step again
+=== positions
+none: the runner has no accepted step for this case

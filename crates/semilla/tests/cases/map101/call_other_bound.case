@@ -1,0 +1,75 @@
+note: the body calls the method of another trait: no site
+rule-: R101.2-2
+exit: 1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: false: no site
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+#[derive(Clone, Default)]
+pub struct Item(pub u32);
+
+pub fn a(x: &Item) -> Item {
+    x.clone()
+}
+=== new src/lib.rs
+#[derive(Clone, Default)]
+pub struct Item(pub u32);
+
+pub fn a(_x: &Item) -> Item {
+    Item::default()
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite]
+fn owned<T: Clone>() {
+    (|x: &T| x.clone(), |x: &T| x.to_owned())
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  ✗ fact a1 of the agent is false: `--same 'rewrite fn owned in .semilla/intent/step.rs'`
+  ✗ the intent claim i1 `#[rewrite()] fn owned()` (.semilla/intent/step.rs:3): false: the check of `--same 'rewrite fn owned in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::a` (src/lib.rs:5): the old closure fits; at the aligned place of the new body 0 of 2 element(s) of the new closure fit; the element that differs: the body has `_0 = const fn() -> shop::Item {<shop::Item as std::default::Default>::default}() -> [return: bb1, unwind continue]`, the closure has `_3 = &shared (*_2)` (R97.2-3))
+
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✗ a1 same: rewrite `fn owned` (the closure form, .semilla/intent/step.rs) (false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::a` (src/lib.rs:5): the old closure fits; at the aligned place of the new body 0 of 2 element(s) of the new closure fit; the element that differs: the body has `_0 = const fn() -> shop::Item {<shop::Item as std::default::Default>::default}() -> [return: bb1, unwind continue]`, the closure has `_3 = &shared (*_2)` (R97.2-3))
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  ✗ i1 `#[rewrite()] fn owned()` (.semilla/intent/step.rs:3): false: the check of `--same 'rewrite fn owned in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::a` (src/lib.rs:5): the old closure fits; at the aligned place of the new body 0 of 2 element(s) of the new closure fit; the element that differs: the body has `_0 = const fn() -> shop::Item {<shop::Item as std::default::Default>::default}() -> [return: bb1, unwind continue]`, the closure has `_3 = &shared (*_2)` (R97.2-3))
+      the input is an exact input of the two versions: correct the claim or the code
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    ✗ false: i1 `#[rewrite()] fn owned()`: the check of `--same 'rewrite fn owned in .semilla/intent/step.rs'` fails (fact a1 of the agent: false: no site: no changed body of the scope has the old closure body with a binding whose new code is the new closure body (R97.5-1); the nearest candidates: `shop::a` (src/lib.rs:5): the old closure fits; at the aligned place of the new body 0 of 2 element(s) of the new closure fit; the element that differs: the body has `_0 = const fn() -> shop::Item {<shop::Item as std::default::Default>::default}() -> [return: bb1, unwind continue]`, the closure has `_3 = &shared (*_2)` (R97.2-3))
+    changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+      MIR changes with no claim: `shop::a` (src/lib.rs:4): the signature changes (`fn a (x : & Item) -> Item` → `fn a (_x : & Item) -> Item`): `#[same(shop::a)] fn a(x_before: &before::shop::Item, x_after: &after::shop::Item, _x: &after::shop::Item) -> bool { !(same(x_before, x_after)) || { let old = before::shop::a(x_before); let new = after::shop::a(_x); true } }`; a difference: `#[change(shop::a)] fn a_change() -> bool { … }` or `#[different(shop::a)] fn a_different() -> bool { … }`
+  changed nodes: 4 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped; control-flow changes: 1 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `shop::a`:
+  ◆ f2 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `x.clone()` at `shop::a/tail` [semantics · code different]
+      not stated (src/lib.rs:-5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::a=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f3)
+      affected bodies: shop::a (with 1 other edit of this body)
+      graph: same structure: 1 changed call target (`<Item as Clone>::clone` → `<Item as Default>::default`)
+      control flow: ~ call `<Item as Clone>::clone` → `<Item as Default>::default` (src/lib.rs:-5, src/lib.rs:5)
+      equivalence: no result alone (the body has 2 edits; the edit adds or removes a node); the body: MIR changes
+  ◆ f3 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `Item::default()` at `shop::a/tail` [semantics · code different]
+      not stated (src/lib.rs:5); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::a=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f2, f3)
+      affected bodies: shop::a (with 1 other edit of this body)
+      graph: no graph change of its own
+      equivalence: no result alone (the body has 2 edits; the edit adds or removes a node); the body: MIR changes
+  ◆ f1 type change (Semilla; R90.2-4, a changed declaration; the uses with a MIR change are its bodies; 2 nodes): parameter `x` of `shop::a` renamed to `_x`: `& Item` [rename · code equal]
+      not stated (src/lib.rs:4, src/lib.rs:-4); to state it: --change 'shop::a=TEXT'
+      equivalence: no result alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    shop::a (src/lib.rs:4): same structure: 1 changed call target; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+no command can succeed without a code change: fix the cause, then run the step again
+=== positions
+none: the runner has no accepted step for this case

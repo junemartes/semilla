@@ -1,0 +1,86 @@
+note: a `match` on an `Option` becomes a block with a new `let` and a call: the fit reads the compiled code, not the syntax
+rule+: R101.3-1
+rule+: R101.1-1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: the form of `fn some_or_unreachable` holds at 1 site\(s\)
+must_match: case 1 \(`o` is `None`\): undefined on the two sides
+must_match: case 2 \(`o` is `Some`\): equal code
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub fn next(o: Option<(u32, u32)>) -> u32 {
+    let (a, b) = match o {
+        Some(pair) => pair,
+        None => unsafe { core::hint::unreachable_unchecked() },
+    };
+    a + b
+}
+=== new src/lib.rs
+pub fn next(o: Option<(u32, u32)>) -> u32 {
+    let (a, b) = {
+        let option = o;
+        unsafe { option.unwrap_unchecked() }
+    };
+    a + b
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite]
+fn some_or_unreachable<T>() {
+    (
+        |o: Option<T>| match o {
+            Some(v) => v,
+            None => unsafe { core::hint::unreachable_unchecked() },
+        },
+        |o: Option<T>| unsafe { o.unwrap_unchecked() },
+    )
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `fn some_or_unreachable` (the closure form, .semilla/intent/step.rs) (holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::next` (src/lib.rs:2))
+      places: shop::next/S0/init
+      entries, in the list below: f1
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  · i1 `#[rewrite()] fn some_or_unreachable()` (.semilla/intent/step.rs:3): hint: the check of `--same 'rewrite fn some_or_unreachable in .semilla/intent/step.rs'` holds (fact a1 of the agent: holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::next` (src/lib.rs:2)); a hint pairs the old and the new code and explains no body: a claim states the behavior
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+      MIR changes with no claim: `shop::next` (src/lib.rs:1): the full compare: `#[same(shop::next)] fn next_same() {}`; a difference: `#[change(shop::next)] fn next_change(o: Option<(u32, u32)>) -> bool { … }` or `#[different(shop::next)] fn next_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 8 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `shop::next`:
+  ◆ f1 replace (a1; R97.3-1, the form of `fn some_or_unreachable` holds at 1 site(s): `shop::next` (src/lib.rs:2); 2 case(s): 1 undefined on the two sides, 1 equal code (form); at the first site the parameter `o` binds to `o`; a real edit that the statement states (statement 1)): changed block_expr: [1] → `{ let option = o; unsafe { option.unwrap_unchecked() } }` at `shop::next/S0/init` [semantics · code different]
+        [1] match o {
+            Some(pair) => pair,
+            None => unsafe { core::hint::unreachable_unchecked() },
+            }
+      case 1 (`o` is `None`): undefined on the two sides (the two paths end in `unreachable`)
+      case 2 (`o` is `Some`): equal code (both returns `((o as Some).Some.0: T)`)
+      affected bodies: shop::next
+      graph: +1 call (`Option::<(u32, u32)>::unwrap_unchecked`), −1 branch (`o`), −1 panic, +2 arrows, −3 arrows; see the case table
+      control flow: + call `Option::<(u32, u32)>::unwrap_unchecked` (src/lib.rs:4): return → check `overflow: a + b`
+      control flow: − branch `o` (src/lib.rs:-2): std::option::Option::None → panic `unreachable_unchecked`, std::option::Option::Some → check `overflow: a + b`
+      control flow: − panic `unreachable_unchecked` (src/lib.rs:-4)
+      control flow: … 2 more (semilla expand --step 0)
+      equivalence: MIR changes
+      ! unsafe code: the changed body has an `unsafe` block
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 1 body
+    shop::next (src/lib.rs:1): graph changes: +1 call, −1 branch, −1 panic, +2 arrows, −3 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: unsafe code: shop::next/S0/init
+
+=== positions
+◆ f1 replace (a1; R97.3-1, the form of `fn some_or_unreachable` holds at 1 site(s): `shop::next` (src/lib.rs:2); 2 case(s): 1 undefined on the two sides, 1 equal code (form); at the first site the parameter `o` binds to `o`; a real edit that the statement states (statement 1)): changed block_expr: [1] → `{ let option = o; unsafe { option.unwrap_unchecked() } }` at `shop::next/S0/init` [semantics · code different]
+    lines: src/lib.rs:2-4, src/lib.rs:-2-4

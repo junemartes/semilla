@@ -193,6 +193,10 @@ pub struct BodyRecord {
     /// B3; only at N0).
     #[serde(rename = "dyn", default, skip_serializing_if = "Vec::is_empty")]
     pub dyn_casts: Vec<(String, String)>,
+    /// [R101.4-1] The canonical texts of the small callees of a closure of the intent crate: the
+    /// def path of each callee and its text (design 101; only at N0, only in the intent crate).
+    #[serde(rename = "ct", default, skip_serializing_if = "Vec::is_empty")]
+    pub callee_texts: Vec<(String, String)>,
     /// The build settings of the unit of the record with no feature (R61.16-2): the `cfg`
     /// names of its unit record that do not start with `feature=`, joined. Two units of one
     /// target name (a library that cargo builds with `panic="unwind"` and with

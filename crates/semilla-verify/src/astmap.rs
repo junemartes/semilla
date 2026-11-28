@@ -29,6 +29,9 @@ pub struct CompiledClaims {
     /// of the file and the name of the function: the canonical MIR text of the old closure and
     /// of the new closure, as rustc compiles them against the two versions.
     pub rewrites: BTreeMap<(String, String), [String; 2]>,
+    /// [R101.4-1] The canonical texts of the small callees of the closures of `rewrites`, by the
+    /// def path of the callee (design 101): only the case table reads them.
+    pub callees: BTreeMap<String, String>,
 }
 
 /// [R79.2-1] What one function of the intent crate calls and reads in each version, also through
@@ -129,12 +132,14 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
     let mut map = AstMap::default();
     // [R97.1-1] The compiled closures of the closure forms of `#[rewrite]` (design 97).
     let mut closures: BTreeMap<(String, String), [String; 2]> = BTreeMap::new();
+    let mut callees: BTreeMap<String, String> = BTreeMap::new();
     let anchors = if input.step.agent.intent.is_empty() {
         Vec::new()
     } else {
         match bodies.intent_anchors(input.step) {
             Some(Ok(data)) => {
                 closures = data.rewrites.clone();
+                callees = data.callees.clone();
                 claim_anchors(input, outcome, &data, &mut map)
             }
             Some(Err(cause)) => {
@@ -174,7 +179,7 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
     // [R97.2-2] The sites of the closure forms of `#[rewrite]`, then [R97.7-1] the groups of
     // the repeated edits (design 97): the kinds of their nodes, before the projection.
     semilla_core::timing::phase(crate::rewrites::PHASE, || {
-        crate::rewrites::plan(input, outcome, &closures);
+        crate::rewrites::plan(input, outcome, &closures, &callees);
         crate::rewrites::groups(input, outcome);
     });
     let nodes: Vec<&Edit> = outcome.edits.iter().filter(|edit| is_node(edit)).collect();

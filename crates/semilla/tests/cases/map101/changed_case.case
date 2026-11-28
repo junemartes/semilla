@@ -1,0 +1,75 @@
+note: the pair changes the value of one arm: the case table has one "equal code" case and one "changed" case
+rule+: R101.6-1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: case 1 \(`o` is `None`\): changed \(the result: `const u32 = 0` → `const u32 = 1`\)
+must_match: case 2 \(`o` is `Some`\): equal code
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub fn size(o: Option<u32>) -> u32 {
+    match o {
+        Some(v) => v,
+        None => 0,
+    }
+}
+=== new src/lib.rs
+pub fn size(o: Option<u32>) -> u32 {
+    match o {
+        Some(v) => v,
+        None => 1,
+    }
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite]
+fn one_for_none() {
+    (
+        |o: Option<u32>| match o {
+            Some(v) => v,
+            None => 0,
+        },
+        |o: Option<u32>| match o {
+            Some(v) => v,
+            None => 1,
+        },
+    )
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `fn one_for_none` (the closure form, .semilla/intent/step.rs) (holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::size` (src/lib.rs:2))
+      places: shop::size/S0/arm[1].body
+      entries, in the list below: f1
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  · i1 `#[rewrite()] fn one_for_none()` (.semilla/intent/step.rs:3): hint: the check of `--same 'rewrite fn one_for_none in .semilla/intent/step.rs'` holds (fact a1 of the agent: holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::size` (src/lib.rs:2)); a hint pairs the old and the new code and explains no body: a claim states the behavior
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+      MIR changes with no claim: `shop::size` (src/lib.rs:1): the full compare: `#[same(shop::size)] fn size_same() {}`; a difference: `#[change(shop::size)] fn size_change(o: Option<u32>) -> bool { … }` or `#[different(shop::size)] fn size_different() -> bool { … }`
+  changed nodes: 1 in 1 entries; 1 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 0 in entries (0 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `shop::size`:
+  ◆ f1 replace (a1; R97.3-1, the form of `fn one_for_none` holds at 1 site(s): `shop::size` (src/lib.rs:2); 2 case(s): 1 changed, 1 equal code (form); at the first site the parameter `o` binds to `o`; a real edit that the statement states (statement 1)): changed literal `0` → `1` at `shop::size/S0/arm[1].body` [semantics · code different]
+      case 1 (`o` is `None`): changed (the result: `const u32 = 0` → `const u32 = 1`)
+      case 2 (`o` is `Some`): equal code (both returns `((o as Some).Some.0: u32)`)
+      affected bodies: shop::size
+      graph: same graph (the edit keeps the control flow)
+      equivalence: MIR changes
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::size (src/lib.rs:1): same graph (the edit keeps the control flow); MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (a1; R97.3-1, the form of `fn one_for_none` holds at 1 site(s): `shop::size` (src/lib.rs:2); 2 case(s): 1 changed, 1 equal code (form); at the first site the parameter `o` binds to `o`; a real edit that the statement states (statement 1)): changed literal `0` → `1` at `shop::size/S0/arm[1].body` [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:-4

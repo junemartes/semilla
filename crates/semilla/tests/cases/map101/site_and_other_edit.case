@@ -1,0 +1,90 @@
+note: a body with a site of a statement and one more edit: the edit keeps its own entry, a real edit that no statement states
+rule-: R101.7-1
+option: --intent
+option: .semilla/intent/step.rs
+must_match: the form of `fn ok_or_unreachable` holds at 1 site\(s\)
+must_match: 2 real edits \(1 stated by the agent\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both .gitignore
+/.semilla/
+=== old src/lib.rs
+pub fn first(r: Result<u32, ()>, n: u32) -> u32 {
+    let v = match r {
+        Ok(v) => v,
+        Err(_) => unsafe { core::hint::unreachable_unchecked() },
+    };
+    v + n
+}
+=== new src/lib.rs
+pub fn first(r: Result<u32, ()>, n: u32) -> u32 {
+    let v = unsafe { r.unwrap_unchecked() };
+    v * n
+}
+=== new .semilla/intent/step.rs
+use semilla_intent::prelude::*;
+
+#[rewrite]
+fn ok_or_unreachable<T, E>() {
+    (
+        |r: Result<T, E>| match r {
+            Ok(v) => v,
+            Err(_) => unsafe { core::hint::unreachable_unchecked() },
+        },
+        |r: Result<T, E>| unsafe { r.unwrap_unchecked() },
+    )
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `fn ok_or_unreachable` (the closure form, .semilla/intent/step.rs) (holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::first` (src/lib.rs:2))
+      places: shop::first/S0/init
+      entries, in the list below: f1
+  intent (0 claim(s), 1 hint(s); a claim is a proof only if it is proved):
+  · i1 `#[rewrite()] fn ok_or_unreachable()` (.semilla/intent/step.rs:3): hint: the check of `--same 'rewrite fn ok_or_unreachable in .semilla/intent/step.rs'` holds (fact a1 of the agent: holds: the closure pair fits 1 site(s), each with one binding (R97.2-2): `shop::first` (src/lib.rs:2)); a hint pairs the old and the new code and explains no body: a claim states the behavior
+  semantic changes (the claims that Semilla proves or refutes; a proved claim explains each changed body that its proof uses):
+    changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+      MIR changes with no claim: `shop::first` (src/lib.rs:1): the full compare: `#[same(shop::first)] fn first_same() {}`; a difference: `#[change(shop::first)] fn first_change(r: Result<u32, ()>, n: u32) -> bool { … }` or `#[different(shop::first)] fn first_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 2 real edits (1 stated by the agent); 0 not mapped; control-flow changes: 9 in entries (1 implicit), 0 in the section of R92.4-1
+  real edits:
+  item `shop::first`:
+  ◆ f1 replace (a1; R97.3-1, the form of `fn ok_or_unreachable` holds at 1 site(s): `shop::first` (src/lib.rs:2); 2 case(s): 1 undefined on the two sides, 1 equal code (form); at the first site the parameter `r` binds to `r`; a real edit that the statement states (statement 1)): changed unsafe: [1] → `unsafe { r.unwrap_unchecked() }` at `shop::first/S0/init` [semantics · code different]
+        [1] match r {
+            Ok(v) => v,
+            Err(_) => unsafe { core::hint::unreachable_unchecked() },
+            }
+      case 1 (`r` is `Err`): undefined on the two sides (the two paths end in `unreachable`)
+      case 2 (`r` is `Ok`): equal code (both returns `((r as Ok).Ok.0: T)`)
+      affected bodies: shop::first (with 1 other edit of this body)
+      graph: +1 call (`Result::<u32, ()>::unwrap_unchecked`), −1 branch (`r`), −1 panic, +2 arrows, −3 arrows; see the case table
+      control flow: + call `Result::<u32, ()>::unwrap_unchecked` (src/lib.rs:2): return → check `overflow: v * n`
+      control flow: − branch `r` (src/lib.rs:-2): std::result::Result::Ok → check `overflow: v + n`, std::result::Result::Err → panic `unreachable_unchecked`
+      control flow: − panic `unreachable_unchecked` (src/lib.rs:-4)
+      control flow: … 2 more (semilla expand --step 0)
+      equivalence: MIR changes alone; the body: MIR changes
+      ! unsafe code: the changed body has an `unsafe` block
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `v + n` → `v * n` at `shop::first/tail` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-6); to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::first=TEXT'; if it does not change, --same 'rewrite $a + $b => $a * $b'
+      affected bodies: shop::first (with 1 other edit of this body)
+      graph: same structure: 1 changed check (`overflow: v + n` → `overflow: v * n`, implicit)
+      control flow: ~ check `overflow: v + n` → `overflow: v * n` (src/lib.rs:-6, src/lib.rs:3)
+      equivalence: MIR changes alone; the body: MIR changes
+      ! unsafe code: the changed body has an `unsafe` block
+  cover: each of the 7 changed line(s) is in a fact
+  control flow: 1 body
+    shop::first (src/lib.rs:1): graph changes: +1 call, −1 branch, −1 panic, 1 changed check, +2 arrows, −3 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: unsafe code: shop::first/S0/init
+
+=== positions
+◆ f1 replace (a1; R97.3-1, the form of `fn ok_or_unreachable` holds at 1 site(s): `shop::first` (src/lib.rs:2); 2 case(s): 1 undefined on the two sides, 1 equal code (form); at the first site the parameter `r` binds to `r`; a real edit that the statement states (statement 1)): changed unsafe: [1] → `unsafe { r.unwrap_unchecked() }` at `shop::first/S0/init` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2-5
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): changed operator `v + n` → `v * n` at `shop::first/tail` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-6

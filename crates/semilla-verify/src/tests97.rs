@@ -14,10 +14,10 @@ const NEW_CLOSURE: &str = "fn _(_1: &{closure#0}, _2: &after::shop::Cart) -> usi
 #[test]
 fn a_closure_of_the_intent_crate_is_a_pattern_and_a_capture_is_an_error() {
     let old = pattern(OLD_CLOSURE).unwrap();
-    assert_eq!((old.arity(), old.steps.len(), old.ret.as_str()), (1, 2, "usize"), "{old:#?}");
+    assert_eq!((old.arity(), old.size, old.ret.as_str()), (1, 2, "usize"), "{old:#?}");
     assert_eq!(old.params.get(&2).map(String::as_str), Some("&shop::Cart"));
     let new = pattern(NEW_CLOSURE).unwrap();
-    assert_eq!((new.arity(), new.steps.len()), (1, 1));
+    assert_eq!((new.arity(), new.size), (1, 1));
     // Negative: a closure that reads its environment (a capture), and a closure that calls an
     // item of the intent file.
     let capture = NEW_CLOSURE.replace("_0 = ((*_2).after::shop::Cart.count: usize)", "_0 = ((*_1).0: usize)");
@@ -147,3 +147,4 @@ fn the_type_of_a_template_parameter_has_the_version_of_each_path_of_the_workspac
     assert!(intent_type("{closure@src/lib.rs:3:9}", 0, &crates).unwrap_err().contains("closure"));
     assert!(intent_type("impl std::fmt::Debug", 0, &crates).unwrap_err().contains("opaque"));
 }
+
