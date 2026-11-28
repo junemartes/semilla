@@ -153,6 +153,88 @@ pub fn threads(most: usize) -> usize {
     if building() { most.min(limit()) } else { most }
 }
 
+/// [R99.5-1] One job of the pool: it owns its data.
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+/// [R99.5-1] The pool of long-lived worker threads of this process (design 99).
+struct Pool {
+    queue: Mutex<std::sync::mpsc::Sender<Job>>,
+    /// The count of the worker threads that started.
+    workers: usize,
+}
+
+std::thread_local! {
+    /// [R99.5-1] True on a worker thread of the pool.
+    static IN_POOL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [R99.5-1] The count of the worker threads of the pool: the CPU share of R96.5-1 ([`limit`]).
+/// The count is fixed for the process.
+pub fn pool_size() -> usize {
+    limit()
+}
+
+/// [R99.5-1] The pool, started at its first job. Its threads live as long as the process, so
+/// the C allocator gives each one arena for all the jobs of the thread.
+fn pool() -> &'static Pool {
+    static POOL: OnceLock<Pool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let (sender, receiver) = std::sync::mpsc::channel::<Job>();
+        let receiver = Arc::new(Mutex::new(receiver));
+        let mut workers = 0;
+        for index in 0..pool_size() {
+            let receiver = receiver.clone();
+            let started = std::thread::Builder::new().name(format!("semilla-task-{index}")).spawn(move || {
+                IN_POOL.with(|flag| flag.set(true));
+                loop {
+                    let next = receiver.lock().unwrap_or_else(|error| error.into_inner()).recv();
+                    let Ok(job) = next else { break };
+                    job();
+                }
+            });
+            workers += usize::from(started.is_ok());
+        }
+        Pool { queue: Mutex::new(sender), workers }
+    })
+}
+
+/// [R99.5-1] Runs `job` on a worker of the pool, and gives a receiver of its result (`Err`: the
+/// job panicked). A job that a worker of the pool starts runs at once on that worker: a job
+/// never waits for the pool, so the pool cannot stop itself.
+pub fn submit<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> std::sync::mpsc::Receiver<std::thread::Result<T>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let wrapped: Job = Box::new(move || {
+        let _ = sender.send(std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)));
+    });
+    if IN_POOL.with(|flag| flag.get()) {
+        wrapped();
+        return receiver;
+    }
+    let pool = pool();
+    if pool.workers == 0 {
+        wrapped();
+        return receiver;
+    }
+    let queue = pool.queue.lock().unwrap_or_else(|error| error.into_inner());
+    if let Err(std::sync::mpsc::SendError(job)) = queue.send(wrapped) {
+        drop(queue);
+        job();
+    }
+    receiver
+}
+
+/// [R99.5-1] Runs each job on the pool, and gives the results in the order of the jobs: the
+/// order of the result does not depend on the order in which the jobs end.
+pub fn run_all<T: Send + 'static>(jobs: Vec<Box<dyn FnOnce() -> T + Send + 'static>>) -> Vec<std::thread::Result<T>> {
+    let receivers: Vec<_> = jobs.into_iter().map(submit).collect();
+    receivers.into_iter().map(|receiver| receiver.recv().unwrap_or_else(|_| Err(Box::new("a job of the pool stopped")))).collect()
+}
+
+/// [R99.5-1] True if the thread of the caller is a worker of the pool (for a test).
+pub fn on_pool_thread() -> bool {
+    IN_POOL.with(|flag| flag.get())
+}
+
 /// The start of the time line of this process.
 fn origin() -> Instant {
     static ORIGIN: OnceLock<Instant> = OnceLock::new();
@@ -273,12 +355,60 @@ mod tests {
     }
 
     // rule- R96.7-1
+    // rule- R99.7-1
     #[test]
     fn with_no_timing_lines_a_task_has_no_run_on_the_time_line() {
         if !crate::timing::enabled() {
             assert!(span("a task").is_none());
         }
         assert!(line_texts(Vec::new()).is_empty());
+    }
+
+    // [R99.5-1] Each job runs on a long-lived thread of the pool (at most `pool_size` threads),
+    // and the results come in the order of the jobs, not in the order of their ends.
+    // rule+ R99.5-1
+    #[test]
+    fn the_jobs_run_on_the_threads_of_the_pool_and_give_their_results_in_order() {
+        type Found = (usize, String, bool);
+        let make = |count: usize| -> Vec<Box<dyn FnOnce() -> Found + Send>> {
+            (0..count)
+                .map(|at| {
+                    Box::new(move || {
+                        // A later job ends first.
+                        std::thread::sleep(Duration::from_millis(((count - at) % 4) as u64 * 5));
+                        (at, std::thread::current().name().unwrap_or_default().to_string(), on_pool_thread())
+                    }) as Box<dyn FnOnce() -> Found + Send>
+                })
+                .collect()
+        };
+        for _ in 0..2 {
+            let found: Vec<Found> = run_all(make(12)).into_iter().map(|done| done.unwrap()).collect();
+            assert_eq!(found.iter().map(|(at, _, _)| *at).collect::<Vec<_>>(), (0..12).collect::<Vec<_>>());
+            assert!(found.iter().all(|(_, _, pool)| *pool));
+            // The threads are the threads of the pool: the same names in each run.
+            let names: std::collections::BTreeSet<String> = found.iter().map(|(_, name, _)| name.clone()).collect();
+            let allowed: std::collections::BTreeSet<String> = (0..pool_size()).map(|index| format!("semilla-task-{index}")).collect();
+            assert!(names.is_subset(&allowed), "{names:?}");
+        }
+        assert!(!on_pool_thread());
+    }
+
+    // [R99.5-1] A job of a job runs at once on its thread (a job never waits for the pool), and
+    // a job that panics stops only itself.
+    // rule- R99.5-1
+    #[test]
+    fn a_job_of_a_job_runs_at_once_and_a_panic_stops_only_its_job() {
+        let wait = Duration::from_secs(60);
+        let outer = submit(move || {
+            let inner = submit(|| (on_pool_thread(), std::thread::current().id()));
+            (inner.recv_timeout(wait).ok().and_then(Result::ok), std::thread::current().id())
+        });
+        let (inner, thread) = outer.recv_timeout(wait).expect("the pool stopped").unwrap();
+        assert_eq!(inner, Some((true, thread)));
+        let failed = submit(|| -> usize { panic!("a job that fails") });
+        assert!(failed.recv_timeout(wait).expect("the pool stopped").is_err());
+        let next = submit(|| 7usize);
+        assert_eq!(next.recv_timeout(wait).expect("the pool stopped").unwrap(), 7);
     }
 
     // rule+ R96.5-1

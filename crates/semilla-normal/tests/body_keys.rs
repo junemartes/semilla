@@ -1,6 +1,7 @@
 //! [R93.3-1] The key of the record of a body (design 93.3): the driver makes it before the
 //! print, and a known key gives a pointer line. A changed callee, a changed type, a renamed
-//! name, and a moved line give a new key; an equal tree gives the same keys.
+//! name, and moved columns give a new key; an equal tree and a moved line give the same keys
+//! (R99.8-1: each place is relative to its item).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -134,24 +135,34 @@ fn a_change_of_an_input_gives_a_new_key_and_an_equal_tree_gives_pointers() {
     // A renamed name gives a new key.
     let (renamed, _) = keys(&scratch, &BASE.replace("callee", "helper"), &[]);
     assert_ne!(key_of(&renamed, "keys::caller"), caller);
-    // A moved line (a line above the body) gives a new key; a line below each body does not.
+    // [R99.8-1] A moved line (a line above the body) keeps each key: each place of a key is
+    // relative to its item (design 99.8). A line below each body keeps each key too.
     let (moved, _) = keys(&scratch, &BASE.replace("pub fn caller", "// a line\npub fn caller"), &[]);
-    assert_ne!(key_of(&moved, "keys::caller"), caller);
-    assert_ne!(key_of(&moved, "keys::other"), other);
+    assert_eq!(key_of(&moved, "keys::caller"), caller);
+    assert_eq!(key_of(&moved, "keys::other"), other);
     assert_eq!(key_of(&moved, "keys::callee"), callee);
     let (below, _) = keys(&scratch, &format!("{BASE}// a last line\n"), &[]);
     assert_eq!(key_of(&below, "keys::caller"), caller);
+    // [R99.8-1] A text before the body on its first line moves its columns: a new key. A body
+    // below it moves by bytes only, and keeps its key.
+    let (shifted, _) = keys(&scratch, &BASE.replace("pub fn caller", "/* a */ pub fn caller"), &[]);
+    assert_ne!(key_of(&shifted, "keys::caller"), caller);
+    assert_eq!(key_of(&shifted, "keys::other"), other);
     // [G3] A changed comment in a body moves the lines of the body: the body gets a new key,
     // and a body above it keeps its key.
     let (commented, _) = keys(&scratch, &BASE.replace("    callee(s.a)\n", "    // a comment\n    callee(s.a)\n"), &[]);
     assert_ne!(key_of(&commented, "keys::caller"), caller);
     assert_eq!(key_of(&commented, "keys::callee"), callee);
-    // [F4] The places of the body itself and of the definitions that it names: a line between
-    // a body and a type that it names moves the type and not the body.
+    // [F4, R99.8-1] The places of the body itself and of the definitions that it names: a line
+    // between a body and a type that it names moves the type and not the body. Each place is
+    // relative to its item, so the key stays (Semilla moves the place of the type in the
+    // stored record); a new field of the type gives a new key.
     let named = format!("{BASE}\npub fn field(t: &T) -> u16 {{\n    t.c\n}}\n\npub struct T {{\n    pub c: u16,\n}}\n");
     let (first, _) = keys(&scratch, &named, &[]);
     let (second, _) = keys(&scratch, &named.replace("pub struct T", "// a line\npub struct T"), &[]);
-    assert_ne!(key_of(&first, "keys::field"), key_of(&second, "keys::field"));
+    assert_eq!(key_of(&first, "keys::field"), key_of(&second, "keys::field"));
+    let (third, _) = keys(&scratch, &named.replace("    pub c: u16,\n", "    pub c: u16,\n    pub d: u8,\n"), &[]);
+    assert_ne!(key_of(&first, "keys::field"), key_of(&third, "keys::field"));
     // A line between a callee and its caller moves the caller only: a non-generic callee keeps
     // its key.
     // An impl that resolves a call: a new body of the method gives the caller a new key.

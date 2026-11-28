@@ -184,23 +184,63 @@ pub struct UnitIndex {
 /// `None` if a line does not have the plain form of R86.2-1: then the caller reads the file with
 /// the full parse (`parse_records`), with its errors, and stores no index.
 pub fn build(bytes: &[u8], file: Option<&Arc<std::fs::File>>) -> Option<(UnitIndex, Vec<BodyRecord>)> {
-    let mut index = UnitIndex::default();
+    let mut builder = Builder::default();
     let mut records = Vec::new();
-    let mut settings = None;
     let mut offset = 0usize;
     for line in bytes.split(|byte| *byte == b'\n') {
         let start = offset;
         offset += line.len() + 1;
+        records.extend(builder.line(start, line, file)?);
+    }
+    let index = builder.finish();
+    for record in records.iter_mut() {
+        record.unit.clone_from(&index.settings);
+    }
+    Some((index, records))
+}
+
+/// [R99.5-2] The index of a record file as a stream (design 99): one line of the file is in
+/// memory at a time, and no record is kept. The index is the index of [`build`]. `None` as in
+/// [`build`], and for an error of the read.
+pub fn build_stream(mut reader: impl std::io::BufRead) -> Option<UnitIndex> {
+    let mut builder = Builder::default();
+    let mut offset = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        if reader.read_until(b'\n', &mut buffer).ok()? == 0 {
+            break;
+        }
+        let line = buffer.strip_suffix(b"\n").unwrap_or(&buffer);
+        let start = offset;
+        offset += line.len() + 1;
+        builder.line(start, line, None)?;
+    }
+    Some(builder.finish())
+}
+
+/// The work of [`build`] and [`build_stream`]: one line at a time.
+#[derive(Default)]
+struct Builder {
+    index: UnitIndex,
+    settings: Option<String>,
+}
+
+impl Builder {
+    /// Adds one line (with no end of line) that starts at the byte `start` of the file. The
+    /// record of a body line, or `Some(None)` for a line with no record. `None`: the line does
+    /// not have the plain form.
+    fn line(&mut self, start: usize, line: &[u8], file: Option<&Arc<std::fs::File>>) -> Option<Option<BodyRecord>> {
         let full = line.len();
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         if line.starts_with(crate::UNIT_LINE.as_bytes()) {
-            if settings.is_none() {
-                settings = Some(crate::unit_settings(std::str::from_utf8(line).ok()?));
+            if self.settings.is_none() {
+                self.settings = Some(crate::unit_settings(std::str::from_utf8(line).ok()?));
             }
-            continue;
+            return Some(None);
         }
         if line.trim_ascii().is_empty() {
-            continue;
+            return Some(None);
         }
         let members = crate::lazy::members(line)?;
         let forms: Vec<&(&str, std::ops::Range<usize>, std::ops::Range<usize>)> = members.iter().filter(|(key, _, _)| crate::lazy_member(key).is_some()).collect();
@@ -240,14 +280,16 @@ pub fn build(bytes: &[u8], file: Option<&Arc<std::fs::File>>) -> Option<(UnitInd
         set_forms(&mut record, q, qx, file);
         let facts = Arc::new(TextFacts::of(&record.text, &record.shape));
         record.known = Known::index(facts.clone());
-        index.entries.push(Entry { name: record.name.clone(), level: record.level.clone(), target: record.target.clone(), line: (start as u64, full as u64), q, qx, facts, rest });
-        records.push(record);
+        self.index.entries.push(Entry { name: record.name.clone(), level: record.level.clone(), target: record.target.clone(), line: (start as u64, full as u64), q, qx, facts, rest });
+        Some(Some(record))
     }
-    index.settings = settings.unwrap_or_default();
-    for record in records.iter_mut() {
-        record.unit.clone_from(&index.settings);
+
+    /// The index of the lines.
+    fn finish(self) -> UnitIndex {
+        let mut index = self.index;
+        index.settings = self.settings.unwrap_or_default();
+        index
     }
-    Some((index, records))
 }
 
 /// Sets the two forms of a record from their states in the index.
@@ -417,6 +459,27 @@ mod tests {
         assert_eq!(again[0].q.as_deref(), Some("Q1"));
         assert_eq!(again[0].unit, "unix");
         assert_eq!(decode(&encode(&index)).unwrap(), index);
+    }
+
+    // [R99.5-2] The index of a stream is the index of the bytes, also with a `\r` at the end
+    // of a line, an empty line, and no end of line after the last line.
+    // rule+ R99.5-2
+    #[test]
+    fn the_index_of_a_stream_is_the_index_of_the_bytes() {
+        let texts = [LINES.to_string(), LINES.replace('\n', "\r\n"), format!("\n{LINES}\n"), LINES.trim_end().to_string()];
+        for text in texts {
+            let (index, _) = build(text.as_bytes(), None).unwrap();
+            let streamed = build_stream(std::io::BufReader::with_capacity(16, text.as_bytes())).unwrap();
+            assert_eq!(streamed, index, "{text:?}");
+        }
+    }
+
+    // rule- R99.5-2
+    #[test]
+    fn a_stream_with_a_line_that_is_not_of_the_plain_form_gives_no_index() {
+        let text = format!("{LINES}{{\"name\":\"k::f\",\"level\":\"n0\",\"text\":\"t\",\"q\":\"a\",\"q\":\"b\"}}\n");
+        assert!(build(text.as_bytes(), None).is_none());
+        assert!(build_stream(text.as_bytes()).is_none());
     }
 
     // rule- R88.2-1

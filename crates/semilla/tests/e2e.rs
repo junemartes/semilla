@@ -2688,6 +2688,13 @@ fn a_build_script_cannot_write_outside_its_build_folder() {
     let out = no_sandbox(&["step", "rename a local"]);
     assert!(out.contains(&format!("! {line}")), "{out}");
     assert!(cache.join("planted.txt").exists(), "with no sandbox, the build script writes the cache folder");
+    // [R99.3-1] The step stores the tree that its check read (design 99). The file that the build
+    // script wrote into the repository while the step ran is an edit with no step. Before 99, the
+    // stored step had the file in its tree, and no fact showed it.
+    assert!(repo.join("planted.txt").exists(), "with no sandbox, the build script writes the repository");
+    let rejected = semilla_env(repo, &["status"], &[("SEMILLA_NO_SANDBOX", "1")]);
+    assert!(String::from_utf8_lossy(&rejected.stdout).contains("the working tree has an edit after the last step"), "{}", String::from_utf8_lossy(&rejected.stdout));
+    std::fs::remove_file(repo.join("planted.txt")).unwrap();
     let status = no_sandbox(&["status", "--wait"]);
     assert!(status.contains(line), "{status}");
     // The state of the sandbox is a part of the key of each record (part D.4). A command with

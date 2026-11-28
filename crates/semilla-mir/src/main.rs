@@ -40,6 +40,10 @@ extern crate rustc_session;
 extern crate rustc_span;
 extern crate rustc_trait_selection;
 
+// [R99.8-1] The one search of the item of a place for the key and for Semilla (design 99.8).
+#[allow(dead_code)]
+#[path = "../../semilla-normal/src/anchors.rs"]
+mod anchors;
 mod bodykey;
 mod config;
 mod consts;
@@ -376,6 +380,10 @@ struct SpanInfo {
 
 /// [R93.3-1] The member of a pointer line (the key of a record of the store of Semilla).
 const POINTER_MEMBER: &str = "semilla-body";
+
+/// [R99.8-1] The member of the last line of a record file with the keys on: the table of the
+/// items of the unit (design 99.8).
+const ANCHORS_MEMBER: &str = "semilla-anchors";
 
 /// [R93.3-1] The member of the last line of a record file with the keys on: the key of each
 /// body line.
@@ -724,7 +732,10 @@ impl Callbacks {
                 text.push('\n');
             }
             if std::env::var_os(bodykey::KNOWN_ENV).is_some() && level == Level::N0 {
-                text.push_str(&serde_json::json!({ KEYS_MEMBER: keys }).to_string());
+                // [R99.8-1] The table of the items of the unit: Semilla moves the places of a
+                // stored record by the start of each item (design 99.8).
+                let anchors = bodykey::take_anchor_text().unwrap_or_else(|| "null".to_string());
+                text.push_str(&format!("{{{}:{},{}:{anchors}}}", to_json(&KEYS_MEMBER), to_json(&keys), to_json(&ANCHORS_MEMBER)));
                 text.push('\n');
             }
         });
@@ -966,7 +977,10 @@ fn collect_bodies(level: Level, target: &str) -> Vec<Line> {
                                 let def = rustc_public::rustc_internal::internal(tcx, item.def_id());
                                 let places = guarded(|| keys.places(tcx, def)).flatten()?;
                                 let flags = format!("{} {:?}", item.requires_monomorphization(), test_crate);
-                                let parts = [generics.clone(), places, to_json(names), flags];
+                                // [R99.8-1] The lines of the names are relative to their items, in the
+                                // file of the span of the record (design 99.8).
+                                let file = guarded(|| body.span.get_filename()).unwrap_or_default();
+                                let parts = [generics.clone(), places, names.as_deref().map_or_else(|| "null".to_string(), |names| names_key(keys, &file, names)), flags];
                                 let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
                                 keys.key(tcx, def, &parts)
                             })
@@ -1323,6 +1337,26 @@ fn body_names(item: CrateItem) -> Option<Vec<NameRecord>> {
             .map(|(name, count)| NameRecord { word: name.word, member: name.member, qual: name.qual, prefix: name.prefix, mac: name.mac, line: name.line, count, rival: name.rival })
             .collect()
     })
+}
+
+/// [R99.8-1] The names of a body as a part of its key (design 99.8): each name with its line
+/// relative to its item in `file`, and the lines of the place names in its rival text, relative
+/// to their items.
+fn names_key(keys: &bodykey::Keys, file: &str, names: &[NameRecord]) -> String {
+    let mut out = String::new();
+    for name in names {
+        let mut lines: Vec<String> = Vec::new();
+        let rival = name.rival.as_ref().map(|rival| {
+            let _ = anchors::text_lines(rival, &mut |file, line| {
+                lines.push(keys.relative_line(file, line));
+                None
+            });
+            anchors::text_lines(rival, &mut |_, _| Some(0)).unwrap_or_else(|| rival.clone())
+        });
+        out.push_str(&to_json(&(&name.word, name.member, &name.qual, name.prefix, &name.mac, name.count, rival, keys.relative_line(file, name.line as i64), lines)));
+        out.push('\n');
+    }
+    out
 }
 
 /// The JSON text of a part of a key.

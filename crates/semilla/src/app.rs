@@ -121,7 +121,9 @@ impl Session {
 /// The semilla application on one repository.
 pub struct App {
     pub repo: Repo,
-    workspaces: BTreeMap<String, Workspace>,
+    /// [R99.6-1] The loaded workspaces of this process, shared: a reader that only reads a
+    /// workspace takes the shared value, with no copy (design 99).
+    workspaces: BTreeMap<String, std::sync::Arc<Workspace>>,
     /// The step results of this process (design 37.21). A second check of an equal step with
     /// equal inputs reads its result here.
     step_memo: BTreeMap<String, StepOutcome>,
@@ -146,6 +148,10 @@ pub struct App {
     /// `--reason` with two `=`) reads the builds, the records, and the compares of the first one
     /// from its memos.
     oracle: Option<(String, std::sync::Arc<NormalOracle>)>,
+    /// [R99.3-1] The tree of the working files of the `step` command that runs now (design 99):
+    /// the command writes the tree one time, and each later reader of the open step reads it.
+    /// `None` out of a `step` command: each reader writes the tree of the working files then.
+    pub(crate) work_tree: Option<String>,
 }
 
 /// Gives no body data for the steps that the command does not check (`--no-build-code`): these
@@ -865,7 +871,7 @@ impl App {
             std::fs::create_dir_all(repo.state_dir())?;
             std::fs::write(&ignore, "*\n")?;
         }
-        Ok(App { repo, workspaces: BTreeMap::new(), step_memo: BTreeMap::new(), config_log: Default::default(), no_bodies: std::env::var_os("SEMILLA_NO_BODIES").is_some(), mode: Mode::default(), trusted_bases: Default::default() , new_list: Vec::new(), deferred: None, oracle: None })
+        Ok(App { repo, workspaces: BTreeMap::new(), step_memo: BTreeMap::new(), config_log: Default::default(), no_bodies: std::env::var_os("SEMILLA_NO_BODIES").is_some(), mode: Mode::default(), trusted_bases: Default::default() , new_list: Vec::new(), deferred: None, oracle: None, work_tree: None })
     }
 
     /// The review state of the reviewer (the decisions in the UI). It is in the cache folder of
@@ -933,13 +939,19 @@ impl App {
     /// Loads the workspace of a git tree (cached in the process, and in the database of the
     /// store, design 88).
     pub fn workspace(&mut self, tree: &str) -> Result<Workspace> {
+        self.shared_workspace(tree).map(|ws| (*ws).clone())
+    }
+
+    /// [R99.6-1] The workspace of a git tree as a shared value (design 99): a reader that does
+    /// not change the workspace takes it with no copy.
+    pub(crate) fn shared_workspace(&mut self, tree: &str) -> Result<std::sync::Arc<Workspace>> {
         if let Some(ws) = self.workspaces.get(tree) {
             return Ok(ws.clone());
         }
         // Design 62: the tree before a root commit is the empty tree. A tree with no entry is
         // the empty workspace: it has no package and no file.
         if crate::git::is_empty_tree(tree) {
-            let ws = Workspace::default();
+            let ws = std::sync::Arc::new(Workspace::default());
             self.workspaces.insert(tree.to_string(), ws.clone());
             return Ok(ws);
         }
@@ -955,6 +967,7 @@ impl App {
             if let Some(ws) = store.content(&cache, crate::recstore::Kind::Syntax, &syntax_key(bytes), semilla_syntax::stored::FORMAT).and_then(|bytes| semilla_syntax::stored::decode(&bytes)) {
                 semilla_core::timing::count(crate::recstore::WORK_PHASE, "files from the store", ws.parsed_files.len() as u64);
                 crate::timing("load the syntax workspace (from the store)", started);
+                let ws = std::sync::Arc::new(ws);
                 self.workspaces.insert(tree.to_string(), ws.clone());
                 return Ok(ws);
             }
@@ -983,6 +996,7 @@ impl App {
         semilla_core::timing::count(crate::recstore::WORK_PHASE, "files parsed", parsed);
         let _ = semilla_core::timing::phase("the write of the syntax data of a tree", || store.put_content(&cache, crate::recstore::Kind::Syntax, &syntax_key(&metadata_bytes), semilla_syntax::stored::FORMAT, semilla_syntax::stored::encode(&ws)));
         crate::timing("load the syntax workspace", started);
+        let ws = std::sync::Arc::new(ws);
         self.workspaces.insert(tree.to_string(), ws.clone());
         Ok(ws)
     }
@@ -1457,7 +1471,7 @@ impl App {
     pub(crate) fn step_end_with(&mut self, queue: bool) -> Result<String> {
         let mut session = self.load_session()?;
         let open = session.open.take().context("no step is open")?;
-        let tree = self.repo.write_tree()?;
+        let tree = self.working_tree()?;
         let index = session.changeset.steps.len();
         session.changeset.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, syntax_only: false, build_check: open.build_check, agent: open.agent, tags: open.tags, configurations: open.configurations });
         session.changeset.head_tree = tree.clone();
@@ -2219,11 +2233,20 @@ impl App {
     // ----- checks -----
 
     /// The change set with the open step as a last step (its "after" tree is the working tree).
+    /// [R99.3-1] The tree of the working files: the tree of the `step` command that runs now,
+    /// else a new write of the tree.
+    pub(crate) fn working_tree(&self) -> Result<String> {
+        match &self.work_tree {
+            Some(tree) => Ok(tree.clone()),
+            None => self.repo.write_tree(),
+        }
+    }
+
     pub(crate) fn current_changeset(&self) -> Result<ChangeSet> {
         let session = self.load_session()?;
         let mut set = session.changeset;
         if let Some(open) = session.open {
-            let tree = self.repo.write_tree()?;
+            let tree = self.working_tree()?;
             let index = set.steps.len();
             set.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, syntax_only: false, build_check: open.build_check, agent: open.agent, tags: open.tags, configurations: open.configurations });
             set.head_tree = tree;
@@ -2464,18 +2487,22 @@ impl App {
             }
             for tree in &trees {
                 let _span = semilla_core::tasks::span("the load of a syntax tree");
-                self.workspace(tree)?;
+                self.shared_workspace(tree)?;
             }
             let cache = self.workspaces.clone();
+            // [R99.6-1] The check of a step makes its own copy of its two workspaces (it puts the
+            // name records into the copy, design 70); each other reader reads the shared value.
             let mut load = |tree: &str| cache.get(tree).cloned().with_context(|| format!("no workspace for tree {tree}"));
             let started = std::time::Instant::now();
-            let (report, outcomes) = semilla_verify::verify_changeset_cached(set, &mut load, &bodies, &exprs, Options { require_groups, derive_edits: true }, &mut memo);
+            let (report, outcomes) = semilla_verify::verify_changeset_shared(set, &mut load, &bodies, &exprs, Options { require_groups, derive_edits: true }, &mut memo);
             Ok((report, outcomes, started, cache))
         })?;
         self.step_memo = memo.results;
         // Design 67, part D: a later step that changes a body that a claim of an earlier step
         // reads checks that claim again.
         // The earlier steps come from the session when the set is one step of it.
+        // [R99.7-1] The end of the check of a change set is on the time line (design 99).
+        let _end_span = semilla_core::tasks::span("the end of the check of a change set");
         let full = self.current_changeset().ok().filter(|full| set.steps.iter().all(|step| full.steps.get(step.index).is_some_and(|known| known.tree_after == step.tree_after)));
         later_claims(set, full.as_ref().map(|full| full.steps.as_slice()).unwrap_or(&set.steps), &bodies, &mut report.steps);
         for outcome in &mut outcomes {
@@ -2501,7 +2528,7 @@ impl App {
             }
             // A build code change shows its diff. A fact of an item has no content: the first
             // such fact of a file gets the change of the file.
-            let Some(trees) = set.steps.iter().find(|change| change.index == step.step).and_then(|change| cache.get(&change.tree_before).zip(cache.get(&change.tree_after))) else { continue };
+            let Some(trees) = set.steps.iter().find(|change| change.index == step.step).and_then(|change| cache.get(&change.tree_before).map(|ws| &**ws).zip(cache.get(&change.tree_after).map(|ws| &**ws))) else { continue };
             let mut seen: BTreeSet<String> = step.facts.iter().filter(|fact| fact.build_code_change && fact.content.is_some()).filter_map(|fact| fact.file.clone()).collect();
             for fact in step.facts.iter_mut().filter(|fact| fact.build_code_change && fact.content.is_none()) {
                 let Some(file) = fact.file.clone().filter(|file| seen.insert(file.clone())) else { continue };
@@ -2560,10 +2587,11 @@ impl App {
             }
             mark_after_commit(&mut report, set);
         }
+        let text_span = semilla_core::tasks::span("the text and the change tree of a check");
         let text = format!("{}{}", semilla_verify::views::text_report(&report.steps), summary_line(&report));
-        let (base, head) = (self.workspace(&set.base_tree).unwrap_or_default(), self.workspace(&set.head_tree).unwrap_or_default());
+        let (base, head) = (self.shared_workspace(&set.base_tree).unwrap_or_default(), self.shared_workspace(&set.head_tree).unwrap_or_default());
         let empty = semilla_syntax::Workspace::default();
-        let step_trees: Vec<(&semilla_syntax::Workspace, &semilla_syntax::Workspace)> = set.steps.iter().map(|s| (cache.get(&s.tree_before).unwrap_or(&empty), cache.get(&s.tree_after).unwrap_or(&empty))).collect();
+        let step_trees: Vec<(&semilla_syntax::Workspace, &semilla_syntax::Workspace)> = set.steps.iter().map(|s| (cache.get(&s.tree_before).map(|ws| &**ws).unwrap_or(&empty), cache.get(&s.tree_after).map(|ws| &**ws).unwrap_or(&empty))).collect();
         let mut tree = semilla_verify::views::change_tree_with(&outcomes, &head, &base, &step_trees);
         if let Some(note) = &report.build_code {
             // The tree of one step has no step numbers on its nodes.
@@ -2573,6 +2601,7 @@ impl App {
             };
             mark_tree(&mut tree, note, lone);
         }
+        drop(text_span);
         Ok(CheckResult { report, outcomes, text, tree })
     }
 
@@ -2832,15 +2861,18 @@ impl App {
         if !cache.join(".complete").exists() || (!marked && cache.join(crate::oracle::BUILD_CODE_FILE).exists()) {
             return;
         }
-        let Ok(records) = semilla_normal::read_records(&cache) else { return };
+        // [R99.6-1] The records of the folder from the reader of the store: the one list in
+        // memory (R86.3-2), with the result of `semilla_normal::read_records` (R88.2-1).
+        use crate::recstore::RecordStore as _;
+        let Ok(records) = crate::recstore::store().records(&cache) else { return };
         let mut calls: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
-        for record in &records {
+        // [R99.6-1] The functions of the workspace whose file ends the file of a span, one time
+        // for each file of a span, in the order of the items.
+        let mut functions: BTreeMap<&str, Vec<&semilla_syntax::Item>> = BTreeMap::new();
+        for record in records.iter() {
             let Some(span) = &record.span else { continue };
-            let item = workspace
-                .items
-                .values()
-                .filter(|item| item.kind == semilla_syntax::ItemKind::Fn && span.file.ends_with(&item.file) && item.line_start <= span.line_start && span.line_start <= item.line_end)
-                .min_by_key(|item| item.line_end - item.line_start);
+            let candidates = functions.entry(span.file.as_str()).or_insert_with(|| workspace.items.values().filter(|item| item.kind == semilla_syntax::ItemKind::Fn && span.file.ends_with(&item.file)).collect());
+            let item = candidates.iter().copied().filter(|item| item.line_start <= span.line_start && span.line_start <= item.line_end).min_by_key(|item| item.line_end - item.line_start);
             let Some(item) = item else { continue };
             for external in &record.externals {
                 calls.entry(item.path.clone()).or_default().entry(external.path.clone()).or_default().extend(external.badges.iter().cloned());
@@ -2935,6 +2967,7 @@ impl App {
     pub(crate) fn store_session_result(&mut self, set: &ChangeSet) -> Result<()> {
         let (report, text, _) = self.review_parts(set, None)?;
         let stored = crate::background::StoredReport { key: "session".into(), tree: String::new(), hash: crate::background::changeset_hash(set), tools: self.tools_key(), report, text };
+        let _span = semilla_core::tasks::span("the write of the session report");
         crate::background::store(self, &stored)
     }
 
@@ -2945,9 +2978,12 @@ impl App {
         let mut set = set.clone();
         let code = self.build_code(&set)?;
         let result = self.check_set_with(&set, false, &code)?;
+        // [R99.7-1] The review data is on the time line (design 99).
+        let _span = semilla_core::tasks::span("the review data of a change set");
         let (plain, text) = (result.report.clone(), result.text.clone());
         // Each group shows the engine suggestion of its subgroups. A stored layout has labels of
         // the agent (a role, a title), and no reviewer output shows a stored label (5k, A3).
+        let parts_span = semilla_core::tasks::span("the flows and the sources of the review data");
         let test_items = self.test_items(&set)?;
         set.subgroups.clear();
         for group in set.groups.clone() {
@@ -2959,8 +2995,8 @@ impl App {
         // The flow view of a function uses the head tree, so it shows the final names. The statuses
         // come from one diff from the base tree to the head tree (brief 5f, D3): a statement path
         // of an early step can name a different statement in the head tree.
-        let head_ws = self.workspace(&set.head_tree).unwrap_or_default();
-        let base_ws = self.workspace(&set.base_tree).unwrap_or_default();
+        let head_ws = self.shared_workspace(&set.head_tree).unwrap_or_default();
+        let base_ws = self.shared_workspace(&set.base_tree).unwrap_or_default();
         let finals = semilla_verify::views::final_edits(&result.outcomes, &base_ws, &head_ws);
         for (item, (statuses, removed)) in semilla_verify::views::final_flow_inputs(&finals) {
             if let Some(flow) = head_ws.items.get(&item).and_then(|it| semilla_syntax::flow::flow_view(it, &statuses, removed)) {
@@ -2974,8 +3010,8 @@ impl App {
         // path such as `S1` can name a different statement in a different step.
         let mut fact_sources = BTreeMap::new();
         for (step, outcome) in set.steps.iter().zip(&result.outcomes) {
-            let before = self.workspace(&step.tree_before)?;
-            let after = self.workspace(&step.tree_after)?;
+            let before = self.shared_workspace(&step.tree_before)?;
+            let after = self.shared_workspace(&step.tree_after)?;
             let step_sources = semilla_verify::views::sources(std::slice::from_ref(outcome), &before, &after);
             for fact in result.report.steps.iter().filter(|report| report.step == step.index).flat_map(|report| &report.facts) {
                 if let Some((old, new)) = fact.at.as_ref().and_then(|at| step_sources.get(&at.to_string())) {
@@ -2987,15 +3023,20 @@ impl App {
                 sources.entry(key).or_insert(semilla_ui::SourcePair { before: old, after: new });
             }
         }
-        let head = self.workspace(&set.head_tree).unwrap_or_default();
+        drop(parts_span);
+        let graph_span = semilla_core::tasks::span("the graph of the review data");
+        let head = self.shared_workspace(&set.head_tree).unwrap_or_default();
         let mut graph: WorkspaceGraph = semilla_verify::views::graph(&result.outcomes, &head);
         // The external calls come from the records of the compiled check.
         if !set.steps.is_empty() {
             self.add_external_calls(&mut graph, &head, &set.head_tree, &code);
         }
+        drop(graph_span);
         let mut data = semilla_ui::UiData { changeset: set, report: result.report, tree: result.tree, flows, graph, sources, fact_sources };
         // A failed write only costs time: the next command computes the data again.
+        let write_span = semilla_core::tasks::span("the write of the review data");
         let _ = crate::background::store_review(self, commit.unwrap_or("session"), &crate::background::changeset_hash(input), &data);
+        drop(write_span);
         self.add_notices(&mut data.report, input, commit);
         Ok((plain, text, data))
     }
@@ -3006,7 +3047,7 @@ impl App {
 /// `status --verbose` prints the facts.
 /// The build configurations of the body checks of a change set (design 8.12; batch 5s, B1),
 /// from the log of the oracle. `None` if no step has a body check.
-fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap<String, Workspace>, others: &BTreeMap<usize, Vec<semilla_verify::OtherConfig>>) -> Option<semilla_core::report::ConfigNote> {
+fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap<String, std::sync::Arc<Workspace>>, others: &BTreeMap<usize, Vec<semilla_verify::OtherConfig>>) -> Option<semilla_core::report::ConfigNote> {
     let log = log.lock().ok()?;
     let mut note = semilla_core::report::ConfigNote::default();
     let mut found = false;

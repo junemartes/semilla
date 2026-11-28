@@ -21,6 +21,7 @@ pub mod cargo;
 pub mod intent;
 pub mod elements;
 pub mod graph;
+pub mod anchors;
 pub mod hash;
 pub mod index;
 pub mod lazy;

@@ -470,6 +470,8 @@ pub(crate) struct Live {
 /// whose content no file of a tree of a stored step has. The result is the count of the
 /// removed entries.
 pub(crate) fn clean_database(cache: &Path, live: &Live) -> Result<usize> {
+    // [R99.8-1] The new body records of this process are in the store before the clean.
+    join_body_writes();
     let Some(db) = database_for(cache) else { return Ok(0) };
     let root = db.cache.clone();
     let mut count = db.remove_where(Kind::Index, &|key| key.strip_prefix("index ").is_none_or(|rel| !root.join(rel).is_file()))?;
@@ -663,8 +665,9 @@ pub(crate) fn step_key(before: &str, after: &str, inputs: &str) -> String {
 /// driver has each input of the record, also the driver and the tool chain (design 93.3).
 pub(crate) const BODY_PHASE: &str = "body";
 
-/// [R93.3-1] The format key of a body record: the JSON line of the record.
-pub(crate) const BODY_FORMAT: &str = "semilla-body-1";
+/// [R93.3-1] The format key of a body record. [R99.8-1] The payload is the item list of the
+/// places of the record (`relocate::Used`, one JSON line), then the JSON line of the record.
+pub(crate) const BODY_FORMAT: &str = "semilla-body-2";
 
 /// [R93.4-1] The mark of a records folder with the keys of its body records (its pointer list),
 /// one key for each line.
@@ -675,6 +678,7 @@ pub(crate) const BODY_STORE_PHASE: &str = "the body records of the store (design
 
 /// [R93.3-1] The keys of the body records of the store: the file of the known keys of a build.
 pub(crate) fn known_bodies(db: &Db) -> String {
+    join_body_writes();
     let mut text = String::new();
     for key in db.key_texts(Kind::Body) {
         if let Some(body) = key.strip_prefix(BODY_PHASE).and_then(|rest| rest.strip_prefix(' ')) {
@@ -703,7 +707,7 @@ impl std::error::Error for MissingBody {}
 /// record with a key goes into the store, in one write transaction. The keys of the lines of
 /// the file go to `keys` (the pointer list of the file). A file with no keys line (a fresh
 /// unit, or a build with no keys) does not change.
-pub(crate) fn resolve_bodies(db: &Db, file: &Path, keys: &Path) -> Result<()> {
+pub(crate) fn resolve_bodies(db: &Arc<Db>, file: &Path, keys: &Path) -> Result<()> {
     use std::io::{BufRead as _, Write as _};
     // [R93.7-1] A stream of the lines: the file is read two times (the place of the last line,
     // then each line), and no text of the whole file is in memory.
@@ -735,6 +739,10 @@ pub(crate) fn resolve_bodies(db: &Db, file: &Path, keys: &Path) -> Result<()> {
     let Ok(serde_json::Value::Object(tail)) = serde_json::from_str::<serde_json::Value>(tail.trim_end()) else { return Ok(()) };
     let Some(serde_json::Value::Array(list)) = tail.get(KEYS_MEMBER) else { return Ok(()) };
     let list: Vec<Option<String>> = list.iter().map(|key| key.as_str().map(str::to_string)).collect();
+    // [R99.8-1] The table of the items of the unit (design 99.8): a stored record moves by the
+    // start of each item in this tree, and a new record goes into the store with its items.
+    let table = semilla_normal::anchors::Table::new(tail.get(ANCHORS_MEMBER).and_then(|found| serde_json::from_value::<Vec<semilla_normal::anchors::FileAnchors>>(found.clone()).ok()).unwrap_or_default());
+    drop(tail);
     // The first line is the unit record; each other line but the last is a body line.
     if count != list.len() + 2 {
         anyhow::bail!("the keys line of {} does not have one key for each body line", file.display());
@@ -742,8 +750,9 @@ pub(crate) fn resolve_bodies(db: &Db, file: &Path, keys: &Path) -> Result<()> {
     let temporary = file.with_extension("resolve");
     let mut out = std::io::BufWriter::new(std::fs::File::create(&temporary)?);
     let mut reader = std::io::BufReader::new(std::fs::File::open(file)?);
-    let mut puts: Vec<Put> = Vec::new();
-    let (mut from_store, mut new, mut written, mut waiting) = (0u64, 0u64, 0u64, 0usize);
+    // [R99.8-1] The new records with a key, for the store.
+    let mut fresh: Vec<(String, String)> = Vec::new();
+    let (mut from_store, mut new, mut written, mut moved) = (0u64, 0u64, 0u64, 0u64);
     let mut line = String::new();
     for at in 0..count - 1 {
         line.clear();
@@ -753,31 +762,35 @@ pub(crate) fn resolve_bodies(db: &Db, file: &Path, keys: &Path) -> Result<()> {
         let pointer = text.starts_with(&format!("{{\"{POINTER_MEMBER}\"")).then(|| serde_json::from_str::<serde_json::Value>(text).ok().and_then(|value| value.get(POINTER_MEMBER).and_then(|key| key.as_str()).map(str::to_string))).flatten();
         match (pointer, key) {
             (Some(pointer), _) => {
-                let found = db.get(Kind::Body, &format!("{BODY_PHASE} {pointer}"), BODY_FORMAT, |payload| out.write_all(payload).ok());
-                if found.is_none() {
+                // [R99.8-1] The stored record, with each place moved by the move of its item.
+                let found = db.get(Kind::Body, &format!("{BODY_PHASE} {pointer}"), BODY_FORMAT, |payload| {
+                    let text = std::str::from_utf8(payload).ok()?;
+                    let (head, record) = text.split_once('\n')?;
+                    let used: crate::relocate::Used = serde_json::from_str(head).ok()?;
+                    match crate::relocate::relocate(record, &used, &table) {
+                        Ok(None) => out.write_all(record.as_bytes()).ok().map(|()| false),
+                        Ok(Some(moved)) => out.write_all(moved.as_bytes()).ok().map(|()| true),
+                        Err(_) => None,
+                    }
+                });
+                let Some(was_moved) = found else {
                     drop(out);
                     let _ = std::fs::remove_file(&temporary);
                     return Err(MissingBody(pointer).into());
-                }
+                };
                 from_store += 1;
+                moved += u64::from(was_moved);
             }
             (None, Some(key)) => {
                 out.write_all(text.as_bytes())?;
-                puts.push((Kind::Body, format!("{BODY_PHASE} {key}"), BODY_FORMAT, text.as_bytes().to_vec()));
+                fresh.push((key, text.to_string()));
                 new += 1;
                 written += text.len() as u64;
-                // [R93.7-1] A batch of 4 MB is one write transaction now.
-                waiting += text.len();
-                if waiting > MOST_WAITING {
-                    db.put(std::mem::take(&mut puts))?;
-                    waiting = 0;
-                }
             }
             (None, None) => out.write_all(text.as_bytes())?,
         }
         out.write_all(b"\n")?;
     }
-    db.put(puts)?;
     out.flush()?;
     drop(out);
     std::fs::rename(&temporary, file)?;
@@ -785,10 +798,64 @@ pub(crate) fn resolve_bodies(db: &Db, file: &Path, keys: &Path) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(keys, list.iter().map(|key| format!("{}\n", key.as_deref().unwrap_or("-"))).collect::<String>())?;
+    store_fresh(db, table, fresh);
     semilla_core::timing::count(BODY_STORE_PHASE, "records from the store", from_store);
+    semilla_core::timing::count(BODY_STORE_PHASE, "stored records moved to new places", moved);
     semilla_core::timing::count(BODY_STORE_PHASE, "records written", new);
     semilla_core::timing::count(BODY_STORE_PHASE, "bytes written", written);
     Ok(())
+}
+
+/// [R99.8-1] Writes the new records of a record file into the store: the payload is the item list
+/// of the places of a record (`relocate::Used`), then the record; a record with no item list
+/// does not go into the store. [R93.7-1] A batch of 4 MB is one write transaction. [R96.9-2] In a
+/// command, the work runs in a thread of its own (the end of the command waits for it): the
+/// unit task does not wait for the walk of each new record. A key that is not in the store yet
+/// is not in the file of the known keys of a later build, so that build prints its record.
+fn store_fresh(db: &Arc<Db>, table: semilla_normal::anchors::Table, fresh: Vec<(String, String)>) {
+    if fresh.is_empty() {
+        return;
+    }
+    let work = move |db: &Db| {
+        let mut puts: Vec<Put> = Vec::new();
+        let mut waiting = 0usize;
+        for (key, text) in fresh {
+            let Some(used) = crate::relocate::used(&text, &table) else { continue };
+            let Ok(head) = serde_json::to_string(&used) else { continue };
+            let mut payload = head.into_bytes();
+            payload.push(b'\n');
+            payload.extend_from_slice(text.as_bytes());
+            waiting += payload.len();
+            puts.push((Kind::Body, format!("{BODY_PHASE} {key}"), BODY_FORMAT, payload));
+            if waiting > MOST_WAITING {
+                let _ = db.put(std::mem::take(&mut puts));
+                waiting = 0;
+            }
+        }
+        let _ = db.put(puts);
+    };
+    if !ASYNC_WRITES.load(std::sync::atomic::Ordering::SeqCst) {
+        work(db);
+        return;
+    }
+    let db = db.clone();
+    let write = std::thread::spawn(move || {
+        let _span = semilla_core::tasks::span("the write of the new body records");
+        work(&db);
+    });
+    BODY_WRITES.lock().unwrap_or_else(|error| error.into_inner()).push(write);
+}
+
+/// [R99.8-1] The writes of new body records that run in their own threads.
+static BODY_WRITES: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
+
+/// [R99.8-1] Waits for each write of new body records: the file of the known keys of a build
+/// then has each record of the builds before it, and the end of a command has each write.
+pub(crate) fn join_body_writes() {
+    let writes = std::mem::take(&mut *BODY_WRITES.lock().unwrap_or_else(|error| error.into_inner()));
+    for write in writes {
+        let _ = write.join();
+    }
 }
 
 /// [R93.3-1] The member of a pointer line of the driver.
@@ -796,6 +863,9 @@ const POINTER_MEMBER: &str = "semilla-body";
 
 /// [R93.3-1] The member of the keys line of the driver.
 const KEYS_MEMBER: &str = "semilla-keys";
+
+/// [R99.8-1] The member of the keys line of the driver with the table of the items of the unit.
+const ANCHORS_MEMBER: &str = "semilla-anchors";
 
 // ----- the task of a unit at its message (design 96) -----
 
@@ -824,12 +894,17 @@ pub(crate) const UNIT_PHASE: &str = "the tasks of the units at their messages (d
 /// get their records (R93.3-1), then the index of the file. The build of the other units runs
 /// at the same time. The task reads the file only after the message of its unit (the caller
 /// gives only the files of [`semilla_normal::cargo::message_units`]).
-pub(crate) fn unit_task(db: &Db, file: &Path, keys: &Path) -> Result<()> {
+pub(crate) fn unit_task(db: &Arc<Db>, file: &Path, keys: &Path) -> Result<()> {
     let started = std::time::Instant::now();
     resolve_bodies(db, file, keys)?;
-    let bytes = std::fs::read(file)?;
+    // [R99.5-2] The index of the file is a stream (design 99): one line is in memory at a time,
+    // and the task keeps no record. A file that changes while the task reads it gets no result:
+    // the end of the build makes its index again.
     let Some(state) = plain_state(file) else { return Ok(()) };
-    let index = semilla_normal::index::build(&bytes, None).map(|(index, _)| index);
+    let index = semilla_normal::index::build_stream(std::io::BufReader::new(std::fs::File::open(file)?));
+    if plain_state(file) != Some(state) {
+        return Ok(());
+    }
     UNIT_DONE.lock().unwrap_or_else(|error| error.into_inner()).insert(file.to_path_buf(), (state, index));
     semilla_core::timing::add(UNIT_PHASE, started);
     semilla_core::timing::count(UNIT_PHASE, "units done during the build", 1);
@@ -1012,8 +1087,9 @@ fn index_folder(db: &Arc<Db>, folder: &Path, key: &FolderKey) {
         let Some(state) = file_state(&file, key.1) else { continue };
         let index = match take_copy_index(&file, state[0]) {
             Some(made) => made,
-            None => match std::fs::read(&file) {
-                Ok(bytes) => semilla_normal::index::build(&bytes, None).map(|(index, _)| index),
+            // [R99.5-2] The index of a file as a stream.
+            None => match std::fs::File::open(&file) {
+                Ok(handle) => semilla_normal::index::build_stream(std::io::BufReader::new(handle)),
                 Err(_) => continue,
             },
         };
@@ -1056,6 +1132,7 @@ static WRITES: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
 /// [R96.9-2] Waits for each write of the store that runs in its own thread. The end of each
 /// command calls it.
 pub(crate) fn join_writes() {
+    join_body_writes();
     let writes = std::mem::take(&mut *WRITES.lock().unwrap_or_else(|error| error.into_inner()));
     for write in writes {
         let _ = write.join();
@@ -1066,28 +1143,19 @@ pub(crate) fn join_writes() {
 /// from the database if it is the index of the file now, else a new index that goes into the
 /// database. A file whose lines do not have the plain form takes the full parse, with its
 /// errors. The result is the result of `semilla_normal::read_records`.
-fn read_indexed(db: &Db, folder: &Path, key: Option<&FolderKey>) -> Result<Vec<semilla_normal::BodyRecord>> {
+fn read_indexed(db: &Arc<Db>, folder: &Path, key: Option<&FolderKey>) -> Result<Vec<semilla_normal::BodyRecord>> {
     let files = record_files(folder)?;
-    // [R88.2-1] The files decode in parallel threads; the records join in the order of the
-    // files, so the result does not depend on the threads.
-    // [R96.5-1] While a build runs, the read uses the thread limit of the tasks of Semilla.
-    let threads = semilla_core::tasks::threads(std::thread::available_parallelism().map_or(4, |count| count.get()).clamp(1, MOST_THREADS));
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let results: Mutex<Vec<(usize, Result<UnitRead>)>> = Mutex::new(Vec::new());
-    std::thread::scope(|scope| {
-        for _ in 0..threads.min(files.len()) {
-            scope.spawn(|| {
-                loop {
-                    let at = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    let Some(file) = files.get(at) else { break };
-                    let read = read_unit(db, file, key);
-                    results.lock().unwrap_or_else(|error| error.into_inner()).push((at, read));
-                }
-            });
-        }
-    });
-    let mut results = results.into_inner().unwrap_or_else(|error| error.into_inner());
-    results.sort_by_key(|(at, _)| *at);
+    // [R88.2-1] The files decode in parallel; the records join in the order of the files, so
+    // the result does not depend on the threads. [R99.5-1] Each file is a job of the pool of the
+    // tasks (long-lived threads, the CPU share of R96.5-1).
+    let jobs: Vec<Box<dyn FnOnce() -> Result<UnitRead> + Send>> = files
+        .iter()
+        .map(|file| {
+            let (db, file, key) = (db.clone(), file.clone(), key.cloned());
+            Box::new(move || read_unit(&db, &file, key.as_ref())) as Box<dyn FnOnce() -> Result<UnitRead> + Send>
+        })
+        .collect();
+    let results: Vec<(usize, Result<UnitRead>)> = semilla_core::tasks::run_all(jobs).into_iter().map(|done| done.unwrap_or_else(|_| Err(anyhow::anyhow!("a read of a record file stopped")))).enumerate().collect();
     let mut records = Vec::new();
     let mut puts = Vec::new();
     let (mut from_index, mut indexed, mut full) = (0u64, 0u64, 0u64);
@@ -1111,9 +1179,6 @@ fn read_indexed(db: &Db, folder: &Path, key: Option<&FolderKey>) -> Result<Vec<s
     let _ = db.put(puts);
     Ok(records)
 }
-
-/// The most threads of the read of one record folder.
-const MOST_THREADS: usize = 8;
 
 /// The read of one record file.
 struct UnitRead {
@@ -1862,6 +1927,12 @@ mod tests {
         assert!(grown > 32 << 10, "the map keeps only {grown} kB");
     }
 
+    /// [R99.8-1] The payload of a stored record with no place: the empty item list, then the
+    /// record.
+    fn stored_payload(record: &str) -> Vec<u8> {
+        format!("{{\"a\":[],\"m\":[]}}\n{record}").into_bytes()
+    }
+
     /// A record file of a build with the keys on: the unit line, a pointer line, a new record
     /// with a key, a record with no key, and the keys line.
     fn keyed_file(dir: &Path, pointer: &str) -> PathBuf {
@@ -1886,7 +1957,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = open_database(dir.path()).unwrap();
         let stored = r#"{"name":"k::old","level":"n0","text":"fn old() {}"}"#;
-        db.put(vec![(Kind::Body, format!("{BODY_PHASE} aa11"), BODY_FORMAT, stored.as_bytes().to_vec())]).unwrap();
+        db.put(vec![(Kind::Body, format!("{BODY_PHASE} aa11"), BODY_FORMAT, stored_payload(stored))]).unwrap();
         let file = keyed_file(dir.path(), "aa11");
         let keys = dir.path().join("keys/k.lib.1.jsonl");
         resolve_bodies(&db, &file, &keys).unwrap();
@@ -1895,7 +1966,7 @@ mod tests {
         assert_eq!(lines.len(), 4, "{text}");
         assert_eq!(lines[1], stored);
         assert!(lines[2].contains("k::new") && lines[3].contains("k::plain"), "{text}");
-        assert!(db.get(Kind::Body, &format!("{BODY_PHASE} 00ff"), BODY_FORMAT, |payload| Some(payload.to_vec())).is_some_and(|payload| payload == lines[2].as_bytes()));
+        assert!(db.get(Kind::Body, &format!("{BODY_PHASE} 00ff"), BODY_FORMAT, |payload| Some(payload.to_vec())).is_some_and(|payload| payload == stored_payload(lines[2])));
         assert_eq!(std::fs::read_to_string(&keys).unwrap(), "aa11\n00ff\n-\n");
         // A file with no keys line does not change.
         resolve_bodies(&db, &file, &keys).unwrap();
@@ -1910,7 +1981,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = open_database(dir.path()).unwrap();
         let stored = r#"{"name":"k::old","level":"n0","text":"fn old() {}"}"#;
-        db.put(vec![(Kind::Body, format!("{BODY_PHASE} aa11"), BODY_FORMAT, stored.as_bytes().to_vec())]).unwrap();
+        db.put(vec![(Kind::Body, format!("{BODY_PHASE} aa11"), BODY_FORMAT, stored_payload(stored))]).unwrap();
         let file = keyed_file(dir.path(), "aa11");
         let keys = dir.path().join("keys/k.lib.1.jsonl");
         unit_task(&db, &file, &keys).unwrap();
@@ -1934,7 +2005,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = open_database(dir.path()).unwrap();
         let stored = r#"{"name":"k::old","level":"n0","text":"fn old() {}"}"#;
-        db.put(vec![(Kind::Body, format!("{BODY_PHASE} bb22"), BODY_FORMAT, stored.as_bytes().to_vec())]).unwrap();
+        db.put(vec![(Kind::Body, format!("{BODY_PHASE} bb22"), BODY_FORMAT, stored_payload(stored))]).unwrap();
         let file = keyed_file(dir.path(), "bb22");
         let keys = dir.path().join("keys/k.lib.1.jsonl");
         unit_task(&db, &file, &keys).unwrap();
