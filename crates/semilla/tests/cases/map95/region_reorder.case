@@ -1,0 +1,51 @@
+note: a moved statement in a body with an other edit: one reorder entry, and the other edit stays a real edit
+rule+: R95.1-1
+must_match: ◆ f\d+ reorder \(Semilla; R95\.1-1
+must_match: ◆ f\d+ replace \(Semilla; R90\.2-2.*wrapping_sub\(y\) \^ 1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let x = a ^ 2;
+    let y = b | 3;
+    x.wrapping_sub(y)
+}
+=== new src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let y = b | 3;
+    let x = a ^ 2;
+    x.wrapping_sub(y) ^ 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::total`:
+  ◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `x.wrapping_sub(y)` → `x.wrapping_sub(y) ^ 1` at `depot::total/tail` [semantics · code different]
+      not stated (src/lib.rs:4, src/lib.rs:-4); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a.wrapping_sub($b) => $a.wrapping_sub($b) ^ 1', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f1, f2)
+      affected bodies: depot::total (with 1 other edit of this body)
+      equivalence: MIR changes alone; the body: MIR changes
+  transformations:
+  item `depot::total`:
+  ◆ f1 reorder (Semilla; R95.1-1, the statements in another order; the parts are independent (1 pair(s) of MIR elements change order); the check reads the region: the other edits of the body are real edits): moved statement `let x = a ^ 2;` from `depot::total/S0` to `depot::total/S1` [semantics · code different]
+      affected bodies: depot::total (with 1 other edit of this body)
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:1): same graph (the edit keeps the control flow); MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 replace (Semilla; R90.2-2, 3 changed MIR elements): changed expression `x.wrapping_sub(y)` → `x.wrapping_sub(y) ^ 1` at `depot::total/tail` [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:-4
+◆ f1 reorder (Semilla; R95.1-1, the statements in another order; the parts are independent (1 pair(s) of MIR elements change order); the check reads the region: the other edits of the body are real edits): moved statement `let x = a ^ 2;` from `depot::total/S0` to `depot::total/S1` [semantics · code different]
+    lines: src/lib.rs:3-4, src/lib.rs:-2, src/lib.rs:-4

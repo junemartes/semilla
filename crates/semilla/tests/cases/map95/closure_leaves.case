@@ -1,0 +1,55 @@
+note: a closure that the body calls and also passes to a call leaves the body: no check
+rule-: R95.6-1
+must_not_match: R95\.6-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+fn apply(f: impl Fn(u32) -> u32, a: u32) -> u32 {
+    f(a)
+}
+
+pub fn total(a: u32, b: u32) -> u32 {
+    let part = |x: u32| x.wrapping_mul(3) ^ b;
+    let s = a.wrapping_mul(3) ^ b;
+    s.rotate_left(1) ^ apply(part, 0)
+}
+=== new src/lib.rs
+fn apply(f: impl Fn(u32) -> u32, a: u32) -> u32 {
+    f(a)
+}
+
+pub fn total(a: u32, b: u32) -> u32 {
+    let part = |x: u32| x.wrapping_mul(3) ^ b;
+    let s = part(a);
+    s.rotate_left(1) ^ apply(part, 0)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 1 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:5): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+    equal MIR: `depot::total::{closure#0} |x: u32| x.wrapping_mul(3) ^ b` (src/lib.rs:6)
+  changed nodes: 1 in 1 entries; 1 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `a.wrapping_mul(3) ^ b` → `part(a)` at `depot::total/S1/init` [semantics · code different]
+      not stated (src/lib.rs:7, src/lib.rs:-7); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a.wrapping_mul(3) ^ b => part($a)'
+      affected bodies: depot::total
+      control flow: ~ call `num::<impl u32>::wrapping_mul` → `part` [closure] (src/lib.rs:-7, src/lib.rs:7)
+      equivalence: `depot::total`: MIR changes
+      equivalence: `depot::total::{closure#0} |x: u32| x.wrapping_mul(3) ^ b`: equivalent (proved by equal MIR)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::total (src/lib.rs:5): same structure: 1 changed call target; MIR changes
+    depot::total::{closure#0} |x: u32| x.wrapping_mul(3) ^ b (src/lib.rs:6): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 replace (Semilla; R90.2-2, 4 changed MIR elements): changed expression `a.wrapping_mul(3) ^ b` → `part(a)` at `depot::total/S1/init` [semantics · code different]
+    lines: src/lib.rs:7, src/lib.rs:-7

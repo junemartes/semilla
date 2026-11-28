@@ -1,0 +1,49 @@
+note: an extract of a helper with a const parameter: the parameter takes the value of the call
+rule+: R95.3-1
+refactor: yes
+must_match: ◆ f\d+ extract \(Semilla; R95\.3-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(x: usize) -> usize {
+    x.wrapping_mul(4)
+}
+=== new src/lib.rs
+pub fn total(x: usize) -> usize {
+    scaled::<4>(x)
+}
+
+fn scaled<const N: usize>(x: usize) -> usize {
+    x.wrapping_mul(N)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+    MIR changes with no claim: `depot::scaled` (src/lib.rs:5): an added body: no template: error[E0284]: type annotations needed
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(x: usize) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+    MIR changes with no claim: `depot::scaled` (no place): no result of the equivalence check; the template of `depot::scaled` covers its item `depot::scaled`
+  changed nodes: 3 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::total`:
+  ◆ f1 extract (Semilla; R95.3-1, a part of the extract of `depot::scaled` (R95.3-1); 3 nodes; one change (R92.6-1)): deleted statement `x.wrapping_mul(4)` at `depot::total/tail`; added statement `scaled::<4>(x)` at `depot::total/tail`; added `depot::scaled` [semantics · code different]
+      affected bodies: depot::total, depot::scaled
+      control flow: ~ call `num::<impl usize>::wrapping_mul` → `scaled::<4>` (src/lib.rs:-2, src/lib.rs:2)
+      control flow: + graph of `depot::scaled`: 3 points, 2 arrows (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 3 bodies
+    depot::scaled (src/lib.rs:5): graph added: 3 points, 2 arrows
+    depot::total (src/lib.rs:1): same structure: 1 changed call target; MIR changes
+    depot::scaled (no place): + instance scaled::<4>
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 extract (Semilla; R95.3-1, a part of the extract of `depot::scaled` (R95.3-1); 3 nodes; one change (R92.6-1)): deleted statement `x.wrapping_mul(4)` at `depot::total/tail`; added statement `scaled::<4>(x)` at `depot::total/tail`; added `depot::scaled` [semantics · code different]
+    lines: src/lib.rs:2-6, src/lib.rs:-2

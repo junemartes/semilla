@@ -1,0 +1,51 @@
+note: an extract of a generic helper: the generic parameter takes the argument of the call
+rule+: R95.3-1
+refactor: yes
+must_match: ◆ f\d+ extract \(Semilla; R95\.3-1.*`T` = `u32`
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = a.max(b);
+    s.wrapping_add(1)
+}
+=== new src/lib.rs
+pub fn total(a: u32, b: u32) -> u32 {
+    let s = larger(a, b);
+    s.wrapping_add(1)
+}
+
+fn larger<T: Ord>(a: T, b: T) -> T {
+    a.max(b)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+    MIR changes with no claim: `depot::larger` (src/lib.rs:6): an added body: `#[new(depot::larger)] fn larger_new() -> bool { … }`
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32, b: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+    MIR changes with no claim: `depot::larger` (no place): no result of the equivalence check; the template of `depot::larger` covers its item `depot::larger`
+  changed nodes: 2 in 1 entries; 0 real edits (0 stated by the agent); 0 not mapped
+  transformations:
+  item `depot::total`:
+  ◆ f1 extract (Semilla; R95.3-1, the MIR of `depot::larger` put in at the call is the MIR of the old code (1 element place(s) explained); the generic arguments of the call: `T` = `u32` (R95.3-1); 2 nodes; one change (R92.6-1)): changed expression `a.max(b)` → `larger(a, b)` at `depot::total/S0/init`; added `depot::larger` [semantics · code different]
+      affected bodies: depot::total, depot::larger
+      control flow: ~ call `impls::<impl Ord for u32>::max` → `larger::<u32>` (src/lib.rs:-2, src/lib.rs:2)
+      control flow: + graph of `depot::larger`: 3 points, 2 arrows (semilla expand --step 0)
+      equivalence: MIR changes
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 3 bodies
+    depot::larger (src/lib.rs:6): graph added: 3 points, 2 arrows
+    depot::total (src/lib.rs:1): same structure: 1 changed call target; MIR changes
+    depot::larger (no place): + instance larger::<u32>
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 extract (Semilla; R95.3-1, the MIR of `depot::larger` put in at the call is the MIR of the old code (1 element place(s) explained); the generic arguments of the call: `T` = `u32` (R95.3-1); 2 nodes; one change (R92.6-1)): changed expression `a.max(b)` → `larger(a, b)` at `depot::total/S0/init`; added `depot::larger` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:5-8, src/lib.rs:-2

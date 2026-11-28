@@ -1,0 +1,63 @@
+note: a helper with a const parameter, called with an other value: no transformation
+rule-: R95.3-1
+must_match: ◆ f\d+ (replace|extract .*a real edit of its own)
+must_not_match: ◆ f\d+ extract \(Semilla; R95\.3-1.*equal
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(x: usize) -> usize {
+    x.wrapping_mul(4)
+}
+=== new src/lib.rs
+pub fn total(x: usize) -> usize {
+    scaled::<3>(x)
+}
+
+fn scaled<const N: usize>(x: usize) -> usize {
+    x.wrapping_mul(N)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 3 MIR changes with no claim
+    MIR changes with no claim: `depot::scaled` (src/lib.rs:5): an added body: no template: error[E0284]: type annotations needed
+    MIR changes with no claim: `depot::total` (src/lib.rs:1): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(x: usize) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+    MIR changes with no claim: `depot::scaled` (no place): no result of the equivalence check; the template of `depot::scaled` covers its item `depot::scaled`
+  changed nodes: 3 in 3 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::scaled`:
+  ◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::scaled` [added · code different]
+      not stated (src/lib.rs:3-6); to state it: --change 'depot::scaled=TEXT'
+      affected bodies: depot::scaled
+      control flow: + graph of `depot::scaled`: 3 points, 2 arrows (semilla expand --step 0)
+  item `depot::total`:
+  ◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `x.wrapping_mul(4)` at `depot::total/tail` [semantics · code different]
+      not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
+      affected bodies: depot::total (with 1 other edit of this body)
+      control flow: ~ call `num::<impl usize>::wrapping_mul` → `scaled::<3>` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: MIR changes
+  ◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `scaled::<3>(x)` at `depot::total/tail` [semantics · code different]
+      not stated (src/lib.rs:2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit (one statement for 2 places: f1, f2)
+      affected bodies: depot::total (with 1 other edit of this body)
+      control flow: ~ call `num::<impl usize>::wrapping_mul` → `scaled::<3>` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: MIR changes
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 3 bodies
+    depot::scaled (src/lib.rs:5): graph added: 3 points, 2 arrows
+    depot::total (src/lib.rs:1): same structure: 1 changed call target; MIR changes
+    depot::scaled (no place): + instance scaled::<3>
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f3 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::scaled` [added · code different]
+    lines: src/lib.rs:3-6
+◆ f1 replace (Semilla; R90.2-2, 1 changed MIR element): deleted statement `x.wrapping_mul(4)` at `depot::total/tail` [semantics · code different]
+    lines: src/lib.rs:-2
+◆ f2 replace (Semilla; R90.2-2, 1 changed MIR element): added statement `scaled::<3>(x)` at `depot::total/tail` [semantics · code different]
+    lines: src/lib.rs:2

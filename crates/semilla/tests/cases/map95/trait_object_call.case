@@ -1,0 +1,76 @@
+note: a call of a trait method through a trait object: no check
+rule-: R95.4-1
+must_not_match: ◆ f\d+ extract
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub trait Tax {
+    fn rate(&self) -> u32;
+}
+
+pub struct Food(pub u32);
+
+impl Tax for Food {
+    fn rate(&self) -> u32 {
+        self.0.wrapping_mul(3)
+    }
+}
+
+pub fn total(f: &Food, d: &dyn Tax) -> u32 {
+    let _ = d;
+    f.0.wrapping_mul(3) ^ 1
+}
+=== new src/lib.rs
+pub trait Tax {
+    fn rate(&self) -> u32;
+}
+
+pub struct Food(pub u32);
+
+impl Tax for Food {
+    fn rate(&self) -> u32 {
+        self.0.wrapping_mul(3)
+    }
+}
+
+pub fn total(f: &Food, d: &dyn Tax) -> u32 {
+    let _ = f;
+    d.rate() ^ 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 1 MIR changes with no claim
+    MIR changes with no claim: `depot::total` (src/lib.rs:13): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change() -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }` [the AST map: 1 node(s) of its item not mapped (complete the intent file)]
+  changed nodes: 2 in 2 entries; 1 real edits (0 stated by the agent); 1 not mapped
+    n1 not mapped [R90.6-1]: changed expression `depot::total/S0/init` (src/lib.rs:14): not mapped in f1: `d` → `f`
+        no template: the type `&dyn Tax` of the parameter `d` has no form in a claim (`dyn …`)
+  real edits:
+  item `depot::total`:
+  ◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `f.0.wrapping_mul(3)` → `d.rate()` at `depot::total/tail/lhs` [semantics · code different]
+      not stated (src/lib.rs:15, src/lib.rs:-15); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite d => f' --same 'rewrite f.0.wrapping_mul(3) => d.rate()' (one statement for 2 places: f1, f2)
+      affected bodies: depot::total (with 1 other edit of this body)
+      control flow: ~ call `num::<impl u32>::wrapping_mul` → `d.rate` [dyn] (src/lib.rs:-15, src/lib.rs:15)
+      equivalence: MIR changes alone; the body: MIR changes
+  not mapped:
+  item `depot::total`:
+  ◆ f1 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed path `d` → `f` at `depot::total/S0/init` [semantics · code different]
+      not stated (src/lib.rs:14, src/lib.rs:-14); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite d => f' --same 'rewrite f.0.wrapping_mul(3) => d.rate()' (one statement for 2 places: f1, f2)
+      affected bodies: depot::total (with 1 other edit of this body)
+      equivalence: equivalent alone (proved by equal MIR); the body: MIR changes
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:13): same structure: 1 changed call target; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `f.0.wrapping_mul(3)` → `d.rate()` at `depot::total/tail/lhs` [semantics · code different]
+    lines: src/lib.rs:15, src/lib.rs:-15
+◆ f1 not mapped (Semilla; R90.6-1, the alignment gives no unique answer): changed path `d` → `f` at `depot::total/S0/init` [semantics · code different]
+    lines: src/lib.rs:14, src/lib.rs:-14

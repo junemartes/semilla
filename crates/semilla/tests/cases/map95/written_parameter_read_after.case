@@ -1,0 +1,74 @@
+note: a callee that writes its parameter, and the caller reads the argument after the call: the copy stays
+rule-: R95.5-2
+must_not_match: R95\.5-2
+must_not_match: ◆ f\d+ extract \(Semilla; R94\.1-1, the MIR of `depot::part` put in at the call is the MIR of the old code
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(mut a: u32) -> u32 {
+    a = a.wrapping_add(1);
+    let r = a.wrapping_mul(2);
+    r ^ a
+}
+=== new src/lib.rs
+#[allow(unused_mut)]
+pub fn total(mut a: u32) -> u32 {
+    let r = part(a);
+    r ^ a
+}
+
+fn part(mut a: u32) -> u32 {
+    a = a.wrapping_add(1);
+    a.wrapping_mul(2)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (the build of the compiled check)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  checked configurations (target `x86_64-unknown-linux-gnu`): `dev`
+  changed bodies: 0 equal MIR, 0 explained by claims, 2 MIR changes with no claim
+    MIR changes with no claim: `depot::part` (src/lib.rs:7): an added body: `#[new(depot::part)] fn part_new(a: u32) -> bool { let new = after::depot::part(a); true }`
+    MIR changes with no claim: `depot::total` (src/lib.rs:2): the full compare: `#[same(depot::total)] fn total_same() {}`; a difference: `#[change(depot::total)] fn total_change(a: u32) -> bool { … }` or `#[different(depot::total)] fn total_different() -> bool { … }`
+  changed nodes: 4 in 4 entries; 3 real edits (0 stated by the agent); 0 not mapped
+  real edits:
+  item `depot::part`:
+  ◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::part` [added · code different]
+      not stated (src/lib.rs:6-10); to state it: --change 'depot::part=TEXT'
+      affected bodies: depot::part
+      control flow: + graph of `depot::part`: 4 points, 3 arrows (semilla expand --step 0)
+  item `depot::total`:
+  ◆ f2 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `a = a.wrapping_add(1)` at `depot::total/S0` [semantics · code different]
+      not stated (src/lib.rs:-2); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a.wrapping_mul(2) => part($a)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f2, f3)
+      affected bodies: depot::total (with 1 other edit of this body)
+      control flow: − call `num::<impl u32>::wrapping_add` (src/lib.rs:-2): return → call `num::<impl u32>::wrapping_mul`
+      control flow: − arrow entry (src/lib.rs:-1) → call `num::<impl u32>::wrapping_add` (src/lib.rs:-2)
+      equivalence: no result alone (the body has 3 edits; an edit of the fact adds or removes a node); the body: MIR changes (the same line for f1)
+  ◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `a.wrapping_mul(2)` → `part(a)` at `depot::total/S1/init` [semantics · code different]
+      not stated (src/lib.rs:3, src/lib.rs:-3); to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::total=TEXT'; if it does not change, --same 'rewrite $a.wrapping_mul(2) => part($a)', and a `--same` fact (rename, move, or rewrite) that explains each other edit (one statement for 2 places: f2, f3)
+      affected bodies: depot::total (with 1 other edit of this body)
+      control flow: ~ call `num::<impl u32>::wrapping_mul` → `part` (src/lib.rs:-3, src/lib.rs:3)
+      control flow: + arrow entry (src/lib.rs:2) → call `part` (src/lib.rs:3)
+      equivalence: not checked alone (the variant with only this edit does not compile); the body: MIR changes
+  syntax only:
+  item `depot::total`:
+  ◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::total`: added `#[allow(unused_mut)]` [attribute · code equal]
+      equivalence: the same line as f2
+  cover: each of the 9 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::part (src/lib.rs:7): graph added: 4 points, 3 arrows
+    depot::total (src/lib.rs:2): graph changes: −1 call, 1 changed call target, +1 arrow, −2 arrows; MIR changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f4 add (Semilla; R90.2-3, a body of the new MIR only): added `depot::part` [added · code different]
+    lines: src/lib.rs:6-10
+◆ f2 delete (Semilla; R90.2-3, 1 removed MIR element): deleted statement `a = a.wrapping_add(1)` at `depot::total/S0` [semantics · code different]
+    lines: src/lib.rs:-2
+◆ f3 replace (Semilla; R90.2-2, 2 changed MIR elements): changed expression `a.wrapping_mul(2)` → `part(a)` at `depot::total/S1/init` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-3
+◆ f1 replace, syntax only (Semilla; R90.2-6, no MIR element; the matcher): attributes of `depot::total`: added `#[allow(unused_mut)]` [attribute · code equal]
+    lines: src/lib.rs:1

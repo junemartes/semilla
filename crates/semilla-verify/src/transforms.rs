@@ -35,6 +35,16 @@ pub const RULE_INDEPENDENT: &str = "R94.4-2";
 pub const RULE_ORDER: &str = "R94.4-3";
 pub const RULE_REFUSED: &str = "R94.5-1";
 pub const RULE_STATEMENT: &str = "R94.6-1";
+pub const RULE_REGION_ORDER: &str = "R95.1-1";
+pub const RULE_REGION_VARIABLE: &str = "R95.1-2";
+pub const RULE_REGION_EXTRACT: &str = "R95.1-3";
+pub const RULE_PURE_CALL: &str = "R95.2-1";
+pub const RULE_GENERIC: &str = "R95.3-1";
+pub const RULE_IMPL: &str = "R95.4-1";
+pub const RULE_EARLY_RETURN: &str = "R95.5-1";
+pub const RULE_WRITTEN_PARAMETER: &str = "R95.5-2";
+pub const RULE_RESULT_PLACE: &str = "R95.5-3";
+pub const RULE_CLOSURE: &str = "R95.6-1";
 
 /// The mark of an order that can matter.
 pub const ORDER_MATTERS: &str = "the order can matter";
@@ -297,13 +307,16 @@ fn apply(trees: [&Workspace; 2], outcome: &StepOutcome, nodes: &[usize], body: &
         }
     }
     let counted = |list: &[MirPlace]| list.len();
-    let rule = if found.inline { RULE_INLINE } else { RULE_EXTRACT };
+    // [R95.3-1] [R95.4-1] [R95.5-1] [R95.5-2] [R95.6-1] The most specific rule of design 95 that
+    // the check used is the rule of the entry; each one adds its text to the check.
+    let rule = found.via.first().and_then(|(rule, _)| [RULE_GENERIC, RULE_IMPL, RULE_EARLY_RETURN, RULE_WRITTEN_PARAMETER, RULE_RESULT_PLACE, RULE_CLOSURE].into_iter().find(|known| known == rule)).unwrap_or(if found.inline { RULE_INLINE } else { RULE_EXTRACT });
+    let via: String = found.via.iter().map(|(rule, text)| format!("; {text} ({rule})")).collect();
     let public = callee_node.is_some() && trees[side].items.get(&found.callee).is_some_and(|item| item.vis.starts_with("pub"));
     let api = if public { "; the callee is public: a different crate can call it" } else { "" };
     let check = if left[0].is_empty() && left[1].is_empty() {
-        format!("the MIR of `{}` put in at the call is the MIR of the {} code ({} element place(s) explained){api}", found.callee, if found.inline { "new" } else { "old" }, found.explained.max(1))
+        format!("the MIR of `{}` put in at the call is the MIR of the {} code ({} element place(s) explained){via}{api}", found.callee, if found.inline { "new" } else { "old" }, found.explained.max(1))
     } else {
-        format!("the MIR of `{}` put in at the call explains {} element place(s); {} element place(s) differ: a real edit of its own ({RULE_LEFT}){api}", found.callee, found.explained, counted(&left[0]) + counted(&left[1]))
+        format!("the MIR of `{}` put in at the call explains {} element place(s); {} element place(s) differ: a real edit of its own ({RULE_LEFT}){via}{api}", found.callee, found.explained, counted(&left[0]) + counted(&left[1]))
     };
     let node = |kind: EntryKind, check: String| NodeKind { kind, syntax_only: false, rule, check, order: None };
     let mut edits = Vec::new();
@@ -321,6 +334,27 @@ fn apply(trees: [&Workspace; 2], outcome: &StepOutcome, nodes: &[usize], body: &
         let covered = (0..2).all(|at| sides[at].iter().all(|place| explained[at].contains(place)));
         if covered {
             out.nodes.insert(edit, node(kind_of(found.inline), format!("a part of the {} of `{}` ({rule})", word(found.inline), found.callee)));
+            out.joins.push((edit, region[0]));
+            edits.push(edit);
+        }
+    }
+    // [R95.6-1] The nodes of a closure body (a closure has no item): each node whose elements are
+    // elements of the closure body, with no element that the check does not explain.
+    if callee_node.is_none() && found.callee.contains("{closure#") {
+        // A node of the item with no element (its body, the closure, is on one side only) is a
+        // node of the closure when the item has one such closure.
+        let prefix = format!("{}::{{closure#", body.name);
+        let lone = outcome.bodies.iter().filter(|other| other.name.starts_with(&prefix) && matches!(other.status, BodyStatus::BeforeOnly | BodyStatus::AfterOnly)).count() == 1;
+        let item_of = |edit: &usize| outcome.edits[*edit].after.as_ref().or(outcome.edits[*edit].before.as_ref()).map(|anchor| anchor.item.clone());
+        let closure_nodes: Vec<usize> = nodes.iter().copied().filter(|edit| !out.nodes.contains_key(edit) && !region.contains(edit)).filter(|edit| {
+            outcome.report.node_mir.get(edit).is_some_and(|mir| {
+                let elements = mir.bodies.contains(&found.callee) && mir.bodies.iter().all(|name| *name == found.callee || *name == body.name) && (0..2).all(|at| mir.places[at].iter().all(|place| explained[at].contains(place) || (at == side && found.callee_at.contains(place)))) && !left.iter().flatten().any(|place| mir.places.iter().any(|list| list.contains(place)));
+                let empty = lone && mir.one_side && mir.places.iter().all(BTreeSet::is_empty) && item_of(edit).as_deref() == Some(body.name.as_str());
+                elements || empty
+            })
+        }).collect();
+        for edit in closure_nodes {
+            out.nodes.insert(edit, node(kind_of(found.inline), check.clone()));
             out.joins.push((edit, region[0]));
             edits.push(edit);
         }
@@ -456,7 +490,13 @@ fn variables_and_orders(input: &StepInput, outcome: &StepOutcome, nodes: &[usize
         let Some(anchor) = edit.after.as_ref().or(edit.before.as_ref()) else { continue };
         let compared = body_of(outcome, &anchor.item);
         let status = compared.map(|body| &body.status);
-        let reorder = compared.and_then(|body| body.elements.as_ref()).and_then(|diff| diff.reorder.as_ref());
+        // [R95.1-1] [R95.1-2] The new order of the region of the node: the node owns no element of
+        // a real edit of the body (the residue), and each other edit keeps its own kind.
+        let mir = outcome.report.node_mir.get(&index);
+        let reorder = compared.and_then(|body| body.elements.as_ref()).and_then(|diff| diff.reorder.as_ref()).filter(|reorder| mir.is_none_or(|mir| (0..2).all(|side| mir.places[side].iter().all(|place| !reorder.residue[side].contains(place)))));
+        let partial = reorder.is_some_and(|reorder| reorder.residue.iter().any(|list| !list.is_empty()));
+        let pure = reorder.map_or(String::new(), |reorder| if reorder.pure_calls > 0 { format!("; the effect summary of {} call(s) has no effect ({RULE_PURE_CALL})", reorder.pure_calls) } else { String::new() });
+        let region = if partial { "; the check reads the region: the other edits of the body are real edits" } else { "" };
         let node = |kind: EntryKind, rule: &'static str, check: String, order: Option<String>| NodeKind { kind, syntax_only: false, rule, check, order };
         match &edit.refactor {
             Some(semilla_syntax::Refactor::Extract { .. }) | Some(semilla_syntax::Refactor::Inline { .. }) => {
@@ -465,10 +505,11 @@ fn variables_and_orders(input: &StepInput, outcome: &StepOutcome, nodes: &[usize
                 // A node of the variable that owns no element that differs, in a body whose
                 // elements that differ each have an other owner (design 41.7: the edit is idle).
                 let idle = outcome.report.node_mir.get(&index).is_some_and(|mir| mir.equal && !mir.doubt && mir.places.iter().all(BTreeSet::is_empty));
+                let rule = if partial { RULE_REGION_VARIABLE } else if reorder.is_some_and(|reorder| reorder.pure_calls > 0 && reorder.flips > 0) { RULE_PURE_CALL } else { RULE_VARIABLE };
                 let found = match (status, reorder) {
                     (Some(BodyStatus::Equal { .. }), _) => node(kind, RULE_VARIABLE, "equal MIR after the normal form (the copy and move chains of a local)".into(), None),
-                    (Some(BodyStatus::Different { .. }), Some(reorder)) if reorder.flips == 0 => node(kind, RULE_VARIABLE, "equal MIR after the normal form, under one map of the locals and the blocks".into(), None),
-                    (Some(BodyStatus::Different { .. }), Some(reorder)) if reorder.dependent.is_empty() => node(kind, RULE_VARIABLE, format!("the MIR differs only in the order of {} pair(s) of independent parts", reorder.flips), None),
+                    (Some(BodyStatus::Different { .. }), Some(reorder)) if reorder.flips == 0 => node(kind, rule, format!("equal MIR after the normal form, under one map of the locals and the blocks{region}"), None),
+                    (Some(BodyStatus::Different { .. }), Some(reorder)) if reorder.dependent.is_empty() => node(kind, rule, format!("the MIR differs only in the order of {} pair(s) of independent parts{pure}{region}", reorder.flips), None),
                     (Some(BodyStatus::Different { .. }), Some(reorder)) => {
                         let cause = format!("the place where the value is evaluated moves: {}", dependence_text(trees[0], &reorder.dependent));
                         node(kind, RULE_VARIABLE_ORDER, cause.clone(), Some(cause))
@@ -497,11 +538,13 @@ fn variables_and_orders(input: &StepInput, outcome: &StepOutcome, nodes: &[usize
                     None
                 };
                 let what = if arm { "arms" } else { "statements" };
+                let pure_rule = if reorder.is_some_and(|reorder| reorder.pure_calls > 0) { RULE_PURE_CALL } else { RULE_INDEPENDENT };
+                let (same_rule, independent_rule) = if partial { (RULE_REGION_ORDER, RULE_REGION_ORDER) } else { (RULE_SAME_ORDER, pure_rule) };
                 let found = match (status, reorder, overlap) {
                     (_, _, Some(cause)) => node(EntryKind::Reorder, RULE_ORDER, cause.clone(), Some(cause)),
                     (Some(BodyStatus::Equal { .. }), _, None) => node(EntryKind::Reorder, RULE_SAME_ORDER, format!("the {what} in another order; the compiled code is the same"), None),
-                    (Some(BodyStatus::Different { .. }), Some(reorder), None) if reorder.flips == 0 => node(EntryKind::Reorder, RULE_SAME_ORDER, format!("the {what} in another order; the MIR is equal under one map of the locals and the blocks: the compiled code is the same"), None),
-                    (Some(BodyStatus::Different { .. }), Some(reorder), None) if reorder.dependent.is_empty() => node(EntryKind::Reorder, RULE_INDEPENDENT, format!("the {what} in another order; the parts are independent ({} pair(s) of MIR elements change order)", reorder.flips), None),
+                    (Some(BodyStatus::Different { .. }), Some(reorder), None) if reorder.flips == 0 => node(EntryKind::Reorder, same_rule, format!("the {what} in another order; the MIR is equal under one map of the locals and the blocks: the compiled code is the same{region}"), None),
+                    (Some(BodyStatus::Different { .. }), Some(reorder), None) if reorder.dependent.is_empty() => node(EntryKind::Reorder, independent_rule, format!("the {what} in another order; the parts are independent ({} pair(s) of MIR elements change order{pure}){region}", reorder.flips), None),
                     (Some(BodyStatus::Different { .. }), Some(reorder), None) => {
                         let cause = dependence_text(trees[0], &reorder.dependent);
                         node(EntryKind::Reorder, RULE_ORDER, cause.clone(), Some(cause))
